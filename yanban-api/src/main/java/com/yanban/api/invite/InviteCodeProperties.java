@@ -38,7 +38,8 @@ public class InviteCodeProperties {
     }
 
     public void setMaxUses(int maxUses) {
-        this.maxUses = maxUses;
+        // The first release intentionally keeps invitation sharing small and predictable.
+        this.maxUses = Math.min(5, Math.max(1, maxUses));
     }
 
     /**

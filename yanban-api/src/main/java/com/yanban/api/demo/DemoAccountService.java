@@ -1,6 +1,9 @@
 package com.yanban.api.demo;
 
 import com.yanban.api.settings.UserSettingsService;
+import com.yanban.api.project.Project;
+import com.yanban.api.project.ProjectRepository;
+import com.yanban.api.project.ProjectService;
 import com.yanban.api.user.SysUser;
 import com.yanban.api.user.SysUserRepository;
 import com.yanban.core.agent.AgentSessionRepository;
@@ -48,6 +51,8 @@ public class DemoAccountService {
     private final KnowledgeIndexService indexService;
     private final AgentSessionRepository sessions;
     private final PaperTaskRepository paperTasks;
+    private final ProjectRepository projects;
+    private final ProjectService projectService;
 
     public DemoAccountService(DemoProperties properties,
                               SysUserRepository users,
@@ -59,7 +64,9 @@ public class DemoAccountService {
                               KbChunkUploadRepository chunkUploads,
                               KnowledgeIndexService indexService,
                               AgentSessionRepository sessions,
-                              PaperTaskRepository paperTasks) {
+                              PaperTaskRepository paperTasks,
+                              ProjectRepository projects,
+                              ProjectService projectService) {
         this.properties = properties;
         this.users = users;
         this.passwordEncoder = passwordEncoder;
@@ -71,6 +78,8 @@ public class DemoAccountService {
         this.indexService = indexService;
         this.sessions = sessions;
         this.paperTasks = paperTasks;
+        this.projects = projects;
+        this.projectService = projectService;
     }
 
     @Transactional
@@ -81,6 +90,17 @@ public class DemoAccountService {
         SysUser user = ensureDemoUser();
         userSettingsService.getOrCreate(user.getId());
         ensureSeedDocuments(user.getId());
+        return user;
+    }
+
+    /**
+     * A shared demo starts each visitor with an empty conversation and empty projects.
+     * Seed knowledge and paper examples are intentionally left untouched.
+     */
+    @Transactional
+    public SysUser prepareForLogin() {
+        SysUser user = ensureDemoUserReady();
+        clearTransientDemoData(user.getId());
         return user;
     }
 
@@ -111,11 +131,14 @@ public class DemoAccountService {
 
     @Transactional
     public void resetDemoData(Long userId) {
+        clearTransientDemoData(userId);
+    }
+
+    private void clearTransientDemoData(Long userId) {
         sessions.deleteAll(sessions.findByUserIdOrderByUpdatedAtDesc(userId));
-        paperTasks.deleteAll(paperTasks.findByUserIdOrderByCreatedAtDesc(userId));
-        chunkUploads.deleteByUserId(userId);
-        deleteDocuments(documents.findByUserIdOrderByCreatedAtDesc(userId));
-        seedDocuments(userId);
+        for (Project project : projects.findByUserIdOrderByUpdatedAtDesc(userId)) {
+            projectService.delete(userId, project.getId());
+        }
     }
 
     private SysUser ensureDemoUser() {

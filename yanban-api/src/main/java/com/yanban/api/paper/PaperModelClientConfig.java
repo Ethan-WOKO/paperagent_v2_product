@@ -7,6 +7,7 @@ import com.yanban.api.agent.AgentToolCallingMode;
 import com.yanban.api.agent.LangChain4jChatModelAdapter;
 import com.yanban.api.agent.ResolvedToolPolicy;
 import com.yanban.api.settings.UserSettingsService;
+import com.yanban.api.quota.UserQuotaService;
 import com.yanban.paper.service.PaperModelExecutionContext;
 import com.yanban.paper.service.PaperModelClient;
 import dev.langchain4j.data.message.SystemMessage;
@@ -36,15 +37,27 @@ public class PaperModelClientConfig {
     @Bean
     public PaperModelClient paperModelClient(LangChain4jChatModelAdapter chatModel,
                                              PaperModelProperties properties,
-                                             ObjectProvider<UserSettingsService> userSettingsServiceProvider) {
-        return paperModelClient(chatModel, properties, userSettingsServiceProvider.getIfAvailable());
+                                             ObjectProvider<UserSettingsService> userSettingsServiceProvider,
+                                             UserQuotaService quotaService) {
+        return paperModelClient(chatModel, properties, userSettingsServiceProvider.getIfAvailable(), quotaService);
     }
 
     PaperModelClient paperModelClient(LangChain4jChatModelAdapter chatModel,
                                       PaperModelProperties properties,
                                       UserSettingsService userSettingsService) {
+        return paperModelClient(chatModel, properties, userSettingsService, null);
+    }
+
+    PaperModelClient paperModelClient(LangChain4jChatModelAdapter chatModel,
+                                      PaperModelProperties properties,
+                                      UserSettingsService userSettingsService,
+                                      UserQuotaService quotaService) {
         Logger log = LoggerFactory.getLogger(PaperModelClientConfig.class);
         return (systemPrompt, userPrompt, temperature, maxTokens) -> {
+            Long userId = PaperModelExecutionContext.currentUserId();
+            if (quotaService != null && userId != null) {
+                quotaService.assertCanUseAi(userId);
+            }
             UserSettingsService.ModelEndpoint endpoint = resolveUserEndpoint(properties, userSettingsService);
             String modelName = endpoint == null ? resolveModel(properties) : endpoint.modelName();
             ChatRequest.Builder builder = ChatRequest.builder()
@@ -71,12 +84,16 @@ public class PaperModelClientConfig {
                 log.info("Paper model call provider=default model={} sourceType=chat-model-bean sourceLabel=default", modelName);
                 response = chatModel.chat(request);
             }
+            if (quotaService != null && userId != null && response != null && response.tokenUsage() != null) {
+                quotaService.recordUsage(userId, "PAPER", response.tokenUsage().inputTokenCount(),
+                        response.tokenUsage().outputTokenCount(), response.tokenUsage().totalTokenCount());
+            }
             return response == null || response.aiMessage() == null ? "" : defaultString(response.aiMessage().text());
         };
     }
 
     public PaperModelClient paperModelClient(LangChain4jChatModelAdapter chatModel, PaperModelProperties properties) {
-        return paperModelClient(chatModel, properties, (UserSettingsService) null);
+        return paperModelClient(chatModel, properties, (UserSettingsService) null, null);
     }
 
     private UserSettingsService.ModelEndpoint resolveUserEndpoint(PaperModelProperties properties,

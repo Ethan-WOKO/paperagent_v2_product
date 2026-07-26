@@ -13,6 +13,10 @@ export interface UserMeResponse {
   username: string;
   accountType: 'NORMAL' | 'DEMO' | string;
   demo: boolean;
+  role: 'ADMIN' | 'USER' | string;
+  aiQuotaTotal: number;
+  aiQuotaUsed: number;
+  aiQuotaRemaining: number;
 }
 
 export function register(payload: { username: string; password: string; inviteCode?: string }) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.observability.TraceIdFilter;
+import com.yanban.api.quota.UserQuotaService;
 import com.yanban.api.settings.SysUserSettings;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
@@ -39,6 +40,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -86,7 +88,9 @@ public class AgentService {
     private final UserAccountPolicy accountPolicy;
     private final AgentRequestDedupService requestDedupService;
     private final AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver;
+    private final UserQuotaService quotaService;
 
+    @Autowired
     public AgentService(AgentSessionRepository sessions,
                         AgentMessageRepository messages,
                         AgentTurnRepository turns,
@@ -107,7 +111,8 @@ public class AgentService {
                         @Qualifier("chatModelProvider") ChatModelProvider titleModelProvider,
                         UserAccountPolicy accountPolicy,
                         AgentRequestDedupService requestDedupService,
-                        AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver) {
+                        AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver,
+                        UserQuotaService quotaService) {
         this.sessions = sessions;
         this.messages = messages;
         this.turns = turns;
@@ -129,6 +134,36 @@ public class AgentService {
         this.accountPolicy = accountPolicy;
         this.requestDedupService = requestDedupService;
         this.runtimeTokenBudgetResolver = runtimeTokenBudgetResolver;
+        this.quotaService = quotaService;
+    }
+
+    /** Compatibility constructor retained for focused unit tests. */
+    public AgentService(AgentSessionRepository sessions,
+                        AgentMessageRepository messages,
+                        AgentTurnRepository turns,
+                        AgentMessageCacheService messageCache,
+                        AgentRuntimeCoordinator agentRuntimeCoordinator,
+                        ObjectMapper objectMapper,
+                        UserSettingsService userSettingsService,
+                        ConversationIntentRouterService conversationIntentRouterService,
+                        SkillsService skillsService,
+                        AgentToolPolicyEngine toolPolicyEngine,
+                        AgentExperimentService agentExperimentService,
+                        AgentMemoryExperimentService agentMemoryExperimentService,
+                        AgentExperimentRecordService agentExperimentRecordService,
+                        AgentContextBuilder agentContextBuilder,
+                        AgentContextSnapshotService contextSnapshotService,
+                        AgentSessionSummaryService sessionSummaryService,
+                        LongTermMemoryRetrievalService longTermMemoryRetrievalService,
+                        ChatModelProvider titleModelProvider,
+                        UserAccountPolicy accountPolicy,
+                        AgentRequestDedupService requestDedupService,
+                        AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver) {
+        this(sessions, messages, turns, messageCache, agentRuntimeCoordinator, objectMapper, userSettingsService,
+                conversationIntentRouterService, skillsService, toolPolicyEngine, agentExperimentService,
+                agentMemoryExperimentService, agentExperimentRecordService, agentContextBuilder, contextSnapshotService,
+                sessionSummaryService, longTermMemoryRetrievalService, titleModelProvider, accountPolicy,
+                requestDedupService, runtimeTokenBudgetResolver, null);
     }
 
     @Transactional
@@ -335,6 +370,9 @@ public class AgentService {
                                                     List<AgentContextEvidence> projectEvidence) {
         long startedAtNanos = System.nanoTime();
         accountPolicy.assertCanSendChatMessage(userId);
+        if (quotaService != null) {
+            quotaService.assertCanUseAi(userId);
+        }
         AgentSession session = getOwnedSession(userId, sessionId);
         UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                 userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
@@ -572,6 +610,10 @@ public class AgentService {
                     result.promptTokens(),
                     result.completionTokens(),
                     result.totalTokens());
+            if (quotaService != null) {
+                quotaService.recordUsage(userId, projectContext == null ? "CHAT" : "PROJECT",
+                        result.promptTokens(), result.completionTokens(), result.totalTokens());
+            }
 
             if (finalProjection.state().outcome() == AgentTaskOutcome.SUCCEEDED) {
                 Long assistantMessageId = lastAssistantMessageId(runtimeMessages);

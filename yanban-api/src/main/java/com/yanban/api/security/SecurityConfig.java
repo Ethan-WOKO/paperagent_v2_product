@@ -28,7 +28,7 @@ public class SecurityConfig {
         return username -> users.findByUsername(username)
                 .map(user -> User.withUsername(user.getUsername())
                         .password(user.getPasswordHash())
-                        .authorities("USER")
+                        .authorities(user.isAdmin() ? "ROLE_ADMIN" : "ROLE_USER")
                         .build())
                 .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
     }
@@ -45,6 +45,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/demo/config").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/paper/events").permitAll()
                         .requestMatchers("/api/v1/ws/**").permitAll()
+                        .requestMatchers("/api/v1/admin/**", "/api/v1/observability/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/**").authenticated()
                         .anyRequest().permitAll()
                 )

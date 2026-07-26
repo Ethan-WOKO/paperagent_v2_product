@@ -2,6 +2,7 @@ package com.yanban.api.ws;
 
 import com.yanban.api.security.JwtService;
 import com.yanban.api.security.JwtUser;
+import com.yanban.api.user.SysUserRepository;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +11,7 @@ import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
@@ -22,9 +24,17 @@ public class WebSocketAuthHandshakeInterceptor implements HandshakeInterceptor {
     static final String ATTR_JWT_USER = "jwtUser";
 
     private final JwtService jwtService;
+    private final SysUserRepository users;
 
-    public WebSocketAuthHandshakeInterceptor(JwtService jwtService) {
+    @Autowired
+    public WebSocketAuthHandshakeInterceptor(JwtService jwtService, SysUserRepository users) {
         this.jwtService = jwtService;
+        this.users = users;
+    }
+
+    /** Compatibility constructor for focused websocket tests. */
+    public WebSocketAuthHandshakeInterceptor(JwtService jwtService) {
+        this(jwtService, null);
     }
 
     @Override
@@ -47,6 +57,12 @@ public class WebSocketAuthHandshakeInterceptor implements HandshakeInterceptor {
         }
         try {
             JwtUser user = jwtService.parseAccessToken(token);
+            boolean currentLogin = users == null || users.findById(user.id())
+                    .map(value -> value.getLoginVersion() == user.loginVersion())
+                    .orElse(false);
+            if (!currentLogin) {
+                throw new IllegalArgumentException("Session has been replaced by a newer login");
+            }
             attributes.put(ATTR_JWT_USER, user);
             log.debug("WebSocket handshake accepted userId={} username={} remote={} path={}",
                     user.id(),

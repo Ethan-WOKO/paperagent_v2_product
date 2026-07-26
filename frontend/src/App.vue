@@ -4,8 +4,14 @@
       <NDialogProvider>
         <NNotificationProvider>
           <NMessageProvider>
-            <div class="app-scale-root" :class="{ 'app-scale-root--canvas': useCanvasScale }">
+            <div v-if="useCanvasScale" class="app-scale-root app-scale-root--canvas">
               <RouterView />
+            </div>
+            <div v-else class="public-page">
+              <div class="app-scale-root">
+                <RouterView />
+              </div>
+              <SiteFilingFooter />
             </div>
             <LanguageToggle v-if="!useCanvasScale" class="app-guest-language-toggle" />
           </NMessageProvider>
@@ -34,6 +40,7 @@ import { RouterView } from 'vue-router';
 import { useRoute } from 'vue-router';
 import { useTheme } from '@/composables/useTheme';
 import LanguageToggle from '@/components/LanguageToggle.vue';
+import SiteFilingFooter from '@/components/SiteFilingFooter.vue';
 import { useI18n } from '@/composables/useI18n';
 import { useUiTranslationBridge } from '@/composables/useUiTranslationBridge';
 
@@ -160,3 +167,16 @@ const themeOverrides = computed(() => ({
   },
 }));
 </script>
+
+<style scoped>
+.public-page {
+  display: grid;
+  min-height: 100dvh;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.public-page :deep(.page-shell),
+.public-page :deep(.demo-page) {
+  min-height: 100%;
+}
+</style>

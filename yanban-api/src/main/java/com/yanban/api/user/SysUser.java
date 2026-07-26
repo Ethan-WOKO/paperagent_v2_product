@@ -28,10 +28,29 @@ public class SysUser {
     @Column(name = "account_type", nullable = false, length = 32)
     private String accountType = "NORMAL";
 
+    /** A small first-version role model: USER or ADMIN. */
+    @Column(nullable = false, length = 32)
+    private String role = "USER";
+
+    /** Incremented at every interactive login so older device tokens become invalid. */
+    @Column(name = "login_version", nullable = false)
+    private long loginVersion;
+
+    /** -1 means unlimited. Existing accounts intentionally migrate to this value. */
+    @Column(name = "ai_quota_total", nullable = false)
+    private long aiQuotaTotal = -1L;
+
+    @Column(name = "ai_quota_used", nullable = false)
+    private long aiQuotaUsed;
+
+    @Column(name = "last_login_at")
+    private Instant lastLoginAt;
+
     @Column(name = "created_at", nullable = false, updatable = false, insertable = false)
     private Instant createdAt;
 
-    @Column(name = "updated_at", nullable = false, insertable = false)
+    // The database owns this MySQL ON UPDATE timestamp; Hibernate must not write a stale null value on login.
+    @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
     private Instant updatedAt;
 
     protected SysUser() {
@@ -79,6 +98,61 @@ public class SysUser {
 
     public void setAccountType(String accountType) {
         this.accountType = accountType == null || accountType.isBlank() ? "NORMAL" : accountType;
+    }
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = "ADMIN".equalsIgnoreCase(role) ? "ADMIN" : "USER";
+    }
+
+    public boolean isAdmin() {
+        return "ADMIN".equalsIgnoreCase(role);
+    }
+
+    public long getLoginVersion() {
+        return loginVersion;
+    }
+
+    public void beginNewLogin() {
+        loginVersion++;
+        lastLoginAt = Instant.now();
+    }
+
+    public long getAiQuotaTotal() {
+        return aiQuotaTotal;
+    }
+
+    public long getAiQuotaUsed() {
+        return aiQuotaUsed;
+    }
+
+    public long getAiQuotaRemaining() {
+        return aiQuotaTotal < 0 ? -1L : Math.max(0L, aiQuotaTotal - aiQuotaUsed);
+    }
+
+    public void setAiQuotaTotal(long aiQuotaTotal) {
+        if (aiQuotaTotal < -1L) {
+            throw new IllegalArgumentException("aiQuotaTotal must be -1 or non-negative");
+        }
+        this.aiQuotaTotal = aiQuotaTotal;
+    }
+
+    public void resetAiQuotaUsed() {
+        this.aiQuotaUsed = 0L;
+    }
+
+    public void addAiQuotaUsage(long tokens) {
+        if (tokens <= 0L) {
+            return;
+        }
+        this.aiQuotaUsed = Math.addExact(this.aiQuotaUsed, tokens);
+    }
+
+    public Instant getLastLoginAt() {
+        return lastLoginAt;
     }
 
     public Instant getCreatedAt() {

@@ -53,6 +53,9 @@ yanban:
     enabled: ${INVITE_CODE_ENABLED:true}
     codes: ${INVITE_CODES:}
     max-uses: ${INVITE_CODE_MAX_USES:5}
+  admin:
+    username: ${YANBAN_ADMIN_USERNAME:}
+    password: ${YANBAN_ADMIN_PASSWORD:}
   demo:
     enabled: ${DEMO_ENABLED:false}
     seed-on-startup: ${DEMO_SEED_ON_STARTUP:true}

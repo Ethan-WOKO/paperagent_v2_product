@@ -43,12 +43,14 @@
 
       <LanguageToggle class="app-sidebar__language" />
 
-      <div class="app-sidebar__plan">
+      <div class="app-sidebar__plan" aria-live="polite">
         <div>
           <strong>{{ t('nav.credits') }}</strong>
-          <span>{{ t('nav.workflowReady') }}</span>
+          <span>{{ quotaSummary }}</span>
         </div>
-        <div class="app-sidebar__meter"><span /></div>
+        <div v-if="hasLimitedQuota" class="app-sidebar__meter" :aria-label="quotaSummary">
+          <span :style="quotaMeterStyle" />
+        </div>
       </div>
 
       <div class="app-sidebar__user">
@@ -105,7 +107,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { NButton, NSpace } from 'naive-ui';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
@@ -121,6 +123,7 @@ const { t } = useI18n();
 const TOPBAR_COLLAPSED_KEY = 'yanban.app.topbarCollapsed';
 const topbarCollapsed = ref(readStoredBoolean(TOPBAR_COLLAPSED_KEY, false));
 const showTopbar = computed(() => route.path.startsWith('/chat'));
+let quotaRefreshTimer: number | undefined;
 
 const navItems = computed(() => [
   { label: t('nav.workspace'), path: '/chat' },
@@ -130,9 +133,32 @@ const navItems = computed(() => [
   { label: t('nav.retrieval'), path: '/knowledge-base/search-debug' },
   { label: t('nav.memory'), path: '/settings/memory' },
   { label: t('nav.settings'), path: '/settings' },
+  ...(authStore.currentUser?.role === 'ADMIN' ? [{ label: '管理后台', path: '/admin' }] : []),
 ]);
 
 const userInitial = computed(() => (authStore.currentUser?.username || 'U').slice(0, 1).toUpperCase());
+
+const hasLimitedQuota = computed(() => {
+  const total = authStore.currentUser?.aiQuotaTotal;
+  return typeof total === 'number' && total >= 0;
+});
+
+const quotaSummary = computed(() => {
+  const user = authStore.currentUser;
+  if (!user) return t('nav.quotaLoginHint');
+  if (user.aiQuotaTotal < 0) return t('nav.quotaUnlimited');
+  return t('nav.quotaUsage', {
+    used: formatTokenCount(user.aiQuotaUsed),
+    total: formatTokenCount(user.aiQuotaTotal),
+  });
+});
+
+const quotaMeterStyle = computed(() => {
+  const user = authStore.currentUser;
+  if (!user || user.aiQuotaTotal <= 0) return { width: '0%' };
+  const percentage = Math.min(100, Math.max(0, (user.aiQuotaUsed / user.aiQuotaTotal) * 100));
+  return { width: `${percentage}%` };
+});
 
 const routeTitle = computed(() => {
   if (route.path.startsWith('/paper')) return t('route.paper');
@@ -140,6 +166,7 @@ const routeTitle = computed(() => {
   if (route.path.startsWith('/knowledge-base/search-debug')) return t('route.retrieval');
   if (route.path.startsWith('/knowledge-base')) return t('route.knowledge');
   if (route.path.startsWith('/settings')) return t('route.settings');
+  if (route.path.startsWith('/admin')) return '管理后台';
   return t('route.chat');
 });
 
@@ -149,6 +176,35 @@ function isActiveNav(path: string) {
   }
   return route.path === path || route.path.startsWith(`${path}/`);
 }
+
+function formatTokenCount(value: number) {
+  return Number(value || 0).toLocaleString('zh-CN');
+}
+
+function refreshQuota() {
+  if (authStore.token && document.visibilityState === 'visible') {
+    void authStore.fetchCurrentUser();
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    refreshQuota();
+  }
+}
+
+onMounted(() => {
+  refreshQuota();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  quotaRefreshTimer = window.setInterval(refreshQuota, 30_000);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  if (quotaRefreshTimer !== undefined) {
+    window.clearInterval(quotaRefreshTimer);
+  }
+});
 
 function readStoredBoolean(key: string, fallback: boolean) {
   if (typeof window === 'undefined') {

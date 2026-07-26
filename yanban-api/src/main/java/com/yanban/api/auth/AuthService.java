@@ -55,10 +55,12 @@ public class AuthService {
         } catch (DataIntegrityViolationException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在", ex);
         }
-        return tokensFor(user.getId(), user.getUsername());
+        user.beginNewLogin();
+        users.saveAndFlush(user);
+        return tokensFor(user);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AuthResponse login(LoginRequest request) {
         String username = normalizeUsername(request.username());
         SysUser user = users.findByUsername(username)
@@ -66,13 +68,17 @@ public class AuthService {
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
         }
-        return tokensFor(user.getId(), user.getUsername());
+        user.beginNewLogin();
+        users.saveAndFlush(user);
+        return tokensFor(user);
     }
 
     @Transactional
     public AuthResponse demoLogin() {
-        SysUser user = demoAccountService.ensureDemoUserReady();
-        return tokensFor(user.getId(), user.getUsername());
+        SysUser user = demoAccountService.prepareForLogin();
+        user.beginNewLogin();
+        users.saveAndFlush(user);
+        return tokensFor(user);
     }
 
     @Transactional(readOnly = true)
@@ -80,7 +86,10 @@ public class AuthService {
         JwtUser jwtUser = jwtService.parseRefreshToken(request.refreshToken());
         SysUser user = users.findById(jwtUser.id())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "刷新令牌无效"));
-        return tokensFor(user.getId(), user.getUsername());
+        if (user.getLoginVersion() != jwtUser.loginVersion()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已在其他设备更新，请重新登录");
+        }
+        return tokensFor(user);
     }
 
     /**
@@ -112,10 +121,10 @@ public class AuthService {
                 .orElse(null);
     }
 
-    private AuthResponse tokensFor(Long userId, String username) {
+    private AuthResponse tokensFor(SysUser user) {
         return AuthResponse.bearer(
-                jwtService.createAccessToken(userId, username),
-                jwtService.createRefreshToken(userId, username),
+                jwtService.createAccessToken(user),
+                jwtService.createRefreshToken(user),
                 jwtService.accessTokenTtlSeconds()
         );
     }

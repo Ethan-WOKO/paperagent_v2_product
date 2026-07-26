@@ -14,4 +14,6 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Project> findLockedByIdAndUserId(Long id, Long userId);
+
+    long countByUserId(Long userId);
 }

@@ -5,10 +5,12 @@ import com.yanban.api.agent.AgentService;
 import com.yanban.api.agent.SendMessageRequest;
 import com.yanban.api.agent.SendMessageResponse;
 import com.yanban.api.security.JwtUser;
+import com.yanban.api.user.SysUserRepository;
 import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -23,11 +25,20 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final ObjectMapper objectMapper;
     private final AgentService agentService;
+    private final SysUserRepository users;
 
+    @Autowired
     public ChatWebSocketHandler(ObjectMapper objectMapper,
-                                AgentService agentService) {
+                                AgentService agentService,
+                                SysUserRepository users) {
         this.objectMapper = objectMapper;
         this.agentService = agentService;
+        this.users = users;
+    }
+
+    /** Compatibility constructor for focused websocket tests. */
+    public ChatWebSocketHandler(ObjectMapper objectMapper, AgentService agentService) {
+        this(objectMapper, agentService, null);
     }
 
     @Override
@@ -48,6 +59,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     session.getId(),
                     session.getRemoteAddress());
             session.close(CloseStatus.NOT_ACCEPTABLE.withReason("Unauthorized"));
+            return;
+        }
+        if (!isCurrentLogin(currentUser)) {
+            session.close(CloseStatus.POLICY_VIOLATION.withReason("Session replaced"));
             return;
         }
 
@@ -137,6 +152,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     ex);
             sendSafe(session, WsChatEvent.error(request.sessionId(), extractErrorMessage(ex), request.clientRequestId()));
         }
+    }
+
+    private boolean isCurrentLogin(JwtUser user) {
+        return users == null || users.findById(user.id())
+                .map(value -> value.getLoginVersion() == user.loginVersion())
+                .orElse(false);
     }
 
     @Override

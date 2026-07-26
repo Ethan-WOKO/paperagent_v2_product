@@ -7,10 +7,12 @@ import com.yanban.api.agent.SendMessageResponse;
 import com.yanban.api.agent.AgentStopReason;
 import com.yanban.api.agent.CompletionStatus;
 import com.yanban.api.security.JwtUser;
+import com.yanban.api.user.SysUserRepository;
 import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -26,11 +28,21 @@ public class ProjectChatWebSocketHandler extends TextWebSocketHandler {
 
     private final ObjectMapper objectMapper;
     private final ProjectAgentRuntimeService projectRuntime;
+    private final SysUserRepository users;
 
+    @Autowired
     public ProjectChatWebSocketHandler(ObjectMapper objectMapper,
-                                       ProjectAgentRuntimeService projectRuntime) {
+                                       ProjectAgentRuntimeService projectRuntime,
+                                       SysUserRepository users) {
         this.objectMapper = objectMapper;
         this.projectRuntime = projectRuntime;
+        this.users = users;
+    }
+
+    /** Compatibility constructor for focused websocket tests. */
+    public ProjectChatWebSocketHandler(ObjectMapper objectMapper,
+                                       ProjectAgentRuntimeService projectRuntime) {
+        this(objectMapper, projectRuntime, null);
     }
 
     @Override
@@ -49,6 +61,10 @@ public class ProjectChatWebSocketHandler extends TextWebSocketHandler {
             log.warn("Project WebSocket message rejected: missing trusted binding wsSessionId={} remote={}",
                     session.getId(), session.getRemoteAddress());
             session.close(CloseStatus.NOT_ACCEPTABLE.withReason("Unauthorized Project binding"));
+            return;
+        }
+        if (!isCurrentLogin(currentUser)) {
+            session.close(CloseStatus.POLICY_VIOLATION.withReason("Session replaced"));
             return;
         }
 
@@ -123,6 +139,12 @@ public class ProjectChatWebSocketHandler extends TextWebSocketHandler {
             sendSafe(session, WsChatEvent.error(
                     request.sessionId(), DEFAULT_WS_ERROR, request.clientRequestId()));
         }
+    }
+
+    private boolean isCurrentLogin(JwtUser user) {
+        return users == null || users.findById(user.id())
+                .map(value -> value.getLoginVersion() == user.loginVersion())
+                .orElse(false);
     }
 
     @Override

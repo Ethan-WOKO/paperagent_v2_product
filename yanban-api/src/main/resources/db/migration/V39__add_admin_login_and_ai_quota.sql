@@ -1,0 +1,21 @@
+ALTER TABLE sys_users
+    ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'USER',
+    ADD COLUMN login_version BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN ai_quota_total BIGINT NOT NULL DEFAULT -1,
+    ADD COLUMN ai_quota_used BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN last_login_at TIMESTAMP NULL;
+
+UPDATE invite_codes SET max_uses = 5 WHERE max_uses > 5;
+
+CREATE TABLE ai_usage_records (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    feature VARCHAR(32) NOT NULL,
+    prompt_tokens BIGINT NOT NULL DEFAULT 0,
+    completion_tokens BIGINT NOT NULL DEFAULT 0,
+    total_tokens BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_ai_usage_records_user_created (user_id, created_at),
+    CONSTRAINT fk_ai_usage_records_user FOREIGN KEY (user_id) REFERENCES sys_users(id)
+);

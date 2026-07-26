@@ -1,4 +1,13 @@
 package com.yanban.api.security;
 
-public record JwtUser(Long id, String username) {
+public record JwtUser(Long id, String username, long loginVersion, String role) {
+
+    /** Kept for existing controller and websocket tests. */
+    public JwtUser(Long id, String username) {
+        this(id, username, 0L, "USER");
+    }
+
+    public boolean isAdmin() {
+        return "ADMIN".equalsIgnoreCase(role);
+    }
 }

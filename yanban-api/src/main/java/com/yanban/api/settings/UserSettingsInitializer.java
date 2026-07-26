@@ -3,6 +3,7 @@ package com.yanban.api.settings;
 import java.util.List;
 import com.yanban.core.model.OpenRouterProperties;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Component
@@ -20,9 +21,11 @@ class UserSettingsInitializer {
         this.openRouterProperties = openRouterProperties;
     }
 
-    // Join the caller transaction so bootstrap flows can create the user row
-    // and its default settings atomically before the user commit becomes visible.
-    @Transactional
+    // A duplicate settings row can be produced when the client loads several
+    // authenticated resources immediately after login. Keep the insert in its
+    // own transaction so the caller can safely re-read the row when another
+    // request won that race.
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public SysUserSettings createDefaultSettings(Long userId, SysUserSettings defaults) {
         SysUserSettings created = settingsRepository.saveAndFlush(defaults);
         seedBuiltinCustomModels(userId);

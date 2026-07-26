@@ -23,6 +23,8 @@ public class UserController {
         SysUser user = users.findById(currentUser.id())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户不存在"));
         String accountType = user.getAccountType() == null ? "NORMAL" : user.getAccountType();
-        return new UserMeResponse(user.getId(), user.getUsername(), accountType, "DEMO".equalsIgnoreCase(accountType));
+        return new UserMeResponse(user.getId(), user.getUsername(), accountType,
+                "DEMO".equalsIgnoreCase(accountType), user.getRole(), user.getAiQuotaTotal(),
+                user.getAiQuotaUsed(), user.getAiQuotaRemaining());
     }
 }

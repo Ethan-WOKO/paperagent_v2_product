@@ -3,6 +3,7 @@ package com.yanban.api.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import com.yanban.api.user.SysUser;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
@@ -28,11 +29,21 @@ public class JwtService {
     }
 
     public String createAccessToken(Long userId, String username) {
-        return createToken(userId, username, "access", properties.getAccessTokenTtl().toSeconds());
+        return createToken(userId, username, 0L, "USER", "access", properties.getAccessTokenTtl().toSeconds());
     }
 
     public String createRefreshToken(Long userId, String username) {
-        return createToken(userId, username, "refresh", properties.getRefreshTokenTtl().toSeconds());
+        return createToken(userId, username, 0L, "USER", "refresh", properties.getRefreshTokenTtl().toSeconds());
+    }
+
+    public String createAccessToken(SysUser user) {
+        return createToken(user.getId(), user.getUsername(), user.getLoginVersion(), user.getRole(), "access",
+                properties.getAccessTokenTtl().toSeconds());
+    }
+
+    public String createRefreshToken(SysUser user) {
+        return createToken(user.getId(), user.getUsername(), user.getLoginVersion(), user.getRole(), "refresh",
+                properties.getRefreshTokenTtl().toSeconds());
     }
 
     public JwtUser parseAccessToken(String token) {
@@ -55,11 +66,13 @@ public class JwtService {
         return properties.getAccessTokenTtl().toSeconds();
     }
 
-    private String createToken(Long userId, String username, String type, long ttlSeconds) {
+    private String createToken(Long userId, String username, long loginVersion, String role, String type, long ttlSeconds) {
         Instant now = clock.instant();
         return Jwts.builder()
                 .subject(String.valueOf(userId))
                 .claim("username", username)
+                .claim("loginVersion", loginVersion)
+                .claim("role", role)
                 .claim("typ", type)
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plusSeconds(ttlSeconds)))
@@ -76,6 +89,9 @@ public class JwtService {
     }
 
     private JwtUser toUser(Claims claims) {
-        return new JwtUser(Long.valueOf(claims.getSubject()), claims.get("username", String.class));
+        Number loginVersion = claims.get("loginVersion", Number.class);
+        String role = claims.get("role", String.class);
+        return new JwtUser(Long.valueOf(claims.getSubject()), claims.get("username", String.class),
+                loginVersion == null ? 0L : loginVersion.longValue(), role == null ? "USER" : role);
     }
 }

@@ -11,4 +11,6 @@ public interface AgentSessionRepository extends JpaRepository<AgentSession, Long
 
     Optional<AgentSession> findByIdAndUserId(Long id, Long userId);
     Optional<AgentSession> findByIdAndUserIdAndScopeAndProjectId(Long id, Long userId, AgentSessionScope scope, Long projectId);
+
+    long countByUserId(Long userId);
 }
