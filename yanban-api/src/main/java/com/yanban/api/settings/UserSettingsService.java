@@ -21,15 +21,13 @@ public class UserSettingsService {
     public static final String PROVIDER_GLM = "glm";
     public static final String PROVIDER_OPENROUTER_HY3_FREE = "openrouter-hy3-free";
     public static final String PROVIDER_OPENROUTER_HY3 = "openrouter-hy3";
-    public static final String DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
+    public static final String DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
     public static final String DEFAULT_GLM_MODEL = "glm-5.2";
     public static final BigDecimal DEFAULT_TEMPERATURE = new BigDecimal("0.70");
     public static final int DEFAULT_MAX_STEPS = 20;
     public static final boolean DEFAULT_RAG_ENABLED = true;
     public static final List<String> DEFAULT_FILESYSTEM_ROOTS = List.of("workspace");
     public static final List<String> DEFAULT_DEEPSEEK_MODELS = List.of(
-            "deepseek-chat",
-            "deepseek-reasoner",
             "deepseek-v4-flash",
             "deepseek-v4-pro"
     );
@@ -90,7 +88,7 @@ public class UserSettingsService {
         SysUserSettings settings = getOrCreate(userId);
         ensureOpenRouterModels(userId);
         String provider = resolveDefaultProviderForUpdate(userId, request.defaultProvider(), settings.getDefaultProvider());
-        String deepseekModel = StringUtils.hasText(request.deepseekModel()) ? request.deepseekModel().trim() : settings.getDeepseekModel();
+        String deepseekModel = resolveDeepseekModel(request.deepseekModel(), settings.getDeepseekModel());
         String glmModel = StringUtils.hasText(request.glmModel()) ? request.glmModel().trim() : settings.getGlmModel();
         BigDecimal temperature = request.deepseekTemperature() != null ? request.deepseekTemperature() : settings.getDeepseekTemperature();
         Integer maxSteps = request.maxSteps() != null ? request.maxSteps() : settings.getMaxSteps();
@@ -100,7 +98,10 @@ public class UserSettingsService {
         String encryptedGithubPat = resolveEncryptedApiKey(settings.getGithubPatEncrypted(), request.githubPat());
         String filesystemRootsText = request.filesystemRoots() == null ? settings.getFilesystemRootsText() : writeJson(request.filesystemRoots());
         String disabledSkillsJson = request.disabledSkills() == null ? settings.getDisabledSkillsJson() : writeJson(request.disabledSkills());
-        String deepseekModelsText = request.deepseekModels() == null ? settings.getDeepseekModelsText() : writeJson(request.deepseekModels());
+        List<String> deepseekModels = request.deepseekModels() == null
+                ? parseDeepseekModels(settings)
+                : normalizeDeepseekModels(request.deepseekModels());
+        String deepseekModelsText = writeJson(deepseekModels);
         String glmModelsText = request.glmModels() == null ? settings.getGlmModelsText() : writeJson(request.glmModels());
         settings.update(provider, encryptedDeepseekApiKey, encryptedGlmApiKey, deepseekModel, glmModel,
                 encryptedGithubPat, filesystemRootsText, disabledSkillsJson, temperature, maxSteps, ragDefaultEnabled,
@@ -114,7 +115,8 @@ public class UserSettingsService {
         SysUserSettings settings = getOrCreate(userId);
         String resolvedProvider = normalizeProvider(provider, settings.getDefaultProvider());
         if (DEFAULT_PROVIDER.equals(resolvedProvider)) {
-            List<String> models = modelDiscoveryService.discoverDeepSeekModels(decryptDeepseekApiKey(settings));
+            List<String> models = normalizeDeepseekModels(
+                    modelDiscoveryService.discoverDeepSeekModels(decryptDeepseekApiKey(settings)));
             String selectedModel = models.contains(settings.getDeepseekModel())
                     ? settings.getDeepseekModel()
                     : models.get(0);
@@ -253,7 +255,7 @@ public class UserSettingsService {
 
         if (DEFAULT_PROVIDER.equals(resolvedProvider)) {
             return new ModelEndpoint(resolvedProvider,
-                    StringUtils.hasText(model) ? model : settings.getDeepseekModel(),
+                    resolveDeepseekModel(model, settings.getDeepseekModel()),
                     null,
                     decryptDeepseekApiKey(settings),
                     "builtin",
@@ -347,7 +349,7 @@ public class UserSettingsService {
     }
 
     public List<String> parseDeepseekModels(SysUserSettings settings) {
-        return readStringList(settings.getDeepseekModelsText(), DEFAULT_DEEPSEEK_MODELS);
+        return normalizeDeepseekModels(readStringList(settings.getDeepseekModelsText(), DEFAULT_DEEPSEEK_MODELS));
     }
 
     public List<String> parseGlmModels(SysUserSettings settings) {
@@ -382,6 +384,28 @@ public class UserSettingsService {
                 DEFAULT_MAX_STEPS,
                 DEFAULT_RAG_ENABLED
         );
+    }
+
+    private String resolveDeepseekModel(String requestedModel, String fallbackModel) {
+        String resolved = StringUtils.hasText(requestedModel) ? requestedModel.trim() : fallbackModel;
+        if (DEFAULT_DEEPSEEK_MODELS.contains(resolved)) {
+            return resolved;
+        }
+        if ("deepseek-chat".equals(resolved) || "deepseek-reasoner".equals(resolved)) {
+            return DEFAULT_DEEPSEEK_MODEL;
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "DeepSeek model must be deepseek-v4-flash or deepseek-v4-pro");
+    }
+
+    private List<String> normalizeDeepseekModels(List<String> models) {
+        List<String> normalized = (models == null ? List.<String>of() : models).stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .filter(DEFAULT_DEEPSEEK_MODELS::contains)
+                .distinct()
+                .toList();
+        return normalized.isEmpty() ? DEFAULT_DEEPSEEK_MODELS : normalized;
     }
 
     private String normalizeProvider(String provider, String fallback) {

@@ -101,7 +101,7 @@ public class YanbanCli implements Runnable {
             JsonNode current = API.getSettings();
             var node = OBJECT_MAPPER.createObjectNode();
             node.put("defaultProvider", current.path("defaultProvider").asText("deepseek"));
-            node.put("deepseekModel", current.path("deepseekModel").asText("deepseek-chat"));
+            node.put("deepseekModel", current.path("deepseekModel").asText("deepseek-v4-flash"));
             node.put("glmModel", current.path("glmModel").asText("glm-4.5-air"));
             node.put("deepseekTemperature", current.path("deepseekTemperature").asDouble(0.7));
             node.put("maxSteps", current.path("maxSteps").asInt(20));

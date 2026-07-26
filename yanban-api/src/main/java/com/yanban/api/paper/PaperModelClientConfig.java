@@ -28,7 +28,7 @@ import org.springframework.util.StringUtils;
 @EnableConfigurationProperties(PaperModelProperties.class)
 public class PaperModelClientConfig {
 
-    private static final String DEFAULT_PAPER_DEEPSEEK_MODEL = "deepseek-chat";
+    private static final String DEFAULT_PAPER_DEEPSEEK_MODEL = "deepseek-v4-flash";
     private static final String DEFAULT_OPENROUTER_MODEL = "tencent/hy3:free";
     private static final String DEFAULT_DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
     private static final String DEFAULT_GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";

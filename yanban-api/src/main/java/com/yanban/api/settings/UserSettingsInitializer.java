@@ -38,9 +38,7 @@ class UserSettingsInitializer {
         }
         List<UserModel> builtins = List.of(
                 new UserModel(userId, "deepseek", "DeepSeek", UserSettingsService.DEFAULT_DEEPSEEK_MODEL, null, null, true, 1),
-                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-reasoner", null, null, true, 2),
-                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-v4-flash", null, null, true, 3),
-                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-v4-pro", null, null, true, 4),
+                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-v4-pro", null, null, true, 2),
                 new UserModel(userId, "glm", "Zhipu GLM", "glm-5.2", null, null, true, 5),
                 new UserModel(userId, "glm", "Zhipu GLM", "glm-5.1", null, null, true, 6),
                 new UserModel(userId, "glm", "Zhipu GLM", "glm-5", null, null, true, 7),

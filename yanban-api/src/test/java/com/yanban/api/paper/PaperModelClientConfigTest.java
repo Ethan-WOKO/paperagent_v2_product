@@ -85,7 +85,7 @@ class PaperModelClientConfigTest {
         verify(chatModel).chat(any(ChatRequest.class), runtimeCaptor.capture());
         AgentRuntimeRequest runtime = runtimeCaptor.getValue();
         assertThat(runtime.provider()).isEqualTo("deepseek");
-        assertThat(runtime.model()).isEqualTo("deepseek-chat");
+        assertThat(runtime.model()).isEqualTo("deepseek-v4-flash");
         assertThat(runtime.apiKey()).isNull();
     }
 

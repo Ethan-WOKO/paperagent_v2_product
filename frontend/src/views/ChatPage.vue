@@ -498,6 +498,7 @@ const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
 const SESSION_STORAGE_KEY = 'yanban.chat.selectedSessionId';
 const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
+const SUPPORTED_DEEPSEEK_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
 const DEFAULT_GLM_MODEL = 'glm-5.2';
 const WS_ACK_TIMEOUT_MS = 4000;
 const WS_MAX_RETRIES = 3;
@@ -517,11 +518,13 @@ const skillOptions = computed(() => availableSkills.value
 
 const modelOptions = computed(() => {
   const options: { label: string; value: string }[] = [];
-  const deepseekModels = settings.value?.deepseekModels?.length
-    ? settings.value.deepseekModels
-    : [DEFAULT_DEEPSEEK_MODEL];
+  const deepseekModels = (settings.value?.deepseekModels || [])
+    .filter(isSupportedDeepseekModel);
   for (const m of deepseekModels) {
     options.push({ label: 'DeepSeek / ' + m, value: toModelKey('deepseek', m) });
+  }
+  if (!deepseekModels.length) {
+    options.push({ label: 'DeepSeek / ' + DEFAULT_DEEPSEEK_MODEL, value: toModelKey('deepseek', DEFAULT_DEEPSEEK_MODEL) });
   }
   const glmModels = settings.value?.glmModels?.length
     ? settings.value.glmModels
@@ -537,7 +540,9 @@ const modelOptions = computed(() => {
   }
   if (selectedModelKey.value && !options.some((option) => option.value === selectedModelKey.value)) {
     const selected = parseModelKey(selectedModelKey.value);
-    options.push({ label: formatProviderName(selected.provider) + ' / ' + selected.model, value: selectedModelKey.value });
+    if (selected.provider !== 'deepseek' || isSupportedDeepseekModel(selected.model)) {
+      options.push({ label: formatProviderName(selected.provider) + ' / ' + selected.model, value: selectedModelKey.value });
+    }
   }
   return options;
 });
@@ -729,7 +734,7 @@ async function selectSession(sessionId: number) {
   const session = sessions.value.find((item) => item.id === sessionId);
   ragDisabled.value = Boolean(session?.ragDisabled);
   if (session?.modelProvider && session?.model) {
-    selectedModelKey.value = toModelKey(session.modelProvider, session.model);
+    selectedModelKey.value = toModelKey(session.modelProvider, normalizeModelName(session.modelProvider, session.model));
   }
   await reloadCurrentMessages(sessionId);
   const storedPanelState = demoQuestionPanelState.value[sessionId];
@@ -2489,7 +2494,7 @@ function parseModelKey(key: string) {
   }
   return {
     provider,
-    model: modelParts.join('::') || DEFAULT_DEEPSEEK_MODEL,
+    model: normalizeModelName(provider, modelParts.join('::') || DEFAULT_DEEPSEEK_MODEL),
   };
 }
 
@@ -2499,7 +2504,18 @@ function defaultModelKeyFromSettings(currentSettings: UserSettingsResponse | nul
   const model = customModel?.modelName || (provider === 'glm'
     ? (currentSettings?.glmModel || DEFAULT_GLM_MODEL)
     : (currentSettings?.deepseekModel || DEFAULT_DEEPSEEK_MODEL));
-  return toModelKey(provider, model);
+  return toModelKey(provider, normalizeModelName(provider, model));
+}
+
+function isSupportedDeepseekModel(model: string) {
+  return SUPPORTED_DEEPSEEK_MODELS.has(model);
+}
+
+function normalizeModelName(provider: string, model: string) {
+  if (provider.toLowerCase() === 'deepseek' && !isSupportedDeepseekModel(model)) {
+    return DEFAULT_DEEPSEEK_MODEL;
+  }
+  return model;
 }
 
 function formatProviderName(provider: string) {

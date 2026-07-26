@@ -100,6 +100,15 @@
                   <NFormItem label="Default provider">
                     <NSelect v-model:value="form.defaultProvider" :options="providerOptions" />
                   </NFormItem>
+                  <NFormItem label="Default model">
+                    <NSelect
+                      v-model:value="defaultModel"
+                      filterable
+                      tag
+                      :options="defaultModelOptions"
+                      :disabled="!isBuiltinDefaultProvider"
+                    />
+                  </NFormItem>
                   <NFormItem label="Temperature">
                     <NInputNumber v-model:value="form.deepseekTemperature" :min="0" :max="2" :step="0.1" style="width: 100%" />
                   </NFormItem>
@@ -295,7 +304,7 @@ import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
 import { useI18n } from '@/composables/useI18n';
 
-const DEFAULT_DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'];
+const DEFAULT_DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
 const DEFAULT_GLM_MODELS = [
   'glm-5.2',
   'glm-5.1',
@@ -313,14 +322,19 @@ const DEFAULT_GLM_MODELS = [
   'glm-4-flash',
 ];
 
-const providerOptions = computed(() => [
-  { label: 'DeepSeek', value: 'deepseek' },
-  { label: 'GLM', value: 'glm' },
-  ...customModels.value.map((model) => ({
-    label: `${model.label} / ${model.modelName}`,
-    value: model.providerKey,
-  })),
-]);
+const providerOptions = computed(() => {
+  const customProviders = new Map<string, { label: string; value: string }>();
+  for (const model of customModels.value) {
+    if (!model.builtin && !customProviders.has(model.providerKey)) {
+      customProviders.set(model.providerKey, { label: model.label, value: model.providerKey });
+    }
+  }
+  return [
+    { label: 'DeepSeek', value: 'deepseek' },
+    { label: 'GLM', value: 'glm' },
+    ...customProviders.values(),
+  ];
+});
 
 const saving = ref(false);
 const authStore = useAuthStore();
@@ -361,6 +375,36 @@ const updatedAtText = computed(() => updatedAt.value
   : (isEnglish.value ? 'Never' : '从未'));
 const deepseekModelOptions = computed(() => form.deepseekModels.map((m) => ({ label: m, value: m })));
 const glmModelOptions = computed(() => form.glmModels.map((m) => ({ label: m, value: m })));
+const isBuiltinDefaultProvider = computed(() => form.defaultProvider === 'deepseek' || form.defaultProvider === 'glm');
+const defaultModelOptions = computed(() => {
+  if (form.defaultProvider === 'deepseek') {
+    return deepseekModelOptions.value;
+  }
+  if (form.defaultProvider === 'glm') {
+    return glmModelOptions.value;
+  }
+  return customModels.value
+    .filter((model) => model.providerKey === form.defaultProvider)
+    .map((model) => ({ label: model.modelName, value: model.modelName }));
+});
+const defaultModel = computed<string>({
+  get() {
+    if (form.defaultProvider === 'deepseek') {
+      return form.deepseekModel;
+    }
+    if (form.defaultProvider === 'glm') {
+      return form.glmModel;
+    }
+    return customModels.value.find((model) => model.providerKey === form.defaultProvider)?.modelName || '';
+  },
+  set(value) {
+    if (form.defaultProvider === 'deepseek') {
+      form.deepseekModel = value;
+    } else if (form.defaultProvider === 'glm') {
+      form.glmModel = value;
+    }
+  },
+});
 const builtinModels = computed(() => customModels.value.filter((m) => m.builtin));
 
 onMounted(async () => {
