@@ -93,3 +93,6 @@ jobs:
 
       - name: Test V2 first active-Step interruption persistence
         run: mvn -pl yanban-api -am -Dtest=ProductStepInterruptionRepositoryAdapterTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test deterministic V2 active-Step interruption materialization
+        run: mvn -pl agent-v2/agent-runtime -am -Dtest=DeterministicActiveStepInterruptionMaterializerTest,ActiveStepInterruptionMaterializerBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
