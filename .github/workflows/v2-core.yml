@@ -51,3 +51,6 @@ jobs:
 
       - name: Test V2 Plan bootstrap persistence adapter
         run: mvn -pl yanban-api -am -Dtest=ProductPlanBootstrapCodecTest,ProductPlanBootstrapRepositoryAdapterTest,V2PlanBootstrapMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test authenticated V2 Plan bootstrap composition
+        run: mvn -pl yanban-agent-v2-adapter,yanban-api -am -Dtest=ProductPersistentPlanBootstrapRequestAdapterTest,AuthenticatedAgentTurnPlanBootstrapComposerTest,AuthenticatedAgentTurnPlanBootstrapCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test

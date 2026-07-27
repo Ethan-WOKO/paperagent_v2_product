@@ -32,6 +32,11 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>io.paperagent.v2</groupId>
+            <artifactId>agent-runtime</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>com.yanban</groupId>
             <artifactId>yanban-knowledge</artifactId>
             <version>${project.version}</version>
