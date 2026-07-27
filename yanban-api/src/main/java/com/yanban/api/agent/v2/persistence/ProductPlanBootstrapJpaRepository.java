@@ -16,4 +16,10 @@ interface ProductPlanBootstrapJpaRepository
     @Query("select bootstrap from ProductPlanBootstrapEntity bootstrap "
             + "where bootstrap.planId = :planId")
     Optional<ProductPlanBootstrapEntity> lockByPlanId(@Param("planId") String planId);
+
+    @Lock(LockModeType.PESSIMISTIC_READ)
+    @Query("select bootstrap from ProductPlanBootstrapEntity bootstrap "
+            + "where bootstrap.planId = :planId")
+    Optional<ProductPlanBootstrapEntity> lockByPlanIdForInspection(
+            @Param("planId") String planId);
 }

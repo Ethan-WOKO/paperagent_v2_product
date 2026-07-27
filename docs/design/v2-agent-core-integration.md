@@ -269,3 +269,27 @@ The product composer does not catch, remap, retry, release, or repair them.
 This boundary activates no Controller or traffic, starts no Agent step or
 loop, derives no lease/event authority, and implements no recovery. Those
 remain later, independently frozen Issue boundaries.
+
+## Product execution-start recovery inspection boundary
+
+The product database now implements the stable V2
+`ExecutionStartRecoveryRepository` as a read-only view over the existing
+canonical Plan-bootstrap and atomic execution-start authorities. Inspection
+locks the bootstrap authority for a transactionally consistent cut shared
+with atomic start: a concurrent start is observed either before it commits as
+`PersistedExecutionStartReady` or after it commits as
+`PersistedExecutionStartCommitted`, never between its internal statements.
+
+READY contains the exact canonical bootstrap and its unchanged Plan. COMMITTED
+additionally verifies both canonical execution-start documents against every
+extracted Plan, TaskFrame, event, owner, fence, checkpoint, and row binding
+before returning the persisted start. Missing authority is distinguished from
+invalid input; any occupied incomplete, corrupt, cross-bound, or non-canonical
+cut fails closed through the single sanitized execution-recovery partial-state
+failure.
+
+Inspection never evaluates or mutates a lease, creates or updates a row,
+observes time, retries, sleeps, or performs recovery. This is only the current
+pre-step relational cut. Runtime recovery composition and later Plan,
+execution-context, step, Workspace, Provider, Sandbox, loop, API, and traffic
+boundaries remain separate Issues.

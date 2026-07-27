@@ -63,3 +63,6 @@ jobs:
 
       - name: Test authenticated V2 fresh execution start composition
         run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnFreshExecutionStartComposerTest,AuthenticatedAgentTurnFreshExecutionStartCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 execution start recovery inspection adapter
+        run: mvn -pl yanban-api -am -Dtest=ProductExecutionStartRecoveryRepositoryAdapterTest,ProductExecutionStartRecoveryRepositoryConcurrencyTest -Dsurefire.failIfNoSpecifiedTests=false test
