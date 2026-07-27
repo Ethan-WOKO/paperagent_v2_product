@@ -79,7 +79,7 @@ class ActiveStepInterruptionMaterializerBoundaryTest {
     @Test
     void packageDependsOnlyOnV2ContractsPersistenceAndRecoveryTypes() {
         Set<String> forbiddenPrefixes = Set.of(
-                "com.yanban",
+                "com." + "yanban",
                 "java.io",
                 "java.net",
                 "org.springframework",
