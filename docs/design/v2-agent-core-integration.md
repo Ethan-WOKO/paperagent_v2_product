@@ -248,3 +248,24 @@ This adapter does not create a generic event or checkpoint store, start a
 Runtime loop, call a Provider, reserve a Workspace, execute a tool, expose an
 API, mutate a Project, or read legacy execution tables. Fresh-start Runtime
 composition and later execution persistence remain separate Issue boundaries.
+
+## Authenticated fresh execution-start composition boundary
+
+The first internal product fresh-start path resolves the authenticated Agent
+turn before adapting and persistently bootstrapping it. A narrow command holds
+only the existing bootstrap command and an optional stable fresh-start
+attempt; it has no identity, Project path, Provider, tool, Sandbox, or second
+authority source. The exact bootstrap persistence result and caller-owned
+attempt are passed unchanged to the stable Runtime starter.
+
+Spring exposes one product `FreshExecutionStarter`, composed from the
+deterministic fresh-execution gate and start materializer with the relational
+lease and execution-start repository ports. A newly applied bootstrap may
+acquire one fenced lease and atomically persist the start marker. A replayed
+bootstrap requires recovery before lease acquisition, while rejected
+bootstrap, lease, and start outcomes retain their stable Runtime identities.
+The product composer does not catch, remap, retry, release, or repair them.
+
+This boundary activates no Controller or traffic, starts no Agent step or
+loop, derives no lease/event authority, and implements no recovery. Those
+remain later, independently frozen Issue boundaries.
