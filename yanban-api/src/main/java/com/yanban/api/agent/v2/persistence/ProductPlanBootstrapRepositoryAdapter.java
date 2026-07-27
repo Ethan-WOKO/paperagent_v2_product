@@ -77,8 +77,13 @@ public class ProductPlanBootstrapRepositoryAdapter implements PlanBootstrapRepos
             if (winner != null) {
                 return classifyPlanReplay(winner, taskFrame, plan, checkpoint);
             }
-            if (transactions.findByTaskFrameId(taskFrame.id().value()).isPresent()) {
-                return partialState();
+            ProductPlanBootstrapEntity taskFrameWinner = transactions
+                    .findByTaskFrameId(taskFrame.id().value()).orElse(null);
+            if (taskFrameWinner != null) {
+                return taskFrameWinner.planId().equals(plan.id().value())
+                        ? classifyPlanReplay(
+                                taskFrameWinner, taskFrame, plan, checkpoint)
+                        : partialState();
             }
             throw insertRace;
         }
