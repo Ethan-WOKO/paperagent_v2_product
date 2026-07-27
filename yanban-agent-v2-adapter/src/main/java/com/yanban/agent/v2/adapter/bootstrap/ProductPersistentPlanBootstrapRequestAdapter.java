@@ -4,7 +4,6 @@ import com.yanban.agent.v2.adapter.taskframe.DeterministicProductTaskFrameAdapte
 import com.yanban.agent.v2.adapter.taskframe.ProductTaskFrameIntakeRequest;
 import com.yanban.agent.v2.adapter.taskframe.ProductTaskFramePreparation;
 import com.yanban.core.agent.AgentRunIdentity;
-import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanRevisionId;
 import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapRequest;
 
@@ -19,20 +18,26 @@ import java.util.Optional;
  * Pure product-to-V2 bootstrap request adaptation without ambient state.
  */
 public final class ProductPersistentPlanBootstrapRequestAdapter {
-    private static final String PLAN_PREFIX = "product-plan.";
     private static final String REVISION_PREFIX = "product-revision.";
-    private static final String PLAN_DOMAIN = "plan\0";
     private static final String REVISION_DOMAIN = "revision-1\0";
 
     private final DeterministicProductTaskFrameAdapter taskFrames;
+    private final ProductPlanIdDerivation planIds;
 
     public ProductPersistentPlanBootstrapRequestAdapter() {
-        this(new DeterministicProductTaskFrameAdapter());
+        this(new ProductPlanIdDerivation());
+    }
+
+    public ProductPersistentPlanBootstrapRequestAdapter(
+            ProductPlanIdDerivation planIds) {
+        this(new DeterministicProductTaskFrameAdapter(), planIds);
     }
 
     ProductPersistentPlanBootstrapRequestAdapter(
-            DeterministicProductTaskFrameAdapter taskFrames) {
+            DeterministicProductTaskFrameAdapter taskFrames,
+            ProductPlanIdDerivation planIds) {
         this.taskFrames = Objects.requireNonNull(taskFrames, "taskFrames");
+        this.planIds = Objects.requireNonNull(planIds, "planIds");
     }
 
     public PersistentPlanBootstrapRequest adapt(
@@ -51,7 +56,7 @@ public final class ProductPersistentPlanBootstrapRequestAdapter {
         String runId = preparation.identity().runId();
         return new PersistentPlanBootstrapRequest(
                 preparation.freezeRequest(),
-                new PlanId(PLAN_PREFIX + sha256(PLAN_DOMAIN + runId)),
+                planIds.derive(preparation.identity()),
                 new PlanRevisionId(
                         REVISION_PREFIX + sha256(REVISION_DOMAIN + runId)),
                 command.initialPlanDraft(),
