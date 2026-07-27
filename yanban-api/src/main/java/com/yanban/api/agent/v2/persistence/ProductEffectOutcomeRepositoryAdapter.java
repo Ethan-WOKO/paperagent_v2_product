@@ -20,12 +20,12 @@ public final class ProductEffectOutcomeRepositoryAdapter
         implements EffectOutcomeRepository {
     private final ProductEffectOutcomeTransactions transactions;
     private final ProductEffectIntentRepositoryAdapter intents;
-    private final ProductStepRecoveryRepositoryAdapter recovery;
+    private final ProductStepRecoveryTransactions recovery;
 
     public ProductEffectOutcomeRepositoryAdapter(
             ProductEffectOutcomeTransactions transactions,
             ProductEffectIntentRepositoryAdapter intents,
-            ProductStepRecoveryRepositoryAdapter recovery) {
+            ProductStepRecoveryTransactions recovery) {
         this.transactions = transactions;
         this.intents = intents;
         this.recovery = recovery;
@@ -49,8 +49,8 @@ public final class ProductEffectOutcomeRepositoryAdapter
             return copy(intent);
         }
         PersistenceResult<StepRecoverySnapshot> inspected =
-                recovery.inspect(intent.value().orElseThrow()
-                        .intent().planId());
+                recovery.inspectWriterAuthority(
+                        intent.value().orElseThrow().intent().planId());
         PersistenceResult<PersistedEffectProgress> authority =
                 active(inspected);
         if (authority != null) {
@@ -100,8 +100,8 @@ public final class ProductEffectOutcomeRepositoryAdapter
             return copy(intent);
         }
         PersistenceResult<StepRecoverySnapshot> inspected =
-                recovery.inspect(intent.value().orElseThrow()
-                        .intent().planId());
+                recovery.inspectWriterAuthority(
+                        intent.value().orElseThrow().intent().planId());
         PersistenceResult<PersistedEffectResult> authority =
                 active(inspected);
         if (authority != null) {

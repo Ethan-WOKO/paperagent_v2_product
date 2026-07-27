@@ -46,6 +46,10 @@ class ProductStepRecoveryTransactions {
     private final ProductPlanExecutionContextCodec contextCodec;
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepActivationCodec activationCodec;
+    private final ProductStepInterruptionJpaRepository interruptions;
+    private final ProductStepInterruptionMarkerReader interruptionMarkers;
+    private final ProductStepCompletionJpaRepository completions;
+    private final ProductStepCompletionMarkerReader completionMarkers;
 
     ProductStepRecoveryTransactions(
             ProductPlanBootstrapJpaRepository bootstraps,
@@ -55,7 +59,11 @@ class ProductStepRecoveryTransactions {
             ProductPlanExecutionContextJpaRepository contexts,
             ProductPlanExecutionContextCodec contextCodec,
             ProductStepActivationJpaRepository activations,
-            ProductStepActivationCodec activationCodec) {
+            ProductStepActivationCodec activationCodec,
+            ProductStepInterruptionJpaRepository interruptions,
+            ProductStepInterruptionMarkerReader interruptionMarkers,
+            ProductStepCompletionJpaRepository completions,
+            ProductStepCompletionMarkerReader completionMarkers) {
         this.bootstraps = bootstraps;
         this.bootstrapCodec = bootstrapCodec;
         this.starts = starts;
@@ -64,16 +72,35 @@ class ProductStepRecoveryTransactions {
         this.contextCodec = contextCodec;
         this.activations = activations;
         this.activationCodec = activationCodec;
+        this.interruptions = interruptions;
+        this.interruptionMarkers = interruptionMarkers;
+        this.completions = completions;
+        this.completionMarkers = completionMarkers;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public PersistenceResult<StepRecoverySnapshot> inspect(PlanId planId) {
+        return inspect(planId, true);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    PersistenceResult<StepRecoverySnapshot> inspectWriterAuthority(
+            PlanId planId) {
+        return inspect(planId, false);
+    }
+
+    private PersistenceResult<StepRecoverySnapshot> inspect(
+            PlanId planId, boolean terminalAware) {
         ProductPlanBootstrapEntity bootstrapRow = bootstraps
                 .lockByPlanIdForInspection(planId.value()).orElse(null);
         if (bootstrapRow == null) {
             boolean occupied = starts.existsById(planId.value())
                     || contexts.existsById(planId.value())
-                    || !activations.findAllByPlanId(planId.value()).isEmpty();
+                    || !activations.findAllByPlanId(planId.value()).isEmpty()
+                    || !interruptions.findAllByPlanId(
+                            planId.value()).isEmpty()
+                    || !completions.findAllByPlanId(
+                            planId.value()).isEmpty();
             return occupied
                     ? partial()
                     : PersistenceResult.rejected(
@@ -91,8 +118,13 @@ class ProductStepRecoveryTransactions {
 
         List<ProductStepActivationEntity> rows =
                 activations.findAllByPlanId(planId.value());
+        List<ProductStepInterruptionEntity> interruptionRows = terminalAware
+                ? interruptions.findAllByPlanId(planId.value()) : List.of();
+        List<ProductStepCompletionEntity> completionRows = terminalAware
+                ? completions.findAllByPlanId(planId.value()) : List.of();
         if (rows.isEmpty()) {
-            return notEligible();
+            return interruptionRows.isEmpty() && completionRows.isEmpty()
+                    ? notEligible() : partial();
         }
         if (rows.size() != 1) {
             return partial();
@@ -104,10 +136,25 @@ class ProductStepRecoveryTransactions {
         if (!recoverable(source, marker)) {
             return notEligible();
         }
-        return PersistenceResult.found(new PersistedStepRecoveryActive(
+        PersistedStepRecoveryActive active = new PersistedStepRecoveryActive(
                 source.bootstrap().taskFrame(), source.bootstrap().plan(),
                 marker.result().activatedCheckpoint(), marker.result(),
-                context.confirmed()));
+                context.confirmed());
+        if (interruptionRows.isEmpty() && completionRows.isEmpty()) {
+            return PersistenceResult.found(active);
+        }
+        if (interruptionRows.size() > 1 || completionRows.size() > 1
+                || !interruptionRows.isEmpty()
+                && !completionRows.isEmpty()) {
+            return partial();
+        }
+        if (!interruptionRows.isEmpty()) {
+            return interruptionMarkers.read(
+                    interruptionRows.get(0), active) == null
+                    ? partial() : notEligible();
+        }
+        return completionMarkers.read(completionRows.get(0), active) == null
+                ? partial() : notEligible();
     }
 
     private Source source(

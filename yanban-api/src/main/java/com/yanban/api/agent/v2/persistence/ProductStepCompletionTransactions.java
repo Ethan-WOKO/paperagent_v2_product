@@ -13,7 +13,6 @@ import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.contracts.ToolCallId;
-import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedStepCompletion;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
@@ -52,6 +51,7 @@ class ProductStepCompletionTransactions {
     private final ProductEffectOutcomeResultJpaRepository outcomeResults;
     private final ProductEffectOutcomeMarkerReader outcomeMarkers;
     private final ProductStepRecoveryTransactions recovery;
+    private final ProductStepCompletionMarkerReader markerReader;
     private final ProductStepCompletionCodec codec;
     private final ProductEffectOutcomeTimeSource time;
     private final EntityManager entityManager;
@@ -69,6 +69,7 @@ class ProductStepCompletionTransactions {
             ProductEffectOutcomeResultJpaRepository outcomeResults,
             ProductEffectOutcomeMarkerReader outcomeMarkers,
             ProductStepRecoveryTransactions recovery,
+            ProductStepCompletionMarkerReader markerReader,
             ProductStepCompletionCodec codec,
             ProductEffectOutcomeTimeSource time,
             EntityManager entityManager) {
@@ -84,6 +85,7 @@ class ProductStepCompletionTransactions {
         this.outcomeResults = outcomeResults;
         this.outcomeMarkers = outcomeMarkers;
         this.recovery = recovery;
+        this.markerReader = markerReader;
         this.codec = codec;
         this.time = time;
         this.entityManager = entityManager;
@@ -98,7 +100,7 @@ class ProductStepCompletionTransactions {
         }
 
         PersistenceResult<io.paperagent.v2.persistence.StepRecoverySnapshot>
-                inspected = recovery.inspect(request.planId());
+                inspected = recovery.inspectWriterAuthority(request.planId());
         if (inspected.outcome() != PersistenceOutcome.FOUND
                 || !(inspected.value().orElse(null)
                 instanceof PersistedStepRecoveryActive active)) {
@@ -222,7 +224,8 @@ class ProductStepCompletionTransactions {
                         .equals(byEvent.completionEventId())) {
             return partial();
         }
-        Marker marker = marker(byEvent);
+        ProductStepCompletionMarkerReader.Marker marker =
+                markerReader.decode(byEvent);
         if (marker == null) {
             return partial();
         }
@@ -230,159 +233,6 @@ class ProductStepCompletionTransactions {
                 ? PersistenceResult.replayed(marker.result())
                 : rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
                         "request.completionEvent.id");
-    }
-
-    private Marker marker(ProductStepCompletionEntity row) {
-        try {
-            StepCompletionRequest request = codec.decodeRequest(
-                    row.requestFormatVersion(), row.requestSha256(),
-                    row.requestJson());
-            PersistedStepCompletion result = codec.decodeResult(
-                    row.resultFormatVersion(), row.resultSha256(),
-                    row.resultJson());
-            ProductStepActivationEntity activationRow = activations.findById(
-                    row.activationEventId()).orElse(null);
-            if (activationRow == null) {
-                return null;
-            }
-            var activationRequest = activationCodec.decodeRequest(
-                    activationRow.requestFormatVersion(),
-                    activationRow.requestSha256(),
-                    activationRow.requestJson());
-            var activationResult = activationCodec.decodeResult(
-                    activationRow.resultFormatVersion(),
-                    activationRow.resultSha256(),
-                    activationRow.resultJson());
-            List<ProductStepCompletionEvidenceEntity> rows = evidence
-                    .findAllByCompletionEventIdOrderByOrdinal(
-                            row.completionEventId());
-            List<EffectReceipt> canonical = new ArrayList<>();
-            for (ProductEffectIntentEntity intentRow :
-                    intents.findAllByPlanId(row.planId())) {
-                PersistedEffectIntent intent =
-                        outcomeMarkers.intent(intentRow.toolCallId());
-                if (intent == null
-                        || !intentRow.planId().equals(
-                                intent.intent().planId().value())
-                        || !intentRow.stepId().equals(
-                                intent.intent().stepId().value())
-                        || !intentRow.activationEventId().equals(
-                                intent.activationEventId().value())) {
-                    return null;
-                }
-                if (!intent.intent().stepId().value().equals(row.stepId())) {
-                    continue;
-                }
-                ProductEffectOutcomeResultEntity outcome = outcomeResults
-                        .findById(intentRow.toolCallId()).orElse(null);
-                var outcomeMarker = outcome == null
-                        ? null : outcomeMarkers.result(outcome);
-                if (outcomeMarker == null
-                        || !intentRow.activationEventId().equals(
-                                row.activationEventId())
-                        || !intent.activationEventId().value().equals(
-                                row.activationEventId())) {
-                    return null;
-                }
-                canonical.add(new EffectReceipt(
-                        new ToolCallId(intentRow.toolCallId()),
-                        outcomeMarker.result().receipt().id()));
-            }
-            canonical.sort(Comparator.comparing(
-                    value -> value.toolCallId().value()));
-            if (rows.size() != canonical.size()) {
-                return null;
-            }
-            List<ReceiptId> receipts = new ArrayList<>();
-            int ordinal = 0;
-            String previousToolCall = null;
-            for (ProductStepCompletionEvidenceEntity item : rows) {
-                EffectReceipt expected = canonical.get(ordinal);
-                ProductEffectOutcomeResultEntity outcome = outcomeResults
-                        .findById(item.toolCallId()).orElse(null);
-                if (item.ordinal() != ordinal++
-                        || previousToolCall != null
-                        && previousToolCall.compareTo(item.toolCallId()) >= 0
-                        || !item.planId().equals(row.planId())
-                        || !item.stepId().equals(row.stepId())
-                        || !item.activationEventId().equals(
-                                row.activationEventId())
-                        || !item.toolCallId().equals(
-                                expected.toolCallId().value())
-                        || !item.receiptId().equals(
-                                expected.receiptId().value())
-                        || outcome == null
-                        || !item.receiptId().equals(outcome.receiptId())
-                        || outcomeMarkers.result(outcome) == null) {
-                    return null;
-                }
-                previousToolCall = item.toolCallId();
-                receipts.add(new ReceiptId(item.receiptId()));
-            }
-            VersionedCheckpoint checkpoint = result.completedCheckpoint();
-            boolean valid = row.committedAt() != null
-                    && row.planId().equals(request.planId().value())
-                    && row.planId().equals(result.planId().value())
-                    && row.stepId().equals(request.stepId().value())
-                    && row.stepId().equals(result.stepId().value())
-                    && activationRow.planId().equals(row.planId())
-                    && activationRow.stepId().equals(row.stepId())
-                    && activationRow.activationEventId().equals(
-                            row.activationEventId())
-                    && activationRequest.planId().equals(request.planId())
-                    && activationRequest.stepId().equals(request.stepId())
-                    && activationRequest.activationEvent().equals(
-                            activationResult.activationEvent())
-                    && activationRequest.activatedCheckpoint().equals(
-                            activationResult.activatedCheckpoint().checkpoint())
-                    && activationResult.activationEvent().id().value()
-                            .equals(row.activationEventId())
-                    && activationResult.planId().equals(request.planId())
-                    && activationResult.stepId().equals(request.stepId())
-                    && activationResult.activatedCheckpoint().version()
-                            == request.expectedCheckpointVersion()
-                    && activationResult.activatedCheckpoint().checkpoint()
-                            .revisionId().equals(
-                                    request.expectedRevisionId())
-                    && activationResult.activatedCheckpoint().checkpoint()
-                            .revisionNumber()
-                            == request.expectedRevisionNumber()
-                    && activationResult.activationEvent().sequence()
-                            == request.expectedEventHeadSequence()
-                    && row.completionEventId().equals(
-                            request.completionEvent().id().value())
-                    && row.completionEventId().equals(
-                            result.completionEvent().id().value())
-                    && row.sourceRevisionId().equals(
-                            request.expectedRevisionId().value())
-                    && row.sourceRevisionNumber()
-                            == request.expectedRevisionNumber()
-                    && row.resultRevisionId().equals(
-                            result.completedRevision().id().value())
-                    && row.resultRevisionNumber()
-                            == result.completedRevision().number()
-                    && row.sourceCheckpointVersion()
-                            == request.expectedCheckpointVersion()
-                    && row.resultCheckpointVersion() == checkpoint.version()
-                    && row.sourceEventSequence()
-                            == request.expectedEventHeadSequence()
-                    && row.resultEventSequence()
-                            == result.completionEvent().sequence()
-                    && row.leaseOwnerId().equals(result.leaseOwnerId())
-                    && row.fencingToken() == request.fencingToken()
-                    && row.fencingToken() == result.fencingToken()
-                    && request.completionEvent().equals(
-                            result.completionEvent())
-                    && request.completedRevision().equals(
-                            result.completedRevision())
-                    && request.completedCheckpoint().equals(
-                            checkpoint.checkpoint())
-                    && request.completionFact().receiptReferences()
-                            .equals(receipts);
-            return valid ? new Marker(request, result) : null;
-        } catch (RuntimeException exception) {
-            return null;
-        }
     }
 
     private boolean canonicalActivation(
@@ -630,10 +480,6 @@ class ProductStepCompletionTransactions {
     private static PersistenceResult<PersistedStepCompletion> rejected(
             PersistenceErrorCode code, String path) {
         return PersistenceResult.rejected(code, path);
-    }
-
-    private record Marker(
-            StepCompletionRequest request, PersistedStepCompletion result) {
     }
 
     private record EffectReceipt(

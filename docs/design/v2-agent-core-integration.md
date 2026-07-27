@@ -529,6 +529,23 @@ leases do not change recovery facts. The adapter performs no write, repair,
 retry, cleanup, Project/Workspace access, execution, model, Provider, Sandbox,
 tool, Controller, API, UI, schema, or legacy Agent operation.
 
+The same bootstrap-locked cut is terminal-aware. After reconstructing the
+canonical ACTIVE authority, inspection validates any first-Step interruption
+or completion through narrow read-only marker readers. One canonical terminal
+marker bound to that Plan, Step, and activation makes active-Step recovery not
+eligible. Completion validation includes the complete canonical
+EffectIntent/EffectOutcome evidence set. Torn, malformed, duplicated,
+cross-bound, or simultaneous interruption and completion occupancy fails
+closed as recovery partial state. The marker readers do not depend on recovery
+transactions, so terminal writers can reuse their canonical decoding without
+creating a dependency cycle.
+
+Existing terminal and effect writers reuse the same bootstrap-locked ACTIVE
+cut reconstruction through a package-internal read-only entry before terminal
+classification. This preserves their own replay and mutually exclusive
+completion/interruption/effect failure semantics without exposing a second
+stable recovery repository or performing an unlocked terminal query.
+
 ## Authenticated active-Step recovery composition boundary
 
 The internal product recovery handoff resolves one owner-qualified Agent turn

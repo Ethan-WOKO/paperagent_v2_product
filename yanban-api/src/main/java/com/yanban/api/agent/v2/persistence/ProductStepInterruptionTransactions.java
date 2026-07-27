@@ -57,6 +57,7 @@ class ProductStepInterruptionTransactions {
     private final ProductLeaseTimeSource timeSource;
     private final ProductStepInterruptionJpaRepository interruptions;
     private final ProductStepCompletionJpaRepository completions;
+    private final ProductStepInterruptionMarkerReader markerReader;
     private final ProductStepInterruptionCodec codec;
     private final EntityManager entityManager;
 
@@ -73,6 +74,7 @@ class ProductStepInterruptionTransactions {
             ProductLeaseTimeSource timeSource,
             ProductStepInterruptionJpaRepository interruptions,
             ProductStepCompletionJpaRepository completions,
+            ProductStepInterruptionMarkerReader markerReader,
             ProductStepInterruptionCodec codec,
             EntityManager entityManager) {
         this.bootstraps = bootstraps;
@@ -87,6 +89,7 @@ class ProductStepInterruptionTransactions {
         this.timeSource = timeSource;
         this.interruptions = interruptions;
         this.completions = completions;
+        this.markerReader = markerReader;
         this.codec = codec;
         this.entityManager = entityManager;
     }
@@ -171,7 +174,7 @@ class ProductStepInterruptionTransactions {
         ProductStepInterruptionEntity reused = interruptions.findById(
                 candidate.event().id().value()).orElse(null);
         if (reused != null) {
-            return decodeMarker(reused) == null ? partial()
+            return markerReader.decode(reused) == null ? partial()
                     : conflict(candidate.eventPath() + ".id");
         }
         if (starts.findByStartEventId(
@@ -255,7 +258,8 @@ class ProductStepInterruptionTransactions {
         if (event == null) {
             return null;
         }
-        Marker marker = decodeMarker(event);
+        ProductStepInterruptionMarkerReader.Marker marker =
+                markerReader.decode(event);
         return marker == null
                 ? partial()
                 : conflict(candidate.eventPath() + ".id");
@@ -265,7 +269,8 @@ class ProductStepInterruptionTransactions {
             ProductStepInterruptionEntity row,
             ProductStepInterruptionCodec.Candidate candidate,
             ActiveSource source) {
-        Marker marker = decodeMarker(row);
+        ProductStepInterruptionMarkerReader.Marker marker =
+                markerReader.decode(row);
         if (marker == null || !markerMatchesSource(row, marker, source)) {
             return partial();
         }
@@ -279,63 +284,9 @@ class ProductStepInterruptionTransactions {
                 : conflict(candidate.eventPath() + ".id");
     }
 
-    private Marker decodeMarker(ProductStepInterruptionEntity row) {
-        try {
-            ProductStepInterruptionCodec.DecodedRequest decoded =
-                    codec.decodeRequest(
-                            row.requestFormatVersion(), row.requestSha256(),
-                            row.requestJson());
-            PersistedStepInterruption result = codec.decodeResult(
-                    row.resultFormatVersion(), row.resultSha256(),
-                    row.resultJson());
-            ProductStepInterruptionCodec.Candidate request =
-                    decoded.candidate();
-            VersionedCheckpoint checkpoint =
-                    result.interruptedCheckpoint();
-            if (!row.interruptionKind().equals(decoded.kind().name())
-                    || result.kind() != decoded.kind()
-                    || !row.planId().equals(request.planId().value())
-                    || !row.planId().equals(result.planId().value())
-                    || !row.stepId().equals(request.stepId().value())
-                    || !row.stepId().equals(result.stepId().value())
-                    || !row.interruptionEventId().equals(
-                            request.event().id().value())
-                    || !row.interruptionEventId().equals(
-                            result.interruptionEvent().id().value())
-                    || !row.sourceRevisionId().equals(
-                            request.expectedRevisionId().value())
-                    || row.sourceRevisionNumber()
-                            != request.expectedRevisionNumber()
-                    || !row.resultRevisionId().equals(
-                            checkpoint.checkpoint().revisionId().value())
-                    || row.resultRevisionNumber()
-                            != checkpoint.checkpoint().revisionNumber()
-                    || row.sourceCheckpointVersion()
-                            != request.expectedCheckpointVersion()
-                    || row.resultCheckpointVersion() != checkpoint.version()
-                    || row.sourceEventSequence()
-                            != request.expectedEventHeadSequence()
-                    || row.resultEventSequence()
-                            != result.interruptionEvent().sequence()
-                    || !row.leaseOwnerId().equals(result.leaseOwnerId())
-                    || row.fencingToken() != request.fencingToken()
-                    || row.fencingToken() != result.fencingToken()
-                    || !request.event().equals(
-                            result.interruptionEvent())
-                    || !request.checkpoint().equals(
-                            checkpoint.checkpoint())
-                    || row.committedAt() == null) {
-                return null;
-            }
-            return new Marker(
-                    decoded.kind(), decoded.request(), result);
-        } catch (RuntimeException exception) {
-            return null;
-        }
-    }
-
     private boolean markerMatchesSource(
-            ProductStepInterruptionEntity row, Marker marker,
+            ProductStepInterruptionEntity row,
+            ProductStepInterruptionMarkerReader.Marker marker,
             ActiveSource source) {
         Checkpoint active = source.activation().result()
                 .activatedCheckpoint().checkpoint();
@@ -832,9 +783,4 @@ class ProductStepInterruptionTransactions {
             PersistedStepActivation result) {
     }
 
-    private record Marker(
-            StepInterruptionKind kind,
-            Object request,
-            PersistedStepInterruption result) {
-    }
 }

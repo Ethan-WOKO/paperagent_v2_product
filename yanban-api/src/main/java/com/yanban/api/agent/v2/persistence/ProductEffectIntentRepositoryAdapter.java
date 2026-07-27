@@ -14,11 +14,11 @@ import org.springframework.stereotype.Repository;
 public final class ProductEffectIntentRepositoryAdapter
         implements EffectIntentRepository {
     private final ProductEffectIntentTransactions transactions;
-    private final ProductStepRecoveryRepositoryAdapter recovery;
+    private final ProductStepRecoveryTransactions recovery;
 
     public ProductEffectIntentRepositoryAdapter(
             ProductEffectIntentTransactions transactions,
-            ProductStepRecoveryRepositoryAdapter recovery) {
+            ProductStepRecoveryTransactions recovery) {
         this.transactions = transactions;
         this.recovery = recovery;
     }
@@ -35,7 +35,8 @@ public final class ProductEffectIntentRepositoryAdapter
             return durable;
         }
         PersistenceResult<StepRecoverySnapshot> inspected =
-                recovery.inspect(request.intent().planId());
+                recovery.inspectWriterAuthority(
+                        request.intent().planId());
         if (!inspected.successful()) {
             var failure = inspected.failure().orElseThrow();
             return PersistenceResult.rejected(failure.code(), failure.path());

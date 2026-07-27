@@ -59,9 +59,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Import({
         ProductStepCompletionRepositoryAdapter.class,
         ProductStepCompletionTransactions.class,
+        ProductStepCompletionMarkerReader.class,
         ProductStepCompletionCodec.class,
         ProductStepInterruptionRepositoryAdapter.class,
         ProductStepInterruptionTransactions.class,
+        ProductStepInterruptionMarkerReader.class,
         ProductStepInterruptionCodec.class,
         ProductStepRecoveryTransactions.class,
         ProductStepRecoveryRepositoryAdapter.class,
