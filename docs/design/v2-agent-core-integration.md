@@ -293,3 +293,25 @@ observes time, retries, sleeps, or performs recovery. This is only the current
 pre-step relational cut. Runtime recovery composition and later Plan,
 execution-context, step, Workspace, Provider, Sandbox, loop, API, and traffic
 boundaries remain separate Issues.
+
+## Authenticated execution-start recovery composition boundary
+
+The internal authenticated recovery path resolves the owner-qualified Agent
+turn before deriving its Plan identity. Bootstrap adaptation and recovery use
+one pure product PlanId derivation, preserving the existing domain-separated
+`product-plan.` format and preventing callers from supplying a second Plan
+authority. The caller command contains only an optional stable fresh-start
+attempt.
+
+The composer passes the exact derived PlanId and optional attempt to the stable
+`ExecutionStartRecoverer`. Spring wires one recoverer from the deterministic
+recovery-ready materializer and the relational recovery-inspection, lease, and
+atomic-start ports. A READY bootstrap may retain a fenced lease and persist the
+atomic start; a later request without an attempt observes the committed start
+without another write. Stable rejected, advanced, retry-required, validation,
+protocol, and reconciliation results are neither caught nor remapped.
+
+This path exposes no Controller or traffic, schedules no retry, starts no
+execution step or loop, reads no Project content, and introduces no Provider,
+Workspace, Sandbox, tool, or legacy Agent dependency. Those remain later
+Issue boundaries.
