@@ -64,6 +64,10 @@ class ProductReceiptTransactions {
         if (claim == Claim.ORPHAN) {
             return partial();
         }
+        existing = receipts.findById(receipt.id().value()).orElse(null);
+        if (existing != null) {
+            return replay(existing, receipt);
+        }
         ProductReceiptCodec.EncodedPayload payload = codec.encode(receipt);
         entityManager.persist(new ProductReceiptEntity(
                 receipt.id().value(), receipt.toolCallId().value(),
@@ -96,6 +100,10 @@ class ProductReceiptTransactions {
         if (!markerReader.hasOnlyValidOrdinaryFacts(
                 receipt.toolCallId().value())) {
             return partial();
+        }
+        existing = receipts.findById(receipt.id().value()).orElse(null);
+        if (existing != null) {
+            return replay(existing, receipt);
         }
         ProductReceiptCodec.EncodedPayload payload = codec.encode(receipt);
         entityManager.persist(new ProductReceiptEntity(
