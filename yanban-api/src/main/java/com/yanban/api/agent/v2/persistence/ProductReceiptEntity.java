@@ -9,13 +9,19 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinColumns;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.Instant;
 
 @Entity
-@Table(name = "agent_v2_receipts", indexes = @Index(
-        name = "idx_agent_v2_receipts_tool_call",
-        columnList = "tool_call_id"))
+@Table(
+        name = "agent_v2_receipts",
+        indexes = @Index(
+                name = "idx_agent_v2_receipts_tool_call",
+                columnList = "tool_call_id"),
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_agent_v2_receipts_id_tool_call",
+                columnNames = {"receipt_id", "tool_call_id"}))
 class ProductReceiptEntity {
     @Id
     @Column(name = "receipt_id", nullable = false, length = 128)
@@ -61,12 +67,23 @@ class ProductReceiptEntity {
             String toolCallId,
             ProductReceiptCodec.EncodedPayload payload,
             Instant committedAt) {
+        this(receiptId, toolCallId,
+                ProductReceiptOwnership.ORDINARY_RECEIPT,
+                ProductReceiptOwnership.ORDINARY_RECEIPT.name(),
+                payload, committedAt);
+    }
+
+    ProductReceiptEntity(
+            String receiptId,
+            String toolCallId,
+            ProductReceiptOwnership claimOwner,
+            String receiptOwner,
+            ProductReceiptCodec.EncodedPayload payload,
+            Instant committedAt) {
         this.receiptId = receiptId;
         this.toolCallId = toolCallId;
-        this.toolCallClaimOwnerKind =
-                ProductReceiptOwnership.ORDINARY_RECEIPT.name();
-        this.receiptOwnerKind =
-                ProductReceiptOwnership.ORDINARY_RECEIPT.name();
+        this.toolCallClaimOwnerKind = claimOwner.name();
+        this.receiptOwnerKind = receiptOwner;
         this.payloadFormatVersion = payload.formatVersion();
         this.payloadSha256 = payload.sha256();
         this.payloadJson = payload.json();

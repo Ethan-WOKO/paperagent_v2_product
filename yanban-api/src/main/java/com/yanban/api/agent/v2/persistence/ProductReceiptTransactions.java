@@ -5,6 +5,7 @@ import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
 import jakarta.persistence.EntityManager;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ class ProductReceiptTransactions {
     private final ProductReceiptCodec codec;
     private final ProductReceiptMarkerReader markerReader;
     private final ProductReceiptEffectIntentMarkerReader effectIntentMarkers;
+    private final ProductEffectOutcomeReceiptInspector effectOutcomeReceipts;
     private final ProductReceiptTimeSource timeSource;
     private final EntityManager entityManager;
 
@@ -27,6 +29,8 @@ class ProductReceiptTransactions {
             ProductReceiptCodec codec,
             ProductReceiptMarkerReader markerReader,
             ProductReceiptEffectIntentMarkerReader effectIntentMarkers,
+            ObjectProvider<ProductEffectOutcomeReceiptInspector>
+                    effectOutcomeReceipts,
             ProductReceiptTimeSource timeSource,
             EntityManager entityManager) {
         this.receipts = receipts;
@@ -34,6 +38,7 @@ class ProductReceiptTransactions {
         this.codec = codec;
         this.markerReader = markerReader;
         this.effectIntentMarkers = effectIntentMarkers;
+        this.effectOutcomeReceipts = effectOutcomeReceipts.getIfAvailable();
         this.timeSource = timeSource;
         this.entityManager = entityManager;
     }
@@ -43,7 +48,10 @@ class ProductReceiptTransactions {
             ExecutionReceipt receipt) {
         ProductReceiptEntity row =
                 receipts.findById(receipt.id().value()).orElse(null);
-        return row == null ? null : replay(row, receipt);
+        if (row != null) {
+            return replay(row, receipt);
+        }
+        return effectReceiptClassification(receipt.id().value());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -53,6 +61,11 @@ class ProductReceiptTransactions {
                 receipts.findById(receipt.id().value()).orElse(null);
         if (existing != null) {
             return replay(existing, receipt);
+        }
+        PersistenceResult<ExecutionReceipt> effect =
+                effectReceiptClassification(receipt.id().value());
+        if (effect != null) {
+            return effect;
         }
         Claim claim = claim(receipt.toolCallId().value());
         if (claim == Claim.OPPOSITE) {
@@ -83,6 +96,11 @@ class ProductReceiptTransactions {
                 receipts.findById(receipt.id().value()).orElse(null);
         if (existing != null) {
             return replay(existing, receipt);
+        }
+        PersistenceResult<ExecutionReceipt> effect =
+                effectReceiptClassification(receipt.id().value());
+        if (effect != null) {
+            return effect;
         }
         ProductReceiptToolCallClaimEntity claim =
                 claims.lockByToolCallId(
@@ -122,9 +140,18 @@ class ProductReceiptTransactions {
                     PersistenceErrorCode.NOT_FOUND, "receiptId");
         }
         ExecutionReceipt receipt = marker(row);
-        return receipt == null
-                ? partial()
-                : PersistenceResult.found(receipt);
+        if (receipt != null) {
+            return PersistenceResult.found(receipt);
+        }
+        if (effectOutcomeReceipts == null) {
+            return partial();
+        }
+        return switch (effectOutcomeReceipts.classify(row.receiptId())) {
+            case NONE -> partial();
+            case PARTIAL -> effectOutcomePartial();
+            case OWNED -> PersistenceResult.found(
+                    effectOutcomeReceipts.receipt(row.receiptId()));
+        };
     }
 
     private Claim claim(String toolCallId) {
@@ -152,13 +179,27 @@ class ProductReceiptTransactions {
             ProductReceiptEntity row, ExecutionReceipt requested) {
         ExecutionReceipt stored = markerReader.marker(row);
         if (stored == null) {
-            return partial();
+            PersistenceResult<ExecutionReceipt> effect =
+                    effectReceiptClassification(row.receiptId());
+            return effect == null ? partial() : effect;
         }
         return stored.equals(requested)
                 ? PersistenceResult.replayed(stored)
                 : PersistenceResult.rejected(
                         PersistenceErrorCode.CONFLICTING_REPLAY,
                         "receipt.id");
+    }
+
+    private PersistenceResult<ExecutionReceipt> effectReceiptClassification(
+            String receiptId) {
+        if (effectOutcomeReceipts == null) {
+            return null;
+        }
+        return switch (effectOutcomeReceipts.classify(receiptId)) {
+            case NONE -> null;
+            case OWNED -> ownershipById();
+            case PARTIAL -> effectOutcomePartial();
+        };
     }
 
     private ExecutionReceipt marker(ProductReceiptEntity row) {
@@ -169,6 +210,18 @@ class ProductReceiptTransactions {
         return PersistenceResult.rejected(
                 PersistenceErrorCode.EFFECT_RECEIPT_OWNERSHIP_REQUIRED,
                 "receipt.toolCallId");
+    }
+
+    private static PersistenceResult<ExecutionReceipt> ownershipById() {
+        return PersistenceResult.rejected(
+                PersistenceErrorCode.EFFECT_RECEIPT_OWNERSHIP_REQUIRED,
+                "receipt.id");
+    }
+
+    private static PersistenceResult<ExecutionReceipt> effectOutcomePartial() {
+        return PersistenceResult.rejected(
+                PersistenceErrorCode.EFFECT_OUTCOME_PARTIAL_STATE,
+                "effectOutcome.source");
     }
 
     private static PersistenceResult<ExecutionReceipt> partial() {

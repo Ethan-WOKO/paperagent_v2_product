@@ -45,6 +45,30 @@ class ProductReceiptMarkerReader {
         }
     }
 
+    ExecutionReceipt effectOutcomeMarker(ProductReceiptEntity row) {
+        try {
+            ProductReceiptToolCallClaimEntity claim =
+                    claims.findById(row.toolCallId()).orElse(null);
+            if (claim == null
+                    || !ProductReceiptOwnership.EFFECT_INTENT.name()
+                    .equals(claim.ownerKind())
+                    || !ProductReceiptOwnership.EFFECT_INTENT.name()
+                    .equals(row.toolCallClaimOwnerKind())
+                    || !"EFFECT_OUTCOME".equals(row.receiptOwnerKind())) {
+                return null;
+            }
+            ExecutionReceipt receipt = codec.decode(
+                    row.payloadFormatVersion(), row.payloadSha256(),
+                    row.payloadJson());
+            return row.receiptId().equals(receipt.id().value())
+                    && row.toolCallId().equals(receipt.toolCallId().value())
+                    ? receipt
+                    : null;
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
     boolean hasOnlyValidOrdinaryFacts(String toolCallId) {
         List<ProductReceiptEntity> rows =
                 receipts.findAllByToolCallId(toolCallId);
