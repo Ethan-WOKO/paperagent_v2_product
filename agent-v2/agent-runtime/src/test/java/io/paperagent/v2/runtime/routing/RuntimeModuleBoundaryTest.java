@@ -179,6 +179,17 @@ class RuntimeModuleBoundaryTest {
                             + ".StepInterruptionKind;",
                     "import io.paperagent.v2.persistence"
                             + ".StepInterruptionRepository;");
+    private static final Set<String>
+            ALLOWED_COMPLETION_MATERIALIZATION_PERSISTENCE_IMPORTS = Set.of(
+                    "import io.paperagent.v2.persistence.LeaseRecord;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistedStepActivation;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistedStepRecoveryActive;",
+                    "import io.paperagent.v2.persistence"
+                            + ".StepCompletionRequest;",
+                    "import io.paperagent.v2.persistence"
+                            + ".VersionedCheckpoint;");
     private static final Set<String> ALLOWED_KERNEL_PERSISTENCE_IMPORTS = Set.of(
             "import io.paperagent.v2.persistence.EffectIntentRepository;",
             "import io.paperagent.v2.persistence.EffectIntentRequest;",
@@ -444,6 +455,25 @@ class RuntimeModuleBoundaryTest {
                 "interruption",
                 "composition",
                 "Composer.java"));
+        Path completionMaterializationSource = sourceRoot.resolve(Path.of(
+                "io",
+                "paperagent",
+                "v2",
+                "runtime",
+                "execution",
+                "completion",
+                "materialization",
+                "Materializer.java"));
+        Path completionMaterializationSiblingSource =
+                sourceRoot.resolve(Path.of(
+                        "io",
+                        "paperagent",
+                        "v2",
+                        "runtime",
+                        "execution",
+                        "completion",
+                        "composition",
+                        "Escape.java"));
         Path kernelSource = sourceRoot.resolve(Path.of(
                 "io",
                 "paperagent",
@@ -553,6 +583,16 @@ class RuntimeModuleBoundaryTest {
                         .contains(
                                 "import io.paperagent.v2.persistence"
                                         + ".StepFailRequest;"));
+        assertEquals(
+                ALLOWED_COMPLETION_MATERIALIZATION_PERSISTENCE_IMPORTS,
+                allowedPersistenceImports(
+                        sourceRoot,
+                        completionMaterializationSource));
+        assertTrue(
+                allowedPersistenceImports(
+                        sourceRoot,
+                        completionMaterializationSiblingSource)
+                        .isEmpty());
         assertEquals(
                 ALLOWED_KERNEL_PERSISTENCE_IMPORTS,
                 allowedPersistenceImports(sourceRoot, kernelSource));
@@ -679,6 +719,26 @@ class RuntimeModuleBoundaryTest {
                         .contains(
                                 "import io.paperagent.v2.persistence"
                                         + ".PersistenceResult;"));
+        assertFalse(
+                allowedPersistenceImports(
+                        sourceRoot,
+                        completionMaterializationSource)
+                        .contains(
+                                "import io.paperagent.v2.persistence"
+                                        + ".StepCompletionRepository;"));
+        assertFalse(
+                allowedPersistenceImports(
+                        sourceRoot,
+                        completionMaterializationSource)
+                        .contains(
+                                "import io.paperagent.v2.persistence"
+                                        + ".PersistenceResult;"));
+        assertFalse(
+                allowedPersistenceImports(
+                        sourceRoot,
+                        completionMaterializationSource)
+                        .contains(
+                                "import io.paperagent.v2.persistence.*;"));
         assertFalse(allowedPersistenceImports(sourceRoot, executionSource)
                 .contains("import io.paperagent.v2.persistence.*;"));
         assertFalse(allowedPersistenceImports(sourceRoot, executionSource)
@@ -891,6 +951,33 @@ class RuntimeModuleBoundaryTest {
                 "composition"));
     }
 
+    private static boolean isCompletionMaterializationSource(
+            Path sourceRoot,
+            Path sourcePath) {
+        Path relative = sourceRoot.relativize(sourcePath);
+        return relative.startsWith(Path.of(
+                "io",
+                "paperagent",
+                "v2",
+                "runtime",
+                "execution",
+                "completion",
+                "materialization"));
+    }
+
+    private static boolean isCompletionTreeSource(
+            Path sourceRoot,
+            Path sourcePath) {
+        Path relative = sourceRoot.relativize(sourcePath);
+        return relative.startsWith(Path.of(
+                "io",
+                "paperagent",
+                "v2",
+                "runtime",
+                "execution",
+                "completion"));
+    }
+
     private static boolean isKernelSource(Path sourceRoot, Path sourcePath) {
         Path relative = sourceRoot.relativize(sourcePath);
         return relative.startsWith(Path.of(
@@ -961,6 +1048,12 @@ class RuntimeModuleBoundaryTest {
         }
         if (isInterruptionMaterializationSource(sourceRoot, sourcePath)) {
             return ALLOWED_INTERRUPTION_MATERIALIZATION_PERSISTENCE_IMPORTS;
+        }
+        if (isCompletionMaterializationSource(sourceRoot, sourcePath)) {
+            return ALLOWED_COMPLETION_MATERIALIZATION_PERSISTENCE_IMPORTS;
+        }
+        if (isCompletionTreeSource(sourceRoot, sourcePath)) {
+            return Set.of();
         }
         if (isActivationMaterializationSource(sourceRoot, sourcePath)) {
             return ALLOWED_ACTIVATION_MATERIALIZATION_PERSISTENCE_IMPORTS;

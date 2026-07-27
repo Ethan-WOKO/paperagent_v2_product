@@ -821,3 +821,33 @@ This boundary does not activate the next Step or implement a general
 completion chain, recovery composition, Runtime kernel, Agent Loop, Provider,
 Sandbox, tool, file, network, Project or Workspace mutation, Controller,
 API/UI traffic, or legacy Agent behavior. Those remain later Issues.
+
+## Deterministic active-Step completion materialization boundary
+
+The V2 Runtime now has one pure materialization boundary between an
+already-recovered active Step and the stable completion persistence request.
+Its only authority input is the exact `RecoveredActiveStep`; callers add one
+completion-fact draft, one completion-event draft, one next-revision draft,
+and the checkpoint creation time. They cannot supply TaskFrame, Plan, Step,
+lease, fence, parent revision, revision number, checkpoint version, event
+sequence, Plan state, or Step-state authority.
+
+Materialization fails closed unless recovery retains the canonical
+version-3, sequence-2 active cut and its exact lease for recovery. It derives
+one immutable `CompletionFact`, appends one revision without changing Step
+definitions or prior completion facts, binds one sequence-3 event to the
+recovered TaskFrame and Plan, and proposes the completion checkpoint. The
+checkpoint preserves peer states and existing Receipt order, appends only the
+attempt's ordered Receipt IDs, changes only the target Step from `ACTIVE` to
+`SUCCEEDED`, and marks the Plan `SUCCEEDED` only when every Step has
+succeeded.
+
+The boundary rejects malformed or contradictory authority, duplicate or
+overlapping Receipts, time regression, event or revision identity reuse, and
+revision-number overflow through bounded redacted validation or protocol
+failures. It has no repository or other collaborator, observes no live time,
+persists nothing, and performs no lease mutation, effect, Receipt creation,
+Step execution, next-Step activation, retry, resume, repair, replan, Project,
+Workspace, file, network, model, Provider, Sandbox, tool, product, API, UI,
+schema, or legacy Agent operation. Runtime completion persistence composition
+remains a later Issue.
