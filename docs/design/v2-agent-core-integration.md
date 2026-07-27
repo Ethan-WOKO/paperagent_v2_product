@@ -397,3 +397,25 @@ or mutates an occupied tree. Product Workspace configuration, authenticated
 source binding, persistent execution-context Runtime composition, steps,
 Provider/Sandbox/tool execution, API/UI activation, and legacy retirement
 remain later Issue boundaries.
+
+## Authenticated local Workspace boundary
+
+The product exposes one authenticated factory that returns the stable V2
+`WorkspacePort`. It first binds an owner-qualified Project source through
+`AuthenticatedAgentTurnProjectVersionSourceFactory`, then constructs a private
+`LocalWorkspaceProvider` at one API-owned root configured by
+`yanban.agent.v2.workspace.root`. The default is
+`data/agent-v2-workspaces`, with an optional
+`YANBAN_AGENT_V2_WORKSPACE_ROOT` override. Relative configuration is resolved
+once against the API process working directory; host paths are never returned,
+logged, or included in configuration failures.
+
+Each call creates an independently source-bound provider while reusing the
+same resolved root. Creation does not load Project files or perform a
+Workspace operation. Provider recreation can therefore use the existing
+exact-spec inspection contract to adopt a fully published Workspace without
+introducing a global Project source or a second identity authority.
+
+This boundary does not compose persisted Plan execution context, expose an
+API, start a step or loop, call a Provider/Sandbox/tool, mutate a Project,
+define cleanup policy, or change a V2 contract. Those remain later Issues.
