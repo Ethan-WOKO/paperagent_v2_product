@@ -138,6 +138,10 @@ class ProductExecutionStartRecoveryRepositoryConcurrencyTest {
             }
         }
         assertEquals(INSPECTIONS, readyCount + committedCount);
+        System.out.printf(
+                "Recovery inspection race outcomes: ready=%d, committed=%d%n",
+                readyCount,
+                committedCount);
         assertEquals(1, bootstraps.count());
         assertEquals(1, leases.count());
         assertEquals(1, starts.count());
