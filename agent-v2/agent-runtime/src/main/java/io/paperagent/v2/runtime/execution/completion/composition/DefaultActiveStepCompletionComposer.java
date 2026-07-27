@@ -156,6 +156,7 @@ public final class DefaultActiveStepCompletionComposer
                 }
                 yield new ActiveStepCompletionPersistenceRejected(
                         planId,
+                        materialized.stepId(),
                         result.failure().orElseThrow(),
                         ActiveStepCompletionLeaseDisposition
                                 .RETAINED_FOR_RECOVERY);

@@ -1,6 +1,7 @@
 package io.paperagent.v2.runtime.execution.completion.composition;
 
 import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.persistence.PersistedStepCompletion;
 import io.paperagent.v2.persistence.PersistenceFailure;
 import io.paperagent.v2.persistence.PersistenceOutcome;
@@ -16,6 +17,7 @@ final class ActiveStepCompletionCompositionValues {
             "activeStepCompletionCommitted.persistedCompletion",
             "activeStepCompletionCommitted.leaseDisposition",
             "activeStepCompletionPersistenceRejected.planId",
+            "activeStepCompletionPersistenceRejected.stepId",
             "activeStepCompletionPersistenceRejected.failure",
             "activeStepCompletionPersistenceRejected.leaseDisposition");
     private static final Set<String> PROTOCOL_PATHS = Set.of(
@@ -59,9 +61,11 @@ final class ActiveStepCompletionCompositionValues {
 
     static void requireRejected(
             PlanId planId,
+            PlanStepId stepId,
             PersistenceFailure failure,
             ActiveStepCompletionLeaseDisposition disposition) {
         required(planId, "activeStepCompletionPersistenceRejected.planId");
+        required(stepId, "activeStepCompletionPersistenceRejected.stepId");
         required(failure, "activeStepCompletionPersistenceRejected.failure");
         requireRetained(
                 disposition,

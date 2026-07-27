@@ -62,6 +62,12 @@ class ActiveStepCompletionCompositionBoundaryTest {
                 Set.of(ActiveStepCompletionLeaseDisposition
                         .RETAINED_FOR_RECOVERY),
                 Set.of(ActiveStepCompletionLeaseDisposition.values()));
+        assertTrue(Arrays.stream(
+                        ActiveStepCompletionCompositionOutcome.class
+                                .getDeclaredMethods())
+                .anyMatch(method -> method.getName().equals("stepId")
+                        && method.getReturnType().equals(
+                                io.paperagent.v2.contracts.PlanStepId.class)));
     }
 
     @Test

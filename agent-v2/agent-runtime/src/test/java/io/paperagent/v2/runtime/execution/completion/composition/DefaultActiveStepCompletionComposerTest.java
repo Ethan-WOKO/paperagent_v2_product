@@ -61,6 +61,7 @@ class DefaultActiveStepCompletionComposerTest {
         assertEquals(PersistenceOutcome.APPLIED,
                 outcome.persistenceOutcome());
         assertSame(persisted, outcome.persistedCompletion());
+        assertEquals(derived.stepId(), outcome.stepId());
         assertEquals(
                 ActiveStepCompletionLeaseDisposition.RETAINED_FOR_RECOVERY,
                 outcome.leaseDisposition());
@@ -87,6 +88,7 @@ class DefaultActiveStepCompletionComposerTest {
         assertEquals(PersistenceOutcome.REPLAYED,
                 outcome.persistenceOutcome());
         assertSame(persisted, outcome.persistedCompletion());
+        assertEquals(derived.stepId(), outcome.stepId());
         assertEquals(1, repository.calls.get());
     }
 
@@ -111,6 +113,9 @@ class DefaultActiveStepCompletionComposerTest {
 
         assertEquals(input.recoveredActiveStep().recovery().planId(),
                 outcome.planId());
+        assertEquals(
+                input.recoveredActiveStep().recovery().activation().stepId(),
+                outcome.stepId());
         assertEquals(failure, outcome.failure());
         assertEquals(
                 ActiveStepCompletionLeaseDisposition.RETAINED_FOR_RECOVERY,
@@ -386,6 +391,25 @@ class DefaultActiveStepCompletionComposerTest {
                                                         .request())),
                         ActiveStepCompletionLeaseDisposition
                                 .RETAINED_FOR_RECOVERY));
+        ActiveStepCompletionCompositionValidationException missingStep =
+                assertThrows(
+                        ActiveStepCompletionCompositionValidationException
+                                .class,
+                        () -> new ActiveStepCompletionPersistenceRejected(
+                                new PlanId("plan"),
+                                null,
+                                new PersistenceFailure(
+                                        PersistenceErrorCode.STALE_VERSION,
+                                        "request.expectedCheckpointVersion"),
+                                ActiveStepCompletionLeaseDisposition
+                                        .RETAINED_FOR_RECOVERY));
+        assertEquals(
+                ActiveStepCompletionCompositionValidationCode
+                        .REQUIRED_VALUE_MISSING,
+                missingStep.code());
+        assertEquals(
+                "activeStepCompletionPersistenceRejected.stepId",
+                missingStep.path());
     }
 
     private static StepCompletionRequest copy(
