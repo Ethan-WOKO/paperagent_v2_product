@@ -71,59 +71,13 @@ class UserSettingsServiceTest {
         when(initializer.createDefaultSettings(eq(userId), any(SysUserSettings.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key"));
         when(userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId)).thenReturn(List.of());
-        when(openRouterProperties.getHy3FreeModel()).thenReturn("tencent/hy3:free");
-        when(openRouterProperties.getHy3Model()).thenReturn("tencent/hy3");
-        when(openRouterProperties.getApiUrl()).thenReturn("https://openrouter.ai/api/v1/chat/completions");
 
         UserSettingsResponse response = service.get(userId);
 
         assertThat(response.defaultProvider()).isEqualTo(UserSettingsService.DEFAULT_PROVIDER);
+        assertThat(response.customModels()).isEmpty();
         verify(initializer).createDefaultSettings(eq(userId), any(SysUserSettings.class));
-    }
-
-    @Test
-    void resolveOpenRouterBuiltinUsesGlobalApiKeyWhenModelHasNoStoredKey() {
-        Long userId = 3L;
-        SysUserSettings settings = new SysUserSettings(
-                userId,
-                UserSettingsService.DEFAULT_PROVIDER,
-                null,
-                null,
-                UserSettingsService.DEFAULT_DEEPSEEK_MODEL,
-                UserSettingsService.DEFAULT_GLM_MODEL,
-                null,
-                "[]",
-                "[]",
-                UserSettingsService.DEFAULT_TEMPERATURE,
-                UserSettingsService.DEFAULT_MAX_STEPS,
-                UserSettingsService.DEFAULT_RAG_ENABLED
-        );
-        UserModel hy3 = new UserModel(
-                userId,
-                UserSettingsService.PROVIDER_OPENROUTER_HY3_FREE,
-                "OpenRouter",
-                "tencent/hy3:free",
-                null,
-                null,
-                true,
-                20
-        );
-        when(repository.findById(userId)).thenReturn(Optional.of(settings));
-        when(userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId)).thenReturn(List.of(hy3));
-        when(openRouterProperties.getApiUrl()).thenReturn("https://openrouter.ai/api/v1/chat/completions");
-        when(openRouterProperties.getApiKey()).thenReturn("or-key");
-
-        UserSettingsService.ModelEndpoint endpoint = service.resolveModelEndpoint(
-                userId,
-                UserSettingsService.PROVIDER_OPENROUTER_HY3_FREE,
-                "tencent/hy3:free");
-
-        assertThat(endpoint.providerKey()).isEqualTo(UserSettingsService.PROVIDER_OPENROUTER_HY3_FREE);
-        assertThat(endpoint.modelName()).isEqualTo("tencent/hy3:free");
-        assertThat(endpoint.apiUrl()).isEqualTo("https://openrouter.ai/api/v1/chat/completions");
-        assertThat(endpoint.apiKey()).isEqualTo("or-key");
-        assertThat(endpoint.sourceType()).isEqualTo("builtin-custom");
-        assertThat(endpoint.sourceLabel()).isEqualTo("OpenRouter");
+        verify(userModelRepository, never()).saveAllAndFlush(any());
     }
 
     @Test

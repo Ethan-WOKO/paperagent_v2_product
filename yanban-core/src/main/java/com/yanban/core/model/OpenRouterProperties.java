@@ -7,8 +7,6 @@ public class OpenRouterProperties {
 
     private String apiUrl = "https://openrouter.ai/api/v1/chat/completions";
     private String apiKey;
-    private String hy3FreeModel = "tencent/hy3:free";
-    private String hy3Model = "tencent/hy3";
 
     public String getApiUrl() {
         return apiUrl;
@@ -26,19 +24,4 @@ public class OpenRouterProperties {
         this.apiKey = apiKey;
     }
 
-    public String getHy3FreeModel() {
-        return hy3FreeModel;
-    }
-
-    public void setHy3FreeModel(String hy3FreeModel) {
-        this.hy3FreeModel = hy3FreeModel;
-    }
-
-    public String getHy3Model() {
-        return hy3Model;
-    }
-
-    public void setHy3Model(String hy3Model) {
-        this.hy3Model = hy3Model;
-    }
 }

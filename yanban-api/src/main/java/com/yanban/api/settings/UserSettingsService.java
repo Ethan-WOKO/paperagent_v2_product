@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.core.model.OpenRouterProperties;
 import com.yanban.core.user.UserAccountPolicy;
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.http.HttpStatus;
@@ -19,8 +18,6 @@ public class UserSettingsService {
 
     public static final String DEFAULT_PROVIDER = "deepseek";
     public static final String PROVIDER_GLM = "glm";
-    public static final String PROVIDER_OPENROUTER_HY3_FREE = "openrouter-hy3-free";
-    public static final String PROVIDER_OPENROUTER_HY3 = "openrouter-hy3";
     public static final String DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
     public static final String DEFAULT_GLM_MODEL = "glm-5.2";
     public static final BigDecimal DEFAULT_TEMPERATURE = new BigDecimal("0.70");
@@ -78,7 +75,6 @@ public class UserSettingsService {
     @Transactional
     public UserSettingsResponse get(Long userId) {
         SysUserSettings settings = getOrCreate(userId);
-        ensureOpenRouterModels(userId);
         return toResponse(settings);
     }
 
@@ -86,7 +82,6 @@ public class UserSettingsService {
     public UserSettingsResponse update(Long userId, UserSettingsRequest request) {
         accountPolicy.assertSettingsMutable(userId);
         SysUserSettings settings = getOrCreate(userId);
-        ensureOpenRouterModels(userId);
         String provider = resolveDefaultProviderForUpdate(userId, request.defaultProvider(), settings.getDefaultProvider());
         String deepseekModel = resolveDeepseekModel(request.deepseekModel(), settings.getDeepseekModel());
         String glmModel = StringUtils.hasText(request.glmModel()) ? request.glmModel().trim() : settings.getGlmModel();
@@ -238,7 +233,6 @@ public class UserSettingsService {
 
     private void ensureUserInitialized(Long userId) {
         getOrCreate(userId);
-        ensureOpenRouterModels(userId);
     }
 
     // ===== Model resolution for AgentService =====
@@ -456,20 +450,6 @@ public class UserSettingsService {
                             settings.getGlmModelsText());
                     repository.saveAndFlush(settings);
                 });
-    }
-
-    private void ensureOpenRouterModels(Long userId) {
-        List<UserModel> existing = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
-        List<UserModel> missing = new ArrayList<>();
-        if (existing.stream().noneMatch(model -> PROVIDER_OPENROUTER_HY3_FREE.equals(model.getProviderKey()))) {
-            missing.add(new UserModel(userId, PROVIDER_OPENROUTER_HY3_FREE, "OpenRouter", openRouterProperties.getHy3FreeModel(), openRouterProperties.getApiUrl(), null, true, 20));
-        }
-        if (existing.stream().noneMatch(model -> PROVIDER_OPENROUTER_HY3.equals(model.getProviderKey()))) {
-            missing.add(new UserModel(userId, PROVIDER_OPENROUTER_HY3, "OpenRouter", openRouterProperties.getHy3Model(), openRouterProperties.getApiUrl(), null, true, 21));
-        }
-        if (!missing.isEmpty()) {
-            userModelRepository.saveAllAndFlush(missing);
-        }
     }
 
     private UserModelResponse toUserModelResponse(UserModel model) {
