@@ -105,3 +105,6 @@ jobs:
 
       - name: Test V2 active-Step effect intent persistence
         run: mvn -pl yanban-api -am -Dtest=ProductEffectIntentCodecTest,ProductEffectIntentRepositoryAdapterTest,ProductEffectIntentRepositoryConcurrencyTest,V2EffectIntentMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 Receipt persistence error contract
+        run: mvn -pl agent-v2/agent-persistence -am -Dtest=ReceiptPersistenceErrorContractTest -Dsurefire.failIfNoSpecifiedTests=false test

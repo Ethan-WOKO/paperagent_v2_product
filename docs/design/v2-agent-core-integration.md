@@ -678,3 +678,17 @@ This boundary records intent only. It performs no Provider, Sandbox, tool,
 file, or network effect; records no progress, outcome, receipt, or Step
 completion; starts no kernel or Agent loop; exposes no Controller/API/UI
 traffic; accesses no Project or Workspace; and reuses no legacy Agent code.
+
+## Stable ordinary Receipt partial-state error boundary
+
+The stable persistence contract distinguishes a corrupt or torn durable
+ordinary Receipt marker, claim, or fact through
+`RECEIPT_PARTIAL_STATE`. This code applies only when occupied Receipt state is
+contradictory, incomplete, corrupt, or undecodable.
+
+It does not classify absence, invalid caller input, conflicting replay,
+EffectIntent ownership rejection, EffectOutcome progress or result corruption,
+or execution-authority failures. Those conditions retain their existing
+stable error codes. This contract adds no Receipt implementation, schema,
+codec, retry, repair, Provider, Sandbox, tool, Step, kernel, API, UI, or legacy
+Agent behavior.
