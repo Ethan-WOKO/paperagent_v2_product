@@ -599,3 +599,25 @@ completion, effect, receipt, retry, resume, repair, replan, Project,
 Workspace, file, network, model, Provider, Sandbox, tool, product, API, UI, or
 legacy Agent operation. Runtime interruption persistence composition remains
 a later Issue.
+
+## Active-Step interruption persistence composition boundary
+
+The V2 Runtime now composes one already-recovered active Step into one atomic
+interruption persistence call. The composer accepts the exact deterministic
+materialization request, invokes its materializer once, and dispatches the
+resulting typed request exactly once to `pause`, `fail`, or `cancel` on the
+stable `StepInterruptionRepository`.
+
+Applied and replayed results are committed only when every Plan, Step, kind,
+event, checkpoint, retained lease owner, and fencing fact exactly matches the
+derived materialization. A typed rejection is preserved unchanged. Missing,
+unexpected, contradictory, or mismatched collaborator results fail through a
+sanitized protocol error and always state that the lease is retained for
+recovery; no uncertain write is repeated.
+
+This composition owns no lease mutation or recovery inspection and does not
+execute a Step, create completions, effects, or receipts, retry, resume,
+repair, replan, access a Project or Workspace, call a file, network, model,
+Provider, Sandbox, or tool port, expose product/API/UI behavior, or depend on
+legacy Agent code. Authenticated product composition and execution traffic
+remain later Issue boundaries.
