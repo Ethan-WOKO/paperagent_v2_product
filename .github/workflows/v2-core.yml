@@ -60,3 +60,6 @@ jobs:
 
       - name: Test V2 execution start persistence adapter
         run: mvn -pl yanban-api -am -Dtest=ProductExecutionStartCodecTest,ProductExecutionStartRepositoryAdapterTest,ProductExecutionStartRepositoryConcurrencyTest,V2ExecutionStartMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test authenticated V2 fresh execution start composition
+        run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnFreshExecutionStartComposerTest,AuthenticatedAgentTurnFreshExecutionStartCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
