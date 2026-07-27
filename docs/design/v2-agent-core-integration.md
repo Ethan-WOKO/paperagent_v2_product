@@ -574,3 +574,28 @@ This adapter does not execute a Step, release or retry a lease, persist an
 effect or receipt, resume or recover execution, read or mutate Project or
 Workspace files, call a model, Provider, Sandbox, network, or tool, expose a
 Controller/API/UI path, or reuse a legacy Agent planner or service.
+
+## Deterministic active-Step interruption materialization boundary
+
+The V2 Runtime now has one pure materialization boundary between an already
+recovered active Step and the stable interruption persistence requests. Its
+only authority input is the exact `RecoveredActiveStep`; callers add one
+explicit interruption kind, an event draft, and a checkpoint timestamp, but
+cannot supply Plan, revision, Step, lease, fence, checkpoint-version, or event
+sequence authority.
+
+Materialization fails closed unless the recovered cut is the canonical
+version-3, sequence-2 activation with exactly one eligible active Step and one
+retained recovery lease. It deterministically derives sequence 3 and a
+version-4 proposal that preserves the revision, peer states, receipts, and all
+other immutable facts while changing only the target Step and Plan to the
+matching paused, failed, or cancelled states. The proposal is validated
+through `CheckpointValidators` and returned as exactly one typed stable
+`StepPauseRequest`, `StepFailRequest`, or `StepCancelRequest`.
+
+This boundary has no repository or other collaborator. It observes no time,
+persists nothing, does not acquire or release a lease, and performs no Step,
+completion, effect, receipt, retry, resume, repair, replan, Project,
+Workspace, file, network, model, Provider, Sandbox, tool, product, API, UI, or
+legacy Agent operation. Runtime interruption persistence composition remains
+a later Issue.
