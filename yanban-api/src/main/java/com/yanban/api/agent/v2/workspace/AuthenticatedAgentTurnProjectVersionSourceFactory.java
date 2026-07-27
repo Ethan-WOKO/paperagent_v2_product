@@ -24,6 +24,13 @@ public class AuthenticatedAgentTurnProjectVersionSourceFactory {
 
     public ProjectVersionSource create(Long authenticatedUserId, Long turnId) {
         VerifiedAgentTurnProductContext context = contexts.resolve(authenticatedUserId, turnId);
+        return create(context);
+    }
+
+    ProjectVersionSource create(VerifiedAgentTurnProductContext context) {
+        if (context == null) {
+            throw projectSourceRequired();
+        }
         Long projectId = context.identity().projectId();
         String versionId = context.projectVersionId().orElseThrow(
                 AuthenticatedAgentTurnProjectVersionSourceFactory::projectSourceRequired);

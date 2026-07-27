@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.bootstrap;
 
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapRequestAdapter;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
+import com.yanban.agent.v2.adapter.bootstrap.ProductWorkspaceIdDerivation;
 import io.paperagent.v2.persistence.ExecutionStartRecoveryRepository;
 import io.paperagent.v2.persistence.PlanBootstrapRepository;
 import io.paperagent.v2.persistence.ExecutionStartRepository;
@@ -29,6 +30,11 @@ public class AgentV2PlanBootstrapConfiguration {
     @Bean
     ProductPlanIdDerivation productPlanIdDerivation() {
         return new ProductPlanIdDerivation();
+    }
+
+    @Bean
+    ProductWorkspaceIdDerivation productWorkspaceIdDerivation() {
+        return new ProductWorkspaceIdDerivation();
     }
 
     @Bean

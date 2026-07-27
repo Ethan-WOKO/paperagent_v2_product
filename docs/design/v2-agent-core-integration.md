@@ -419,3 +419,34 @@ introducing a global Project source or a second identity authority.
 This boundary does not compose persisted Plan execution context, expose an
 API, start a step or loop, call a Provider/Sandbox/tool, mutate a Project,
 define cleanup policy, or change a V2 contract. Those remain later Issues.
+
+## Authenticated persisted Plan execution-context composition boundary
+
+The internal product composition path now resolves an owner-qualified Project
+turn exactly once before consulting any context, Workspace, or persistence
+collaborator. That single verified product context supplies the Plan identity,
+the Project version, and a domain-separated Workspace identity:
+`product-workspace.` plus the lowercase SHA-256 of UTF-8 `workspace\0` and the
+product run ID. The caller contributes only an optional stable lease attempt.
+
+For a context that is canonically absent, the product proposes one
+materialization specification using a snapshot of the configured Project file,
+aggregate, and count limits. A read-only product preflight shapes only this
+optional proposal; the stable V2 composer re-inspects and arbitrates all
+authority. If a reservation or confirmation already exists, no current-limit
+proposal is supplied, so the persisted exact specification remains
+authoritative across product configuration changes and provider recreation.
+Partial, rejected, cross-bound, or protocol-invalid preflight state cannot
+authorize initialization.
+
+The existing authenticated Project-source and local Workspace factories have
+package-private trusted-context paths for this composition only. Their public
+owner-qualified entry points retain their previous behavior. The composer
+creates one source-bound Workspace port from the already verified context and
+delegates once to `DefaultPlanExecutionContextComposer` with the relational
+execution-start, context, and lease repositories. V2 outcomes and repository
+or Workspace failures are returned or propagated unchanged.
+
+This boundary activates no Controller or traffic, starts no step or Agent
+loop, performs no Provider, Sandbox, or tool call, mutates no Project, adds no
+schema, and changes no V2 core contract. Those remain later Issues.
