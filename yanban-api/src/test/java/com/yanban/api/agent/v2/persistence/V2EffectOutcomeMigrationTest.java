@@ -33,6 +33,7 @@ class V2EffectOutcomeMigrationTest {
                       '{}', TIMESTAMP '2026-07-28 00:00:00')
                     """);
             statement.execute(effectIntent("tool-effect"));
+            statement.execute(effectIntent("tool-other"));
         }
         migrate(url, "49");
         try (Connection connection =
@@ -65,6 +66,8 @@ class V2EffectOutcomeMigrationTest {
                     progress("progress-b", "tool-effect", 1)));
             assertThrows(SQLException.class, () -> statement.execute(
                     result("missing-tool", "receipt-effect")));
+            assertThrows(SQLException.class, () -> statement.execute(
+                    result("tool-other", "receipt-effect")));
             assertThrows(SQLException.class, () -> statement.execute(
                     "DELETE FROM agent_v2_receipts "
                             + "WHERE receipt_id = 'receipt-effect'"));
