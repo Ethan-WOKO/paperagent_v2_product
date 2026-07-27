@@ -90,3 +90,6 @@ jobs:
 
       - name: Test authenticated V2 active-Step recovery composition
         run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnStepRecoveryComposerTest,AuthenticatedAgentTurnStepRecoveryCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 first active-Step interruption persistence
+        run: mvn -pl yanban-api -am -Dtest=ProductStepInterruptionRepositoryAdapterTest -Dsurefire.failIfNoSpecifiedTests=false test
