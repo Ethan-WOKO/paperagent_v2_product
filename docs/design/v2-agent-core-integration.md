@@ -728,3 +728,42 @@ Provider, Sandbox, tool, file, network, lease, Step, kernel, Agent Loop,
 Controller, API, UI, Project, or Workspace operation and reuses no legacy
 Agent implementation. Effect progress/result and execution completion remain
 later Issue boundaries.
+
+## Product EffectOutcome persistence boundary
+
+The product database implements the stable `EffectOutcomeRepository` through
+V50. Immutable effect progress is globally keyed by its progress ID and
+uniquely sequenced from one within each ToolCall stream. One final-result
+marker may bind that ToolCall to exactly one shared V49 Receipt fact. The
+result marker and Receipt use a composite `(receipt_id, tool_call_id)`
+constraint and are inserted in one transaction, so neither can become visible
+without the other.
+
+New progress and results require the existing canonical EffectIntent claim,
+the exact current active-Step recovery cut, and the current live lease token
+and fence. The Plan bootstrap is locked before these authorities are rechecked.
+No bootstrap, execution-start, context, activation, interruption, lease,
+intent, claim, event, checkpoint, Plan, or revision row is mutated.
+
+Exact progress and result replay is decoded and validated before recovery,
+lease, or clock inspection and remains permanent after lease expiry or
+takeover. Progress streams must start at one and remain contiguous, and no new
+progress is accepted after a valid final result. Canonical format-1 documents
+and lowercase SHA-256 digests protect every progress detail shape and every
+Receipt field. Missing counterparts, corrupt documents, discriminator or
+cross-column mismatches, noncontiguous streams, and orphaned occupied cuts
+fail closed as sanitized EffectOutcome partial state.
+
+EffectOutcome Receipts retain the EffectIntent ToolCall claim and use the
+`EFFECT_OUTCOME` receipt-fact discriminator. A Receipt ID already owned by an
+ordinary Receipt or another complete outcome cannot be taken over, and the
+ordinary Receipt adapter recognizes complete outcome Receipts for read while
+rejecting append ownership in both race directions. Constraint, deadlock, and
+serialization losers receive at most one fresh classification; there is no
+production retry loop.
+
+This boundary persists provider-neutral progress and result facts only. It
+does not execute an effect or Step, complete a Step, mutate a checkpoint,
+invoke a Provider, Sandbox, tool, file, or network, start a kernel or Agent
+Loop, expose Controller/API/UI traffic, access Project/Workspace content, or
+reuse legacy Agent code.

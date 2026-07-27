@@ -14,7 +14,9 @@ import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.EffectIntentRequest;
+import io.paperagent.v2.persistence.EffectResultRequest;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
+import io.paperagent.v2.persistence.PersistedEffectResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -47,6 +49,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         ProductReceiptMarkerReader.class,
         ProductReceiptEffectIntentMarkerReader.class,
         ProductEffectIntentCodec.class,
+        ProductEffectOutcomeCodec.class,
+        ProductEffectOutcomeMarkerReader.class,
+        ProductEffectOutcomeReceiptInspector.class,
         ProductReceiptRepositoryAdapterTest.Configuration.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -85,17 +90,23 @@ class ProductReceiptRepositoryAdapterTest {
     @jakarta.annotation.Resource
     private ProductEffectIntentCodec effectIntentCodec;
     @jakarta.annotation.Resource
+    private ProductEffectOutcomeCodec outcomeCodec;
+    @jakarta.annotation.Resource
+    private ProductEffectOutcomeResultJpaRepository effectResults;
+    @jakarta.annotation.Resource
     private CountingTime time;
     @jakarta.annotation.Resource
     private JdbcTemplate jdbc;
 
     @BeforeEach
     void reset() {
+        effectResults.deleteAll();
         receipts.deleteAll();
         intents.deleteAll();
         claims.deleteAll();
         jdbc.update("DELETE FROM agent_v2_plan_bootstraps");
         receipts.flush();
+        effectResults.flush();
         intents.flush();
         claims.flush();
         time.observations.set(0);
@@ -177,6 +188,32 @@ class ProductReceiptRepositoryAdapterTest {
         assertEquals(0, receipts.count());
         assertEquals(1, claims.count());
         assertEquals(0, time.observations.get());
+
+        ExecutionReceipt effectReceipt =
+                receipt("effect-result", "effect-owned");
+        EffectResultRequest outcomeRequest =
+                new EffectResultRequest(effectReceipt, "token-a", 1);
+        PersistedEffectResult outcomeResult =
+                new PersistedEffectResult(effectReceipt, "owner-a", 1);
+        receipts.saveAndFlush(new ProductReceiptEntity(
+                effectReceipt.id().value(),
+                effectReceipt.toolCallId().value(),
+                ProductReceiptOwnership.EFFECT_INTENT,
+                "EFFECT_OUTCOME",
+                new ProductReceiptCodec(new ObjectMapper())
+                        .encode(effectReceipt),
+                Instant.parse("2026-07-28T00:00:02Z")));
+        effectResults.saveAndFlush(new ProductEffectOutcomeResultEntity(
+                effectReceipt.toolCallId().value(),
+                effectReceipt.id().value(), "owner-a", 1,
+                outcomeCodec.encodeResultRequest(outcomeRequest),
+                outcomeCodec.encodeResultResult(outcomeResult),
+                Instant.parse("2026-07-28T00:00:02Z")));
+        assertEquals(PersistenceOutcome.FOUND,
+                adapter.find(effectReceipt.id()).outcome());
+        failure(adapter.append(effectReceipt),
+                PersistenceErrorCode.EFFECT_RECEIPT_OWNERSHIP_REQUIRED,
+                "receipt.id");
     }
 
     @Test

@@ -111,3 +111,6 @@ jobs:
 
       - name: Test product V2 ordinary Receipt persistence
         run: mvn -pl yanban-api -am -Dtest=ProductReceiptCodecTest,ProductReceiptRepositoryAdapterTest,ProductReceiptRepositoryConcurrencyTest,V2ReceiptMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test product V2 EffectOutcome persistence
+        run: mvn -pl yanban-api -am -Dtest=ProductEffectOutcomeCodecTest,ProductEffectOutcomeRepositoryAdapterTest,ProductEffectOutcomeRepositoryConcurrencyTest,V2EffectOutcomeMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
