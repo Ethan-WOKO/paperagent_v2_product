@@ -206,6 +206,9 @@ class ProductPlanExecutionContextTransactions {
                     : rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
                             "request.planId");
         }
+        if (!sourceMatchesContext(source, decoded)) {
+            return partial();
+        }
         if (!request.materializationSpec()
                 .equals(decoded.reservation().materializationSpec())) {
             return rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
@@ -287,15 +290,17 @@ class ProductPlanExecutionContextTransactions {
     }
 
     private Source source(ProductPlanBootstrapEntity bootstrapRow) {
+        ProductExecutionStartEntity startRow =
+                starts.findById(bootstrapRow.planId()).orElse(null);
+        if (startRow == null) {
+            return null;
+        }
         try {
             PersistedPlanBootstrap bootstrap = bootstrapCodec.decode(
                     bootstrapRow.payloadFormatVersion(),
                     bootstrapRow.payloadSha256(),
                     bootstrapRow.payloadJson());
-            ProductExecutionStartEntity startRow =
-                    starts.findById(bootstrapRow.planId()).orElse(null);
-            if (!canonicalBootstrap(bootstrapRow, bootstrap)
-                    || startRow == null) {
+            if (!canonicalBootstrap(bootstrapRow, bootstrap)) {
                 return null;
             }
             ExecutionStartRequest request = startCodec.decodeRequest(
@@ -468,6 +473,9 @@ class ProductPlanExecutionContextTransactions {
             ExecutionStartRequest request,
             PersistedExecutionStart result) {
         Checkpoint started = result.startedCheckpoint().checkpoint();
+        PlanRevision latest = bootstrap.plan().latestRevision();
+        Set<PlanStepId> stepIds = latest.steps().stream()
+                .map(step -> step.id()).collect(Collectors.toSet());
         return row.committedAt() != null
                 && row.planId().equals(bootstrap.plan().id().value())
                 && request.planId().equals(bootstrap.plan().id())
@@ -481,12 +489,25 @@ class ProductPlanExecutionContextTransactions {
                 && request.startedCheckpoint().equals(started)
                 && result.startedCheckpoint().version() == 2
                 && request.startEvent().sequence() == 1
+                && request.startEvent().planId()
+                        .equals(bootstrap.plan().id())
+                && request.startEvent().taskFrameId()
+                        .equals(bootstrap.taskFrame().id())
                 && started.lastEventSequence() == 1
+                && started.planId().equals(bootstrap.plan().id())
+                && started.taskFrameId()
+                        .equals(bootstrap.taskFrame().id())
                 && started.revisionId()
-                        .equals(bootstrap.plan().latestRevision().id())
+                        .equals(latest.id())
                 && started.revisionNumber()
-                        == bootstrap.plan().latestRevision().number()
-                && started.planState() == PlanExecutionState.ACTIVE;
+                        == latest.number()
+                && latest.completedFacts().isEmpty()
+                && started.planState() == PlanExecutionState.ACTIVE
+                && started.stepStates().keySet().equals(stepIds)
+                && started.stepStates().values().stream()
+                        .allMatch(state ->
+                                state == StepExecutionState.NOT_STARTED)
+                && started.receiptReferences().isEmpty();
     }
 
     private static <T> PersistenceResult<T> partial() {

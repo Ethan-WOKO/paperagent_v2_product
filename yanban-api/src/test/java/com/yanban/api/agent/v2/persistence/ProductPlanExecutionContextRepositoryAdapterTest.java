@@ -17,17 +17,25 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @DataJpaTest
 @TestPropertySource(properties = {
@@ -93,6 +101,8 @@ class ProductPlanExecutionContextRepositoryAdapterTest {
     private ProductPlanBootstrapCodec bootstrapCodec;
     @jakarta.annotation.Resource
     private ProductExecutionStartCodec startCodec;
+    @jakarta.annotation.Resource
+    private ProductPlanExecutionContextCodec contextCodec;
     @jakarta.annotation.Resource
     private MutableTime time;
 
@@ -300,6 +310,160 @@ class ProductPlanExecutionContextRepositoryAdapterTest {
                 "planExecutionContext");
     }
 
+    @Test
+    void startRowDatabaseFailurePropagatesUnchangedAndWritesNothing() {
+        ProductPlanBootstrapJpaRepository bootstrapRows =
+                mock(ProductPlanBootstrapJpaRepository.class);
+        ProductExecutionStartJpaRepository startRows =
+                mock(ProductExecutionStartJpaRepository.class);
+        ProductPlanExecutionContextJpaRepository contextRows =
+                mock(ProductPlanExecutionContextJpaRepository.class);
+        jakarta.persistence.EntityManager entityManager =
+                mock(jakarta.persistence.EntityManager.class);
+        ProductPlanExecutionContextTransactions transactions =
+                new ProductPlanExecutionContextTransactions(
+                        bootstrapRows,
+                        mock(ProductPlanBootstrapCodec.class),
+                        startRows,
+                        mock(ProductExecutionStartCodec.class),
+                        mock(ProductLeaseJpaRepository.class),
+                        mock(ProductLeaseTimeSource.class),
+                        contextRows,
+                        mock(ProductPlanExecutionContextCodec.class),
+                        entityManager);
+        ProductPlanExecutionContextRepositoryAdapter isolated =
+                new ProductPlanExecutionContextRepositoryAdapter(transactions);
+        PersistedPlanBootstrap bootstrap =
+                ProductPlanExecutionContextTestFixtures.bootstrap(
+                        "plan-db-failure", "task-db-failure");
+        var request = ProductPlanExecutionContextTestFixtures.reservation(
+                bootstrap, "token-db-failure", 1,
+                ProductPlanExecutionContextTestFixtures.spec("db-failure"));
+        ProductPlanBootstrapEntity bootstrapRow =
+                new ProductPlanBootstrapEntity(
+                        "plan-db-failure", "task-db-failure", 1,
+                        "0".repeat(64), "{}",
+                        ProductPlanExecutionContextTestFixtures.NOW);
+        DataAccessResourceFailureException failure =
+                new DataAccessResourceFailureException(
+                        "synthetic start-row database failure");
+        when(bootstrapRows.lockByPlanId("plan-db-failure"))
+                .thenReturn(Optional.of(bootstrapRow));
+        when(contextRows.findById("plan-db-failure"))
+                .thenReturn(Optional.empty());
+        when(startRows.findById("plan-db-failure")).thenThrow(failure);
+
+        assertSame(failure, assertThrows(
+                DataAccessResourceFailureException.class,
+                () -> isolated.reserve(request)));
+        verify(entityManager, never()).persist(
+                org.mockito.ArgumentMatchers.any());
+        verify(contextRows, never()).save(
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void crossTaskFrameStartAuthorityFailsClosedWithoutReservation() {
+        Scenario scenario = seed("cross-task", true);
+        ProductExecutionStartEntity row =
+                starts.findById("plan-cross-task").orElseThrow();
+        var original = startCodec.decodeRequest(
+                row.requestFormatVersion(), row.requestSha256(),
+                row.requestJson());
+        var event = new io.paperagent.v2.contracts.EventEnvelope(
+                original.startEvent().id(),
+                new io.paperagent.v2.contracts.TaskFrameId("other-task"),
+                original.startEvent().planId(),
+                original.startEvent().sequence(),
+                original.startEvent().occurredAt(),
+                original.startEvent().type(),
+                original.startEvent().causationId(),
+                original.startEvent().correlationId(),
+                original.startEvent().payload());
+        replaceStartDocuments(row,
+                new io.paperagent.v2.persistence.ExecutionStartRequest(
+                        original.planId(), original.leaseToken(),
+                        original.fencingToken(), event,
+                        original.startedCheckpoint()),
+                "owner-cross-task");
+
+        assertFailure(adapter.reserve(scenario.reservation()),
+                PersistenceErrorCode.PLAN_EXECUTION_CONTEXT_PARTIAL_STATE,
+                "planExecutionContext");
+        assertEquals(0, contexts.count());
+    }
+
+    @Test
+    void advancedStepStartAuthorityFailsClosedWithoutReservation() {
+        Scenario scenario = seed("advanced", true);
+        ProductExecutionStartEntity row =
+                starts.findById("plan-advanced").orElseThrow();
+        var original = startCodec.decodeRequest(
+                row.requestFormatVersion(), row.requestSha256(),
+                row.requestJson());
+        var checkpoint = original.startedCheckpoint();
+        var states = new java.util.LinkedHashMap<>(checkpoint.stepStates());
+        states.put(states.keySet().iterator().next(),
+                io.paperagent.v2.contracts.StepExecutionState.ACTIVE);
+        var advanced = new io.paperagent.v2.contracts.Checkpoint(
+                checkpoint.taskFrameId(), checkpoint.planId(),
+                checkpoint.revisionId(), checkpoint.revisionNumber(),
+                checkpoint.lastEventSequence(), checkpoint.planState(),
+                states, checkpoint.receiptReferences(),
+                checkpoint.createdAt());
+        replaceStartDocuments(row,
+                new io.paperagent.v2.persistence.ExecutionStartRequest(
+                        original.planId(), original.leaseToken(),
+                        original.fencingToken(), original.startEvent(),
+                        advanced),
+                "owner-advanced");
+
+        assertFailure(adapter.reserve(scenario.reservation()),
+                PersistenceErrorCode.PLAN_EXECUTION_CONTEXT_PARTIAL_STATE,
+                "planExecutionContext");
+        assertEquals(0, contexts.count());
+    }
+
+    @Test
+    void firstConfirmationRejectsReservationWhoseFrozenHeadWasCorrupted() {
+        Scenario scenario = seed("confirm-binding", true);
+        assertEquals(PersistenceOutcome.APPLIED,
+                adapter.reserve(scenario.reservation()).outcome());
+        ProductPlanExecutionContextEntity row =
+                contexts.findById("plan-confirm-binding").orElseThrow();
+        var stored = contextCodec.decodeReservationRequest(
+                row.reservationRequestFormatVersion(),
+                row.reservationRequestSha256(),
+                row.reservationRequestJson());
+        var corrupted =
+                new io.paperagent.v2.persistence
+                        .PlanExecutionContextReservationRequest(
+                        stored.planId(), stored.leaseToken(),
+                        stored.fencingToken(),
+                        new io.paperagent.v2.contracts.PlanRevisionId(
+                                "corrupt-revision"),
+                        stored.expectedRevisionNumber(),
+                        stored.expectedCheckpointVersion(),
+                        stored.expectedEventHeadSequence(),
+                        stored.materializationSpec());
+        var encoded = contextCodec.encodeReservationRequest(corrupted);
+        set(row, "reservationRequestSha256", encoded.sha256());
+        set(row, "reservationRequestJson", encoded.json());
+        contexts.saveAndFlush(row);
+
+        assertFailure(adapter.confirm(
+                        ProductPlanExecutionContextTestFixtures.confirmation(
+                                scenario.bootstrap(),
+                                "token-confirm-binding", 1,
+                                scenario.spec())),
+                PersistenceErrorCode.PLAN_EXECUTION_CONTEXT_PARTIAL_STATE,
+                "planExecutionContext");
+        ProductPlanExecutionContextEntity unchanged =
+                contexts.findById("plan-confirm-binding").orElseThrow();
+        assertEquals(null, unchanged.confirmationLeaseOwnerId());
+        assertEquals(null, unchanged.confirmationRequestJson());
+    }
+
     private Scenario seed(String suffix, boolean sourceBacked) {
         PersistedPlanBootstrap bootstrap = sourceBacked
                 ? ProductPlanExecutionContextTestFixtures.bootstrap(
@@ -324,6 +488,24 @@ class ProductPlanExecutionContextRepositoryAdapterTest {
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError(exception);
         }
+    }
+
+    private void replaceStartDocuments(
+            ProductExecutionStartEntity row,
+            io.paperagent.v2.persistence.ExecutionStartRequest request,
+            String owner) {
+        var result = new io.paperagent.v2.persistence.PersistedExecutionStart(
+                request.planId(), owner, request.fencingToken(),
+                request.startEvent(),
+                new io.paperagent.v2.persistence.VersionedCheckpoint(
+                        2, request.startedCheckpoint()));
+        var encodedRequest = startCodec.encodeRequest(request);
+        var encodedResult = startCodec.encodeResult(result);
+        set(row, "requestSha256", encodedRequest.sha256());
+        set(row, "requestJson", encodedRequest.json());
+        set(row, "resultSha256", encodedResult.sha256());
+        set(row, "resultJson", encodedResult.json());
+        starts.saveAndFlush(row);
     }
 
     private static void assertFailure(
