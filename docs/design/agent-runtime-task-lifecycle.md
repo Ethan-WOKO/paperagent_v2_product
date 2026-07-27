@@ -1,5 +1,11 @@
 # Agent Runtime 边界与统一任务生命周期设计
 
+> **状态：HISTORICAL / PARTIALLY SUPERSEDED（2026-07-27）。**
+> 当前 Agent 核心边界以 `docs/design/v2-agent-core-integration.md` 和
+> `agent-v2/` 的冻结契约为准。本文继续作为 V1 产品生命周期和兼容 API 的
+> 背景材料；其中保留旧 `PlanAgentService` 作为目标 Runtime、增加额外顶层策略，
+> 或让 V2 核心依赖产品实现的建议均已被替代。
+>
 > 关联 issue: #4 `design: 设计 Agent Runtime 边界和统一任务生命周期`
 >
 > 本文是后续实现统一 Agent Runtime、任务生命周期、事件协议、取消机制、RAG/记忆接入的设计基线。当前 PR 只做设计沉淀，不修改业务代码。

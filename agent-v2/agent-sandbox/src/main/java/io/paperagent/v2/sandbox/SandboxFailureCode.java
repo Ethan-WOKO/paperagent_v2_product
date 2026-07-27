@@ -1,0 +1,25 @@
+package io.paperagent.v2.sandbox;
+
+/**
+ * Stable one-attempt Sandbox failure categories.
+ */
+public enum SandboxFailureCode {
+    INVALID_REQUEST,
+    CAPABILITY_DENIED,
+    UNSUPPORTED_PROFILE,
+    WORKSPACE_UNAVAILABLE,
+    TIMEOUT,
+    CANCELLED,
+    OUTPUT_LIMIT,
+    RESOURCE_LIMIT,
+    PROCESS_LIMIT,
+    NETWORK_LIMIT,
+    SECRET_UNAVAILABLE,
+    EXECUTION_FAILURE,
+    BACKEND_FAILURE,
+    PROTOCOL_VIOLATION,
+    SCRIPTED_MISMATCH,
+    SCRIPTED_OUT_OF_ORDER,
+    SCRIPTED_EXHAUSTED,
+    SCRIPTED_UNCONSUMED
+}

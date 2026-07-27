@@ -1,0 +1,34 @@
+package io.paperagent.v2.persistence;
+
+import io.paperagent.v2.contracts.EffectProgress;
+
+import java.util.Objects;
+
+public record PersistedEffectProgress(
+        EffectProgress progress,
+        String leaseOwnerId,
+        long fencingToken) {
+
+    public PersistedEffectProgress {
+        Objects.requireNonNull(progress, "progress");
+        requireText(leaseOwnerId, "leaseOwnerId");
+        if (fencingToken < 1) {
+            throw new IllegalArgumentException("fencingToken must be positive");
+        }
+    }
+
+    @Override
+    public String toString() {
+        return "PersistedEffectProgress["
+                + "progress=<provided>, "
+                + "leaseOwnerId=<provided>, "
+                + "fencingToken=<provided>]";
+    }
+
+    private static void requireText(String value, String path) {
+        Objects.requireNonNull(value, path);
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(path + " must not be blank");
+        }
+    }
+}
