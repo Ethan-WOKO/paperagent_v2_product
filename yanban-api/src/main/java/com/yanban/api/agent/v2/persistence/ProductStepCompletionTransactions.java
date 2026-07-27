@@ -257,16 +257,25 @@ class ProductStepCompletionTransactions {
             List<EffectReceipt> canonical = new ArrayList<>();
             for (ProductEffectIntentEntity intentRow :
                     intents.findAllByPlanId(row.planId())) {
-                if (!intentRow.stepId().equals(row.stepId())) {
-                    continue;
-                }
                 PersistedEffectIntent intent =
                         outcomeMarkers.intent(intentRow.toolCallId());
+                if (intent == null
+                        || !intentRow.planId().equals(
+                                intent.intent().planId().value())
+                        || !intentRow.stepId().equals(
+                                intent.intent().stepId().value())
+                        || !intentRow.activationEventId().equals(
+                                intent.activationEventId().value())) {
+                    return null;
+                }
+                if (!intent.intent().stepId().value().equals(row.stepId())) {
+                    continue;
+                }
                 ProductEffectOutcomeResultEntity outcome = outcomeResults
                         .findById(intentRow.toolCallId()).orElse(null);
                 var outcomeMarker = outcome == null
                         ? null : outcomeMarkers.result(outcome);
-                if (intent == null || outcomeMarker == null
+                if (outcomeMarker == null
                         || !intentRow.activationEventId().equals(
                                 row.activationEventId())
                         || !intent.activationEventId().value().equals(
@@ -392,13 +401,21 @@ class ProductStepCompletionTransactions {
         List<EffectReceipt> receipts = new ArrayList<>();
         for (ProductEffectIntentEntity row :
                 intents.findAllByPlanId(request.planId().value())) {
-            if (!row.stepId().equals(request.stepId().value())) {
-                continue;
-            }
             var intent = outcomeMarkers.intent(row.toolCallId());
             if (intent == null
+                    || !row.planId().equals(
+                            intent.intent().planId().value())
+                    || !row.stepId().equals(
+                            intent.intent().stepId().value())
                     || !row.activationEventId().equals(
-                            active.activation().activationEvent().id().value())
+                            intent.activationEventId().value())) {
+                return EvidenceCut.partial();
+            }
+            if (!intent.intent().stepId().equals(request.stepId())) {
+                continue;
+            }
+            if (!row.activationEventId().equals(
+                    active.activation().activationEvent().id().value())
                     || !intent.activationEventId().equals(
                             active.activation().activationEvent().id())) {
                 return EvidenceCut.partial();

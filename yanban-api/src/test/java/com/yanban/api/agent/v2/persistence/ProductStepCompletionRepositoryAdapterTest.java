@@ -255,6 +255,43 @@ class ProductStepCompletionRepositoryAdapterTest {
     }
 
     @Test
+    void intentRelationalStepMismatchFailsBeforeApplyAndOnReplay() {
+        var before = ProductEffectIntentTestFixtures.request(
+                scenario, "tool-misbound-before", "token-completion", 1);
+        applied(intentAdapter.persist(before));
+        assertEquals(1, jdbc.update("""
+                UPDATE agent_v2_effect_intents
+                   SET step_id = ?
+                 WHERE tool_call_id = ?
+                """, "other-step", "tool-misbound-before"));
+        failure(adapter.complete(request(
+                        "completion-misbound-before", List.of())),
+                PersistenceErrorCode.STEP_COMPLETION_PARTIAL_STATE,
+                "stepCompletion");
+        assertEquals(0, completions.count());
+
+        reset();
+        var after = ProductEffectIntentTestFixtures.request(
+                scenario, "tool-misbound-after", "token-completion", 1);
+        applied(intentAdapter.persist(after));
+        record(after, "receipt-misbound-after");
+        StepCompletionRequest complete = request(
+                "completion-misbound-after",
+                List.of(new ReceiptId("receipt-misbound-after")));
+        applied(adapter.complete(complete));
+        assertEquals(1, jdbc.update("""
+                UPDATE agent_v2_effect_intents
+                   SET step_id = ?
+                 WHERE tool_call_id = ?
+                """, "other-step", "tool-misbound-after"));
+        failure(adapter.complete(complete),
+                PersistenceErrorCode.STEP_COMPLETION_PARTIAL_STATE,
+                "stepCompletion");
+        assertEquals(1, completions.count());
+        assertEquals(1, evidence.count());
+    }
+
+    @Test
     void stableSourceEventPlanAndCheckpointFailuresKeepExactPaths() {
         StepCompletionRequest base =
                 request("completion-validation", List.of());
