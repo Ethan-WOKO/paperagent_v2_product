@@ -7,6 +7,7 @@ import io.paperagent.v2.persistence.ExecutionStartRecoveryRepository;
 import io.paperagent.v2.persistence.PlanBootstrapRepository;
 import io.paperagent.v2.persistence.ExecutionStartRepository;
 import io.paperagent.v2.persistence.LeaseRepository;
+import io.paperagent.v2.persistence.StepActivationRepository;
 import io.paperagent.v2.runtime.bootstrap.DefaultPersistentPlanBootstrapper;
 import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapper;
 import io.paperagent.v2.runtime.checkpoint.DeterministicInitialCheckpointFreezer;
@@ -14,6 +15,9 @@ import io.paperagent.v2.runtime.execution.DeterministicExecutionStartMaterialize
 import io.paperagent.v2.runtime.execution.DeterministicFreshExecutionGate;
 import io.paperagent.v2.runtime.execution.start.DefaultFreshExecutionStarter;
 import io.paperagent.v2.runtime.execution.start.FreshExecutionStarter;
+import io.paperagent.v2.runtime.execution.activation.composition.DefaultStepActivationComposer;
+import io.paperagent.v2.runtime.execution.activation.composition.StepActivationComposer;
+import io.paperagent.v2.runtime.execution.activation.materialization.DeterministicCommittedStepActivationMaterializer;
 import io.paperagent.v2.runtime.execution.recovery.composition.DefaultExecutionStartRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.ExecutionStartRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.materialization.DeterministicRecoveryReadyExecutionStartMaterializer;
@@ -74,5 +78,15 @@ public class AgentV2PlanBootstrapConfiguration {
                 new DeterministicRecoveryReadyExecutionStartMaterializer(),
                 leaseRepository,
                 executionStartRepository);
+    }
+
+    @Bean
+    StepActivationComposer stepActivationComposer(
+            LeaseRepository leaseRepository,
+            StepActivationRepository stepActivationRepository) {
+        return new DefaultStepActivationComposer(
+                new DeterministicCommittedStepActivationMaterializer(),
+                leaseRepository,
+                stepActivationRepository);
     }
 }

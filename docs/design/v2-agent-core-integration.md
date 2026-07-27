@@ -477,3 +477,28 @@ mismatches, and cross-bound source/context facts fail closed without updating
 prior authority. This boundary does not compose or execute a Step, call a
 model, Provider, Sandbox, or tool, expose an API, mutate a Project or
 Workspace, or implement completion, interruption, or recovery.
+
+## Authenticated first-Step activation composition boundary
+
+The internal product composition path now resolves one owner-qualified Agent
+turn before validating caller activation material or consulting persistence.
+The verified run identity alone derives the Plan identity. The caller supplies
+only one stable Step ID and one complete, caller-owned activation attempt; it
+cannot override Plan, TaskFrame, Project, Workspace, or lease authority.
+
+One read-only execution-start inspection must yield the exact committed H0
+cut for the derived Plan. Missing, ready-only, rejected, contradictory,
+malformed, or cross-bound results fail closed before lease acquisition,
+materialization, or activation. A valid cut is delegated unchanged, together
+with the exact Step and attempt, to one stable `StepActivationComposer`.
+
+Spring wires that composer as `DefaultStepActivationComposer` with
+`DeterministicCommittedStepActivationMaterializer` and the product
+`LeaseRepository` and `StepActivationRepository` adapters. Stable outcomes,
+validation failures, protocol failures, persistence failures, and lease
+dispositions are not translated, retried, released, or cleaned up here.
+
+This boundary exposes no Controller or traffic, executes no Step, model,
+Provider, Sandbox, or tool, reads no Project or Workspace files, and adds no
+completion, interruption, recovery, replan, context creation, schema, or V2
+contract behavior.
