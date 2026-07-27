@@ -69,3 +69,6 @@ jobs:
 
       - name: Test authenticated V2 execution start recovery composition
         run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnExecutionStartRecoveryComposerTest,AuthenticatedAgentTurnExecutionStartRecoveryCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 Plan execution context persistence adapter
+        run: mvn -pl yanban-api -am -Dtest=ProductPlanExecutionContextCodecTest,ProductPlanExecutionContextRepositoryAdapterTest,ProductPlanExecutionContextRepositoryConcurrencyTest,V2PlanExecutionContextMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
