@@ -210,6 +210,20 @@ class ProductStepRecoveryRepositoryAdapterTest {
         assertFailure(adapter.inspect(bootstrap.plan().id()),
                 PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE,
                 "stepRecovery");
+
+        StepActivationRequest request =
+                ProductStepActivationTestFixtures.request(
+                        bootstrap, "token", 1, "orphan-activation");
+        PersistedStepActivation orphanActivation =
+                new PersistedStepActivation(
+                        request.planId(), request.stepId(), "owner", 1,
+                        request.activationEvent(), new VersionedCheckpoint(
+                                3, request.activatedCheckpoint()));
+        seedInterruption(
+                bootstrap, orphanActivation, "orphan-interruption");
+        assertFailure(adapter.inspect(bootstrap.plan().id()),
+                PersistenceErrorCode.STEP_RECOVERY_PARTIAL_STATE,
+                "stepRecovery");
     }
 
     @Test

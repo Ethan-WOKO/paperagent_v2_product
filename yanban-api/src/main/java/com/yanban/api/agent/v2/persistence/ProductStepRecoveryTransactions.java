@@ -107,8 +107,13 @@ class ProductStepRecoveryTransactions {
 
         List<ProductStepActivationEntity> rows =
                 activations.findAllByPlanId(planId.value());
+        List<ProductStepInterruptionEntity> interruptionRows =
+                interruptions.findAllByPlanId(planId.value());
+        List<ProductStepCompletionEntity> completionRows =
+                completions.findAllByPlanId(planId.value());
         if (rows.isEmpty()) {
-            return notEligible();
+            return interruptionRows.isEmpty() && completionRows.isEmpty()
+                    ? notEligible() : partial();
         }
         if (rows.size() != 1) {
             return partial();
@@ -124,10 +129,6 @@ class ProductStepRecoveryTransactions {
                 source.bootstrap().taskFrame(), source.bootstrap().plan(),
                 marker.result().activatedCheckpoint(), marker.result(),
                 context.confirmed());
-        List<ProductStepInterruptionEntity> interruptionRows =
-                interruptions.findAllByPlanId(planId.value());
-        List<ProductStepCompletionEntity> completionRows =
-                completions.findAllByPlanId(planId.value());
         if (interruptionRows.isEmpty() && completionRows.isEmpty()) {
             return PersistenceResult.found(active);
         }
