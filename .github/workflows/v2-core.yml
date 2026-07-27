@@ -87,3 +87,6 @@ jobs:
 
       - name: Test V2 active-Step recovery inspection
         run: mvn -pl yanban-api -am -Dtest=ProductStepRecoveryRepositoryAdapterTest,ProductStepRecoveryRepositoryConcurrencyTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test authenticated V2 active-Step recovery composition
+        run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnStepRecoveryComposerTest,AuthenticatedAgentTurnStepRecoveryCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
