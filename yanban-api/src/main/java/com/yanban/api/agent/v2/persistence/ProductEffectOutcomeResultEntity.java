@@ -8,11 +8,16 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinColumns;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.Instant;
 
 @Entity
-@Table(name = "agent_v2_effect_results")
+@Table(
+        name = "agent_v2_effect_results",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_agent_v2_effect_result_receipt",
+                columnNames = {"tool_call_id", "receipt_id"}))
 class ProductEffectOutcomeResultEntity {
     @Id
     @Column(name = "tool_call_id", nullable = false, length = 128)

@@ -56,6 +56,7 @@ class ProductStepInterruptionTransactions {
     private final ProductLeaseJpaRepository leases;
     private final ProductLeaseTimeSource timeSource;
     private final ProductStepInterruptionJpaRepository interruptions;
+    private final ProductStepCompletionJpaRepository completions;
     private final ProductStepInterruptionCodec codec;
     private final EntityManager entityManager;
 
@@ -71,6 +72,7 @@ class ProductStepInterruptionTransactions {
             ProductLeaseJpaRepository leases,
             ProductLeaseTimeSource timeSource,
             ProductStepInterruptionJpaRepository interruptions,
+            ProductStepCompletionJpaRepository completions,
             ProductStepInterruptionCodec codec,
             EntityManager entityManager) {
         this.bootstraps = bootstraps;
@@ -84,6 +86,7 @@ class ProductStepInterruptionTransactions {
         this.leases = leases;
         this.timeSource = timeSource;
         this.interruptions = interruptions;
+        this.completions = completions;
         this.codec = codec;
         this.entityManager = entityManager;
     }
@@ -141,12 +144,18 @@ class ProductStepInterruptionTransactions {
                             candidate.planId().value()).isEmpty()
                     || !interruptions.findAllByPlanId(
                             candidate.planId().value()).isEmpty()
+                    || !completions.findAllByPlanId(
+                            candidate.planId().value()).isEmpty()
                     || leases.findFirstByPlanIdOrderByFencingTokenDesc(
                             candidate.planId().value()).isPresent();
             return occupied ? partial() : rejected(
                     PersistenceErrorCode.NOT_FOUND, "request.planId");
         }
 
+        if (!completions.findAllByPlanId(
+                candidate.planId().value()).isEmpty()) {
+            return partial();
+        }
         ActiveSource source = activeSource(candidate.planId(), bootstrapRow);
         List<ProductStepInterruptionEntity> own =
                 interruptions.findAllByPlanId(candidate.planId().value());

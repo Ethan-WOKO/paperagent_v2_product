@@ -4,6 +4,10 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinColumns;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
@@ -11,23 +15,27 @@ import java.time.Instant;
 
 @Entity
 @Table(
-        name = "agent_v2_step_activations",
+        name = "agent_v2_step_completions",
         indexes = @Index(
-                name = "idx_agent_v2_step_activations_plan",
-                columnList = "plan_id"),
+                name = "idx_agent_v2_step_completions_plan",
+                columnList = "plan_id",
+                unique = true),
         uniqueConstraints = @UniqueConstraint(
-                name = "uk_agent_v2_step_activation_binding",
+                name = "uk_agent_v2_step_completion_binding",
                 columnNames = {
-                        "activation_event_id", "plan_id", "step_id"
+                        "completion_event_id", "plan_id", "step_id",
+                        "activation_event_id"
                 }))
-class ProductStepActivationEntity {
+class ProductStepCompletionEntity {
     @Column(name = "plan_id", nullable = false, length = 128)
     private String planId;
     @Column(name = "step_id", nullable = false, length = 128)
     private String stepId;
-    @Id
     @Column(name = "activation_event_id", nullable = false, length = 128)
     private String activationEventId;
+    @Id
+    @Column(name = "completion_event_id", nullable = false, length = 128)
+    private String completionEventId;
     @Column(name = "source_revision_id", nullable = false, length = 128)
     private String sourceRevisionId;
     @Column(name = "source_revision_number", nullable = false)
@@ -63,22 +71,43 @@ class ProductStepActivationEntity {
     @Column(name = "committed_at", nullable = false)
     private Instant committedAt;
 
-    protected ProductStepActivationEntity() {
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumns({
+            @JoinColumn(
+                    name = "activation_event_id",
+                    referencedColumnName = "activation_event_id",
+                    insertable = false,
+                    updatable = false),
+            @JoinColumn(
+                    name = "plan_id",
+                    referencedColumnName = "plan_id",
+                    insertable = false,
+                    updatable = false),
+            @JoinColumn(
+                    name = "step_id",
+                    referencedColumnName = "step_id",
+                    insertable = false,
+                    updatable = false)
+    })
+    private ProductStepActivationEntity activation;
+
+    protected ProductStepCompletionEntity() {
     }
 
-    ProductStepActivationEntity(
-            String planId, String stepId, String eventId,
-            String sourceRevisionId, long sourceRevisionNumber,
-            String resultRevisionId, long resultRevisionNumber,
-            long sourceCheckpointVersion, long resultCheckpointVersion,
-            long sourceEventSequence, long resultEventSequence,
-            String leaseOwnerId, long fencingToken,
-            ProductStepActivationCodec.EncodedPayload request,
-            ProductStepActivationCodec.EncodedPayload result,
+    ProductStepCompletionEntity(
+            String planId, String stepId, String activationEventId,
+            String completionEventId, String sourceRevisionId,
+            long sourceRevisionNumber, String resultRevisionId,
+            long resultRevisionNumber, long sourceCheckpointVersion,
+            long resultCheckpointVersion, long sourceEventSequence,
+            long resultEventSequence, String leaseOwnerId, long fencingToken,
+            ProductStepCompletionCodec.EncodedPayload request,
+            ProductStepCompletionCodec.EncodedPayload result,
             Instant committedAt) {
         this.planId = planId;
         this.stepId = stepId;
-        this.activationEventId = eventId;
+        this.activationEventId = activationEventId;
+        this.completionEventId = completionEventId;
         this.sourceRevisionId = sourceRevisionId;
         this.sourceRevisionNumber = sourceRevisionNumber;
         this.resultRevisionId = resultRevisionId;
@@ -101,6 +130,7 @@ class ProductStepActivationEntity {
     String planId() { return planId; }
     String stepId() { return stepId; }
     String activationEventId() { return activationEventId; }
+    String completionEventId() { return completionEventId; }
     String sourceRevisionId() { return sourceRevisionId; }
     long sourceRevisionNumber() { return sourceRevisionNumber; }
     String resultRevisionId() { return resultRevisionId; }

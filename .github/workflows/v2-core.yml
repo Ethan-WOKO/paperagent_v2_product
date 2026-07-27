@@ -114,3 +114,6 @@ jobs:
 
       - name: Test product V2 EffectOutcome persistence
         run: mvn -pl yanban-api -am -Dtest=ProductEffectOutcomeCodecTest,ProductEffectOutcomeRepositoryAdapterTest,ProductEffectOutcomeRepositoryConcurrencyTest,V2EffectOutcomeMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test product V2 first active-Step completion persistence
+        run: mvn -pl yanban-api -am -Dtest=ProductStepCompletionCodecTest,ProductStepCompletionRepositoryAdapterTest,ProductStepCompletionRepositoryConcurrencyTest,V2StepCompletionMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test

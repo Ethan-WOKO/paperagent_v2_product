@@ -9,13 +9,22 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinColumns;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.Instant;
 
 @Entity
-@Table(name = "agent_v2_effect_intents", indexes = @Index(
-        name = "idx_agent_v2_effect_intents_plan_step",
-        columnList = "plan_id,step_id"))
+@Table(
+        name = "agent_v2_effect_intents",
+        indexes = @Index(
+                name = "idx_agent_v2_effect_intents_plan_step",
+                columnList = "plan_id,step_id"),
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_agent_v2_effect_intent_binding",
+                columnNames = {
+                        "tool_call_id", "plan_id", "step_id",
+                        "activation_event_id"
+                }))
 class ProductEffectIntentEntity {
     @Id
     @Column(name = "tool_call_id", nullable = false, length = 128)

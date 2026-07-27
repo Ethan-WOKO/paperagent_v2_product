@@ -24,6 +24,7 @@ class ProductEffectIntentTransactions {
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepActivationCodec activationCodec;
     private final ProductStepInterruptionJpaRepository interruptions;
+    private final ProductStepCompletionJpaRepository completions;
     private final ProductLeaseJpaRepository leases;
     private final ProductLeaseTimeSource timeSource;
     private final ProductEffectIntentJpaRepository intents;
@@ -37,6 +38,7 @@ class ProductEffectIntentTransactions {
             ProductStepActivationJpaRepository activations,
             ProductStepActivationCodec activationCodec,
             ProductStepInterruptionJpaRepository interruptions,
+            ProductStepCompletionJpaRepository completions,
             ProductLeaseJpaRepository leases,
             ProductLeaseTimeSource timeSource,
             ProductEffectIntentJpaRepository intents,
@@ -48,6 +50,7 @@ class ProductEffectIntentTransactions {
         this.activations = activations;
         this.activationCodec = activationCodec;
         this.interruptions = interruptions;
+        this.completions = completions;
         this.leases = leases;
         this.timeSource = timeSource;
         this.intents = intents;
@@ -69,6 +72,10 @@ class ProductEffectIntentTransactions {
                 request.intent().toolCallId().value()).orElse(null);
         if (existing != null) {
             return replay(existing, request);
+        }
+        if (!completions.findAllByPlanId(
+                request.intent().planId().value()).isEmpty()) {
+            return partial();
         }
         PersistenceResult<PersistedEffectIntent> authority =
                 validateAuthority(request, active);

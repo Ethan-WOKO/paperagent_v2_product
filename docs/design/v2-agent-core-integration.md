@@ -767,3 +767,40 @@ does not execute an effect or Step, complete a Step, mutate a checkpoint,
 invoke a Provider, Sandbox, tool, file, or network, start a kernel or Agent
 Loop, expose Controller/API/UI traffic, access Project/Workspace content, or
 reuse legacy Agent code.
+
+## Product first active-Step completion persistence boundary
+
+The product database implements the stable `StepCompletionRepository` for the
+current first active-Step cut through V51. One immutable completion marker is
+bound to the exact V46 activation and stores canonical hash-checked request and
+result documents. Ordered child rows bind the completion fact to every final
+V50 EffectOutcome Receipt for that Plan, Step, and activation; an effect-free
+Step has no evidence rows. Each evidence row repeats the Plan, Step, and
+activation authority and uses composite foreign keys to the exact completion
+marker and EffectIntent, plus the exact ToolCall/Receipt EffectOutcome pair,
+so a cross-Plan, Step, or activation association cannot commit.
+
+Every new completion locks the Plan bootstrap authority and revalidates the
+canonical version-3, sequence-2 activation, the absence of interruption or
+completion, the current live lease, the expected source head, one eligible
+active Step, and the complete final EffectOutcome set. Receipts are ordered by
+ToolCall ID and must exactly equal the CompletionFact references. The marker
+and evidence rows use explicit persistence and commit atomically without
+updating bootstrap, execution-start, context, activation, effect, receipt,
+lease, Plan, revision, event, or checkpoint source rows.
+
+Exact replay is validated before mutable lease or clock inspection and remains
+permanent after lease expiry or takeover. Corrupt or torn marker, activation,
+intent, outcome, receipt, claim, or evidence cuts fail closed through the
+sanitized completion partial-state error; missing final outcomes and evidence
+mismatches are not eligible. Completion, interruption, EffectIntent, and
+EffectOutcome writers serialize on the same bootstrap lock. After permanent
+exact replay classification, the effect writers reject a completed Plan, and
+completion replay reconstructs the complete canonical intent/final-outcome
+set before accepting its evidence. A completed Step therefore cannot acquire
+later intent, progress, or result facts in either lock ordering.
+
+This boundary does not activate the next Step or implement a general
+completion chain, recovery composition, Runtime kernel, Agent Loop, Provider,
+Sandbox, tool, file, network, Project or Workspace mutation, Controller,
+API/UI traffic, or legacy Agent behavior. Those remain later Issues.

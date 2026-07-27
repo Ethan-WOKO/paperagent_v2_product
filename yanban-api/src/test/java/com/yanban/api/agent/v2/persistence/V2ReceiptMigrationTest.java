@@ -42,6 +42,7 @@ class V2ReceiptMigrationTest {
         Flyway.configure().dataSource(url, "sa", "")
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true).baselineVersion("47")
+                .target("49")
                 .load().migrate();
 
         try (Connection connection =
