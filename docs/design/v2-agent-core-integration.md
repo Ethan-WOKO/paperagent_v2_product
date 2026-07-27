@@ -851,3 +851,31 @@ Step execution, next-Step activation, retry, resume, repair, replan, Project,
 Workspace, file, network, model, Provider, Sandbox, tool, product, API, UI,
 schema, or legacy Agent operation. Runtime completion persistence composition
 remains a later Issue.
+
+## Active-Step completion persistence composition boundary
+
+The V2 Runtime now composes one already-recovered active Step into one atomic
+completion persistence call. Its public input is the exact completion
+materialization request. The composer invokes the deterministic materializer
+once, validates the returned request against the recovered Plan, Step,
+revision, checkpoint, event, Receipt, and retained lease authorities, and
+passes that same request object once to the stable `StepCompletionRepository`.
+
+Applied and replayed results are committed only when the returned persisted
+completion exactly matches the derived Plan, Step, event, completed revision,
+completed checkpoint, recovery lease owner, and fencing generation. A typed
+persistence rejection and its failure are preserved unchanged. Null, found,
+throwing, contradictory, or authority-mismatched collaborator behavior fails
+through a bounded token-safe protocol error with an exact materialize or
+persist stage and path. Every outcome and protocol failure states
+`RETAINED_FOR_RECOVERY`; neither the lease token nor collaborator exception
+details are exposed.
+
+This composition does not inspect, acquire, renew, or release a lease,
+regenerate completion authority, retry an uncertain write, execute a Step or
+effect, create a Receipt, activate another Step, compose a general completion
+chain, access Project or Workspace content, call file, network, model,
+Provider, Sandbox, or tool behavior, expose product/API/UI traffic, change a
+stable contract or schema, or depend on legacy Agent code. Authenticated
+product completion composition and later execution traffic remain separate
+Issue boundaries.
