@@ -621,3 +621,29 @@ repair, replan, access a Project or Workspace, call a file, network, model,
 Provider, Sandbox, or tool port, expose product/API/UI behavior, or depend on
 legacy Agent code. Authenticated product composition and execution traffic
 remain later Issue boundaries.
+
+## Authenticated active-Step interruption composition boundary
+
+The internal product interruption path resolves one owner-qualified Agent turn
+and derives its Plan identity before validating caller interruption material.
+Its command contains exactly one stable Step-recovery lease attempt, one
+interruption kind, one event draft, and one checkpoint timestamp. It cannot
+supply Plan, TaskFrame, Project, Workspace, revision, Step, checkpoint, lease,
+or fencing authority.
+
+After validation, the product performs exactly one stable active-Step recovery
+attempt. Lease and persistence rejections remain closed typed product outcomes
+that preserve the exact stable recovery result and never call interruption
+composition. Only an exact same-Plan `RecoveredActiveStep` is passed once,
+together with the unchanged caller intent, to the stable Runtime interruption
+composer. Its exact outcome and retained-lease disposition are preserved
+without exposing the recovered lease authority again through the product
+result.
+
+Spring wires the deterministic interruption materializer and core composer
+directly to the existing product `StepInterruptionRepository`. The product
+wrapper has no repository collaborator and does not inspect persistence,
+retry, release or renew a lease, regenerate event or checkpoint authority, run
+a Step, create a completion, effect, or receipt, resume, repair, replan, access
+a Project or Workspace, use files, network, model, Provider, Sandbox, or tools,
+expose a Controller/API/UI path, change schema, or reuse legacy Agent code.

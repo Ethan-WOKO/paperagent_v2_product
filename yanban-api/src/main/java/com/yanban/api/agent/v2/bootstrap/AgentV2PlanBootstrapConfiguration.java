@@ -8,6 +8,7 @@ import io.paperagent.v2.persistence.PlanBootstrapRepository;
 import io.paperagent.v2.persistence.ExecutionStartRepository;
 import io.paperagent.v2.persistence.LeaseRepository;
 import io.paperagent.v2.persistence.StepActivationRepository;
+import io.paperagent.v2.persistence.StepInterruptionRepository;
 import io.paperagent.v2.persistence.StepRecoveryRepository;
 import io.paperagent.v2.runtime.bootstrap.DefaultPersistentPlanBootstrapper;
 import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapper;
@@ -19,6 +20,9 @@ import io.paperagent.v2.runtime.execution.start.FreshExecutionStarter;
 import io.paperagent.v2.runtime.execution.activation.composition.DefaultStepActivationComposer;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationComposer;
 import io.paperagent.v2.runtime.execution.activation.materialization.DeterministicCommittedStepActivationMaterializer;
+import io.paperagent.v2.runtime.execution.interruption.composition.ActiveStepInterruptionComposer;
+import io.paperagent.v2.runtime.execution.interruption.composition.DefaultActiveStepInterruptionComposer;
+import io.paperagent.v2.runtime.execution.interruption.materialization.DeterministicActiveStepInterruptionMaterializer;
 import io.paperagent.v2.runtime.execution.recovery.composition.DefaultExecutionStartRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.DefaultStepRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.ExecutionStartRecoverer;
@@ -100,5 +104,13 @@ public class AgentV2PlanBootstrapConfiguration {
         return new DefaultStepRecoverer(
                 stepRecoveryRepository,
                 leaseRepository);
+    }
+
+    @Bean
+    ActiveStepInterruptionComposer activeStepInterruptionComposer(
+            StepInterruptionRepository stepInterruptionRepository) {
+        return new DefaultActiveStepInterruptionComposer(
+                new DeterministicActiveStepInterruptionMaterializer(),
+                stepInterruptionRepository);
     }
 }
