@@ -48,3 +48,6 @@ jobs:
 
       - name: Test Agent turn product context resolver
         run: mvn -pl yanban-api -am -Dtest=AgentTurnProductContextResolverTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 Plan bootstrap persistence adapter
+        run: mvn -pl yanban-api -am -Dtest=ProductPlanBootstrapCodecTest,ProductPlanBootstrapRepositoryAdapterTest,V2PlanBootstrapMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test

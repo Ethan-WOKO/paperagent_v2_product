@@ -153,3 +153,29 @@ unchanged.
 This boundary returns verified product facts for the deterministic TaskFrame
 adapter. It does not construct a TaskFrame draft or routing decision, activate
 the V2 runtime, persist V2 state, expose an endpoint, or change any V2 module.
+
+## Product Plan bootstrap persistence boundary
+
+The first production V2 persistence adapter lives in product-side
+`yanban-api` and implements only `PlanBootstrapRepository`. Migration V42 owns
+an independent `agent_v2_plan_bootstraps` table; it neither reads nor changes
+the legacy Plan tables.
+
+Each row atomically stores one canonical TaskFrame, initial Plan, and version-1
+initial Checkpoint as an explicit format-1 JSON document. Collection fields
+with set or map semantics are sorted before encoding, and the UTF-8 document is
+protected by a lowercase SHA-256 digest. Every replay verifies the format and
+digest, reconstructs the aggregate through V2 constructors, and verifies that
+the reconstructed document is exactly canonical. Integrity failures expose no
+stored payload content.
+
+Plan ID and TaskFrame ID uniqueness provide the two bootstrap authorities.
+Exact tuples replay, same-Plan changes conflict at `plan.id`, and a different
+Plan claiming an existing TaskFrame fails as bootstrap partial state. Inserts
+run in their own transaction; after a unique-key race has rolled back, winner
+classification runs through a fresh read transaction.
+
+This adapter does not authorize or route requests, compose bootstrap inputs,
+start execution, update Plans, or implement any later read/update persistence
+port. Runtime activation and authenticated bootstrap composition remain later
+Issue boundaries.

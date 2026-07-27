@@ -1,0 +1,108 @@
+package com.yanban.api.agent.v2.persistence;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.paperagent.v2.persistence.PersistedPlanBootstrap;
+import org.junit.jupiter.api.Test;
+
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+class ProductPlanBootstrapCodecTest {
+    private final ProductPlanBootstrapCodec codec =
+            new ProductPlanBootstrapCodec(new ObjectMapper());
+
+    @Test
+    void emitsDeterministicJsonAndHashForEquivalentSetsAndMaps() {
+        PersistedPlanBootstrap first = ProductPlanBootstrapTestFixtures.tuple(
+                "plan-1", "task-1", Optional.empty(), false);
+        PersistedPlanBootstrap second = ProductPlanBootstrapTestFixtures.tuple(
+                "plan-1", "task-1", Optional.empty(), true);
+
+        ProductPlanBootstrapCodec.EncodedPayload left = codec.encode(first);
+        ProductPlanBootstrapCodec.EncodedPayload right = codec.encode(second);
+
+        assertEquals(left.json(), right.json());
+        assertEquals(left.sha256(), right.sha256());
+        assertEquals(
+                "11c60162e3efe9eb7d6738f4233c66fd82e771bd03dd88ba995979fc15cdff5f",
+                left.sha256());
+        assertEquals(64, left.sha256().length());
+        assertEquals(left.sha256().toLowerCase(), left.sha256());
+        assertFalse(left.json().contains("@class"));
+    }
+
+    @Test
+    void roundTripsWorkspaceTupleExactly() {
+        assertRoundTrip(ProductPlanBootstrapTestFixtures.workspace("plan-w", "task-w"));
+    }
+
+    @Test
+    void roundTripsProjectTupleWithLimitsCapabilitiesNetworkAndSecretRefs() {
+        assertRoundTrip(ProductPlanBootstrapTestFixtures.project("plan-p", "task-p"));
+    }
+
+    @Test
+    void rejectsHashMismatchWithoutPayloadLeakOrCause() {
+        var encoded = codec.encode(
+                ProductPlanBootstrapTestFixtures.workspace("plan-secret", "task-secret"));
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> codec.decode(
+                        encoded.formatVersion(),
+                        "0".repeat(64),
+                        encoded.json()));
+
+        assertSanitized(failure);
+    }
+
+    @Test
+    void rejectsUnsupportedVersionWithoutPayloadLeakOrCause() {
+        var encoded = codec.encode(
+                ProductPlanBootstrapTestFixtures.workspace("plan-secret", "task-secret"));
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> codec.decode(2, encoded.sha256(), encoded.json()));
+
+        assertSanitized(failure);
+    }
+
+    @Test
+    void rejectsUndecodablePayloadWithoutLeakingParserExcerpt() {
+        String payload = "{\"private-user-content\":\"DO_NOT_EXPOSE\"";
+        String hash = sha256(payload);
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> codec.decode(1, hash, payload));
+
+        assertSanitized(failure);
+        assertFalse(failure.getMessage().contains("DO_NOT_EXPOSE"));
+    }
+
+    private void assertRoundTrip(PersistedPlanBootstrap expected) {
+        var encoded = codec.encode(expected);
+        assertEquals(expected, codec.decode(
+                encoded.formatVersion(), encoded.sha256(), encoded.json()));
+    }
+
+    private static void assertSanitized(IllegalStateException failure) {
+        assertEquals("Stored V2 Plan bootstrap payload is invalid", failure.getMessage());
+        assertNull(failure.getCause());
+    }
+
+    private static String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256")
+                            .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new AssertionError(exception);
+        }
+    }
+}
