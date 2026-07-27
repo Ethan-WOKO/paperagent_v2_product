@@ -43,6 +43,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         ProductEffectIntentRepositoryAdapter.class,
         ProductEffectIntentTransactions.class,
         ProductEffectIntentCodec.class,
+        ProductReceiptCodec.class,
+        ProductReceiptMarkerReader.class,
         ProductStepRecoveryRepositoryAdapter.class,
         ProductStepRecoveryTransactions.class,
         ProductPlanBootstrapCodec.class,
@@ -87,6 +89,10 @@ class ProductEffectIntentRepositoryAdapterTest {
     @jakarta.annotation.Resource
     private ProductEffectIntentJpaRepository intents;
     @jakarta.annotation.Resource
+    private ProductReceiptJpaRepository receipts;
+    @jakarta.annotation.Resource
+    private ProductReceiptToolCallClaimJpaRepository claims;
+    @jakarta.annotation.Resource
     private ProductStepInterruptionJpaRepository interruptions;
     @jakarta.annotation.Resource
     private ProductStepActivationJpaRepository activations;
@@ -112,6 +118,8 @@ class ProductEffectIntentRepositoryAdapterTest {
     @BeforeEach
     void reset() {
         intents.deleteAll();
+        receipts.deleteAll();
+        claims.deleteAll();
         interruptions.deleteAll();
         activations.deleteAll();
         contexts.deleteAll();
@@ -119,6 +127,8 @@ class ProductEffectIntentRepositoryAdapterTest {
         leases.deleteAll();
         bootstraps.deleteAll();
         intents.flush();
+        receipts.flush();
+        claims.flush();
         interruptions.flush();
         activations.flush();
         contexts.flush();
@@ -356,6 +366,19 @@ class ProductEffectIntentRepositoryAdapterTest {
                 PersistenceErrorCode.EFFECT_INTENT_PARTIAL_STATE,
                 "effectIntent.source");
         assertTrue(time.observations.get() >= 1);
+    }
+
+    @Test
+    void orphanOrdinaryClaimFailsAsReceiptPartialBeforeRecovery() {
+        var scenario = seed();
+        EffectIntentRequest request = request(scenario, "tool-a");
+        claims.saveAndFlush(new ProductReceiptToolCallClaimEntity(
+                "tool-a", ProductReceiptOwnership.ORDINARY_RECEIPT));
+        failure(adapter.persist(request),
+                PersistenceErrorCode.RECEIPT_PARTIAL_STATE,
+                "receipt.source");
+        assertEquals(0, intents.count());
+        assertEquals(0, time.observations.get());
     }
 
     private ProductEffectIntentTestFixtures.Scenario seed() {
