@@ -29,6 +29,7 @@ class ProductEffectOutcomeTransactions {
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepActivationCodec activationCodec;
     private final ProductStepInterruptionJpaRepository interruptions;
+    private final ProductStepCompletionJpaRepository completions;
     private final ProductLeaseJpaRepository leases;
     private final ProductEffectOutcomeTimeSource timeSource;
     private final ProductEffectOutcomeProgressJpaRepository progress;
@@ -45,6 +46,7 @@ class ProductEffectOutcomeTransactions {
             ProductStepActivationJpaRepository activations,
             ProductStepActivationCodec activationCodec,
             ProductStepInterruptionJpaRepository interruptions,
+            ProductStepCompletionJpaRepository completions,
             ProductLeaseJpaRepository leases,
             ProductEffectOutcomeTimeSource timeSource,
             ProductEffectOutcomeProgressJpaRepository progress,
@@ -59,6 +61,7 @@ class ProductEffectOutcomeTransactions {
         this.activations = activations;
         this.activationCodec = activationCodec;
         this.interruptions = interruptions;
+        this.completions = completions;
         this.leases = leases;
         this.timeSource = timeSource;
         this.progress = progress;
@@ -99,6 +102,10 @@ class ProductEffectOutcomeTransactions {
                 request.progress().id().value()).orElse(null);
         if (existing != null) {
             return replay(existing, request);
+        }
+        if (!completions.findAllByPlanId(
+                expectedIntent.intent().planId().value()).isEmpty()) {
+            return partial();
         }
         List<ProductEffectOutcomeProgressEntity> stream =
                 progress.findAllByToolCallIdOrderBySequenceAsc(
@@ -226,6 +233,10 @@ class ProductEffectOutcomeTransactions {
                 request.receipt().toolCallId().value()).orElse(null);
         if (existing != null) {
             return replay(existing, request);
+        }
+        if (!completions.findAllByPlanId(
+                expectedIntent.intent().planId().value()).isEmpty()) {
+            return partial();
         }
         PersistenceResult<PersistedEffectResult> collision =
                 receiptCollision(request.receipt());

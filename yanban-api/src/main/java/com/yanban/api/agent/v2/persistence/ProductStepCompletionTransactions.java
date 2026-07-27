@@ -13,6 +13,7 @@ import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.contracts.ToolCallId;
+import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedStepCompletion;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
@@ -253,15 +254,48 @@ class ProductStepCompletionTransactions {
             List<ProductStepCompletionEvidenceEntity> rows = evidence
                     .findAllByCompletionEventIdOrderByOrdinal(
                             row.completionEventId());
+            List<EffectReceipt> canonical = new ArrayList<>();
+            for (ProductEffectIntentEntity intentRow :
+                    intents.findAllByPlanId(row.planId())) {
+                if (!intentRow.stepId().equals(row.stepId())) {
+                    continue;
+                }
+                PersistedEffectIntent intent =
+                        outcomeMarkers.intent(intentRow.toolCallId());
+                ProductEffectOutcomeResultEntity outcome = outcomeResults
+                        .findById(intentRow.toolCallId()).orElse(null);
+                var outcomeMarker = outcome == null
+                        ? null : outcomeMarkers.result(outcome);
+                if (intent == null || outcomeMarker == null
+                        || !intentRow.activationEventId().equals(
+                                row.activationEventId())
+                        || !intent.activationEventId().value().equals(
+                                row.activationEventId())) {
+                    return null;
+                }
+                canonical.add(new EffectReceipt(
+                        new ToolCallId(intentRow.toolCallId()),
+                        outcomeMarker.result().receipt().id()));
+            }
+            canonical.sort(Comparator.comparing(
+                    value -> value.toolCallId().value()));
+            if (rows.size() != canonical.size()) {
+                return null;
+            }
             List<ReceiptId> receipts = new ArrayList<>();
             int ordinal = 0;
             String previousToolCall = null;
             for (ProductStepCompletionEvidenceEntity item : rows) {
+                EffectReceipt expected = canonical.get(ordinal);
                 ProductEffectOutcomeResultEntity outcome = outcomeResults
                         .findById(item.toolCallId()).orElse(null);
                 if (item.ordinal() != ordinal++
                         || previousToolCall != null
                         && previousToolCall.compareTo(item.toolCallId()) >= 0
+                        || !item.toolCallId().equals(
+                                expected.toolCallId().value())
+                        || !item.receiptId().equals(
+                                expected.receiptId().value())
                         || outcome == null
                         || !item.receiptId().equals(outcome.receiptId())
                         || outcomeMarkers.result(outcome) == null) {

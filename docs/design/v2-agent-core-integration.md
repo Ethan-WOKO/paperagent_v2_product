@@ -790,9 +790,12 @@ Exact replay is validated before mutable lease or clock inspection and remains
 permanent after lease expiry or takeover. Corrupt or torn marker, activation,
 intent, outcome, receipt, claim, or evidence cuts fail closed through the
 sanitized completion partial-state error; missing final outcomes and evidence
-mismatches are not eligible. Completion and interruption serialize on the same
-bootstrap lock and each writer rejects the opposite immutable fact, so neither
-ordering can commit both.
+mismatches are not eligible. Completion, interruption, EffectIntent, and
+EffectOutcome writers serialize on the same bootstrap lock. After permanent
+exact replay classification, the effect writers reject a completed Plan, and
+completion replay reconstructs the complete canonical intent/final-outcome
+set before accepting its evidence. A completed Step therefore cannot acquire
+later intent, progress, or result facts in either lock ordering.
 
 This boundary does not activate the next Step or implement a general
 completion chain, recovery composition, Runtime kernel, Agent Loop, Provider,

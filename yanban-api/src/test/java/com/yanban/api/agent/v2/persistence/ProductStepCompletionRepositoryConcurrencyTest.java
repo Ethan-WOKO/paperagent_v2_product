@@ -2,13 +2,21 @@ package com.yanban.api.agent.v2.persistence;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.paperagent.v2.contracts.Checkpoint;
+import io.paperagent.v2.contracts.EffectProgress;
+import io.paperagent.v2.contracts.EffectProgressId;
 import io.paperagent.v2.contracts.EventEnvelope;
 import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.EventType;
 import io.paperagent.v2.contracts.InlineEventPayload;
 import io.paperagent.v2.contracts.ObjectValue;
 import io.paperagent.v2.contracts.PlanExecutionState;
+import io.paperagent.v2.contracts.ReceiptStatus;
 import io.paperagent.v2.contracts.StepExecutionState;
+import io.paperagent.v2.contracts.TextValue;
+import io.paperagent.v2.persistence.EffectIntentRequest;
+import io.paperagent.v2.persistence.EffectProgressRequest;
+import io.paperagent.v2.persistence.EffectResultRequest;
+import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.StepCancelRequest;
@@ -56,6 +64,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         ProductStepInterruptionTransactions.class,
         ProductStepInterruptionCodec.class,
         ProductStepRecoveryTransactions.class,
+        ProductStepRecoveryRepositoryAdapter.class,
+        ProductEffectIntentRepositoryAdapter.class,
+        ProductEffectIntentTransactions.class,
+        ProductEffectOutcomeRepositoryAdapter.class,
+        ProductEffectOutcomeTransactions.class,
         ProductEffectOutcomeMarkerReader.class,
         ProductEffectOutcomeCodec.class,
         ProductReceiptMarkerReader.class,
@@ -97,6 +110,10 @@ class ProductStepCompletionRepositoryConcurrencyTest {
     private ProductStepCompletionRepositoryAdapter completionAdapter;
     @jakarta.annotation.Resource
     private ProductStepInterruptionRepositoryAdapter interruptionAdapter;
+    @jakarta.annotation.Resource
+    private ProductEffectIntentRepositoryAdapter intentAdapter;
+    @jakarta.annotation.Resource
+    private ProductEffectOutcomeRepositoryAdapter outcomeAdapter;
     @jakarta.annotation.Resource
     private ProductStepCompletionJpaRepository completions;
     @jakarta.annotation.Resource
@@ -215,9 +232,146 @@ class ProductStepCompletionRepositoryConcurrencyTest {
         assertTrue(completions.count() == 0 || interruptions.count() == 0);
     }
 
+    @Test
+    void completionFirstRejectsNewEffectWritesAndKeepsExactReplays() {
+        EffectIntentRequest intentRequest = intent("tool-before-completion");
+        applied(intentAdapter.persist(intentRequest));
+        EffectProgressRequest progressRequest = progress(
+                intentRequest, "progress-before-completion", 1);
+        applied(outcomeAdapter.appendProgress(progressRequest));
+        EffectResultRequest resultRequest = result(
+                intentRequest, "receipt-before-completion");
+        applied(outcomeAdapter.recordResult(resultRequest));
+        StepCompletionRequest complete = ProductStepCompletionTestFixtures
+                .request(scenario, "token-race", 1,
+                        "completion-freezes-effects",
+                        List.of(resultRequest.receipt().id()));
+        applied(completionAdapter.complete(complete));
+
+        replayed(intentAdapter.persist(intentRequest));
+        replayed(outcomeAdapter.appendProgress(progressRequest));
+        replayed(outcomeAdapter.recordResult(resultRequest));
+        failure(intentAdapter.persist(intent("tool-after-completion")),
+                PersistenceErrorCode.EFFECT_INTENT_PARTIAL_STATE,
+                "effectIntent.source");
+        failure(outcomeAdapter.appendProgress(progress(
+                        intentRequest, "progress-after-completion", 2)),
+                PersistenceErrorCode.EFFECT_OUTCOME_PARTIAL_STATE,
+                "effectOutcome.source");
+        EffectResultRequest changed = result(
+                intentRequest, "receipt-after-completion");
+        failure(outcomeAdapter.recordResult(changed),
+                PersistenceErrorCode.CONFLICTING_REPLAY,
+                "request.receipt.id");
+        replayed(completionAdapter.complete(complete));
+        assertEquals(1, intents.count());
+        assertEquals(1, progress.count());
+        assertEquals(1, results.count());
+    }
+
+    @Test
+    void completionLockSerializesNewIntentProgressAndResult()
+            throws Exception {
+        List<PersistenceResult<?>> intentRace = race(List.of(
+                () -> completionAdapter.complete(
+                        completion("completion-vs-intent")),
+                () -> intentAdapter.persist(intent("tool-raced-intent"))));
+        assertEquals(1, count(intentRace, PersistenceOutcome.APPLIED));
+        assertEquals(1, count(intentRace, PersistenceOutcome.REJECTED));
+        assertEquals(1, completions.count() + intents.count());
+
+        resetScenario();
+        EffectIntentRequest progressIntent = intent("tool-raced-progress");
+        applied(intentAdapter.persist(progressIntent));
+        EffectResultRequest finalResult =
+                result(progressIntent, "receipt-raced-progress");
+        applied(outcomeAdapter.recordResult(finalResult));
+        StepCompletionRequest progressCompletion =
+                ProductStepCompletionTestFixtures.request(
+                        scenario, "token-race", 1,
+                        "completion-vs-progress",
+                        List.of(finalResult.receipt().id()));
+        List<PersistenceResult<?>> progressRace = race(List.of(
+                () -> completionAdapter.complete(progressCompletion),
+                () -> outcomeAdapter.appendProgress(progress(
+                        progressIntent, "progress-raced", 1))));
+        assertEquals(1, count(progressRace, PersistenceOutcome.APPLIED));
+        assertEquals(1, count(progressRace, PersistenceOutcome.REJECTED));
+        assertEquals(1, completions.count());
+        assertEquals(0, progress.count());
+
+        resetScenario();
+        EffectIntentRequest resultIntent = intent("tool-raced-result");
+        applied(intentAdapter.persist(resultIntent));
+        EffectResultRequest racedResult =
+                result(resultIntent, "receipt-raced-result");
+        StepCompletionRequest resultCompletion =
+                ProductStepCompletionTestFixtures.request(
+                        scenario, "token-race", 1,
+                        "completion-vs-result",
+                        List.of(racedResult.receipt().id()));
+        List<PersistenceResult<?>> resultRace = race(List.of(
+                () -> completionAdapter.complete(resultCompletion),
+                () -> outcomeAdapter.recordResult(racedResult)));
+        assertEquals(PersistenceOutcome.APPLIED,
+                resultRace.get(1).outcome());
+        assertEquals(1, results.count());
+        assertTrue(completions.count() == 0 || completions.count() == 1);
+        if (completions.count() == 1) {
+            replayed(completionAdapter.complete(resultCompletion));
+            assertEquals(1, evidence.count());
+        }
+    }
+
     private StepCompletionRequest completion(String id) {
         return ProductStepCompletionTestFixtures.request(
                 scenario, "token-race", 1, id, List.of());
+    }
+
+    private EffectIntentRequest intent(String toolCallId) {
+        return ProductEffectIntentTestFixtures.request(
+                scenario, toolCallId, "token-race", 1);
+    }
+
+    private EffectProgressRequest progress(
+            EffectIntentRequest intent, String id, long sequence) {
+        return new EffectProgressRequest(new EffectProgress(
+                new EffectProgressId(id), intent.intent().toolCallId(),
+                sequence,
+                ProductStepCompletionTestFixtures.NOW.plusSeconds(sequence),
+                new ObjectValue(Map.of(
+                        "detail", new TextValue(id)))),
+                "token-race", 1);
+    }
+
+    private EffectResultRequest result(
+            EffectIntentRequest intent, String receiptId) {
+        return new EffectResultRequest(
+                ProductEffectOutcomeCodecTest.receipt(
+                        ReceiptStatus.FAILURE, receiptId,
+                        intent.intent().toolCallId().value()),
+                "token-race", 1);
+    }
+
+    private void resetScenario() {
+        evidence.deleteAll();
+        completions.deleteAll();
+        results.deleteAll();
+        progress.deleteAll();
+        receipts.deleteAll();
+        intents.deleteAll();
+        claims.deleteAll();
+        interruptions.deleteAll();
+        activations.deleteAll();
+        contexts.deleteAll();
+        starts.deleteAll();
+        leases.deleteAll();
+        bootstraps.deleteAll();
+        scenario = ProductEffectIntentTestFixtures.seed(
+                "plan-completion-race", "task-completion-race",
+                "owner-race", "token-race", 1,
+                bootstraps, bootstrapCodec, leases, starts, startCodec,
+                activations, activationCodec);
     }
 
     private StepCancelRequest cancellation(String id) {
@@ -283,5 +437,26 @@ class ProductStepCompletionRepositoryConcurrencyTest {
             List<PersistenceResult<?>> results, PersistenceOutcome outcome) {
         return results.stream()
                 .filter(value -> value.outcome() == outcome).count();
+    }
+
+    private static <T> T applied(PersistenceResult<T> result) {
+        assertEquals(PersistenceOutcome.APPLIED, result.outcome(),
+                result.toString());
+        return result.value().orElseThrow();
+    }
+
+    private static <T> T replayed(PersistenceResult<T> result) {
+        assertEquals(PersistenceOutcome.REPLAYED, result.outcome(),
+                result.toString());
+        return result.value().orElseThrow();
+    }
+
+    private static void failure(
+            PersistenceResult<?> result, PersistenceErrorCode code,
+            String path) {
+        assertEquals(PersistenceOutcome.REJECTED, result.outcome(),
+                result.toString());
+        assertEquals(code, result.failure().orElseThrow().code());
+        assertEquals(path, result.failure().orElseThrow().path());
     }
 }
