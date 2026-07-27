@@ -528,3 +528,25 @@ reads nor evaluates lease rows or time, so expired, deleted, or replaced
 leases do not change recovery facts. The adapter performs no write, repair,
 retry, cleanup, Project/Workspace access, execution, model, Provider, Sandbox,
 tool, Controller, API, UI, schema, or legacy Agent operation.
+
+## Authenticated active-Step recovery composition boundary
+
+The internal product recovery handoff resolves one owner-qualified Agent turn
+before validating caller recovery material. Its verified run identity alone
+derives the Plan identity, and the command carries exactly one caller-owned
+stable lease attempt. It cannot supply or override Plan, TaskFrame, Project,
+Workspace, Step, checkpoint, activation, owner, token, or expiry authority.
+
+The product delegates the exact derived Plan and exact lease attempt to one
+stable `StepRecoverer`. Spring wires `DefaultStepRecoverer` directly from the
+product `StepRecoveryRepository` and `LeaseRepository` implementations. Stable
+recovery performs the read-only initial active-snapshot inspection, acquires
+or replays one fenced product lease, re-inspects the active snapshot, and
+returns the exact version-3 activation authority with the lease retained for
+the later executor.
+
+Authentication, validation, persistence, lease, and protocol outcomes remain
+unchanged. The wrapper does not inspect independently, generate authority,
+retry, sleep, release, repair, or clean up. It executes no Step and performs no
+Project or Workspace access, file or network operation, model, Provider,
+Sandbox, tool, Controller, API, UI, schema, or legacy Agent behavior.

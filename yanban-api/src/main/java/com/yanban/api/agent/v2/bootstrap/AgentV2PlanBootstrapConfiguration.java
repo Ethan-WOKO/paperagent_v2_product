@@ -8,6 +8,7 @@ import io.paperagent.v2.persistence.PlanBootstrapRepository;
 import io.paperagent.v2.persistence.ExecutionStartRepository;
 import io.paperagent.v2.persistence.LeaseRepository;
 import io.paperagent.v2.persistence.StepActivationRepository;
+import io.paperagent.v2.persistence.StepRecoveryRepository;
 import io.paperagent.v2.runtime.bootstrap.DefaultPersistentPlanBootstrapper;
 import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapper;
 import io.paperagent.v2.runtime.checkpoint.DeterministicInitialCheckpointFreezer;
@@ -19,7 +20,9 @@ import io.paperagent.v2.runtime.execution.activation.composition.DefaultStepActi
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationComposer;
 import io.paperagent.v2.runtime.execution.activation.materialization.DeterministicCommittedStepActivationMaterializer;
 import io.paperagent.v2.runtime.execution.recovery.composition.DefaultExecutionStartRecoverer;
+import io.paperagent.v2.runtime.execution.recovery.composition.DefaultStepRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.ExecutionStartRecoverer;
+import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.materialization.DeterministicRecoveryReadyExecutionStartMaterializer;
 import io.paperagent.v2.runtime.planning.DeterministicInitialPlanFreezer;
 import io.paperagent.v2.runtime.taskframe.DeterministicTaskFrameFreezer;
@@ -88,5 +91,14 @@ public class AgentV2PlanBootstrapConfiguration {
                 new DeterministicCommittedStepActivationMaterializer(),
                 leaseRepository,
                 stepActivationRepository);
+    }
+
+    @Bean
+    StepRecoverer stepRecoverer(
+            StepRecoveryRepository stepRecoveryRepository,
+            LeaseRepository leaseRepository) {
+        return new DefaultStepRecoverer(
+                stepRecoveryRepository,
+                leaseRepository);
     }
 }
