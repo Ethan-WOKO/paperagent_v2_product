@@ -21,6 +21,7 @@
     <modules>
         <module>agent-v2</module>
         <module>yanban-core</module>
+        <module>yanban-agent-v2-adapter</module>
         <module>yanban-knowledge</module>
         <module>yanban-paper</module>
         <module>yanban-mcp</module>

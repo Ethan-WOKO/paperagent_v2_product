@@ -39,3 +39,6 @@ jobs:
 
       - name: Test V2 core
         run: mvn -f agent-v2/pom.xml test
+
+      - name: Test product TaskFrame adapter
+        run: mvn -pl yanban-agent-v2-adapter -am test
