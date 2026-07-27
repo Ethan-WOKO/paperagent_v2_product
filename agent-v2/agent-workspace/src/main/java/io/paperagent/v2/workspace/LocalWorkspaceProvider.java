@@ -387,14 +387,7 @@ public final class LocalWorkspaceProvider implements WorkspacePort {
         if (existing != null) {
             return existingMaterialization(existing, spec, "inspectMaterialization");
         }
-        rejectUnknownOccupancy(
-                spec.workspaceId(),
-                "inspectMaterialization",
-                null);
-        throw failure(
-                WorkspaceErrorCode.WORKSPACE_NOT_FOUND,
-                "inspectMaterialization",
-                null);
+        return recoverPublishedMaterialization(spec);
     }
 
     @Override
@@ -650,6 +643,89 @@ public final class LocalWorkspaceProvider implements WorkspacePort {
         }
     }
 
+    private VerifiedWorkspaceMaterialization recoverPublishedMaterialization(
+            WorkspaceMaterializationSpec spec) {
+        String operation = "inspectMaterialization";
+        MaterializationClaim claim =
+                acquireMaterializationClaim(spec.workspaceId());
+        if (claim == null) {
+            throw failure(
+                    WorkspaceErrorCode.WORKSPACE_PARTIAL_STATE,
+                    operation,
+                    null);
+        }
+        try {
+            requireRecoverablePublishedOccupancy(spec.workspaceId(), operation);
+
+            Path container = containerFor(spec.workspaceId());
+            Path dataRoot = container.resolve(DATA_DIRECTORY);
+            Path stagingRoot = container.resolve(STAGING_DIRECTORY);
+            WorkspaceMaterializationVerifier.verifyActiveStructure(
+                    container,
+                    dataRoot,
+                    stagingRoot,
+                    operation);
+
+            ProjectVersionSnapshot snapshot =
+                    loadSnapshot(spec.sourceProjectVersion());
+            WorkspaceManifestValidator.validateReference(
+                    snapshot,
+                    spec.sourceProjectVersion());
+            WorkspaceManifestValidator.validateLimits(
+                    snapshot.files(),
+                    spec.limits());
+            WorkspaceManifestValidator.validatePaths(snapshot.files(), true);
+            WorkspaceManifestValidator.validateHashes(snapshot.files());
+            WorkspaceManifestValidator.validatePaths(
+                    snapshot.files(),
+                    caseSensitive);
+            ContentHash fingerprint =
+                    WorkspaceManifestFingerprint.calculate(snapshot);
+            ContentHash pinned =
+                    sourceManifestFingerprints.get(spec.sourceProjectVersion());
+            if (pinned != null && !pinned.equals(fingerprint)) {
+                throw failure(
+                        WorkspaceErrorCode.SOURCE_MANIFEST_FINGERPRINT_MISMATCH,
+                        operation,
+                        null);
+            }
+
+            WorkspaceRef workspace = new WorkspaceRef(
+                    spec.workspaceId(),
+                    spec.sourceProjectVersion());
+            VerifiedWorkspaceMaterialization result =
+                    new VerifiedWorkspaceMaterialization(spec, fingerprint);
+            WorkspaceState active = new WorkspaceState(
+                    workspace,
+                    spec,
+                    result,
+                    container,
+                    dataRoot,
+                    stagingRoot,
+                    spec.limits(),
+                    WorkspaceManifestValidator.baseline(snapshot.files()));
+            requireManagedState(active, operation);
+            WorkspaceMaterializationVerifier.verifyPending(
+                    dataRoot,
+                    stagingRoot,
+                    snapshot.files(),
+                    spec.limits());
+            requireHeldClaim(claim, operation);
+            requireRecoverablePublishedOccupancy(spec.workspaceId(), operation);
+            requireNotRetired(spec.workspaceId(), operation);
+
+            sourceManifestFingerprints.putIfAbsent(
+                    spec.sourceProjectVersion(),
+                    fingerprint);
+            workspaces.put(
+                    spec.workspaceId(),
+                    WorkspaceRegistration.active(active));
+            return result;
+        } finally {
+            releaseMaterializationClaim(claim);
+        }
+    }
+
     private VerifiedWorkspaceMaterialization existingMaterialization(
             WorkspaceRegistration registration,
             WorkspaceMaterializationSpec supplied,
@@ -715,6 +791,42 @@ public final class LocalWorkspaceProvider implements WorkspacePort {
                     operation,
                     null);
         }
+    }
+
+    private void requireRecoverablePublishedOccupancy(
+            WorkspaceId workspaceId,
+            String operation) {
+        requireNotRetired(workspaceId, operation);
+        PathOccupancy container =
+                probeOccupancy(containerFor(workspaceId));
+        PathOccupancy pending =
+                probeOccupancy(pendingFor(workspaceId));
+        if (container == PathOccupancy.LINK
+                || pending == PathOccupancy.LINK) {
+            throw failure(
+                    WorkspaceErrorCode.LINK_ESCAPE,
+                    operation,
+                    null);
+        }
+        if (pending != PathOccupancy.ABSENT) {
+            throw failure(
+                    WorkspaceErrorCode.WORKSPACE_PARTIAL_STATE,
+                    operation,
+                    null);
+        }
+        if (container == PathOccupancy.ABSENT) {
+            throw failure(
+                    WorkspaceErrorCode.WORKSPACE_NOT_FOUND,
+                    operation,
+                    null);
+        }
+        if (container != PathOccupancy.PRESENT) {
+            throw failure(
+                    WorkspaceErrorCode.WORKSPACE_PARTIAL_STATE,
+                    operation,
+                    null);
+        }
+        requireNotRetired(workspaceId, operation);
     }
 
     private void requireAbsent(Path path, String operation) {

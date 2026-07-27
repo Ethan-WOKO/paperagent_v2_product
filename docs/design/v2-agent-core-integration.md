@@ -372,3 +372,28 @@ Controller, API, step, Provider, Sandbox, tool, or Project mutation. Binary and
 general Project-source expansion, real Workspace materialization, and Runtime
 execution-context composition remain later Issues. No legacy Agent planner,
 executor, verifier, or service code is reused.
+
+## Local Workspace restart-recovery boundary
+
+The generic local Workspace provider can recover an exact, completely
+published Workspace after provider or process recreation. Recovery is entered
+only through `inspectMaterialization` with the frozen materialization
+specification. It serializes through the existing provider-root and Workspace
+claim, verifies the canonical published container without following links,
+loads the exact source Project version once, and reuses the existing manifest,
+limit, path, collision, hash, and fingerprint validation.
+
+Adoption is deliberately read-only on disk. The published `data` tree must
+match the source manifest byte for byte, `staging` must be empty, and no
+pending, extra, missing, linked, ambiguous, or partially published entry is
+accepted. A successful inspection restores only the in-memory active
+registration, original baseline hashes, opaque Workspace reference, and source
+manifest fingerprint. Exact re-inspection then replays that fact without
+reloading the source.
+
+Fresh materialization still rejects every occupied final or pending path.
+Recovery neither creates a marker nor repairs, deletes, takes over, scans for,
+or mutates an occupied tree. Product Workspace configuration, authenticated
+source binding, persistent execution-context Runtime composition, steps,
+Provider/Sandbox/tool execution, API/UI activation, and legacy retirement
+remain later Issue boundaries.
