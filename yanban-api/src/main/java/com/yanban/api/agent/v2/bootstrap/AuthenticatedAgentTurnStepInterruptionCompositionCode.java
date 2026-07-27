@@ -1,0 +1,11 @@
+package com.yanban.api.agent.v2.bootstrap;
+
+public enum AuthenticatedAgentTurnStepInterruptionCompositionCode {
+    REQUIRED_VALUE_MISSING,
+    RECOVERY_COLLABORATOR_FAILURE,
+    INVALID_RECOVERY_RESULT,
+    RECOVERY_PLAN_MISMATCH,
+    INTERRUPTION_COLLABORATOR_FAILURE,
+    INVALID_INTERRUPTION_RESULT,
+    INTERRUPTION_PLAN_MISMATCH
+}

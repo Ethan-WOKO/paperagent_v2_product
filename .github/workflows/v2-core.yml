@@ -99,3 +99,6 @@ jobs:
 
       - name: Test V2 active-Step interruption persistence composition
         run: mvn -pl agent-v2/agent-runtime -am -Dtest=DefaultActiveStepInterruptionComposerTest,ActiveStepInterruptionCompositionBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test authenticated V2 active-Step interruption composition
+        run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnStepInterruptionComposerTest,AuthenticatedAgentTurnStepInterruptionCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
