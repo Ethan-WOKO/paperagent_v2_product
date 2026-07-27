@@ -80,6 +80,17 @@ class ProductStepRecoveryTransactions {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public PersistenceResult<StepRecoverySnapshot> inspect(PlanId planId) {
+        return inspect(planId, true);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    PersistenceResult<StepRecoverySnapshot> inspectWriterAuthority(
+            PlanId planId) {
+        return inspect(planId, false);
+    }
+
+    private PersistenceResult<StepRecoverySnapshot> inspect(
+            PlanId planId, boolean terminalAware) {
         ProductPlanBootstrapEntity bootstrapRow = bootstraps
                 .lockByPlanIdForInspection(planId.value()).orElse(null);
         if (bootstrapRow == null) {
@@ -107,10 +118,10 @@ class ProductStepRecoveryTransactions {
 
         List<ProductStepActivationEntity> rows =
                 activations.findAllByPlanId(planId.value());
-        List<ProductStepInterruptionEntity> interruptionRows =
-                interruptions.findAllByPlanId(planId.value());
-        List<ProductStepCompletionEntity> completionRows =
-                completions.findAllByPlanId(planId.value());
+        List<ProductStepInterruptionEntity> interruptionRows = terminalAware
+                ? interruptions.findAllByPlanId(planId.value()) : List.of();
+        List<ProductStepCompletionEntity> completionRows = terminalAware
+                ? completions.findAllByPlanId(planId.value()) : List.of();
         if (rows.isEmpty()) {
             return interruptionRows.isEmpty() && completionRows.isEmpty()
                     ? notEligible() : partial();

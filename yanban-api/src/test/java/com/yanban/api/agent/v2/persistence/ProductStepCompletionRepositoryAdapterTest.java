@@ -41,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @Import({
         ProductStepCompletionRepositoryAdapter.class,
         ProductStepCompletionTransactions.class,
+        ProductStepCompletionMarkerReader.class,
         ProductStepCompletionCodec.class,
         ProductEffectOutcomeRepositoryAdapter.class,
         ProductEffectOutcomeTransactions.class,
@@ -56,6 +57,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
         ProductReceiptMarkerReader.class,
         ProductReceiptEffectIntentMarkerReader.class,
         ProductStepRecoveryTransactions.class,
+        ProductStepInterruptionMarkerReader.class,
+        ProductStepInterruptionCodec.class,
         ProductStepRecoveryRepositoryAdapter.class,
         ProductPlanBootstrapCodec.class,
         ProductExecutionStartCodec.class,

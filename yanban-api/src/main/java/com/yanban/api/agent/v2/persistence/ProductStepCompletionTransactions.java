@@ -100,7 +100,7 @@ class ProductStepCompletionTransactions {
         }
 
         PersistenceResult<io.paperagent.v2.persistence.StepRecoverySnapshot>
-                inspected = recovery.inspect(request.planId());
+                inspected = recovery.inspectWriterAuthority(request.planId());
         if (inspected.outcome() != PersistenceOutcome.FOUND
                 || !(inspected.value().orElse(null)
                 instanceof PersistedStepRecoveryActive active)) {
