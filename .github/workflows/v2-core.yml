@@ -57,3 +57,6 @@ jobs:
 
       - name: Test V2 Plan lease persistence adapter
         run: mvn -pl yanban-api -am -Dtest=ProductLeaseRepositoryAdapterTest,ProductLeaseRepositoryConcurrencyTest,V2PlanLeaseMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 execution start persistence adapter
+        run: mvn -pl yanban-api -am -Dtest=ProductExecutionStartCodecTest,ProductExecutionStartRepositoryAdapterTest,ProductExecutionStartRepositoryConcurrencyTest,V2ExecutionStartMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
