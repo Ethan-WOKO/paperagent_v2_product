@@ -81,3 +81,6 @@ jobs:
 
       - name: Test V2 first-Step activation persistence adapter
         run: mvn -pl yanban-api -am -Dtest=ProductStepActivationCodecTest,ProductStepActivationRepositoryAdapterTest,ProductStepActivationRepositoryConcurrencyTest,V2StepActivationMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test authenticated V2 first-Step activation composition
+        run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnStepActivationComposerTest,AuthenticatedAgentTurnStepActivationCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
