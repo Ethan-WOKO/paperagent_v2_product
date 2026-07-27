@@ -206,3 +206,22 @@ This boundary does not generate routing or Plan content, read Project files,
 call a Provider, start the Agent loop, execute a tool, expose a Controller, or
 cut over legacy traffic. API activation, execution start, Workspace, Provider,
 Sandbox, recovery, and legacy retirement remain later Issue boundaries.
+
+## Product Plan lease persistence boundary
+
+The product database implements only the stable V2 `LeaseRepository` through
+an independent `agent_v2_plan_leases` table. Every acquisition generation is
+retained. A release marks the current generation and a renewal updates only its
+expiry; the next acquisition after release or expiry appends exactly the next
+fencing token. Lease tokens are globally unique and can never be reused.
+
+Every operation locks the existing V2 bootstrap row for its Plan in a new
+transaction before observing one trusted UTC persistence time and reading the
+current generation. This serializes same-Plan authority without coupling the
+V2 core to Spring or the product schema. Cross-Plan token uniqueness remains a
+database authority: after an insert constraint race rolls back, a fresh
+transaction confirms token ownership before classifying the loser.
+
+The adapter does not start execution, mutate a Project, expose an API, run a
+cleanup scheduler, or read legacy Plan or lease tables. Execution-start
+persistence and composition remain later Issue boundaries.
