@@ -47,30 +47,13 @@ public final class DeterministicActiveStepCompletionMaterializer
                 requiredRequest.recoveredActiveStep());
         validateDrafts(requiredRequest, authority);
 
-        CompletionFact fact;
-        PlanRevision completedRevision;
-        EventEnvelope event;
-        Plan completedPlan;
-        Checkpoint completedCheckpoint;
-        try {
-            fact = completionFact(requiredRequest, authority);
-            completedRevision = completedRevision(
-                    requiredRequest, authority, fact);
-            event = completionEvent(requiredRequest, authority);
-            completedPlan = completedPlan(authority, completedRevision);
-            completedCheckpoint = completedCheckpoint(
-                    requiredRequest, authority, completedRevision);
-        } catch (IllegalArgumentException invalid) {
-            if (invalid
-                    instanceof ActiveStepCompletionMaterializationValidationException) {
-                throw invalid;
-            }
-            throw ActiveStepCompletionMaterializationValues.protocol(
-                    ActiveStepCompletionMaterializationProtocolCode
-                            .CONTRACT_VALIDATION_FAILED,
-                    ActiveStepCompletionMaterializationStage.INPUT,
-                    "activeStepCompletionMaterializationRequest");
-        }
+        CompletionFact fact = completionFact(requiredRequest, authority);
+        PlanRevision completedRevision = completedRevision(
+                requiredRequest, authority, fact);
+        EventEnvelope event = completionEvent(requiredRequest, authority);
+        Plan completedPlan = completedPlan(authority, completedRevision);
+        Checkpoint completedCheckpoint = completedCheckpoint(
+                requiredRequest, authority, completedRevision);
 
         if (!CheckpointValidators.validate(
                         completedCheckpoint,
@@ -87,19 +70,25 @@ public final class DeterministicActiveStepCompletionMaterializer
 
         PlanRevision currentRevision = authority.plan().latestRevision();
         LeaseRecord lease = authority.lease();
-        return new StepCompletionRequest(
-                authority.plan().id(),
-                lease.leaseToken(),
-                lease.fencingToken(),
-                currentRevision.id(),
-                currentRevision.number(),
-                ACTIVE_CHECKPOINT_VERSION,
-                ACTIVE_EVENT_SEQUENCE,
-                authority.stepId(),
-                fact,
-                event,
-                completedRevision,
-                completedCheckpoint);
+        try {
+            return new StepCompletionRequest(
+                    authority.plan().id(),
+                    lease.leaseToken(),
+                    lease.fencingToken(),
+                    currentRevision.id(),
+                    currentRevision.number(),
+                    ACTIVE_CHECKPOINT_VERSION,
+                    ACTIVE_EVENT_SEQUENCE,
+                    authority.stepId(),
+                    fact,
+                    event,
+                    completedRevision,
+                    completedCheckpoint);
+        } catch (IllegalArgumentException invalid) {
+            throw contractFailure(
+                    ActiveStepCompletionMaterializationStage.CHECKPOINT,
+                    "stepCompletionRequest");
+        }
     }
 
     private static void validateDrafts(
@@ -182,11 +171,17 @@ public final class DeterministicActiveStepCompletionMaterializer
             ActiveStepCompletionMaterializationRequest request,
             Authority authority) {
         ActiveStepCompletionFactDraft draft = request.completionFactDraft();
-        return new CompletionFact(
-                authority.stepId(),
-                draft.outcomeHash(),
-                draft.completedAt(),
-                draft.receiptReferences());
+        try {
+            return new CompletionFact(
+                    authority.stepId(),
+                    draft.outcomeHash(),
+                    draft.completedAt(),
+                    draft.receiptReferences());
+        } catch (IllegalArgumentException invalid) {
+            throw contractFailure(
+                    ActiveStepCompletionMaterializationStage.COMPLETION_FACT,
+                    "completionFact");
+        }
     }
 
     private static PlanRevision completedRevision(
@@ -198,31 +193,43 @@ public final class DeterministicActiveStepCompletionMaterializer
                 new LinkedHashMap<>(current.completedFacts());
         facts.put(authority.stepId(), fact);
         ActiveStepCompletionRevisionDraft draft = request.revisionDraft();
-        return new PlanRevision(
-                draft.id(),
-                current.taskFrameId(),
-                current.number() + 1,
-                java.util.Optional.of(current.id()),
-                draft.reason(),
-                draft.createdAt(),
-                current.steps(),
-                facts);
+        try {
+            return new PlanRevision(
+                    draft.id(),
+                    current.taskFrameId(),
+                    current.number() + 1,
+                    java.util.Optional.of(current.id()),
+                    draft.reason(),
+                    draft.createdAt(),
+                    current.steps(),
+                    facts);
+        } catch (IllegalArgumentException invalid) {
+            throw contractFailure(
+                    ActiveStepCompletionMaterializationStage.REVISION,
+                    "completedRevision");
+        }
     }
 
     private static EventEnvelope completionEvent(
             ActiveStepCompletionMaterializationRequest request,
             Authority authority) {
         ActiveStepCompletionEventDraft draft = request.eventDraft();
-        return new EventEnvelope(
-                draft.id(),
-                authority.taskFrame().id(),
-                authority.plan().id(),
-                COMPLETION_EVENT_SEQUENCE,
-                draft.occurredAt(),
-                draft.type(),
-                draft.causationId(),
-                draft.correlationId(),
-                draft.payload());
+        try {
+            return new EventEnvelope(
+                    draft.id(),
+                    authority.taskFrame().id(),
+                    authority.plan().id(),
+                    COMPLETION_EVENT_SEQUENCE,
+                    draft.occurredAt(),
+                    draft.type(),
+                    draft.causationId(),
+                    draft.correlationId(),
+                    draft.payload());
+        } catch (IllegalArgumentException invalid) {
+            throw contractFailure(
+                    ActiveStepCompletionMaterializationStage.EVENT,
+                    "completionEvent");
+        }
     }
 
     private static Plan completedPlan(
@@ -231,10 +238,16 @@ public final class DeterministicActiveStepCompletionMaterializer
         List<PlanRevision> revisions =
                 new ArrayList<>(authority.plan().revisions());
         revisions.add(completedRevision);
-        return new Plan(
-                authority.plan().id(),
-                authority.plan().taskFrameId(),
-                revisions);
+        try {
+            return new Plan(
+                    authority.plan().id(),
+                    authority.plan().taskFrameId(),
+                    revisions);
+        } catch (IllegalArgumentException invalid) {
+            throw contractFailure(
+                    ActiveStepCompletionMaterializationStage.REVISION,
+                    "completedPlan");
+        }
     }
 
     private static Checkpoint completedCheckpoint(
@@ -250,18 +263,24 @@ public final class DeterministicActiveStepCompletionMaterializer
                 request.completionFactDraft().receiptReferences());
         boolean allSucceeded = states.values().stream()
                 .allMatch(state -> state == StepExecutionState.SUCCEEDED);
-        return new Checkpoint(
-                authority.current().taskFrameId(),
-                authority.current().planId(),
-                completedRevision.id(),
-                completedRevision.number(),
-                COMPLETION_EVENT_SEQUENCE,
-                allSucceeded
-                        ? PlanExecutionState.SUCCEEDED
-                        : PlanExecutionState.ACTIVE,
-                states,
-                receipts,
-                request.checkpointCreatedAt());
+        try {
+            return new Checkpoint(
+                    authority.current().taskFrameId(),
+                    authority.current().planId(),
+                    completedRevision.id(),
+                    completedRevision.number(),
+                    COMPLETION_EVENT_SEQUENCE,
+                    allSucceeded
+                            ? PlanExecutionState.SUCCEEDED
+                            : PlanExecutionState.ACTIVE,
+                    states,
+                    receipts,
+                    request.checkpointCreatedAt());
+        } catch (IllegalArgumentException invalid) {
+            throw contractFailure(
+                    ActiveStepCompletionMaterializationStage.CHECKPOINT,
+                    "completedCheckpoint");
+        }
     }
 
     private static Authority requireAuthority(RecoveredActiveStep recovered) {
@@ -359,6 +378,17 @@ public final class DeterministicActiveStepCompletionMaterializer
                         .STEP_NOT_ELIGIBLE,
                 ActiveStepCompletionMaterializationStage.RECOVERED_AUTHORITY,
                 "recoveredActiveStep.recovery.activation.stepId");
+    }
+
+    private static ActiveStepCompletionMaterializationProtocolException
+            contractFailure(
+                    ActiveStepCompletionMaterializationStage stage,
+                    String path) {
+        return ActiveStepCompletionMaterializationValues.protocol(
+                ActiveStepCompletionMaterializationProtocolCode
+                        .CONTRACT_VALIDATION_FAILED,
+                stage,
+                path);
     }
 
     private record Authority(

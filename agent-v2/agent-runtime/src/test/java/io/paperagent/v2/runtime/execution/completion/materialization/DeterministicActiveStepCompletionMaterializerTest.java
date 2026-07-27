@@ -353,8 +353,9 @@ class DeterministicActiveStepCompletionMaterializerTest {
                         .CONTRACT_VALIDATION_FAILED,
                 exception.code());
         assertEquals(
-                ActiveStepCompletionMaterializationStage.INPUT,
+                ActiveStepCompletionMaterializationStage.EVENT,
                 exception.stage());
+        assertEquals("completionEvent", exception.path());
         assertFalse(exception.getMessage().contains("invalid correlation"));
     }
 
