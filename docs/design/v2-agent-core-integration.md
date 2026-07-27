@@ -502,3 +502,29 @@ This boundary exposes no Controller or traffic, executes no Step, model,
 Provider, Sandbox, or tool, reads no Project or Workspace files, and adds no
 completion, interruption, recovery, replan, context creation, schema, or V2
 contract behavior.
+
+## Product active-Step recovery inspection boundary
+
+The product database now implements the stable V2 `StepRecoveryRepository`
+as one read-only relational cut over the existing bootstrap, committed
+execution-start H0, optional confirmed Project execution context, and immutable
+first-Step activation authorities. Every non-null inspection acquires the Plan
+bootstrap inspection lock before reading the remaining Plan-scoped facts in the
+same transaction.
+
+Missing unoccupied Plans remain distinct from occupied partial state. Canonical
+H0 without an activation is not yet eligible for active-Step recovery. A found
+snapshot requires exactly one canonical activation linking checkpoint version
+2/event sequence 1 to version 3/sequence 2, with only its selected Step moving
+from `NOT_STARTED` to `ACTIVE`. Project-backed Tasks additionally require their
+exact fully confirmed execution context; source-less Tasks require none.
+Malformed documents, extracted-column or cross-authority mismatches, multiple
+activation rows, orphan occupancy, and invalid transition structure fail
+closed as partial state.
+
+Inspection returns the exact immutable TaskFrame, current Plan, version-3
+checkpoint, activation marker, and optional confirmed context. It neither
+reads nor evaluates lease rows or time, so expired, deleted, or replaced
+leases do not change recovery facts. The adapter performs no write, repair,
+retry, cleanup, Project/Workspace access, execution, model, Provider, Sandbox,
+tool, Controller, API, UI, schema, or legacy Agent operation.
