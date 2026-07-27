@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 @Repository
@@ -33,22 +34,23 @@ class ProductLeaseTransactions {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public PersistenceResult<LeaseRecord> acquire(
             PlanId planId, String ownerId, String leaseToken, Instant expiresAt) {
+        Instant canonicalExpiry = canonical(expiresAt);
         if (bootstraps.lockByPlanId(planId.value()).isEmpty()) {
             return rejected(PersistenceErrorCode.NOT_FOUND, "planId");
         }
-        Instant effectiveNow = timeSource.observe();
+        Instant effectiveNow = canonical(timeSource.observe());
         Optional<ProductLeaseEntity> current =
                 leases.findFirstByPlanIdOrderByFencingTokenDesc(planId.value());
         if (current.isPresent() && active(current.get(), effectiveNow)) {
             ProductLeaseEntity held = current.get();
             if (held.ownerId().equals(ownerId)
                     && held.leaseToken().equals(leaseToken)
-                    && held.expiresAt().equals(expiresAt)) {
+                    && held.expiresAt().equals(canonicalExpiry)) {
                 return PersistenceResult.replayed(record(held));
             }
             return rejected(PersistenceErrorCode.LEASE_HELD, "planId");
         }
-        if (!expiresAt.isAfter(effectiveNow)) {
+        if (!canonicalExpiry.isAfter(effectiveNow)) {
             return rejected(PersistenceErrorCode.INVALID_ARGUMENT, "expiresAt");
         }
         if (leases.findByLeaseToken(leaseToken).isPresent()) {
@@ -56,7 +58,12 @@ class ProductLeaseTransactions {
         }
         long nextFence = current.map(row -> row.fencingToken() + 1).orElse(1L);
         ProductLeaseEntity acquired = new ProductLeaseEntity(
-                planId.value(), nextFence, ownerId, leaseToken, effectiveNow, expiresAt);
+                planId.value(),
+                nextFence,
+                ownerId,
+                leaseToken,
+                effectiveNow,
+                canonicalExpiry);
         entityManager.persist(acquired);
         entityManager.flush();
         return PersistenceResult.applied(record(acquired));
@@ -65,6 +72,7 @@ class ProductLeaseTransactions {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public PersistenceResult<LeaseRecord> renew(
             PlanId planId, String leaseToken, Instant expiresAt) {
+        Instant canonicalExpiry = canonical(expiresAt);
         Authority authority = authority(planId);
         if (!authority.exists()) {
             return rejected(PersistenceErrorCode.LEASE_NOT_HELD, "planId");
@@ -79,13 +87,13 @@ class ProductLeaseTransactions {
         if (!authority.now().isBefore(current.expiresAt())) {
             return rejected(PersistenceErrorCode.LEASE_EXPIRED, "planId");
         }
-        if (current.expiresAt().equals(expiresAt)) {
+        if (current.expiresAt().equals(canonicalExpiry)) {
             return PersistenceResult.replayed(record(current));
         }
-        if (!expiresAt.isAfter(current.expiresAt())) {
+        if (!canonicalExpiry.isAfter(current.expiresAt())) {
             return rejected(PersistenceErrorCode.INVALID_ARGUMENT, "expiresAt");
         }
-        current.renewUntil(expiresAt);
+        current.renewUntil(canonicalExpiry);
         entityManager.flush();
         return PersistenceResult.applied(record(current));
     }
@@ -137,7 +145,7 @@ class ProductLeaseTransactions {
         if (bootstraps.lockByPlanId(planId.value()).isEmpty()) {
             return Authority.missing();
         }
-        Instant now = timeSource.observe();
+        Instant now = canonical(timeSource.observe());
         ProductLeaseEntity current =
                 leases.findFirstByPlanIdOrderByFencingTokenDesc(planId.value()).orElse(null);
         return new Authority(true, now, current);
@@ -145,6 +153,10 @@ class ProductLeaseTransactions {
 
     private static boolean active(ProductLeaseEntity lease, Instant now) {
         return lease.releasedAt() == null && now.isBefore(lease.expiresAt());
+    }
+
+    private static Instant canonical(Instant instant) {
+        return instant.truncatedTo(ChronoUnit.MICROS);
     }
 
     private static LeaseRecord record(ProductLeaseEntity entity) {

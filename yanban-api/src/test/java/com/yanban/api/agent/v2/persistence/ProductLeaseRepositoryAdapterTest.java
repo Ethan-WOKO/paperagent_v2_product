@@ -169,6 +169,37 @@ class ProductLeaseRepositoryAdapterTest {
     }
 
     @Test
+    void canonicalizesNanosecondsForReplayFindAndExactRenewal() {
+        seed("plan-1");
+        Instant observed = NOW.plusNanos(987);
+        Instant requestedExpiry = NOW.plusSeconds(60).plusNanos(654);
+        Instant canonicalNow = NOW;
+        Instant canonicalExpiry = NOW.plusSeconds(60);
+        time.set(observed);
+
+        PersistenceResult<LeaseRecord> applied =
+                adapter.acquire(
+                        plan("plan-1"), "owner-a", "token-a", requestedExpiry);
+        PersistenceResult<LeaseRecord> replayed =
+                adapter.acquire(
+                        plan("plan-1"), "owner-a", "token-a", requestedExpiry);
+        PersistenceResult<LeaseRecord> found = adapter.find(plan("plan-1"));
+        PersistenceResult<LeaseRecord> renewed =
+                adapter.renew(plan("plan-1"), "token-a", requestedExpiry);
+
+        LeaseRecord canonical = applied.value().orElseThrow();
+        assertEquals(canonicalNow, canonical.acquiredAt());
+        assertEquals(canonicalExpiry, canonical.expiresAt());
+        assertEquals(PersistenceOutcome.REPLAYED, replayed.outcome());
+        assertEquals(canonical, replayed.value().orElseThrow());
+        assertEquals(PersistenceOutcome.FOUND, found.outcome());
+        assertEquals(canonical, found.value().orElseThrow());
+        assertEquals(PersistenceOutcome.REPLAYED, renewed.outcome());
+        assertEquals(canonical, renewed.value().orElseThrow());
+        assertEquals(1, leases.count());
+    }
+
+    @Test
     void activeLeaseRejectsAnyNonExactContenderBeforeExpiryOrTokenChecks() {
         seed("plan-1");
         acquire("plan-1", "owner-a", "token-a", NOW.plusSeconds(60));
