@@ -225,3 +225,26 @@ transaction confirms token ownership before classifying the loser.
 The adapter does not start execution, mutate a Project, expose an API, run a
 cleanup scheduler, or read legacy Plan or lease tables. Execution-start
 persistence and composition remain later Issue boundaries.
+
+## Product execution-start persistence boundary
+
+The product database implements only the stable V2
+`ExecutionStartRepository`. One permanent `agent_v2_execution_starts` row is
+the immutable authority for the sequence-1 start event, checkpoint version 2,
+and start marker. The row stores separately versioned canonical request and
+result documents protected by SHA-256, while extracting the Plan, event, lease
+owner, fence, and commit time needed for database authority and inspection.
+
+Every first-start attempt locks the existing V2 bootstrap row in a new
+transaction. A permanent exact replay is returned before observing time or
+consulting mutable lease state. A new start decodes and verifies the bootstrap,
+observes one trusted microsecond persistence time, validates the current lease
+and frozen NOT_STARTED-to-ACTIVE transition, and inserts the authority row
+atomically. Same-Plan contenders serialize through the bootstrap lock;
+cross-Plan event-id races are classified only after the losing transaction
+rolls back and a fresh transaction confirms the winner.
+
+This adapter does not create a generic event or checkpoint store, start a
+Runtime loop, call a Provider, reserve a Workspace, execute a tool, expose an
+API, mutate a Project, or read legacy execution tables. Fresh-start Runtime
+composition and later execution persistence remain separate Issue boundaries.

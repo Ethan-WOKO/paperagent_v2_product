@@ -240,6 +240,89 @@ class ProductPlanBootstrapRepositoryAdapterTest {
     }
 
     @Test
+    void insertRaceUsesSamePlanTaskFrameWinnerForExactReplay() {
+        ProductPlanBootstrapTransactions transactions =
+                mock(ProductPlanBootstrapTransactions.class);
+        ProductPlanBootstrapCodec codec =
+                new ProductPlanBootstrapCodec(new ObjectMapper());
+        ProductPlanBootstrapRepositoryAdapter isolated =
+                new ProductPlanBootstrapRepositoryAdapter(transactions, codec);
+        PersistedPlanBootstrap tuple =
+                ProductPlanBootstrapTestFixtures.workspace("plan-1", "task-1");
+        var payload = codec.encode(tuple);
+        ProductPlanBootstrapEntity winner = new ProductPlanBootstrapEntity(
+                "plan-1", "task-1", 1, payload.sha256(), payload.json(), Instant.now());
+        when(transactions.findByPlanId("plan-1")).thenReturn(Optional.empty());
+        when(transactions.findByTaskFrameId("task-1"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        when(transactions.insert(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new DataIntegrityViolationException("synthetic race"));
+
+        assertEquals(PersistenceOutcome.REPLAYED,
+                bootstrap(isolated, tuple).outcome());
+        var order = inOrder(transactions);
+        order.verify(transactions).findByPlanId("plan-1");
+        order.verify(transactions).findByTaskFrameId("task-1");
+        order.verify(transactions).insert(org.mockito.ArgumentMatchers.any());
+        order.verify(transactions).findByPlanId("plan-1");
+        order.verify(transactions).findByTaskFrameId("task-1");
+    }
+
+    @Test
+    void insertRaceUsesSamePlanTaskFrameWinnerForConflict() {
+        ProductPlanBootstrapTransactions transactions =
+                mock(ProductPlanBootstrapTransactions.class);
+        ProductPlanBootstrapCodec codec =
+                new ProductPlanBootstrapCodec(new ObjectMapper());
+        ProductPlanBootstrapRepositoryAdapter isolated =
+                new ProductPlanBootstrapRepositoryAdapter(transactions, codec);
+        PersistedPlanBootstrap winnerTuple =
+                ProductPlanBootstrapTestFixtures.workspace("plan-1", "task-1");
+        PersistedPlanBootstrap changed =
+                withObjective(winnerTuple, "Different objective");
+        var payload = codec.encode(winnerTuple);
+        ProductPlanBootstrapEntity winner = new ProductPlanBootstrapEntity(
+                "plan-1", "task-1", 1, payload.sha256(), payload.json(), Instant.now());
+        when(transactions.findByPlanId("plan-1")).thenReturn(Optional.empty());
+        when(transactions.findByTaskFrameId("task-1"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        when(transactions.insert(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new DataIntegrityViolationException("synthetic race"));
+
+        assertFailure(
+                bootstrap(isolated, changed),
+                PersistenceErrorCode.CONFLICTING_REPLAY,
+                "plan.id");
+    }
+
+    @Test
+    void insertRaceKeepsDifferentPlanTaskFrameWinnerPartial() {
+        ProductPlanBootstrapTransactions transactions =
+                mock(ProductPlanBootstrapTransactions.class);
+        ProductPlanBootstrapCodec codec =
+                new ProductPlanBootstrapCodec(new ObjectMapper());
+        ProductPlanBootstrapRepositoryAdapter isolated =
+                new ProductPlanBootstrapRepositoryAdapter(transactions, codec);
+        PersistedPlanBootstrap requested =
+                ProductPlanBootstrapTestFixtures.workspace("plan-1", "task-1");
+        PersistedPlanBootstrap winnerTuple =
+                ProductPlanBootstrapTestFixtures.workspace("plan-2", "task-1");
+        var payload = codec.encode(winnerTuple);
+        ProductPlanBootstrapEntity winner = new ProductPlanBootstrapEntity(
+                "plan-2", "task-1", 1, payload.sha256(), payload.json(), Instant.now());
+        when(transactions.findByPlanId("plan-1")).thenReturn(Optional.empty());
+        when(transactions.findByTaskFrameId("task-1"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        when(transactions.insert(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new DataIntegrityViolationException("synthetic race"));
+
+        assertFailure(
+                bootstrap(isolated, requested),
+                PersistenceErrorCode.BOOTSTRAP_PARTIAL_STATE,
+                "bootstrap");
+    }
+
+    @Test
     void propagatesUnrelatedStorageFailureWhenFreshReadsFindNoWinner() {
         ProductPlanBootstrapTransactions transactions =
                 mock(ProductPlanBootstrapTransactions.class);
