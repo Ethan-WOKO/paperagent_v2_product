@@ -106,3 +106,31 @@ The full product, paper, knowledge, and frontend suites are not required
 because this change does not alter those sources or activate V2 at runtime.
 Future adapter and cutover Issues must add focused product tests for the paths
 they change.
+
+## Product TaskFrame intake boundary
+
+`yanban-agent-v2-adapter` is the first product-side adapter. It depends one way
+on `yanban-core`, V2 contracts, and V2 runtime. It does not activate or persist
+the runtime and has no Spring, JPA, Controller, database, or authorization
+lookup.
+
+The TaskFrame intake accepts an already authenticated and authorized
+`AgentRunIdentity`, an optional frozen product version, a V2 routing decision,
+a V2 TaskFrame draft, an execution profile, and a caller-owned creation time.
+It performs only fail-closed consistency checks on these product facts:
+
+- user IDs are positive and optional session IDs are positive when present;
+- workspace runs have neither a project nor a project version;
+- project runs have a positive project ID and a nonblank frozen version ID.
+
+For a consistent request, the adapter maps the product project/version pair to
+`ProjectVersionRef`, derives the opaque TaskFrame ID as `product.` plus the
+lowercase SHA-256 of the UTF-8 product `runId`, and delegates persistent-route
+and canonical TaskFrame validation to `DeterministicTaskFrameFreezer`. The
+result retains the unchanged product identity alongside the canonical
+TaskFrame. The adapter catches or translates none of the typed V2 validation
+failures.
+
+Database-backed fact resolution, ownership checks, runtime bootstrap,
+persistence, Workspace, Provider, Sandbox, API routing, and legacy retirement
+remain later Issue boundaries.
