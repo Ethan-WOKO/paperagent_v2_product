@@ -117,3 +117,6 @@ jobs:
 
       - name: Test product V2 first active-Step completion persistence
         run: mvn -pl yanban-api -am -Dtest=ProductStepCompletionCodecTest,ProductStepCompletionRepositoryAdapterTest,ProductStepCompletionRepositoryConcurrencyTest,V2StepCompletionMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test deterministic V2 active-Step completion materialization
+        run: mvn -pl agent-v2/agent-runtime -am -Dtest=DeterministicActiveStepCompletionMaterializerTest,ActiveStepCompletionMaterializerBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
