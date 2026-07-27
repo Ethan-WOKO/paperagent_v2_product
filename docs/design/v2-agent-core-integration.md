@@ -450,3 +450,30 @@ or Workspace failures are returned or propagated unchanged.
 This boundary activates no Controller or traffic, starts no step or Agent
 loop, performs no Provider, Sandbox, or tool call, mutates no Project, adds no
 schema, and changes no V2 core contract. Those remain later Issues.
+
+## Product first-Step activation persistence boundary
+
+The product database implements the stable V2 `StepActivationRepository`
+through V46. Each immutable activation row is keyed by its globally unique
+activation event and extracts the Plan, Step, committed H0 source, activated
+checkpoint head, lease owner, and fence from canonical format-1 request and
+result documents protected by lowercase SHA-256. The schema remains capable
+of holding later activation facts, while this boundary admits exactly one
+first activation per Plan.
+
+Every attempt locks the Plan bootstrap authority. A permanent exact replay is
+validated and returned before consulting mutable lease expiry. A new
+activation reconstructs the canonical bootstrap plus committed sequence-1,
+checkpoint-version-2 execution start. Project-backed tasks additionally
+require the exact confirmed execution context; source-less tasks require no
+context. One trusted database time observation validates the current lease
+before the deterministic NOT_STARTED-to-ACTIVE checkpoint transition is
+appended atomically.
+
+Concurrent same-Plan attempts serialize through the bootstrap lock, and the
+event primary key arbitrates cross-Plan event-id races. Occupied multiple or
+advanced activation cuts, malformed documents, digest or extracted-column
+mismatches, and cross-bound source/context facts fail closed without updating
+prior authority. This boundary does not compose or execute a Step, call a
+model, Provider, Sandbox, or tool, expose an API, mutate a Project or
+Workspace, or implement completion, interruption, or recovery.

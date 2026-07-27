@@ -78,3 +78,6 @@ jobs:
 
       - name: Test authenticated V2 Plan execution context composition
         run: mvn -pl yanban-agent-v2-adapter,yanban-api -am -Dtest=ProductWorkspaceIdDerivationTest,AuthenticatedAgentTurnPlanExecutionContextComposerTest,AuthenticatedAgentTurnPlanExecutionContextCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 first-Step activation persistence adapter
+        run: mvn -pl yanban-api -am -Dtest=ProductStepActivationCodecTest,ProductStepActivationRepositoryAdapterTest,ProductStepActivationRepositoryConcurrencyTest,V2StepActivationMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
