@@ -19,6 +19,7 @@
     <description>研伴 Agent 多模块父工程</description>
 
     <modules>
+        <module>agent-v2</module>
         <module>yanban-core</module>
         <module>yanban-knowledge</module>
         <module>yanban-paper</module>

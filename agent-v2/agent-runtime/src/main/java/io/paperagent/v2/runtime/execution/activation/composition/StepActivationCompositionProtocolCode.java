@@ -1,0 +1,10 @@
+package io.paperagent.v2.runtime.execution.activation.composition;
+
+public enum StepActivationCompositionProtocolCode {
+    NULL_COLLABORATOR_RESULT,
+    UNEXPECTED_PERSISTENCE_OUTCOME,
+    COLLABORATOR_EXCEPTION,
+    INCONSISTENT_MATERIALIZATION_AUTHORITY,
+    INCONSISTENT_LEASE_AUTHORITY,
+    INCONSISTENT_ACTIVATION_RESULT
+}

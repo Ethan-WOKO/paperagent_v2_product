@@ -10,22 +10,25 @@ Read these first when deciding what to do next:
 
 | Priority | Document | Date | Role | Current takeaway |
 | ---: | --- | --- | --- | --- |
-| 1 | `docs/design/paper-agent-next-steps-roadmap.md` | 2026-07-07 | Current product direction | Do literature recommendation independence and reranking evaluation first. Do not start a big Project shell yet. |
-| 2 | `docs/evaluation/reports/literature-recommendation-eval-20260708.md` | 2026-07-08 | Current evaluation baseline | Literature recommendation baseline is 4.445 / 5 across 10 golden cases. |
-| 3 | `memory-bank/roadmap-completion-audit-20260705.md` | 2026-07-05 | Old roadmap completion audit | The previous Agent reconstruction roadmap is broadly covered; remaining work is final smoke/verification, not a new feature queue. |
-| 4 | `memory-bank/agent-product-reconstruction-roadmap.md` | Updated 2026-07-05 | Historical master roadmap | Useful for background and design principles, but not the shortest source for current next action. |
-| 5 | `docs/process/local-merge-gate.md` and `docs/process/verification-matrix.md` | 2026-07-04 | Merge discipline | Use these to decide what tests and risk notes are needed before merging. |
+| 1 | `docs/design/v2-agent-core-integration.md` | 2026-07-27 | Current Agent architecture direction | Keep this repository as the product shell and integrate the isolated V2 core through one-way adapters. |
+| 2 | Active GitHub Issue | Current | Frozen implementation contract | Defines base/source commits, owned paths, acceptance tests, and stop conditions for one capability. |
+| 3 | `docs/design/paper-agent-next-steps-roadmap.md` | 2026-07-07 | Product-capability direction | Continue to preserve and improve literature, paper, and UI capabilities alongside the V2 Agent migration. |
+| 4 | `docs/process/local-merge-gate.md` and `docs/process/verification-matrix.md` | 2026-07-04 / current | Merge discipline | Select focused checks for the current change; expand only for a directly affected boundary. |
+| 5 | `docs/evaluation/reports/literature-recommendation-eval-20260708.md` | 2026-07-08 | Product evaluation baseline | Literature recommendation baseline is 4.445 / 5 across 10 golden cases. |
 
 ## 2. Current Direction
 
-As of 2026-07-08, the active work should be:
+As of 2026-07-27, development has two coordinated tracks:
 
-1. finish and verify literature recommendation as an independent capability,
-2. record a dated evaluation baseline for every ranking/prompt change,
-3. then move to paper polish quality closure: diff, failure reasons, and LaTeX compile validation,
-4. only after that revisit paper polish UI, chart understanding, general Agent expansion, and Project.
+1. preserve the existing product shell and its literature, paper, knowledge,
+   authentication, UI, and deployment capabilities;
+2. integrate the frozen V2 Agent core under `agent-v2/`, then add product-side
+   adapters one capability at a time.
 
-This ordering comes from `docs/design/paper-agent-next-steps-roadmap.md` dated 2026-07-07.
+`docs/design/v2-agent-core-integration.md` is authoritative for Agent runtime
+architecture. The dated product roadmap remains authoritative for quality work
+outside the Agent core. Older runtime documents are historical where they
+conflict with the V2 integration decision.
 
 ## 3. Historical Roadmaps And Audits
 
@@ -57,7 +60,8 @@ These describe target behavior and boundaries.
 
 | Document | Date / modified | Topic | Summary |
 | --- | --- | --- | --- |
-| `docs/design/agent-runtime-task-lifecycle.md` | 2026-07-04 | Runtime boundary | Defines AgentRuntimeService, adapters, task states, strategy types, cancellation/retry, and compatibility phases. |
+| `docs/design/v2-agent-core-integration.md` | 2026-07-27 | Current Agent integration boundary | Defines the product-shell decision, isolated V2 reactor, dependency direction, and migration sequence. |
+| `docs/design/agent-runtime-task-lifecycle.md` | 2026-07-04 | Historical runtime boundary | Retained for V1 lifecycle context; superseded where it conflicts with the V2 core contracts. |
 | `docs/design/agent-event-cancel-protocol.md` | 2026-07-04 | Event/cancel protocol | Defines unified task events, SSE, Kafka messages, cancel API, worker safe points, and frontend state mapping. |
 | `docs/design/kb-version-governance-rag-filtering.md` | 2026-07-04 | Knowledge governance | Defines version status, source type, filtering, ranking, ES sync, LangChain4j metadata requirements. |
 | `docs/design/chatmemory-context-management.md` | 2026-07-04 | Context and memory | Defines UI history, short-term memory, summaries, long-term memory, context snapshots, user confirmation points. |
@@ -126,21 +130,21 @@ These are sample content, not roadmap direction.
 
 ## 11. Practical Notes For The Next Contributor
 
-Current working-tree context as of 2026-07-08:
+Current repository context as of 2026-07-27:
 
-1. There are uncommitted literature recommendation changes in `yanban-paper` and `yanban-api`.
-2. There are also uncommitted frontend changes and `.bak` files. Treat those as separate until confirmed.
-3. The latest relevant test pass is the 2026-07-08 focused Maven run recorded in `docs/evaluation/reports/literature-recommendation-eval-20260708.md`.
-4. The next documentation update after implementation should be either:
-   - a PR/implementation note for literature recommendation independence, or
-   - a new dated evaluation report if reranking logic changes.
+1. Start from the active Issue's exact base commit in an independent worktree.
+2. Treat legacy Agent code as `UNASSESSED`; do not copy it into V2 without an
+   independent review.
+3. Keep V2-to-product dependency checks in every Agent integration PR.
+4. Preserve the existing product features and run focused tests for only the
+   directly affected boundary.
 
 ## 12. Short Answer
 
 If you are confused, start here:
 
-1. Read `docs/design/paper-agent-next-steps-roadmap.md`.
-2. Read `docs/evaluation/reports/literature-recommendation-eval-20260708.md`.
-3. Use `memory-bank/roadmap-completion-audit-20260705.md` only to understand why the older big roadmap is considered mostly complete.
-4. Work on literature recommendation cleanup and verification before starting UI, chart, or Project work.
-
+1. Read `docs/design/v2-agent-core-integration.md`.
+2. Read the active GitHub Issue.
+3. Use `docs/process/verification-matrix.md` to choose focused checks.
+4. Use `docs/design/paper-agent-next-steps-roadmap.md` for non-Agent product
+   priorities.

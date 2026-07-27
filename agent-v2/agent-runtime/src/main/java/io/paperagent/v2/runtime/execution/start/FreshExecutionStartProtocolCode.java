@@ -1,0 +1,9 @@
+package io.paperagent.v2.runtime.execution.start;
+
+public enum FreshExecutionStartProtocolCode {
+    NULL_COLLABORATOR_RESULT,
+    UNEXPECTED_PERSISTENCE_OUTCOME,
+    COLLABORATOR_EXCEPTION,
+    INCONSISTENT_LEASE_AUTHORITY,
+    INCONSISTENT_EXECUTION_START_RESULT
+}

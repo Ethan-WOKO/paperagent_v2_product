@@ -1,5 +1,13 @@
 # Agent Runtime Refactor Plan
 
+> **Status: HISTORICAL / SUPERSEDED IN PART (2026-07-27).**
+> The current Agent-core architecture and dependency direction are defined by
+> `docs/design/v2-agent-core-integration.md` and the frozen contracts under
+> `agent-v2/`. This document remains useful as product-experience background,
+> but proposals to evolve the legacy runtime as the target core, retain
+> `PlanAgentService` as the target plan strategy, or add top-level strategies
+> beyond `DIRECT` and `PERSISTENT_PLAN_EXECUTE` are superseded.
+>
 ## Background
 
 The current project already has useful agent building blocks:

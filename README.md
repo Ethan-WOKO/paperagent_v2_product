@@ -14,18 +14,19 @@
 
 ## 1. 仓库边界
 
-本轮新实现全部位于：
+本仓库是 PaperAgent 的产品主仓库，保留已经调试完成的前端、文献检索、论文润色、
+知识库、鉴权和部署能力。V2 Agent 核心以隔离的 Maven reactor 位于：
 
 ```text
-private-helper-agent/
+agent-v2/
 ```
 
-只读参考，不修改：
+`agent-v2/` 当前只包含六个核心模块，不包含独立的 `app-api`、`app-web` 或
+`e2e-tests`。产品代码以后通过明确的 adapter 依赖 V2 稳定契约；V2 核心不得反向
+依赖 `com.yanban`、Controller、产品数据库实体或旧 Agent Service。
 
-```text
-PaiSmart-main/
-paper-agent/
-```
+本次导入仅建立构建与代码边界，尚未切换任何生产 API 或运行时流量。详细决策见
+`docs/design/v2-agent-core-integration.md`。
 
 ## 2. 阶段 B 当前能力
 
@@ -293,6 +294,9 @@ mvn test -Dgroups=manual
 
 ## 12. 文档索引
 
+- V2 Agent 核心集成：`docs/design/v2-agent-core-integration.md`
+- 当前文档地图：`docs/document-map-20260708.md`
+- 按变更类型选择测试：`docs/process/verification-matrix.md`
 - 环境说明：`docs/SETUP.md`
 - API 冒烟：`docs/API-smoke.md`
 - WebSocket 协议：`docs/WEBSOCKET.md`
