@@ -26,6 +26,13 @@ public final class DeterministicProductTaskFrameAdapter {
     }
 
     public ProductTaskFrameBinding bind(ProductTaskFrameIntakeRequest request) {
+        ProductTaskFramePreparation preparation = prepare(request);
+        return new ProductTaskFrameBinding(
+                preparation.identity(),
+                freezer.freeze(preparation.freezeRequest()));
+    }
+
+    public ProductTaskFramePreparation prepare(ProductTaskFrameIntakeRequest request) {
         ProductTaskFrameIntakeRequest requiredRequest = required(
                 request,
                 "request");
@@ -41,14 +48,14 @@ public final class DeterministicProductTaskFrameAdapter {
                         requiredRequest.projectVersionId(),
                         "request.projectVersionId"));
 
-        TaskFrame taskFrame = freezer.freeze(new TaskFrameFreezeRequest(
+        TaskFrameFreezeRequest freezeRequest = new TaskFrameFreezeRequest(
                 requiredRequest.routingDecision(),
                 taskFrameId(identity),
                 requiredRequest.draft(),
                 sourceProjectVersion,
                 requiredRequest.executionProfile(),
-                requiredRequest.createdAt()));
-        return new ProductTaskFrameBinding(identity, taskFrame);
+                requiredRequest.createdAt());
+        return new ProductTaskFramePreparation(identity, freezeRequest);
     }
 
     private static Optional<ProjectVersionRef> projectVersion(

@@ -177,5 +177,32 @@ classification runs through a fresh read transaction.
 
 This adapter does not authorize or route requests, compose bootstrap inputs,
 start execution, update Plans, or implement any later read/update persistence
-port. Runtime activation and authenticated bootstrap composition remain later
-Issue boundaries.
+port. Authenticated composition is described below; execution activation
+remains a later Issue boundary.
+
+## Authenticated persistent Plan bootstrap composition boundary
+
+The first internal product bootstrap path composes an already-authenticated
+Agent turn without exposing an API or starting execution. It resolves the turn
+through the owner-qualified `AgentTurnProductContextResolver` before adapting
+any V2 request. The caller supplies only the routing decision, TaskFrame and
+initial Plan drafts, execution profile, and the three creation instants;
+identity and ProjectVersion come exclusively from the resolver.
+
+The pure product adapter now separates TaskFrame preparation from freezing.
+Existing TaskFrame binding delegates to that preparation, preserving its
+validation and deterministic TaskFrame ID behavior. The bootstrap request
+adapter derives stable, domain-separated IDs from the verified product
+`runId`: `product-plan.` plus SHA-256 of `plan\0` and the run ID, and
+`product-revision.` plus SHA-256 of `revision-1\0` and the run ID.
+
+Spring configuration wires the deterministic TaskFrame, initial Plan, and
+initial Checkpoint freezers through `DefaultPersistentPlanBootstrapper` to the
+product `PlanBootstrapRepository`. The composer delegates exactly once and
+returns the persistence result unchanged. Nonpersistent routing therefore
+fails through the existing V2 typed validation before persistence.
+
+This boundary does not generate routing or Plan content, read Project files,
+call a Provider, start the Agent loop, execute a tool, expose a Controller, or
+cut over legacy traffic. API activation, execution start, Workspace, Provider,
+Sandbox, recovery, and legacy retirement remain later Issue boundaries.
