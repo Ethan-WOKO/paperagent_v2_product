@@ -42,3 +42,9 @@ jobs:
 
       - name: Test product TaskFrame adapter
         run: mvn -pl yanban-agent-v2-adapter -am test
+
+      - name: Test owned Agent turn lookup
+        run: mvn -pl yanban-core -Dtest=AgentRepositoryTest test
+
+      - name: Test Agent turn product context resolver
+        run: mvn -pl yanban-api -am -Dtest=AgentTurnProductContextResolverTest -Dsurefire.failIfNoSpecifiedTests=false test

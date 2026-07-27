@@ -131,6 +131,25 @@ result retains the unchanged product identity alongside the canonical
 TaskFrame. The adapter catches or translates none of the typed V2 validation
 failures.
 
-Database-backed fact resolution, ownership checks, runtime bootstrap,
-persistence, Workspace, Provider, Sandbox, API routing, and legacy retirement
-remain later Issue boundaries.
+Additional intake sources, runtime bootstrap, V2 persistence, Workspace,
+Provider, Sandbox, API routing, and legacy retirement remain later Issue
+boundaries.
+
+## Authenticated Agent turn context boundary
+
+The first concrete product intake source resolves a persisted `AGENT_TURN`
+through the product-side `yanban-api` module. The resolver accepts only the
+authenticated user ID and turn ID. It loads the turn and session with
+owner-qualified repository queries, validates their internal identity and
+scope facts, and constructs an `AgentRunIdentity` only after those checks pass.
+
+Workspace sessions must not carry a Project and return no ProjectVersion.
+Project sessions must carry a positive Project ID and reuse
+`ProjectService.manifest(userId, projectId)` for both product ownership and the
+current immutable manifest version. The resolver does not read Project content
+through any other path and propagates existing `ProjectService` failures
+unchanged.
+
+This boundary returns verified product facts for the deterministic TaskFrame
+adapter. It does not construct a TaskFrame draft or routing decision, activate
+the V2 runtime, persist V2 state, expose an endpoint, or change any V2 module.
