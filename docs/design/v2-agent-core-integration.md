@@ -347,3 +347,28 @@ This boundary describes Workspace intent only. It does not read or
 materialize a Workspace, activate a step, compose Runtime context, call a
 Provider/Sandbox/tool, expose an API, mutate a Project, or read legacy Agent
 tables. Those remain later Issue boundaries.
+
+## Authenticated product Project-version source boundary
+
+The product now exposes one owner-qualified immutable Project cut through the
+stable V2 `ProjectVersionSource` contract. A product-side factory first resolves
+the authenticated Agent turn through `AgentTurnProductContextResolver`; only a
+verified Project-backed turn can bind the resolver's exact user, Project, and
+frozen version authority. Workspace-scoped turns fail closed before any Project
+access.
+
+An exact source load reuses the existing admitted-text
+`ProjectService.manifest/materializeSandbox` behavior. This reuse decision is
+`REUSE_WITH_ADAPTER`: the adapter cross-checks the product manifest, sandbox
+snapshot, and returned text map as one project/version/path/size/lowercase
+SHA-256 cut, then maps UTF-8 content bytes into a sorted, defensive V2 snapshot.
+Changed references and corrupt or incomplete cuts fail through sanitized
+Workspace errors. Existing Project authorization, storage, and runtime failures
+propagate unchanged; there is no cache, retry, fallback authority, host path,
+or direct file read.
+
+This boundary creates no Workspace and activates no Runtime composition,
+Controller, API, step, Provider, Sandbox, tool, or Project mutation. Binary and
+general Project-source expansion, real Workspace materialization, and Runtime
+execution-context composition remain later Issues. No legacy Agent planner,
+executor, verifier, or service code is reused.
