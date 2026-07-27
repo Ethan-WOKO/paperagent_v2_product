@@ -19,6 +19,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Propagation;
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.verify;
 
 @DataJpaTest
 @TestPropertySource(properties = {
@@ -321,6 +323,26 @@ class ProductExecutionStartRepositoryAdapterTest {
         assertSame(failure,
                 assertThrows(IllegalStateException.class,
                         () -> isolated.start(scenario.request())));
+    }
+
+    @Test
+    void unrelatedConstraintFailureIsRethrownAfterFreshWinnerLookup() {
+        ProductExecutionStartTransactions transactions =
+                org.mockito.Mockito.mock(ProductExecutionStartTransactions.class);
+        ProductExecutionStartRepositoryAdapter isolated =
+                new ProductExecutionStartRepositoryAdapter(transactions);
+        Scenario scenario = seed("plan-a", "task-a", "owner-a", "token-a", 1);
+        DataIntegrityViolationException failure =
+                new DataIntegrityViolationException("synthetic constraint");
+        org.mockito.Mockito.when(transactions.start(scenario.request()))
+                .thenThrow(failure);
+        org.mockito.Mockito.when(transactions.eventIdExists("event-a"))
+                .thenReturn(false);
+
+        assertSame(failure,
+                assertThrows(DataIntegrityViolationException.class,
+                        () -> isolated.start(scenario.request())));
+        verify(transactions).eventIdExists("event-a");
     }
 
     private void assertRejectedWithoutWrite(
