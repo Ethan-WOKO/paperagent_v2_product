@@ -46,6 +46,10 @@ class ProductStepRecoveryTransactions {
     private final ProductPlanExecutionContextCodec contextCodec;
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepActivationCodec activationCodec;
+    private final ProductStepInterruptionJpaRepository interruptions;
+    private final ProductStepInterruptionMarkerReader interruptionMarkers;
+    private final ProductStepCompletionJpaRepository completions;
+    private final ProductStepCompletionMarkerReader completionMarkers;
 
     ProductStepRecoveryTransactions(
             ProductPlanBootstrapJpaRepository bootstraps,
@@ -55,7 +59,11 @@ class ProductStepRecoveryTransactions {
             ProductPlanExecutionContextJpaRepository contexts,
             ProductPlanExecutionContextCodec contextCodec,
             ProductStepActivationJpaRepository activations,
-            ProductStepActivationCodec activationCodec) {
+            ProductStepActivationCodec activationCodec,
+            ProductStepInterruptionJpaRepository interruptions,
+            ProductStepInterruptionMarkerReader interruptionMarkers,
+            ProductStepCompletionJpaRepository completions,
+            ProductStepCompletionMarkerReader completionMarkers) {
         this.bootstraps = bootstraps;
         this.bootstrapCodec = bootstrapCodec;
         this.starts = starts;
@@ -64,6 +72,10 @@ class ProductStepRecoveryTransactions {
         this.contextCodec = contextCodec;
         this.activations = activations;
         this.activationCodec = activationCodec;
+        this.interruptions = interruptions;
+        this.interruptionMarkers = interruptionMarkers;
+        this.completions = completions;
+        this.completionMarkers = completionMarkers;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
@@ -73,7 +85,11 @@ class ProductStepRecoveryTransactions {
         if (bootstrapRow == null) {
             boolean occupied = starts.existsById(planId.value())
                     || contexts.existsById(planId.value())
-                    || !activations.findAllByPlanId(planId.value()).isEmpty();
+                    || !activations.findAllByPlanId(planId.value()).isEmpty()
+                    || !interruptions.findAllByPlanId(
+                            planId.value()).isEmpty()
+                    || !completions.findAllByPlanId(
+                            planId.value()).isEmpty();
             return occupied
                     ? partial()
                     : PersistenceResult.rejected(
@@ -104,10 +120,29 @@ class ProductStepRecoveryTransactions {
         if (!recoverable(source, marker)) {
             return notEligible();
         }
-        return PersistenceResult.found(new PersistedStepRecoveryActive(
+        PersistedStepRecoveryActive active = new PersistedStepRecoveryActive(
                 source.bootstrap().taskFrame(), source.bootstrap().plan(),
                 marker.result().activatedCheckpoint(), marker.result(),
-                context.confirmed()));
+                context.confirmed());
+        List<ProductStepInterruptionEntity> interruptionRows =
+                interruptions.findAllByPlanId(planId.value());
+        List<ProductStepCompletionEntity> completionRows =
+                completions.findAllByPlanId(planId.value());
+        if (interruptionRows.isEmpty() && completionRows.isEmpty()) {
+            return PersistenceResult.found(active);
+        }
+        if (interruptionRows.size() > 1 || completionRows.size() > 1
+                || !interruptionRows.isEmpty()
+                && !completionRows.isEmpty()) {
+            return partial();
+        }
+        if (!interruptionRows.isEmpty()) {
+            return interruptionMarkers.read(
+                    interruptionRows.get(0), active) == null
+                    ? partial() : notEligible();
+        }
+        return completionMarkers.read(completionRows.get(0), active) == null
+                ? partial() : notEligible();
     }
 
     private Source source(

@@ -2,16 +2,27 @@ package com.yanban.api.agent.v2.persistence;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.paperagent.v2.contracts.Checkpoint;
+import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.EventEnvelope;
+import io.paperagent.v2.contracts.EventType;
+import io.paperagent.v2.contracts.InlineEventPayload;
+import io.paperagent.v2.contracts.ObjectValue;
+import io.paperagent.v2.contracts.PlanExecutionState;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.ReceiptId;
+import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistedStepActivation;
+import io.paperagent.v2.persistence.PersistedStepCompletion;
+import io.paperagent.v2.persistence.PersistedStepInterruption;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.StepActivationRequest;
+import io.paperagent.v2.persistence.StepCompletionRequest;
+import io.paperagent.v2.persistence.StepInterruptionKind;
+import io.paperagent.v2.persistence.StepPauseRequest;
 import io.paperagent.v2.persistence.StepRecoverySnapshot;
 import io.paperagent.v2.persistence.VersionedCheckpoint;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +37,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -41,7 +54,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 @Import({
         ProductStepRecoveryRepositoryAdapter.class,
         ProductStepRecoveryTransactions.class,
+        ProductStepInterruptionMarkerReader.class,
+        ProductStepCompletionMarkerReader.class,
+        ProductEffectOutcomeMarkerReader.class,
+        ProductReceiptMarkerReader.class,
+        ProductReceiptEffectIntentMarkerReader.class,
         ProductStepActivationCodec.class,
+        ProductStepInterruptionCodec.class,
+        ProductStepCompletionCodec.class,
+        ProductEffectIntentCodec.class,
+        ProductEffectOutcomeCodec.class,
+        ProductReceiptCodec.class,
         ProductExecutionStartCodec.class,
         ProductPlanBootstrapCodec.class,
         ProductPlanExecutionContextCodec.class,
@@ -90,6 +113,16 @@ class ProductStepRecoveryRepositoryAdapterTest {
     @jakarta.annotation.Resource
     private ProductStepActivationCodec activationCodec;
     @jakarta.annotation.Resource
+    private ProductStepInterruptionJpaRepository interruptions;
+    @jakarta.annotation.Resource
+    private ProductStepInterruptionCodec interruptionCodec;
+    @jakarta.annotation.Resource
+    private ProductStepCompletionJpaRepository completions;
+    @jakarta.annotation.Resource
+    private ProductStepCompletionEvidenceJpaRepository completionEvidence;
+    @jakarta.annotation.Resource
+    private ProductStepCompletionCodec completionCodec;
+    @jakarta.annotation.Resource
     private ProductLeaseJpaRepository leases;
     @jakarta.annotation.Resource
     private CountingTimeSource timeSource;
@@ -98,11 +131,17 @@ class ProductStepRecoveryRepositoryAdapterTest {
 
     @BeforeEach
     void reset() {
+        completionEvidence.deleteAll();
+        completions.deleteAll();
+        interruptions.deleteAll();
         activations.deleteAll();
         contexts.deleteAll();
         starts.deleteAll();
         leases.deleteAll();
         bootstraps.deleteAll();
+        completionEvidence.flush();
+        completions.flush();
+        interruptions.flush();
         activations.flush();
         contexts.flush();
         starts.flush();
@@ -411,6 +450,60 @@ class ProductStepRecoveryRepositoryAdapterTest {
         assertEquals(rows, totalAuthorityRows());
     }
 
+    @Test
+    void canonicalInterruptionIsNotEligibleAndCorruptionIsPartial() {
+        PersistedPlanBootstrap bootstrap =
+                ProductPlanBootstrapTestFixtures.workspace(
+                        "interrupted", "task-interrupted");
+        seedH0(bootstrap);
+        PersistedStepActivation activation =
+                seedActivation(bootstrap, "owner", 3);
+        ProductStepInterruptionEntity row =
+                seedInterruption(bootstrap, activation, "interruption");
+
+        assertFailure(adapter.inspect(bootstrap.plan().id()),
+                PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE,
+                "stepRecovery");
+        jdbc.update("update agent_v2_step_interruptions "
+                        + "set result_sha256 = ? where interruption_event_id = ?",
+                "0".repeat(64), row.interruptionEventId());
+        assertFailure(adapter.inspect(bootstrap.plan().id()),
+                PersistenceErrorCode.STEP_RECOVERY_PARTIAL_STATE,
+                "stepRecovery");
+    }
+
+    @Test
+    void canonicalCompletionIsNotEligibleAndDualOccupancyIsPartial() {
+        PersistedPlanBootstrap bootstrap =
+                ProductPlanBootstrapTestFixtures.workspace(
+                        "completed", "task-completed");
+        seedH0(bootstrap);
+        PersistedStepActivation activation =
+                seedActivation(bootstrap, "owner", 4);
+        ProductStepCompletionEntity completion =
+                seedCompletion(bootstrap, activation, "completion");
+
+        long rows = totalAuthorityRows();
+        assertFailure(adapter.inspect(bootstrap.plan().id()),
+                PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE,
+                "stepRecovery");
+        assertEquals(rows, totalAuthorityRows());
+
+        jdbc.update("update agent_v2_step_completions "
+                        + "set result_sha256 = ? where completion_event_id = ?",
+                "0".repeat(64), completion.completionEventId());
+        assertFailure(adapter.inspect(bootstrap.plan().id()),
+                PersistenceErrorCode.STEP_RECOVERY_PARTIAL_STATE,
+                "stepRecovery");
+        completions.deleteAll();
+        completions.flush();
+        seedCompletion(bootstrap, activation, "completion-restored");
+        seedInterruption(bootstrap, activation, "dual-interruption");
+        assertFailure(adapter.inspect(bootstrap.plan().id()),
+                PersistenceErrorCode.STEP_RECOVERY_PARTIAL_STATE,
+                "stepRecovery");
+    }
+
     private void seedBootstrap(PersistedPlanBootstrap bootstrap) {
         ProductPlanBootstrapCodec.EncodedPayload payload =
                 bootstrapCodec.encode(bootstrap);
@@ -461,7 +554,93 @@ class ProductStepRecoveryRepositoryAdapterTest {
 
     private long totalAuthorityRows() {
         return bootstraps.count() + starts.count() + contexts.count()
-                + activations.count() + leases.count();
+                + activations.count() + leases.count()
+                + interruptions.count() + completions.count()
+                + completionEvidence.count();
+    }
+
+    private ProductStepInterruptionEntity seedInterruption(
+            PersistedPlanBootstrap bootstrap,
+            PersistedStepActivation activation, String eventId) {
+        Checkpoint active = activation.activatedCheckpoint().checkpoint();
+        Map<io.paperagent.v2.contracts.PlanStepId, StepExecutionState> states =
+                new LinkedHashMap<>(active.stepStates());
+        states.put(activation.stepId(), StepExecutionState.PAUSED);
+        EventEnvelope event = new EventEnvelope(
+                new EventId(eventId), bootstrap.taskFrame().id(),
+                bootstrap.plan().id(), 3,
+                ProductStepActivationTestFixtures.NOW.plusSeconds(2),
+                new EventType("STEP_PAUSED"),
+                Optional.of(activation.activationEvent().id()),
+                "interruption-correlation",
+                new InlineEventPayload(new ObjectValue(Map.of())));
+        Checkpoint checkpoint = new Checkpoint(
+                active.taskFrameId(), active.planId(), active.revisionId(),
+                active.revisionNumber(), 3, PlanExecutionState.PAUSED,
+                states, active.receiptReferences(),
+                active.createdAt().plusSeconds(1));
+        StepPauseRequest request = new StepPauseRequest(
+                bootstrap.plan().id(), "token", activation.fencingToken(),
+                active.revisionId(), active.revisionNumber(), 3, 2,
+                activation.stepId(), event, checkpoint);
+        PersistedStepInterruption result = new PersistedStepInterruption(
+                request.planId(), request.stepId(),
+                StepInterruptionKind.PAUSE, activation.leaseOwnerId(),
+                request.fencingToken(), event,
+                new VersionedCheckpoint(4, checkpoint));
+        ProductStepInterruptionEntity row =
+                new ProductStepInterruptionEntity(
+                        request.planId().value(), request.stepId().value(),
+                        event.id().value(), StepInterruptionKind.PAUSE.name(),
+                        active.revisionId().value(), active.revisionNumber(),
+                        checkpoint.revisionId().value(),
+                        checkpoint.revisionNumber(), 3, 4, 2, 3,
+                        activation.leaseOwnerId(),
+                        activation.fencingToken(),
+                        interruptionCodec.encodeRequest(
+                                ProductStepInterruptionCodec.Candidate.from(
+                                        StepInterruptionKind.PAUSE, request)),
+                        interruptionCodec.encodeResult(result),
+                        ProductStepActivationTestFixtures.NOW.plusSeconds(2));
+        return interruptions.saveAndFlush(row);
+    }
+
+    private ProductStepCompletionEntity seedCompletion(
+            PersistedPlanBootstrap bootstrap,
+            PersistedStepActivation activation, String eventId) {
+        ProductEffectIntentTestFixtures.Scenario scenario =
+                new ProductEffectIntentTestFixtures.Scenario(
+                        bootstrap,
+                        ProductStepActivationTestFixtures.request(
+                                bootstrap, "token",
+                                activation.fencingToken(),
+                                activation.activationEvent().id().value()),
+                        activation);
+        StepCompletionRequest request =
+                ProductStepCompletionTestFixtures.request(
+                        scenario, "token", activation.fencingToken(),
+                        eventId, List.of());
+        PersistedStepCompletion result = new PersistedStepCompletion(
+                request.planId(), request.stepId(),
+                activation.leaseOwnerId(), request.fencingToken(),
+                request.completionEvent(), request.completedRevision(),
+                new VersionedCheckpoint(4, request.completedCheckpoint()));
+        ProductStepCompletionEntity row = new ProductStepCompletionEntity(
+                request.planId().value(), request.stepId().value(),
+                activation.activationEvent().id().value(),
+                request.completionEvent().id().value(),
+                request.expectedRevisionId().value(),
+                request.expectedRevisionNumber(),
+                request.completedRevision().id().value(),
+                request.completedRevision().number(),
+                request.expectedCheckpointVersion(), 4,
+                request.expectedEventHeadSequence(),
+                request.completionEvent().sequence(),
+                activation.leaseOwnerId(), request.fencingToken(),
+                completionCodec.encodeRequest(request),
+                completionCodec.encodeResult(result),
+                ProductStepActivationTestFixtures.NOW.plusSeconds(2));
+        return completions.saveAndFlush(row);
     }
 
     private static PersistedStepRecoveryActive found(

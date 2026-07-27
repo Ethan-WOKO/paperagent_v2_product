@@ -57,6 +57,7 @@ class ProductStepInterruptionTransactions {
     private final ProductLeaseTimeSource timeSource;
     private final ProductStepInterruptionJpaRepository interruptions;
     private final ProductStepCompletionJpaRepository completions;
+    private final ProductStepInterruptionMarkerReader markerReader;
     private final ProductStepInterruptionCodec codec;
     private final EntityManager entityManager;
 
@@ -73,6 +74,7 @@ class ProductStepInterruptionTransactions {
             ProductLeaseTimeSource timeSource,
             ProductStepInterruptionJpaRepository interruptions,
             ProductStepCompletionJpaRepository completions,
+            ProductStepInterruptionMarkerReader markerReader,
             ProductStepInterruptionCodec codec,
             EntityManager entityManager) {
         this.bootstraps = bootstraps;
@@ -87,6 +89,7 @@ class ProductStepInterruptionTransactions {
         this.timeSource = timeSource;
         this.interruptions = interruptions;
         this.completions = completions;
+        this.markerReader = markerReader;
         this.codec = codec;
         this.entityManager = entityManager;
     }
@@ -171,7 +174,7 @@ class ProductStepInterruptionTransactions {
         ProductStepInterruptionEntity reused = interruptions.findById(
                 candidate.event().id().value()).orElse(null);
         if (reused != null) {
-            return decodeMarker(reused) == null ? partial()
+            return markerReader.decode(reused) == null ? partial()
                     : conflict(candidate.eventPath() + ".id");
         }
         if (starts.findByStartEventId(
@@ -255,7 +258,8 @@ class ProductStepInterruptionTransactions {
         if (event == null) {
             return null;
         }
-        Marker marker = decodeMarker(event);
+        ProductStepInterruptionMarkerReader.Marker marker =
+                markerReader.decode(event);
         return marker == null
                 ? partial()
                 : conflict(candidate.eventPath() + ".id");
@@ -265,7 +269,8 @@ class ProductStepInterruptionTransactions {
             ProductStepInterruptionEntity row,
             ProductStepInterruptionCodec.Candidate candidate,
             ActiveSource source) {
-        Marker marker = decodeMarker(row);
+        ProductStepInterruptionMarkerReader.Marker marker =
+                markerReader.decode(row);
         if (marker == null || !markerMatchesSource(row, marker, source)) {
             return partial();
         }
@@ -335,7 +340,8 @@ class ProductStepInterruptionTransactions {
     }
 
     private boolean markerMatchesSource(
-            ProductStepInterruptionEntity row, Marker marker,
+            ProductStepInterruptionEntity row,
+            ProductStepInterruptionMarkerReader.Marker marker,
             ActiveSource source) {
         Checkpoint active = source.activation().result()
                 .activatedCheckpoint().checkpoint();

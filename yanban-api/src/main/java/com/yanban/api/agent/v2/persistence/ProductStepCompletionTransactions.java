@@ -52,6 +52,7 @@ class ProductStepCompletionTransactions {
     private final ProductEffectOutcomeResultJpaRepository outcomeResults;
     private final ProductEffectOutcomeMarkerReader outcomeMarkers;
     private final ProductStepRecoveryTransactions recovery;
+    private final ProductStepCompletionMarkerReader markerReader;
     private final ProductStepCompletionCodec codec;
     private final ProductEffectOutcomeTimeSource time;
     private final EntityManager entityManager;
@@ -69,6 +70,7 @@ class ProductStepCompletionTransactions {
             ProductEffectOutcomeResultJpaRepository outcomeResults,
             ProductEffectOutcomeMarkerReader outcomeMarkers,
             ProductStepRecoveryTransactions recovery,
+            ProductStepCompletionMarkerReader markerReader,
             ProductStepCompletionCodec codec,
             ProductEffectOutcomeTimeSource time,
             EntityManager entityManager) {
@@ -84,6 +86,7 @@ class ProductStepCompletionTransactions {
         this.outcomeResults = outcomeResults;
         this.outcomeMarkers = outcomeMarkers;
         this.recovery = recovery;
+        this.markerReader = markerReader;
         this.codec = codec;
         this.time = time;
         this.entityManager = entityManager;
@@ -222,7 +225,8 @@ class ProductStepCompletionTransactions {
                         .equals(byEvent.completionEventId())) {
             return partial();
         }
-        Marker marker = marker(byEvent);
+        ProductStepCompletionMarkerReader.Marker marker =
+                markerReader.decode(byEvent);
         if (marker == null) {
             return partial();
         }
