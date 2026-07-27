@@ -23,6 +23,11 @@
         </dependency>
         <dependency>
             <groupId>com.yanban</groupId>
+            <artifactId>yanban-agent-v2-adapter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.yanban</groupId>
             <artifactId>yanban-knowledge</artifactId>
             <version>${project.version}</version>
         </dependency>

@@ -186,6 +186,22 @@ class AgentRepositoryTest {
     }
 
     @Test
+    void findsTurnOnlyForItsOwner() {
+        AgentSession session = sessions.saveAndFlush(new AgentSession(
+                1026L,
+                "owned turn",
+                "deepseek",
+                "deepseek-chat",
+                20,
+                false
+        ));
+        AgentTurn turn = turns.saveAndFlush(new AgentTurn(session.getId(), 1026L, 2601L));
+
+        assertThat(turns.findByIdAndUserId(turn.getId(), 1026L)).contains(turn);
+        assertThat(turns.findByIdAndUserId(turn.getId(), 9999L)).isEmpty();
+    }
+
+    @Test
     void ordersSnapshotsWithSameCreatedAtByDescendingIdSoLatestIsMaximumId() {
         AgentSession session = sessions.saveAndFlush(new AgentSession(
                 1025L,
