@@ -75,3 +75,6 @@ jobs:
 
       - name: Test authenticated product Project version source adapter
         run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnProjectVersionSourceFactoryTest,ProductProjectVersionSourceTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test authenticated V2 Plan execution context composition
+        run: mvn -pl yanban-agent-v2-adapter,yanban-api -am -Dtest=ProductWorkspaceIdDerivationTest,AuthenticatedAgentTurnPlanExecutionContextComposerTest,AuthenticatedAgentTurnPlanExecutionContextCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test

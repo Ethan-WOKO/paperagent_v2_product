@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.workspace;
 
+import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import io.paperagent.v2.workspace.LocalWorkspaceProvider;
 import io.paperagent.v2.workspace.ProjectVersionSource;
 import io.paperagent.v2.workspace.WorkspacePort;
@@ -28,6 +29,14 @@ public final class AuthenticatedAgentTurnWorkspacePortFactory {
 
     public WorkspacePort create(Long authenticatedUserId, Long turnId) {
         ProjectVersionSource source = sources.create(authenticatedUserId, turnId);
+        return create(source);
+    }
+
+    WorkspacePort create(VerifiedAgentTurnProductContext context) {
+        return create(sources.create(context));
+    }
+
+    private WorkspacePort create(ProjectVersionSource source) {
         try {
             return new LocalWorkspaceProvider(workspaceRoot, source);
         } catch (RuntimeException failure) {
