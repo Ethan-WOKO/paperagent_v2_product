@@ -647,3 +647,34 @@ retry, release or renew a lease, regenerate event or checkpoint authority, run
 a Step, create a completion, effect, or receipt, resume, repair, replan, access
 a Project or Workspace, use files, network, model, Provider, Sandbox, or tools,
 expose a Controller/API/UI path, change schema, or reuse legacy Agent code.
+
+## Product active-Step effect intent persistence boundary
+
+The product database implements the stable V2 `EffectIntentRepository`
+through V48. One immutable `agent_v2_effect_intents` row is globally keyed by
+the ToolCall ID and binds the exact provider-neutral effect kind and structured
+arguments to its Plan, active Step, activation event, durable lease owner, and
+fencing generation. Canonical format-1 request and result documents are
+protected independently by lowercase SHA-256 digests.
+
+Before a first write, the adapter uses the existing canonical active-Step
+recovery inspection, then locks the Plan bootstrap authority and rechecks the
+single activation and absence of a committed interruption. It validates one
+current unreleased and unexpired lease without acquiring, renewing, releasing,
+or replacing it. The effect marker is the only row written; execution start,
+context, activation, interruption, checkpoint, event, Plan, revision, and
+lease authorities remain unchanged.
+
+An exact durable request replays before current lease or clock inspection,
+including after lease takeover. Any changed intent, activation, lease token,
+or fence conflicts at its stable request path. Read-only lookup is independent
+of current execution and lease state, while malformed, non-canonical,
+digest-invalid, or cross-bound durable rows fail closed through the sanitized
+effect-intent partial-state failure. Same-Plan writes serialize on the
+bootstrap row and database constraint losers are classified in a fresh
+transaction.
+
+This boundary records intent only. It performs no Provider, Sandbox, tool,
+file, or network effect; records no progress, outcome, receipt, or Step
+completion; starts no kernel or Agent loop; exposes no Controller/API/UI
+traffic; accesses no Project or Workspace; and reuses no legacy Agent code.

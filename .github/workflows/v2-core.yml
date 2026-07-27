@@ -102,3 +102,6 @@ jobs:
 
       - name: Test authenticated V2 active-Step interruption composition
         run: mvn -pl yanban-api -am -Dtest=AuthenticatedAgentTurnStepInterruptionComposerTest,AuthenticatedAgentTurnStepInterruptionCompositionTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 active-Step effect intent persistence
+        run: mvn -pl yanban-api -am -Dtest=ProductEffectIntentCodecTest,ProductEffectIntentRepositoryAdapterTest,ProductEffectIntentRepositoryConcurrencyTest,V2EffectIntentMigrationTest -Dsurefire.failIfNoSpecifiedTests=false test
