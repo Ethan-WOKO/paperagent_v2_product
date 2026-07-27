@@ -315,3 +315,35 @@ This path exposes no Controller or traffic, schedules no retry, starts no
 execution step or loop, reads no Project content, and introduces no Provider,
 Workspace, Sandbox, tool, or legacy Agent dependency. Those remain later
 Issue boundaries.
+
+## Product Plan execution-context persistence boundary
+
+The product database implements the stable pre-step
+`PlanExecutionContextRepository` through V45. One
+`agent_v2_plan_execution_contexts` row durably owns a Plan's canonical
+Workspace reservation and the globally unique Workspace ID; the same row may
+later append the canonical confirmation without rewriting reservation owner
+or fence authority.
+
+Reservation, confirmation, and inspection serialize on the existing Plan
+bootstrap row. They accept only a canonical source-backed bootstrap plus its
+committed sequence-1 execution start and version-2 checkpoint. Reservation
+binds the requested materialization specification to the authoritative source
+ProjectVersion and current revision/head expectations, then validates the
+current lease token and fence. Confirmation requires the exact reservation
+and may use a valid takeover lease while retaining both generations of owner
+and fence authority.
+
+All four request/result documents use deterministic format-1 JSON protected
+by SHA-256 and are cross-checked against extracted relational columns. Exact
+reservation and confirmation replays are permanent and precede mutable lease
+checks. Inspection is read-only, and incomplete, digest-invalid,
+cross-bound, or structurally corrupt occupied cuts fail closed through the
+single sanitized Plan execution-context partial-state failure. Database
+constraints arbitrate concurrent same-Workspace contenders; no production
+sleep, spin, or retry is used.
+
+This boundary describes Workspace intent only. It does not read or
+materialize a Workspace, activate a step, compose Runtime context, call a
+Provider/Sandbox/tool, expose an API, mutate a Project, or read legacy Agent
+tables. Those remain later Issue boundaries.
