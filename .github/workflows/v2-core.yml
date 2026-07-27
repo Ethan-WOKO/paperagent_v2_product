@@ -3,6 +3,8 @@ name: V2 core
 on:
   pull_request:
   push:
+    branches:
+      - main
 
 permissions:
   contents: read
