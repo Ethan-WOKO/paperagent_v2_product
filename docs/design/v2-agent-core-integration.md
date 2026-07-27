@@ -775,7 +775,10 @@ current first active-Step cut through V51. One immutable completion marker is
 bound to the exact V46 activation and stores canonical hash-checked request and
 result documents. Ordered child rows bind the completion fact to every final
 V50 EffectOutcome Receipt for that Plan, Step, and activation; an effect-free
-Step has no evidence rows.
+Step has no evidence rows. Each evidence row repeats the Plan, Step, and
+activation authority and uses composite foreign keys to the exact completion
+marker and EffectIntent, plus the exact ToolCall/Receipt EffectOutcome pair,
+so a cross-Plan, Step, or activation association cannot commit.
 
 Every new completion locks the Plan bootstrap authority and revalidates the
 canonical version-3, sequence-2 activation, the absence of interruption or

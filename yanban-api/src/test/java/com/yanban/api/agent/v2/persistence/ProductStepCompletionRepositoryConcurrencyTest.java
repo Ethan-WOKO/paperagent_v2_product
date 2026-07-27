@@ -230,6 +230,24 @@ class ProductStepCompletionRepositoryConcurrencyTest {
         assertEquals(1, count(first, PersistenceOutcome.REJECTED));
         assertEquals(1, completions.count() + interruptions.count());
         assertTrue(completions.count() == 0 || interruptions.count() == 0);
+
+        resetScenario();
+        applied(completionAdapter.complete(
+                completion("completion-first")));
+        assertEquals(PersistenceOutcome.REJECTED,
+                interruptionAdapter.cancel(
+                        cancellation("cancel-after-completion")).outcome());
+        assertEquals(1, completions.count());
+        assertEquals(0, interruptions.count());
+
+        resetScenario();
+        applied(interruptionAdapter.cancel(
+                cancellation("cancel-first")));
+        assertEquals(PersistenceOutcome.REJECTED,
+                completionAdapter.complete(
+                        completion("completion-after-cancel")).outcome());
+        assertEquals(0, completions.count());
+        assertEquals(1, interruptions.count());
     }
 
     @Test

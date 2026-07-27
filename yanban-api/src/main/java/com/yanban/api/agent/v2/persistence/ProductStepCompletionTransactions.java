@@ -193,6 +193,8 @@ class ProductStepCompletionTransactions {
         for (EffectReceipt receipt : cut.receipts()) {
             entityManager.persist(new ProductStepCompletionEvidenceEntity(
                     request.completionEvent().id().value(), ordinal++,
+                    request.planId().value(), request.stepId().value(),
+                    active.activation().activationEvent().id().value(),
                     receipt.toolCallId().value(), receipt.receiptId().value()));
         }
         entityManager.flush();
@@ -301,6 +303,10 @@ class ProductStepCompletionTransactions {
                 if (item.ordinal() != ordinal++
                         || previousToolCall != null
                         && previousToolCall.compareTo(item.toolCallId()) >= 0
+                        || !item.planId().equals(row.planId())
+                        || !item.stepId().equals(row.stepId())
+                        || !item.activationEventId().equals(
+                                row.activationEventId())
                         || !item.toolCallId().equals(
                                 expected.toolCallId().value())
                         || !item.receiptId().equals(

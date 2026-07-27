@@ -31,14 +31,30 @@ class V2StepCompletionMigrationTest {
                       '0000000000000000000000000000000000000000000000000000000000000000',
                       '{}',TIMESTAMP '2026-07-28 00:00:00')
                     """);
+            statement.execute("""
+                    INSERT INTO agent_v2_plan_bootstraps VALUES (
+                      'plan-b','task-b',1,
+                      '0000000000000000000000000000000000000000000000000000000000000000',
+                      '{}',TIMESTAMP '2026-07-28 00:00:00')
+                    """);
             statement.execute(activation("activation-a", "plan-a", "step-a"));
+            statement.execute(activation("activation-b", "plan-b", "step-b"));
             statement.execute("""
                     INSERT INTO agent_v2_tool_call_claims
                     VALUES ('tool-a','EFFECT_INTENT')
                     """);
-            statement.execute(intent());
-            statement.execute(receipt());
-            statement.execute(result());
+            statement.execute("""
+                    INSERT INTO agent_v2_tool_call_claims
+                    VALUES ('tool-b','EFFECT_INTENT')
+                    """);
+            statement.execute(intent(
+                    "tool-a", "plan-a", "step-a", "activation-a"));
+            statement.execute(intent(
+                    "tool-b", "plan-b", "step-b", "activation-b"));
+            statement.execute(receipt("receipt-a", "tool-a"));
+            statement.execute(receipt("receipt-b", "tool-b"));
+            statement.execute(result("tool-a", "receipt-a"));
+            statement.execute(result("tool-b", "receipt-b"));
         }
         migrate(url, "51");
 
@@ -54,8 +70,16 @@ class V2StepCompletionMigrationTest {
                     "completion-a", "plan-a", "step-a", "activation-a"));
             statement.execute("""
                     INSERT INTO agent_v2_step_completion_evidence
-                    VALUES ('completion-a',0,'tool-a','receipt-a')
+                    VALUES (
+                      'completion-a',0,'plan-a','step-a','activation-a',
+                      'tool-a','receipt-a')
                     """);
+            assertThrows(SQLException.class, () -> statement.execute("""
+                    INSERT INTO agent_v2_step_completion_evidence
+                    VALUES (
+                      'completion-a',1,'plan-a','step-a','activation-a',
+                      'tool-b','receipt-b')
+                    """));
             assertThrows(SQLException.class, () -> statement.execute(
                     completion("completion-b", "plan-a", "step-a",
                             "activation-a")));
@@ -64,11 +88,15 @@ class V2StepCompletionMigrationTest {
                             "activation-a")));
             assertThrows(SQLException.class, () -> statement.execute("""
                     INSERT INTO agent_v2_step_completion_evidence
-                    VALUES ('completion-a',1,'tool-a','wrong-receipt')
+                    VALUES (
+                      'completion-a',1,'plan-a','step-a','activation-a',
+                      'tool-a','wrong-receipt')
                     """));
             assertThrows(SQLException.class, () -> statement.execute("""
                     INSERT INTO agent_v2_step_completion_evidence
-                    VALUES ('missing',0,'tool-a','receipt-a')
+                    VALUES (
+                      'missing',0,'plan-a','step-a','activation-a',
+                      'tool-a','receipt-a')
                     """));
             assertThrows(SQLException.class, () -> statement.execute(
                     "DELETE FROM agent_v2_effect_results "
@@ -115,37 +143,38 @@ class V2StepCompletionMigrationTest {
                 """.formatted(plan, step, event);
     }
 
-    private static String intent() {
+    private static String intent(
+            String tool, String plan, String step, String activation) {
         return """
                 INSERT INTO agent_v2_effect_intents VALUES (
-                  'tool-a','plan-a','step-a','activation-a','search',
+                  '%s','%s','%s','%s','search',
                   'owner-a',1,1,
                   '0000000000000000000000000000000000000000000000000000000000000000',
                   '{}',1,
                   '0000000000000000000000000000000000000000000000000000000000000000',
                   '{}',TIMESTAMP '2026-07-28 00:00:00.123456',
                   'EFFECT_INTENT')
-                """;
+                """.formatted(tool, plan, step, activation);
     }
 
-    private static String receipt() {
+    private static String receipt(String receipt, String tool) {
         return """
                 INSERT INTO agent_v2_receipts VALUES (
-                  'receipt-a','tool-a','EFFECT_INTENT','EFFECT_OUTCOME',1,
+                  '%s','%s','EFFECT_INTENT','EFFECT_OUTCOME',1,
                   '0000000000000000000000000000000000000000000000000000000000000000',
                   '{}',TIMESTAMP '2026-07-28 00:00:00.123456')
-                """;
+                """.formatted(receipt, tool);
     }
 
-    private static String result() {
+    private static String result(String tool, String receipt) {
         return """
                 INSERT INTO agent_v2_effect_results VALUES (
-                  'tool-a','receipt-a','owner-a',1,1,
+                  '%s','%s','owner-a',1,1,
                   '0000000000000000000000000000000000000000000000000000000000000000',
                   '{}',1,
                   '0000000000000000000000000000000000000000000000000000000000000000',
                   '{}',TIMESTAMP '2026-07-28 00:00:00.123456')
-                """;
+                """.formatted(tool, receipt);
     }
 
     private static String completion(

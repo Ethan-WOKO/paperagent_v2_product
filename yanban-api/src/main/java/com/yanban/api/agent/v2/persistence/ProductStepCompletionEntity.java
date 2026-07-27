@@ -9,6 +9,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinColumns;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.Instant;
 
@@ -18,7 +19,13 @@ import java.time.Instant;
         indexes = @Index(
                 name = "idx_agent_v2_step_completions_plan",
                 columnList = "plan_id",
-                unique = true))
+                unique = true),
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_agent_v2_step_completion_binding",
+                columnNames = {
+                        "completion_event_id", "plan_id", "step_id",
+                        "activation_event_id"
+                }))
 class ProductStepCompletionEntity {
     @Column(name = "plan_id", nullable = false, length = 128)
     private String planId;

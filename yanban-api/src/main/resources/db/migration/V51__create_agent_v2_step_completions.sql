@@ -2,6 +2,10 @@ ALTER TABLE agent_v2_step_activations
     ADD CONSTRAINT uk_agent_v2_step_activation_binding
         UNIQUE (activation_event_id, plan_id, step_id);
 
+ALTER TABLE agent_v2_effect_intents
+    ADD CONSTRAINT uk_agent_v2_effect_intent_binding
+        UNIQUE (tool_call_id, plan_id, step_id, activation_event_id);
+
 ALTER TABLE agent_v2_effect_results
     ADD CONSTRAINT uk_agent_v2_effect_result_receipt
         UNIQUE (tool_call_id, receipt_id);
@@ -30,6 +34,8 @@ CREATE TABLE agent_v2_step_completions (
     committed_at TIMESTAMP(6) NOT NULL,
     PRIMARY KEY (completion_event_id),
     UNIQUE KEY uk_agent_v2_step_completions_plan (plan_id),
+    UNIQUE KEY uk_agent_v2_step_completion_binding
+        (completion_event_id, plan_id, step_id, activation_event_id),
     CONSTRAINT ck_agent_v2_step_completion_versions CHECK (
         source_revision_number > 0
         AND result_revision_number = source_revision_number + 1
@@ -52,6 +58,9 @@ CREATE TABLE agent_v2_step_completions (
 CREATE TABLE agent_v2_step_completion_evidence (
     completion_event_id VARCHAR(128) NOT NULL,
     ordinal INT NOT NULL,
+    plan_id VARCHAR(128) NOT NULL,
+    step_id VARCHAR(128) NOT NULL,
+    activation_event_id VARCHAR(128) NOT NULL,
     tool_call_id VARCHAR(128) NOT NULL,
     receipt_id VARCHAR(128) NOT NULL,
     PRIMARY KEY (completion_event_id, ordinal),
@@ -60,8 +69,14 @@ CREATE TABLE agent_v2_step_completion_evidence (
     CONSTRAINT ck_agent_v2_step_completion_evidence_ordinal
         CHECK (ordinal >= 0),
     CONSTRAINT fk_agent_v2_step_completion_evidence_marker
-        FOREIGN KEY (completion_event_id)
-        REFERENCES agent_v2_step_completions (completion_event_id),
+        FOREIGN KEY (
+            completion_event_id, plan_id, step_id, activation_event_id)
+        REFERENCES agent_v2_step_completions (
+            completion_event_id, plan_id, step_id, activation_event_id),
+    CONSTRAINT fk_agent_v2_step_completion_evidence_intent
+        FOREIGN KEY (tool_call_id, plan_id, step_id, activation_event_id)
+        REFERENCES agent_v2_effect_intents
+            (tool_call_id, plan_id, step_id, activation_event_id),
     CONSTRAINT fk_agent_v2_step_completion_evidence_outcome
         FOREIGN KEY (tool_call_id, receipt_id)
         REFERENCES agent_v2_effect_results (tool_call_id, receipt_id)

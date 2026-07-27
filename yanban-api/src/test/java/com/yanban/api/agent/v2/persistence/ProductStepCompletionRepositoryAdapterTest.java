@@ -17,6 +17,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Propagation;
@@ -28,6 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @DataJpaTest
 @TestPropertySource(properties = {
@@ -255,7 +257,7 @@ class ProductStepCompletionRepositoryAdapterTest {
     }
 
     @Test
-    void intentRelationalStepMismatchFailsBeforeApplyAndOnReplay() {
+    void intentRelationalStepMismatchFailsBeforeApplyAndCannotCorruptReplay() {
         var before = ProductEffectIntentTestFixtures.request(
                 scenario, "tool-misbound-before", "token-completion", 1);
         applied(intentAdapter.persist(before));
@@ -279,11 +281,16 @@ class ProductStepCompletionRepositoryAdapterTest {
                 "completion-misbound-after",
                 List.of(new ReceiptId("receipt-misbound-after")));
         applied(adapter.complete(complete));
-        assertEquals(1, jdbc.update("""
+        assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("""
                 UPDATE agent_v2_effect_intents
                    SET step_id = ?
                  WHERE tool_call_id = ?
                 """, "other-step", "tool-misbound-after"));
+        assertEquals(1, jdbc.update("""
+                UPDATE agent_v2_effect_intents
+                   SET result_sha256 = ?
+                 WHERE tool_call_id = ?
+                """, "0".repeat(64), "tool-misbound-after"));
         failure(adapter.complete(complete),
                 PersistenceErrorCode.STEP_COMPLETION_PARTIAL_STATE,
                 "stepCompletion");
