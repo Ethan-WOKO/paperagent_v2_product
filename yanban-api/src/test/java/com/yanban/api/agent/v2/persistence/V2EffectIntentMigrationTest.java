@@ -39,6 +39,7 @@ class V2EffectIntentMigrationTest {
         Flyway.configure().dataSource(url, "sa", "")
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true).baselineVersion("47")
+                .target("48")
                 .load().migrate();
 
         try (Connection connection =

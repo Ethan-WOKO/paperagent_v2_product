@@ -8,6 +8,7 @@ import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,7 +27,10 @@ class ProductEffectIntentTransactions {
     private final ProductLeaseJpaRepository leases;
     private final ProductLeaseTimeSource timeSource;
     private final ProductEffectIntentJpaRepository intents;
+    private final ProductReceiptToolCallClaimJpaRepository claims;
+    private final ProductReceiptMarkerReader receiptMarkers;
     private final ProductEffectIntentCodec codec;
+    private final EntityManager entityManager;
 
     ProductEffectIntentTransactions(
             ProductPlanBootstrapJpaRepository bootstraps,
@@ -36,7 +40,10 @@ class ProductEffectIntentTransactions {
             ProductLeaseJpaRepository leases,
             ProductLeaseTimeSource timeSource,
             ProductEffectIntentJpaRepository intents,
-            ProductEffectIntentCodec codec) {
+            ProductReceiptToolCallClaimJpaRepository claims,
+            ProductReceiptMarkerReader receiptMarkers,
+            ProductEffectIntentCodec codec,
+            EntityManager entityManager) {
         this.bootstraps = bootstraps;
         this.activations = activations;
         this.activationCodec = activationCodec;
@@ -44,7 +51,10 @@ class ProductEffectIntentTransactions {
         this.leases = leases;
         this.timeSource = timeSource;
         this.intents = intents;
+        this.claims = claims;
+        this.receiptMarkers = receiptMarkers;
         this.codec = codec;
+        this.entityManager = entityManager;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -87,6 +97,22 @@ class ProductEffectIntentTransactions {
             return rejected(PersistenceErrorCode.LEASE_EXPIRED,
                     "request.intent.planId");
         }
+        ProductReceiptToolCallClaimEntity claim = claims.lockByToolCallId(
+                request.intent().toolCallId().value()).orElse(null);
+        if (claim != null) {
+            if (!ProductReceiptOwnership.EFFECT_INTENT.name().equals(
+                    claim.ownerKind())) {
+                return receiptMarkers.hasOnlyValidOrdinaryFacts(
+                        request.intent().toolCallId().value())
+                        ? ownership()
+                        : receiptPartial();
+            }
+            return partial();
+        }
+        entityManager.persist(new ProductReceiptToolCallClaimEntity(
+                request.intent().toolCallId().value(),
+                ProductReceiptOwnership.EFFECT_INTENT));
+        entityManager.flush();
         PersistedEffectIntent result = new PersistedEffectIntent(
                 request.intent(), lease.ownerId(), lease.fencingToken(),
                 request.expectedActivationEventId());
@@ -94,13 +120,14 @@ class ProductEffectIntentTransactions {
                 codec.encodeRequest(request);
         ProductEffectIntentCodec.EncodedPayload encodedResult =
                 codec.encodeResult(result);
-        intents.saveAndFlush(new ProductEffectIntentEntity(
+        entityManager.persist(new ProductEffectIntentEntity(
                 request.intent().toolCallId().value(),
                 request.intent().planId().value(),
                 request.intent().stepId().value(),
                 request.expectedActivationEventId().value(),
                 request.intent().kind(), lease.ownerId(),
                 lease.fencingToken(), encodedRequest, encodedResult, now));
+        entityManager.flush();
         return PersistenceResult.applied(result);
     }
 
@@ -109,7 +136,21 @@ class ProductEffectIntentTransactions {
             EffectIntentRequest request) {
         ProductEffectIntentEntity row = intents.findById(
                 request.intent().toolCallId().value()).orElse(null);
-        return row == null ? null : replay(row, request);
+        if (row != null) {
+            return replay(row, request);
+        }
+        ProductReceiptToolCallClaimEntity claim = claims.findById(
+                request.intent().toolCallId().value()).orElse(null);
+        if (claim == null) {
+            return null;
+        }
+        return ProductReceiptOwnership.EFFECT_INTENT.name().equals(
+                claim.ownerKind())
+                ? partial()
+                : receiptMarkers.hasOnlyValidOrdinaryFacts(
+                request.intent().toolCallId().value())
+                ? ownership()
+                : receiptPartial();
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
@@ -117,6 +158,13 @@ class ProductEffectIntentTransactions {
         ProductEffectIntentEntity row =
                 intents.findById(id.value()).orElse(null);
         if (row == null) {
+            ProductReceiptToolCallClaimEntity claim =
+                    claims.findById(id.value()).orElse(null);
+            if (claim != null
+                    && ProductReceiptOwnership.EFFECT_INTENT.name().equals(
+                    claim.ownerKind())) {
+                return partial();
+            }
             return rejected(PersistenceErrorCode.NOT_FOUND, "toolCallId");
         }
         Marker marker = marker(row);
@@ -214,7 +262,14 @@ class ProductEffectIntentTransactions {
             PersistedEffectIntent result = codec.decodeResult(
                     row.resultFormatVersion(), row.resultSha256(),
                     row.resultJson());
-            boolean valid = row.toolCallId().equals(
+            ProductReceiptToolCallClaimEntity claim = claims.findById(
+                    row.toolCallId()).orElse(null);
+            boolean valid = claim != null
+                    && ProductReceiptOwnership.EFFECT_INTENT.name().equals(
+                    claim.ownerKind())
+                    && ProductReceiptOwnership.EFFECT_INTENT.name().equals(
+                    row.toolCallOwnerKind())
+                    && row.toolCallId().equals(
                             request.intent().toolCallId().value())
                     && row.planId().equals(request.intent().planId().value())
                     && row.stepId().equals(request.intent().stepId().value())
@@ -241,6 +296,18 @@ class ProductEffectIntentTransactions {
     private static PersistenceResult<PersistedEffectIntent> partial() {
         return rejected(PersistenceErrorCode.EFFECT_INTENT_PARTIAL_STATE,
                 PARTIAL);
+    }
+
+    private static PersistenceResult<PersistedEffectIntent> ownership() {
+        return rejected(
+                PersistenceErrorCode.EFFECT_RECEIPT_OWNERSHIP_REQUIRED,
+                "request.intent.toolCallId");
+    }
+
+    private static PersistenceResult<PersistedEffectIntent> receiptPartial() {
+        return rejected(
+                PersistenceErrorCode.RECEIPT_PARTIAL_STATE,
+                "receipt.source");
     }
 
     private static PersistenceResult<PersistedEffectIntent> rejected(

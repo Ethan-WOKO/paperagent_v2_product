@@ -692,3 +692,39 @@ or execution-authority failures. Those conditions retain their existing
 stable error codes. This contract adds no Receipt implementation, schema,
 codec, retry, repair, Provider, Sandbox, tool, Step, kernel, API, UI, or legacy
 Agent behavior.
+
+## Product ToolCall ownership and ordinary Receipt persistence boundary
+
+The product database now implements the stable `ReceiptRepository` through
+V49. A globally keyed ToolCall claim admits exactly one current ownership
+family: `EFFECT_INTENT` or `ORDINARY_RECEIPT`. V49 deterministically backfills
+every existing V48 effect intent with its exact effect claim, and composite
+foreign keys prevent either an intent or Receipt fact from existing without
+the matching claim. Receipt rows separately retain a fact discriminator for
+ordinary Receipts and future effect outcomes, while a pair constraint binds
+ordinary facts to ordinary claims and reserves effect outcomes for effect
+claims.
+
+Both first EffectIntent persistence and first ordinary Receipt append create
+or lock the shared claim inside the same transaction as their immutable fact.
+The first claimant wins; the opposite family receives the stable
+effect-receipt ownership rejection and writes no fact. Constraint, deadlock,
+or serialization losers receive at most one fresh classification transaction,
+never a retry loop. Assigned identifiers are inserted explicitly so database
+uniqueness, rather than JPA merge behavior, remains the race authority.
+
+Ordinary Receipts use canonical format-1 JSON and lowercase SHA-256 across all
+statuses, optional values, bounded output captures, artifacts, diffs, and
+event references. Exact appends replay permanently, changed same-ID appends
+conflict, and multiple Receipt IDs may share one ordinary ToolCall claim.
+Find is read-only and independent of time or live execution authority.
+Orphaned, mismatched, undecodable, noncanonical, digest-invalid, or
+cross-column claim/fact cuts fail closed through the corresponding sanitized
+effect-intent or Receipt partial-state code; no claim is repaired, replaced,
+or deleted.
+
+This boundary records durable Receipt facts only. It performs no effect,
+Provider, Sandbox, tool, file, network, lease, Step, kernel, Agent Loop,
+Controller, API, UI, Project, or Workspace operation and reuses no legacy
+Agent implementation. Effect progress/result and execution completion remain
+later Issue boundaries.

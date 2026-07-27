@@ -8,8 +8,6 @@ import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.StepRecoverySnapshot;
-import org.hibernate.exception.ConstraintViolationException;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -47,7 +45,7 @@ public final class ProductEffectIntentRepositoryAdapter
         try {
             return transactions.persist(request, active);
         } catch (RuntimeException exception) {
-            if (!constraintViolation(exception)) {
+            if (!ProductReceiptRaceFailure.recognized(exception)) {
                 throw exception;
             }
             PersistenceResult<PersistedEffectIntent> classified =
@@ -73,15 +71,4 @@ public final class ProductEffectIntentRepositoryAdapter
                 PersistenceErrorCode.INVALID_ARGUMENT, path);
     }
 
-    private static boolean constraintViolation(Throwable failure) {
-        Throwable current = failure;
-        while (current != null) {
-            if (current instanceof DataIntegrityViolationException
-                    || current instanceof ConstraintViolationException) {
-                return true;
-            }
-            current = current.getCause();
-        }
-        return false;
-    }
 }
