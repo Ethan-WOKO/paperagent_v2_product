@@ -96,3 +96,6 @@ jobs:
 
       - name: Test deterministic V2 active-Step interruption materialization
         run: mvn -pl agent-v2/agent-runtime -am -Dtest=DeterministicActiveStepInterruptionMaterializerTest,ActiveStepInterruptionMaterializerBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 active-Step interruption persistence composition
+        run: mvn -pl agent-v2/agent-runtime -am -Dtest=DefaultActiveStepInterruptionComposerTest,ActiveStepInterruptionCompositionBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
