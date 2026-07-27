@@ -1,0 +1,39 @@
+name: V2 core
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ubuntu JDK 17
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Verify Maven version
+        run: mvn --version
+
+      - name: Reject V2 to Yanban dependencies
+        shell: bash
+        run: |
+          if git grep -n -I -E 'com\.yanban' -- agent-v2; then
+            echo "::error::V2 core must not depend on com.yanban"
+            exit 1
+          fi
+
+      - name: Test V2 core
+        run: mvn -f agent-v2/pom.xml test
