@@ -10,9 +10,11 @@ import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistenceFailure;
+import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopTurnLimitReached;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
 
+import java.util.List;
 import java.util.Set;
 
 final class BoundedStepReplanCompositionValues {
@@ -20,6 +22,7 @@ final class BoundedStepReplanCompositionValues {
             "boundedStepReplanComposition.activeStepReplanRepository",
             "boundedStepReplanComposition.recoveredActiveStep",
             "boundedStepReplanComposition.turnLimitReached",
+            "boundedStepReplanComposition.noEffect",
             "boundedStepReplanComposition.activeStepReplanRequest",
             "boundedStepReplanApplied.persistedReplan",
             "boundedStepReplanReplayed.persistedReplan",
@@ -46,6 +49,42 @@ final class BoundedStepReplanCompositionValues {
             RecoveredActiveStep recoveredActiveStep,
             BoundedStepAgentLoopTurnLimitReached turnLimitReached,
             ActiveStepReplanRequest activeStepReplanRequest) {
+        requireAuthority(
+                recoveredActiveStep,
+                turnLimitReached.planId(),
+                turnLimitReached.stepId(),
+                turnLimitReached.persistedIntents(),
+                activeStepReplanRequest);
+    }
+
+    static void requireAuthority(
+            RecoveredActiveStep recoveredActiveStep,
+            BoundedStepAgentLoopNoEffect noEffect,
+            ActiveStepReplanRequest activeStepReplanRequest) {
+        if (!noEffect.persistedIntents().isEmpty()) {
+            throw protocolFailure(
+                    recoveredActiveStep.planId(),
+                    recoveredActiveStep.recovery().activation().stepId(),
+                    BoundedStepReplanCompositionStage.AUTHORITY_VALIDATION,
+                    BoundedStepReplanCompositionProtocolCode
+                            .INCONSISTENT_REQUEST_AUTHORITY,
+                    "boundedStepReplanComposition.authority",
+                    null);
+        }
+        requireAuthority(
+                recoveredActiveStep,
+                noEffect.planId(),
+                noEffect.stepId(),
+                noEffect.persistedIntents(),
+                activeStepReplanRequest);
+    }
+
+    private static void requireAuthority(
+            RecoveredActiveStep recoveredActiveStep,
+            PlanId outcomePlanId,
+            PlanStepId outcomeStepId,
+            List<PersistedEffectIntent> persistedIntents,
+            ActiveStepReplanRequest activeStepReplanRequest) {
         PersistedStepRecoveryActive recovery = recoveredActiveStep.recovery();
         LeaseRecord lease = recoveredActiveStep.lease();
         PersistedStepActivation activation = recovery.activation();
@@ -64,8 +103,8 @@ final class BoundedStepReplanCompositionValues {
                 && activation.activatedCheckpoint().equals(recovery.checkpoint())
                 && activation.leaseOwnerId().equals(lease.ownerId())
                 && activation.fencingToken() == lease.fencingToken();
-        boolean requestMatches = turnLimitReached.planId().equals(planId)
-                && turnLimitReached.stepId().equals(stepId)
+        boolean requestMatches = outcomePlanId.equals(planId)
+                && outcomeStepId.equals(stepId)
                 && activeStepReplanRequest.planId().equals(planId)
                 && activeStepReplanRequest.activeStepId().equals(stepId)
                 && activeStepReplanRequest.leaseToken().equals(lease.leaseToken())
@@ -78,7 +117,7 @@ final class BoundedStepReplanCompositionValues {
                         == recovery.checkpoint().version()
                 && activeStepReplanRequest.expectedEventHeadSequence()
                         == checkpoint.lastEventSequence();
-        boolean intentsMatch = turnLimitReached.persistedIntents().stream()
+        boolean intentsMatch = persistedIntents.stream()
                 .allMatch(intent -> intentMatches(
                         intent, planId, stepId, lease, activation));
         if (!recoveredAuthorityMatches || !requestMatches || !intentsMatch) {

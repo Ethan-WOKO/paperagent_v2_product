@@ -4,6 +4,7 @@ import io.paperagent.v2.persistence.ActiveStepReplanRepository;
 import io.paperagent.v2.persistence.ActiveStepReplanRequest;
 import io.paperagent.v2.persistence.PersistedActiveStepReplan;
 import io.paperagent.v2.persistence.PersistenceResult;
+import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -46,9 +47,22 @@ class BoundedStepReplanCompositionConcurrencyTest {
         var composer = new DefaultBoundedStepReplanComposer(repository);
         List<Callable<BoundedStepReplanCompositionOutcome>> callsToRun =
                 new ArrayList<>();
-        for (var scenario : scenarios) {
-            callsToRun.add(() -> composer.compose(
-                    scenario.recovered(), scenario.turnLimitReached(), scenario.request()));
+        for (int index = 0; index < scenarios.size(); index++) {
+            var scenario = scenarios.get(index);
+            if (index % 2 == 0) {
+                callsToRun.add(() -> composer.compose(
+                        scenario.recovered(),
+                        scenario.turnLimitReached(),
+                        scenario.request()));
+            } else {
+                var noEffect = new BoundedStepAgentLoopNoEffect(
+                        scenario.recovered().planId(),
+                        scenario.recovered().recovery().activation().stepId(),
+                        1,
+                        List.of());
+                callsToRun.add(() -> composer.composeNoEffect(
+                        scenario.recovered(), noEffect, scenario.request()));
+            }
         }
 
         ExecutorService executor = Executors.newFixedThreadPool(4);

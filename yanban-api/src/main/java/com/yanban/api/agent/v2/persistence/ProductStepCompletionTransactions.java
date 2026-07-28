@@ -43,6 +43,7 @@ class ProductStepCompletionTransactions {
     private final ProductStepCompletionJpaRepository completions;
     private final ProductStepCompletionEvidenceJpaRepository evidence;
     private final ProductStepInterruptionJpaRepository interruptions;
+    private final ProductActiveStepReplanJpaRepository replans;
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepActivationCodec activationCodec;
     private final ProductExecutionStartJpaRepository starts;
@@ -61,6 +62,7 @@ class ProductStepCompletionTransactions {
             ProductStepCompletionJpaRepository completions,
             ProductStepCompletionEvidenceJpaRepository evidence,
             ProductStepInterruptionJpaRepository interruptions,
+            ProductActiveStepReplanJpaRepository replans,
             ProductStepActivationJpaRepository activations,
             ProductStepActivationCodec activationCodec,
             ProductExecutionStartJpaRepository starts,
@@ -77,6 +79,7 @@ class ProductStepCompletionTransactions {
         this.completions = completions;
         this.evidence = evidence;
         this.interruptions = interruptions;
+        this.replans = replans;
         this.activations = activations;
         this.activationCodec = activationCodec;
         this.starts = starts;
@@ -205,7 +208,16 @@ class ProductStepCompletionTransactions {
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public PersistenceResult<PersistedStepCompletion> classify(
             StepCompletionRequest request) {
-        return existing(request);
+        PersistenceResult<PersistedStepCompletion> existing =
+                existing(request);
+        if (existing != null) {
+            return existing;
+        }
+        String id = request.completionEvent().id().value();
+        return replans.findBySupersessionEventId(id).isPresent()
+                || replans.findByReplanEventId(id).isPresent()
+                ? rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
+                "request.completionEvent.id") : null;
     }
 
     private PersistenceResult<PersistedStepCompletion> existing(
@@ -385,6 +397,8 @@ class ProductStepCompletionTransactions {
                 || activations.existsById(id)
                 || interruptions.existsById(id)
                 || completions.existsById(id)
+                || replans.findBySupersessionEventId(id).isPresent()
+                || replans.findByReplanEventId(id).isPresent()
                 ? rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
                         "request.completionEvent.id") : null;
     }

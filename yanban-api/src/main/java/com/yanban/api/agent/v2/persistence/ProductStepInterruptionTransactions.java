@@ -57,6 +57,7 @@ class ProductStepInterruptionTransactions {
     private final ProductLeaseTimeSource timeSource;
     private final ProductStepInterruptionJpaRepository interruptions;
     private final ProductStepCompletionJpaRepository completions;
+    private final ProductActiveStepReplanJpaRepository replans;
     private final ProductStepInterruptionMarkerReader markerReader;
     private final ProductStepInterruptionCodec codec;
     private final EntityManager entityManager;
@@ -74,6 +75,7 @@ class ProductStepInterruptionTransactions {
             ProductLeaseTimeSource timeSource,
             ProductStepInterruptionJpaRepository interruptions,
             ProductStepCompletionJpaRepository completions,
+            ProductActiveStepReplanJpaRepository replans,
             ProductStepInterruptionMarkerReader markerReader,
             ProductStepInterruptionCodec codec,
             EntityManager entityManager) {
@@ -89,6 +91,7 @@ class ProductStepInterruptionTransactions {
         this.timeSource = timeSource;
         this.interruptions = interruptions;
         this.completions = completions;
+        this.replans = replans;
         this.markerReader = markerReader;
         this.codec = codec;
         this.entityManager = entityManager;
@@ -149,6 +152,8 @@ class ProductStepInterruptionTransactions {
                             candidate.planId().value()).isEmpty()
                     || !completions.findAllByPlanId(
                             candidate.planId().value()).isEmpty()
+                    || !replans.findAllByPlanIdOrderBySourceEventSequenceAsc(
+                            candidate.planId().value()).isEmpty()
                     || leases.findFirstByPlanIdOrderByFencingTokenDesc(
                             candidate.planId().value()).isPresent();
             return occupied ? partial() : rejected(
@@ -158,6 +163,14 @@ class ProductStepInterruptionTransactions {
         if (!completions.findAllByPlanId(
                 candidate.planId().value()).isEmpty()) {
             return partial();
+        }
+        if (replans.findAllByPlanIdOrderBySourceEventSequenceAsc(
+                        candidate.planId().value()).stream()
+                .anyMatch(row -> row.supersededStepId().equals(
+                        candidate.stepId().value()))) {
+            return rejected(
+                    PersistenceErrorCode.STEP_INTERRUPTION_NOT_ELIGIBLE,
+                    ELIGIBILITY);
         }
         ActiveSource source = activeSource(candidate.planId(), bootstrapRow);
         List<ProductStepInterruptionEntity> own =
@@ -180,6 +193,10 @@ class ProductStepInterruptionTransactions {
         if (starts.findByStartEventId(
                         candidate.event().id().value()).isPresent()
                 || activations.findById(
+                        candidate.event().id().value()).isPresent()
+                || replans.findBySupersessionEventId(
+                        candidate.event().id().value()).isPresent()
+                || replans.findByReplanEventId(
                         candidate.event().id().value()).isPresent()) {
             return conflict(candidate.eventPath() + ".id");
         }
@@ -253,6 +270,12 @@ class ProductStepInterruptionTransactions {
             return source == null ? partial()
                     : replay(own.get(0), candidate, source);
         }
+        if (replans.findBySupersessionEventId(
+                        candidate.event().id().value()).isPresent()
+                || replans.findByReplanEventId(
+                        candidate.event().id().value()).isPresent()) {
+            return conflict(candidate.eventPath() + ".id");
+        }
         ProductStepInterruptionEntity event = interruptions.findById(
                 candidate.event().id().value()).orElse(null);
         if (event == null) {
@@ -298,6 +321,10 @@ class ProductStepInterruptionTransactions {
         return starts.findByStartEventId(
                         row.interruptionEventId()).isEmpty()
                 && activations.findById(
+                        row.interruptionEventId()).isEmpty()
+                && replans.findBySupersessionEventId(
+                        row.interruptionEventId()).isEmpty()
+                && replans.findByReplanEventId(
                         row.interruptionEventId()).isEmpty()
                 && row.sourceRevisionId().equals(active.revisionId().value())
                 && row.sourceRevisionNumber() == active.revisionNumber()

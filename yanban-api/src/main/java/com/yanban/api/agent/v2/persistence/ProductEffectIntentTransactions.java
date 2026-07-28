@@ -4,27 +4,23 @@ import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.contracts.ToolCallId;
 import io.paperagent.v2.persistence.EffectIntentRequest;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
-import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
+import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
+import io.paperagent.v2.persistence.StepRecoverySnapshot;
 import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.List;
-
 @Repository
 class ProductEffectIntentTransactions {
     private static final String PARTIAL = "effectIntent.source";
 
     private final ProductPlanBootstrapJpaRepository bootstraps;
-    private final ProductStepActivationJpaRepository activations;
-    private final ProductStepActivationCodec activationCodec;
-    private final ProductStepInterruptionJpaRepository interruptions;
-    private final ProductStepCompletionJpaRepository completions;
+    private final ProductStepRecoveryTransactions recovery;
     private final ProductLeaseJpaRepository leases;
     private final ProductLeaseTimeSource timeSource;
     private final ProductEffectIntentJpaRepository intents;
@@ -35,10 +31,7 @@ class ProductEffectIntentTransactions {
 
     ProductEffectIntentTransactions(
             ProductPlanBootstrapJpaRepository bootstraps,
-            ProductStepActivationJpaRepository activations,
-            ProductStepActivationCodec activationCodec,
-            ProductStepInterruptionJpaRepository interruptions,
-            ProductStepCompletionJpaRepository completions,
+            ProductStepRecoveryTransactions recovery,
             ProductLeaseJpaRepository leases,
             ProductLeaseTimeSource timeSource,
             ProductEffectIntentJpaRepository intents,
@@ -47,10 +40,7 @@ class ProductEffectIntentTransactions {
             ProductEffectIntentCodec codec,
             EntityManager entityManager) {
         this.bootstraps = bootstraps;
-        this.activations = activations;
-        this.activationCodec = activationCodec;
-        this.interruptions = interruptions;
-        this.completions = completions;
+        this.recovery = recovery;
         this.leases = leases;
         this.timeSource = timeSource;
         this.intents = intents;
@@ -72,10 +62,6 @@ class ProductEffectIntentTransactions {
                 request.intent().toolCallId().value()).orElse(null);
         if (existing != null) {
             return replay(existing, request);
-        }
-        if (!completions.findAllByPlanId(
-                request.intent().planId().value()).isEmpty()) {
-            return partial();
         }
         PersistenceResult<PersistedEffectIntent> authority =
                 validateAuthority(request, active);
@@ -182,47 +168,37 @@ class ProductEffectIntentTransactions {
 
     private PersistenceResult<PersistedEffectIntent> validateAuthority(
             EffectIntentRequest request, PersistedStepRecoveryActive active) {
-        if (!active.planId().equals(request.intent().planId())) {
+        PersistenceResult<StepRecoverySnapshot> inspected =
+                recovery.inspectLocked(request.intent().planId());
+        if (inspected.outcome() != PersistenceOutcome.FOUND
+                || !(inspected.value().orElse(null)
+                instanceof PersistedStepRecoveryActive current)) {
+            if (inspected.failure().map(failure -> failure.code()
+                    == PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE)
+                    .orElse(false)) {
+                return rejected(
+                        PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
+                        "request.intent.stepId");
+            }
+            return inspected.failure().isPresent()
+                    ? partial()
+                    : rejected(
+                    PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
+                    "request.intent.stepId");
+        }
+        if (!current.equals(active)
+                || !current.planId().equals(request.intent().planId())) {
             return partial();
         }
-        if (!active.activation().activationEvent().id().equals(
+        if (!current.activation().activationEvent().id().equals(
                 request.expectedActivationEventId())) {
             return rejected(PersistenceErrorCode.NOT_FOUND,
                     "request.expectedActivationEventId");
         }
-        if (!active.activation().stepId().equals(request.intent().stepId())
-                || active.checkpoint().checkpoint().stepStates().get(
+        if (!current.activation().stepId().equals(request.intent().stepId())
+                || current.checkpoint().checkpoint().stepStates().get(
                         request.intent().stepId()) != StepExecutionState.ACTIVE) {
             return rejected(PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
-                    "request.intent.stepId");
-        }
-        List<ProductStepActivationEntity> rows =
-                activations.findAllByPlanId(request.intent().planId().value());
-        if (rows.size() != 1) {
-            return partial();
-        }
-        ProductStepActivationEntity row = rows.get(0);
-        PersistedStepActivation decoded;
-        try {
-            decoded = activationCodec.decodeResult(
-                    row.resultFormatVersion(), row.resultSha256(),
-                    row.resultJson());
-        } catch (RuntimeException exception) {
-            return partial();
-        }
-        if (!decoded.equals(active.activation())
-                || !row.planId().equals(request.intent().planId().value())
-                || !row.stepId().equals(request.intent().stepId().value())
-                || !row.activationEventId().equals(
-                        request.expectedActivationEventId().value())
-                || row.fencingToken() != decoded.fencingToken()
-                || !row.leaseOwnerId().equals(decoded.leaseOwnerId())) {
-            return partial();
-        }
-        if (!interruptions.findAllByPlanId(
-                request.intent().planId().value()).isEmpty()) {
-            return rejected(
-                    PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
                     "request.intent.stepId");
         }
         return null;
