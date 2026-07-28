@@ -1,0 +1,11 @@
+package com.yanban.api.agent.v2.execution;
+
+public enum AuthenticatedAgentTurnStepTurnCompositionCode {
+    REQUIRED_VALUE_MISSING,
+    RECOVERY_COLLABORATOR_FAILURE,
+    INVALID_RECOVERY_RESULT,
+    RECOVERY_PLAN_MISMATCH,
+    KERNEL_COLLABORATOR_FAILURE,
+    INVALID_KERNEL_RESULT,
+    KERNEL_PLAN_MISMATCH
+}
