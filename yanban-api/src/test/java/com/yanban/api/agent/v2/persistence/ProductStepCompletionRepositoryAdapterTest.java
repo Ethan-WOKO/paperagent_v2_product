@@ -79,6 +79,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
         ProductReceiptMarkerReader.class,
         ProductReceiptEffectIntentMarkerReader.class,
         ProductStepRecoveryTransactions.class,
+        ProductActiveStepReplanMarkerReader.class,
+        ProductActiveStepReplanCodec.class,
         ProductStepInterruptionMarkerReader.class,
         ProductStepInterruptionCodec.class,
         ProductStepRecoveryRepositoryAdapter.class,

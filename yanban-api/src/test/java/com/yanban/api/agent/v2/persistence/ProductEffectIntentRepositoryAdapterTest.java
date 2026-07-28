@@ -47,6 +47,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         ProductReceiptMarkerReader.class,
         ProductStepRecoveryRepositoryAdapter.class,
         ProductStepRecoveryTransactions.class,
+        ProductActiveStepReplanMarkerReader.class,
+        ProductActiveStepReplanCodec.class,
         ProductStepInterruptionMarkerReader.class,
         ProductStepInterruptionCodec.class,
         ProductStepCompletionMarkerReader.class,
@@ -327,7 +329,7 @@ class ProductEffectIntentRepositoryAdapterTest {
     }
 
     @Test
-    void committedInterruptionMakesTheActiveStepIneligible() {
+    void corruptInterruptionOccupancyFailsClosedBeforeIntentWrite() {
         var scenario = seed();
         EffectIntentRequest request = request(scenario, "tool-a");
         jdbc.update("""
@@ -348,8 +350,8 @@ class ProductEffectIntentRepositoryAdapterTest {
                 "0".repeat(64), "{}", 1, "0".repeat(64), "{}",
                 ProductStepActivationTestFixtures.NOW);
         failure(adapter.persist(request),
-                PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
-                "request.intent.stepId");
+                PersistenceErrorCode.EFFECT_INTENT_PARTIAL_STATE,
+                "effectIntent.source");
         assertEquals(0, time.observations.get());
         assertEquals(0, intents.count());
     }

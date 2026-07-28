@@ -52,6 +52,7 @@ class ProductStepActivationTransactions {
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepCompletionJpaRepository completions;
     private final ProductStepInterruptionJpaRepository interruptions;
+    private final ProductActiveStepReplanJpaRepository replans;
     private final ProductStepActivationCodec codec;
     private final ProductStepRecoveryTransactions recovery;
     private final EntityManager entityManager;
@@ -68,6 +69,7 @@ class ProductStepActivationTransactions {
             ProductStepActivationJpaRepository activations,
             ProductStepCompletionJpaRepository completions,
             ProductStepInterruptionJpaRepository interruptions,
+            ProductActiveStepReplanJpaRepository replans,
             ProductStepActivationCodec codec,
             ProductStepRecoveryTransactions recovery,
             EntityManager entityManager) {
@@ -82,6 +84,7 @@ class ProductStepActivationTransactions {
         this.activations = activations;
         this.completions = completions;
         this.interruptions = interruptions;
+        this.replans = replans;
         this.codec = codec;
         this.recovery = recovery;
         this.entityManager = entityManager;
@@ -175,7 +178,9 @@ class ProductStepActivationTransactions {
                 || completions.findById(
                         request.activationEvent().id().value()).isPresent()
                 || interruptions.findById(
-                        request.activationEvent().id().value()).isPresent()) {
+                        request.activationEvent().id().value()).isPresent()
+                || replanEventExists(
+                        request.activationEvent().id().value())) {
             return rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
                     "request.activationEvent.id");
         }
@@ -203,6 +208,11 @@ class ProductStepActivationTransactions {
         return PersistenceResult.applied(result);
     }
 
+    private boolean replanEventExists(String eventId) {
+        return replans.findBySupersessionEventId(eventId).isPresent()
+                || replans.findByReplanEventId(eventId).isPresent();
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public PersistenceResult<PersistedStepActivation> classifyConstraint(
             StepActivationRequest request) {
@@ -221,6 +231,10 @@ class ProductStepActivationTransactions {
             return bootstrap == null
                     ? partial()
                     : replay(own.get(0), request, bootstrap);
+        }
+        if (replanEventExists(request.activationEvent().id().value())) {
+            return rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
+                    "request.activationEvent.id");
         }
         ProductStepActivationEntity event = activations.findById(
                 request.activationEvent().id().value()).orElse(null);

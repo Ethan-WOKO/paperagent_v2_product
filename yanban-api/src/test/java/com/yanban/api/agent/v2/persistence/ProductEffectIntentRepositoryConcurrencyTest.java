@@ -47,6 +47,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         ProductReceiptEffectIntentMarkerReader.class,
         ProductStepRecoveryRepositoryAdapter.class,
         ProductStepRecoveryTransactions.class,
+        ProductActiveStepReplanMarkerReader.class,
+        ProductActiveStepReplanCodec.class,
         ProductStepInterruptionMarkerReader.class,
         ProductStepInterruptionCodec.class,
         ProductStepCompletionMarkerReader.class,

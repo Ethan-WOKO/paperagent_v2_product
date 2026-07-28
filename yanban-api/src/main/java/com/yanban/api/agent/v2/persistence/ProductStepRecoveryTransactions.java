@@ -53,6 +53,8 @@ class ProductStepRecoveryTransactions {
     private final ProductStepInterruptionMarkerReader interruptionMarkers;
     private final ProductStepCompletionJpaRepository completions;
     private final ProductStepCompletionMarkerReader completionMarkers;
+    private final ProductActiveStepReplanJpaRepository replans;
+    private final ProductActiveStepReplanMarkerReader replanMarkers;
 
     ProductStepRecoveryTransactions(
             ProductPlanBootstrapJpaRepository bootstraps,
@@ -66,7 +68,9 @@ class ProductStepRecoveryTransactions {
             ProductStepInterruptionJpaRepository interruptions,
             ProductStepInterruptionMarkerReader interruptionMarkers,
             ProductStepCompletionJpaRepository completions,
-            ProductStepCompletionMarkerReader completionMarkers) {
+            ProductStepCompletionMarkerReader completionMarkers,
+            ProductActiveStepReplanJpaRepository replans,
+            ProductActiveStepReplanMarkerReader replanMarkers) {
         this.bootstraps = bootstraps;
         this.bootstrapCodec = bootstrapCodec;
         this.starts = starts;
@@ -79,6 +83,8 @@ class ProductStepRecoveryTransactions {
         this.interruptionMarkers = interruptionMarkers;
         this.completions = completions;
         this.completionMarkers = completionMarkers;
+        this.replans = replans;
+        this.replanMarkers = replanMarkers;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
@@ -99,7 +105,7 @@ class ProductStepRecoveryTransactions {
     }
 
     PersistenceResult<StepRecoverySnapshot> inspectLocked(PlanId planId) {
-        return inspect(planId, false);
+        return inspect(planId, true);
     }
 
     private PersistenceResult<StepRecoverySnapshot> inspect(
@@ -113,7 +119,10 @@ class ProductStepRecoveryTransactions {
                     || !interruptions.findAllByPlanId(
                             planId.value()).isEmpty()
                     || !completions.findAllByPlanId(
-                            planId.value()).isEmpty();
+                            planId.value()).isEmpty()
+                    || !replans
+                            .findAllByPlanIdOrderBySourceEventSequenceAsc(
+                                    planId.value()).isEmpty();
             return occupied
                     ? partial()
                     : PersistenceResult.rejected(
@@ -137,8 +146,12 @@ class ProductStepRecoveryTransactions {
         List<ProductStepCompletionEntity> completionRows =
                 completions.findAllByPlanIdOrderBySourceEventSequenceAsc(
                         planId.value());
+        List<ProductActiveStepReplanEntity> replanRows =
+                replans.findAllByPlanIdOrderBySourceEventSequenceAsc(
+                        planId.value());
         if (rows.isEmpty()) {
-            if (!interruptionRows.isEmpty() || !completionRows.isEmpty()) {
+            if (!interruptionRows.isEmpty() || !completionRows.isEmpty()
+                    || !replanRows.isEmpty()) {
                 return partial();
             }
             PlanStepId ready = firstReady(
@@ -152,7 +165,8 @@ class ProductStepRecoveryTransactions {
                                     source.started().startedCheckpoint(),
                                     ready, context.confirmed()));
         }
-        Fold fold = fold(source, context, rows, completionRows);
+        Fold fold = fold(
+                source, context, rows, completionRows, replanRows);
         if (fold == null) {
             return partial();
         }
@@ -171,12 +185,14 @@ class ProductStepRecoveryTransactions {
     private Fold fold(
             Source source, ContextCut context,
             List<ProductStepActivationEntity> activationRows,
-            List<ProductStepCompletionEntity> completionRows) {
+            List<ProductStepCompletionEntity> completionRows,
+            List<ProductActiveStepReplanEntity> replanRows) {
         Plan plan = source.bootstrap().plan();
         VersionedCheckpoint head = source.started().startedCheckpoint();
         int activationIndex = 0;
         int completionIndex = 0;
         PersistedStepRecoveryActive active = null;
+        int replanIndex = 0;
         while (activationIndex < activationRows.size()) {
             ProductStepActivationEntity activationRow =
                     activationRows.get(activationIndex++);
@@ -194,8 +210,29 @@ class ProductStepRecoveryTransactions {
                     || completionRows.get(completionIndex)
                     .sourceEventSequence()
                     != active.activation().activationEvent().sequence()) {
+                ProductActiveStepReplanEntity replanRow =
+                        replanIndex < replanRows.size()
+                                ? replanRows.get(replanIndex) : null;
+                if (replanRow != null
+                        && replanRow.sourceEventSequence()
+                                == active.checkpoint().checkpoint()
+                                        .lastEventSequence()) {
+                    ProductActiveStepReplanMarkerReader.Folded
+                            replacement =
+                            replanMarkers.read(replanRow, active);
+                    if (replacement == null) {
+                        return null;
+                    }
+                    plan = replacement.plan();
+                    head = replacement.marker().result()
+                            .replannedCheckpoint();
+                    active = null;
+                    replanIndex++;
+                    continue;
+                }
                 if (activationIndex != activationRows.size()
-                        || completionIndex != completionRows.size()) {
+                        || completionIndex != completionRows.size()
+                        || replanIndex != replanRows.size()) {
                     return null;
                 }
                 return new Fold(active);
@@ -218,7 +255,8 @@ class ProductStepRecoveryTransactions {
             head = completion.result().completedCheckpoint();
             active = null;
         }
-        if (completionIndex != completionRows.size() || active != null) {
+        if (completionIndex != completionRows.size() || active != null
+                || replanIndex != replanRows.size()) {
             return null;
         }
         if (head.checkpoint().planState() == PlanExecutionState.SUCCEEDED

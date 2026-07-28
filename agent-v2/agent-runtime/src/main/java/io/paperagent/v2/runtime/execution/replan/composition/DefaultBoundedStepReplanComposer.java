@@ -8,10 +8,11 @@ import io.paperagent.v2.persistence.PersistedActiveStepReplan;
 import io.paperagent.v2.persistence.PersistenceFailure;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
+import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopTurnLimitReached;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
 
-/** Composes one validated turn-limit handoff to fenced active-Step replan persistence. */
+/** Composes one validated bounded-stall handoff to fenced active-Step replan persistence. */
 public final class DefaultBoundedStepReplanComposer
         implements BoundedStepReplanComposer {
     private final ActiveStepReplanRepository activeStepReplanRepository;
@@ -42,6 +43,28 @@ public final class DefaultBoundedStepReplanComposer
         PlanStepId stepId = recovered.recovery().activation().stepId();
 
         BoundedStepReplanCompositionValues.requireAuthority(recovered, limit, request);
+        return replan(planId, stepId, recovered, request);
+    }
+
+    @Override
+    public BoundedStepReplanCompositionOutcome composeNoEffect(
+            RecoveredActiveStep recoveredActiveStep,
+            BoundedStepAgentLoopNoEffect noEffect,
+            ActiveStepReplanRequest activeStepReplanRequest) {
+        RecoveredActiveStep recovered = BoundedStepReplanCompositionValues.required(
+                recoveredActiveStep,
+                "boundedStepReplanComposition.recoveredActiveStep");
+        BoundedStepAgentLoopNoEffect stall =
+                BoundedStepReplanCompositionValues.required(
+                        noEffect,
+                        "boundedStepReplanComposition.noEffect");
+        ActiveStepReplanRequest request = BoundedStepReplanCompositionValues.required(
+                activeStepReplanRequest,
+                "boundedStepReplanComposition.activeStepReplanRequest");
+        PlanId planId = recovered.planId();
+        PlanStepId stepId = recovered.recovery().activation().stepId();
+
+        BoundedStepReplanCompositionValues.requireAuthority(recovered, stall, request);
         return replan(planId, stepId, recovered, request);
     }
 

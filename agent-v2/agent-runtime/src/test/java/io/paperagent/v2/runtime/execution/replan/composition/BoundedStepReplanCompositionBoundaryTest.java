@@ -5,11 +5,14 @@ import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanRevisionId;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.persistence.PersistenceResult;
+import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopTurnLimitReached;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLeaseDisposition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -17,6 +20,61 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BoundedStepReplanCompositionBoundaryTest {
+
+    @Test
+    void genuineNoEffectRequiresExactOutcomeAuthorityBeforePersistence() {
+        var scenario = BoundedStepReplanCompositionTestFixtures.scenario(
+                "no-effect-authority");
+        var repository = repositoryFor(scenario);
+        var composer = new DefaultBoundedStepReplanComposer(repository);
+        var wrongStep = new BoundedStepAgentLoopNoEffect(
+                scenario.recovered().planId(),
+                new PlanStepId("other-step"),
+                1,
+                List.of());
+
+        var failure = assertProtocol(() -> composer.composeNoEffect(
+                scenario.recovered(), wrongStep, scenario.request()));
+
+        assertEquals(
+                BoundedStepReplanCompositionProtocolCode.INCONSISTENT_REQUEST_AUTHORITY,
+                failure.code());
+        assertEquals(0, repository.calls());
+    }
+
+    @Test
+    void genuineNoEffectRejectsNullOutcomeBeforePersistence() {
+        var scenario = BoundedStepReplanCompositionTestFixtures.scenario(
+                "no-effect-null");
+        var repository = repositoryFor(scenario);
+        var composer = new DefaultBoundedStepReplanComposer(repository);
+
+        assertThrows(BoundedStepReplanCompositionValidationException.class,
+                () -> composer.composeNoEffect(
+                        scenario.recovered(), null, scenario.request()));
+        assertEquals(0, repository.calls());
+    }
+
+    @Test
+    void genuineNoEffectWithAnyPriorIntentRejectsBeforePersistence() {
+        var scenario = BoundedStepReplanCompositionTestFixtures.scenario(
+                "no-effect-prior-intent");
+        var repository = repositoryFor(scenario);
+        var composer = new DefaultBoundedStepReplanComposer(repository);
+        var noEffectWithPriorIntent = new BoundedStepAgentLoopNoEffect(
+                scenario.recovered().planId(),
+                scenario.recovered().recovery().activation().stepId(),
+                2,
+                scenario.turnLimitReached().persistedIntents());
+
+        var failure = assertProtocol(() -> composer.composeNoEffect(
+                scenario.recovered(), noEffectWithPriorIntent, scenario.request()));
+
+        assertEquals(
+                BoundedStepReplanCompositionProtocolCode.INCONSISTENT_REQUEST_AUTHORITY,
+                failure.code());
+        assertEquals(0, repository.calls());
+    }
 
     @Test
     void rejectsEveryInputAuthorityMismatchBeforePersistence() {
