@@ -950,3 +950,25 @@ EffectOutcome; performs no completion, next-Step activation, retry, resume,
 repair, replan, or autonomous Agent Loop; mutates no Project or Workspace;
 exposes no Controller/API/UI traffic; and reuses no legacy Agent planner,
 loop, verifier, candidate chain, or service orchestration.
+
+## Governed literature-search effect execution boundary
+
+The first real product effect maps only the persisted V2 tool identity
+`literature.search` to the independently assessed product
+`literature_search_start` executor. Authentication, Plan identity, current
+ACTIVE Step recovery, the exact persisted EffectIntent, activation binding,
+and fenced lease are verified before product execution. Model arguments are
+limited to the literature query options; user, Project, client-request, and
+tool-policy authority are injected from verified product state.
+
+Execution is database atomic. A V53 claim row uniquely owns one persisted
+ToolCall and is foreign-keyed to its Plan/Step/activation intent binding.
+Under the bootstrap lock, claim creation, the existing product task-start
+write, bounded sanitized ExecutionReceipt, and final EffectOutcome commit in
+one transaction. Concurrent exact calls serialize to one execution and a
+committed result is replay-only. A claim without its final result is treated
+as corruption, never as permission to execute again.
+
+This boundary does not poll the literature task, perform live retrieval,
+complete or advance the Step, run another tool, expose Controller/API/UI
+traffic, or introduce a generic effect loop.
