@@ -14,14 +14,30 @@ import org.junit.jupiter.api.Test;
 class V56LiteratureOutcomeMigrationTest {
     @Test
     void h2UpgradeAddsUniqueWriteOnceBindingSlots() throws Exception {
-        String url = "jdbc:h2:mem:v56_outcomes;MODE=MySQL;DB_CLOSE_DELAY=-1";
+        upgradeAndAssert(
+                "v56_outcomes_h2",
+                "src/test/resources/db/migration-h2/"
+                        + "V56__bind_v2_literature_task_outcomes.sql");
+    }
+
+    @Test
+    void productionMigrationUsesStatementsAcceptedInMysqlCompatibleH2()
+            throws Exception {
+        upgradeAndAssert(
+                "v56_outcomes_production",
+                "src/main/resources/db/migration/"
+                        + "V56__bind_v2_literature_task_outcomes.sql");
+    }
+
+    private static void upgradeAndAssert(
+            String databaseName, String migrationPath) throws Exception {
+        String url = "jdbc:h2:mem:" + databaseName
+                + ";MODE=MySQL;DB_CLOSE_DELAY=-1";
         try (var connection = DriverManager.getConnection(url, "sa", "");
              Reader v55 = Files.newBufferedReader(Path.of(
                      "src/test/resources/db/migration-h2/"
                              + "V55__create_agent_v2_final_syntheses.sql"));
-             Reader v56 = Files.newBufferedReader(Path.of(
-                     "src/test/resources/db/migration-h2/"
-                             + "V56__bind_v2_literature_task_outcomes.sql"))) {
+             Reader v56 = Files.newBufferedReader(Path.of(migrationPath))) {
             RunScript.execute(connection, v55);
             RunScript.execute(connection, v56);
             try (var statement = connection.createStatement()) {

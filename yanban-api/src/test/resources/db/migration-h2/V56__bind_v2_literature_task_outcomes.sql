@@ -1,8 +1,8 @@
 ALTER TABLE agent_v2_literature_deliveries
-    ADD literature_task_id BIGINT;
+    ADD COLUMN literature_task_id BIGINT;
 
 ALTER TABLE agent_v2_literature_deliveries
-    ADD result_assistant_message_id BIGINT;
+    ADD COLUMN result_assistant_message_id BIGINT;
 
 ALTER TABLE agent_v2_literature_deliveries
     ADD CONSTRAINT uk_agent_v2_delivery_literature_task

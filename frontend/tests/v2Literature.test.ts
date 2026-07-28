@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { V2LiteratureTurnOutcomeResponse } from '../src/api/agent';
 import {
+  isCurrentV2LiteratureRequest,
   isV2LiteratureTerminal,
   newV2LiteratureClientRequestId,
   normalizeV2LiteratureForm,
@@ -70,6 +71,23 @@ describe('V2 literature form contract', () => {
 });
 
 describe('V2 literature polling', () => {
+  it('rejects a start response after its session or request sequence changed', () => {
+    const expected = {
+      sessionId: 7,
+      clientRequestId: 'literature-request-1',
+      sequence: 3,
+    };
+    expect(isCurrentV2LiteratureRequest(expected, expected)).toBe(true);
+    expect(isCurrentV2LiteratureRequest(expected, {
+      ...expected,
+      sessionId: 8,
+    })).toBe(false);
+    expect(isCurrentV2LiteratureRequest(expected, {
+      ...expected,
+      sequence: 4,
+    })).toBe(false);
+  });
+
   it('polls PENDING/RUNNING and stops on the first authoritative terminal outcome', async () => {
     const states = [outcome('PENDING'), outcome('RUNNING'), outcome('COMPLETED')];
     const read = vi.fn(async () => states.shift()!);
@@ -155,6 +173,10 @@ describe('Chat page V2 literature isolation', () => {
     expect(api).toContain('/v2/literature-turns/${encodeURIComponent(clientRequestId)}/cancel');
     expect(source).toContain('@click="startLiteratureSearch"');
     expect(source).toContain('await startV2LiteratureTurn(sessionId, request)');
+    expect(source.indexOf('isCurrentV2LiteratureRequest('))
+      .toBeGreaterThan(source.indexOf('await startV2LiteratureTurn(sessionId, request)'));
+    expect(source.indexOf('await runLiteraturePolling(sessionId, request.clientRequestId)'))
+      .toBeGreaterThan(source.indexOf('isCurrentV2LiteratureRequest('));
     expect(source).toContain('async function handleSend()');
     expect(source).toContain('sendMessageWithFallback(sessionId, content');
     expect(source).not.toContain("draft.value.startsWith('/literature')");

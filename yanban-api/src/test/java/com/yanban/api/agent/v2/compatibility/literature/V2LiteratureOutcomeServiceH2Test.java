@@ -134,10 +134,38 @@ class V2LiteratureOutcomeServiceH2Test {
                 service.get(7L, sessionId, "partial");
 
         assertEquals("PARTIAL", first.status());
-        assertEquals(List.of("openalex: unavailable"),
+        assertEquals(List.of("OpenAlex source unavailable"),
                 first.sourceFailures());
         assertEquals("@article{safe}", first.items().get(0).bibtex());
         assertEquals(first.resultMessageId(), replay.resultMessageId());
+    }
+
+    @Test
+    void providerFailuresExposeOnlyStableSourceLevelHints() {
+        LiteratureSearchTask task = completedTask(false, false);
+        task.setSourceFailuresJson("""
+                [
+                  "openalex: GET http://10.0.0.7/private?token=secret failed",
+                  "arxiv: java.net.ConnectException at internal-host:9200",
+                  "provider password=hunter2 stack trace"
+                ]
+                """);
+        tasks.saveAndFlush(task);
+        delivery("safe-failures", task, false);
+
+        V2LiteratureOutcomeResponse result =
+                service.get(7L, sessionId, "safe-failures");
+
+        assertEquals(List.of(
+                "OpenAlex source unavailable",
+                "arXiv source unavailable",
+                "Literature source unavailable"),
+                result.sourceFailures());
+        String serialized = result.sourceFailures().toString();
+        assertFalse(serialized.contains("10.0.0.7"));
+        assertFalse(serialized.contains("secret"));
+        assertFalse(serialized.contains("internal-host"));
+        assertFalse(serialized.contains("hunter2"));
     }
 
     @Test

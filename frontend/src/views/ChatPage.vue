@@ -445,6 +445,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
 import { projectPlanExecutionOutcome, projectPlanFinalAnswer, projectPlanLifecycle } from '@/utils/projectCompletion';
 import {
+  isCurrentV2LiteratureRequest,
   newV2LiteratureClientRequestId,
   normalizeV2LiteratureForm,
   pollV2Literature,
@@ -595,6 +596,7 @@ const literatureClientRequestId = ref<string | null>(null);
 const literaturePollTimers = new Set<number>();
 let literaturePollController: AbortController | null = null;
 let literatureRecoverySequence = 0;
+let literatureStartSequence = 0;
 const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
 const SESSION_STORAGE_KEY = 'yanban.chat.selectedSessionId';
 const LITERATURE_REQUEST_STORAGE_PREFIX = 'yanban.chat.v2Literature.';
@@ -749,6 +751,7 @@ watch(
 
 watch(selectedSessionId, (sessionId, previousSessionId) => {
   if (sessionId === previousSessionId) return;
+  literatureStartSequence += 1;
   stopLiteraturePolling();
   literatureOutcome.value = null;
   literatureError.value = '';
@@ -759,6 +762,7 @@ watch(selectedSessionId, (sessionId, previousSessionId) => {
 });
 
 onBeforeUnmount(() => {
+  literatureStartSequence += 1;
   currentSocket.value?.close();
   stopLiteraturePolling();
   cancelMinimapHoverClear();
@@ -792,6 +796,7 @@ async function ensureLiteratureSession() {
   });
   sessions.value = [data, ...sessions.value];
   applySelectedSession(data.id);
+  await nextTick();
   return data.id;
 }
 
@@ -814,8 +819,21 @@ async function startLiteratureSearch() {
   literatureStarting.value = true;
   try {
     const sessionId = await ensureLiteratureSession();
+    const startSequence = ++literatureStartSequence;
     literatureClientRequestId.value = request.clientRequestId;
     await startV2LiteratureTurn(sessionId, request);
+    if (!isCurrentV2LiteratureRequest(
+      {
+        sessionId,
+        clientRequestId: request.clientRequestId,
+        sequence: startSequence,
+      },
+      {
+        sessionId: selectedSessionId.value,
+        clientRequestId: literatureClientRequestId.value,
+        sequence: literatureStartSequence,
+      },
+    )) return;
     storeLiteratureRequestId(sessionId, request.clientRequestId);
     await runLiteraturePolling(sessionId, request.clientRequestId);
   } catch (error) {

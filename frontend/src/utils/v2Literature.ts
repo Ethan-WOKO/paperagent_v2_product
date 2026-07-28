@@ -24,6 +24,21 @@ export interface V2LiteraturePresentation {
   papers: Array<V2LiteraturePaperItem & { safeUrl: string | null }>;
 }
 
+export interface V2LiteratureRequestIdentity {
+  sessionId: number | null;
+  clientRequestId: string | null;
+  sequence: number;
+}
+
+export function isCurrentV2LiteratureRequest(
+  expected: V2LiteratureRequestIdentity,
+  current: V2LiteratureRequestIdentity,
+) {
+  return expected.sessionId === current.sessionId
+    && expected.clientRequestId === current.clientRequestId
+    && expected.sequence === current.sequence;
+}
+
 export function normalizeV2LiteratureForm(
   form: V2LiteratureFormValue,
   clientRequestId: string,

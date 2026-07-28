@@ -234,12 +234,24 @@ public class V2LiteratureOutcomeService {
             if (failures.size() >= MAX_FAILURES) {
                 break;
             }
-            String failure = bounded(value, 240);
-            if (failure != null) {
+            String failure = safeSourceFailure(value);
+            if (!failures.contains(failure)) {
                 failures.add(failure);
             }
         }
         return failures;
+    }
+
+    private static String safeSourceFailure(JsonNode value) {
+        String raw = value != null && value.isTextual()
+                ? value.textValue().toLowerCase(Locale.ROOT) : "";
+        if (raw.contains("openalex")) {
+            return "OpenAlex source unavailable";
+        }
+        if (raw.contains("arxiv")) {
+            return "arXiv source unavailable";
+        }
+        return "Literature source unavailable";
     }
 
     private V2LiteratureOutcomeResponse response(
