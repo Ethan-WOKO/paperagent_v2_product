@@ -35,8 +35,11 @@ import io.paperagent.v2.persistence.ExecutionStartRepository;
 import io.paperagent.v2.persistence.LeaseRepository;
 import io.paperagent.v2.persistence.PlanBootstrapRepository;
 import io.paperagent.v2.persistence.PersistedStepRecoverySucceeded;
+import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.StepActivationRepository;
+import io.paperagent.v2.persistence.StepInterruptionRepository;
+import io.paperagent.v2.persistence.StepPauseRequest;
 import io.paperagent.v2.persistence.StepRecoveryRepository;
 import io.paperagent.v2.runtime.execution.activation.composition
         .StepActivationComposer;
@@ -126,6 +129,8 @@ class PersistentPlanAgentLoopVerticalTest {
 
     @Autowired
     private StepRecoveryRepository stepRecoveryRepository;
+    @Autowired
+    private StepInterruptionRepository stepInterruptionRepository;
 
     @Autowired
     private EffectIntentRepository effectIntentRepository;
@@ -365,6 +370,128 @@ class PersistentPlanAgentLoopVerticalTest {
         verify(executor, times(2)).execute(any());
         assertNull(ToolExecutionContext.getCurrentUserId());
         assertNull(ToolExecutionContext.getResolvedAllowedTools());
+    }
+
+    @Test
+    void realH2CompletedStepAAllowsPausingCurrentActiveStepB() {
+        VerifiedAgentTurnProductContext context =
+                new VerifiedAgentTurnProductContext(
+                        new AgentRunIdentity(
+                                "AGENT_TURN", "turn-42",
+                                USER_ID, 11L, null),
+                        Optional.empty());
+        when(productContexts.resolve(USER_ID, TURN_ID))
+                .thenReturn(context);
+        var planId = planIds.derive(context.identity());
+        var scenario =
+                PersistentPlanAgentLoopTestSupport.seedDurableTwoStep(
+                        planId, bootstrapRepository, leaseRepository,
+                        executionStartRepository,
+                        stepActivationRepository);
+        SingleTurnStepKernel kernel =
+                mock(SingleTurnStepKernel.class);
+        when(kernel.run(any())).thenAnswer(invocation ->
+                PersistentPlanAgentLoopTestSupport.persistDurableIntent(
+                        effectIntentRepository,
+                        invocation.<io.paperagent.v2.runtime.execution.kernel
+                                .SingleTurnStepKernelRequest>getArgument(0)
+                                .recoveredStep()));
+        LiteratureSearchStartToolExecutor executor =
+                mock(LiteratureSearchStartToolExecutor.class);
+        when(executor.execute(any(ToolCall.class)))
+                .thenAnswer(invocation -> {
+                    ToolCall call = invocation.getArgument(0);
+                    LiteratureSearchTask task =
+                            literatureTasks.saveAndFlush(
+                                    new LiteratureSearchTask(
+                                            USER_ID, null,
+                                            "step-b-boundary",
+                                            "step-b-boundary",
+                                            8, null, true,
+                                            "PENDING", "QUEUED",
+                                            call.id(), call.id()));
+                    var output = json.createObjectNode();
+                    output.put("taskId", task.getId());
+                    output.put("status", task.getStatus());
+                    output.put("currentStage",
+                            task.getCurrentStage());
+                    return ToolResult.success(
+                            call.id(),
+                            "literature_search_start", output);
+                });
+        AuthenticatedLiteratureSearchEffectExecutionComposer effects =
+                new AuthenticatedLiteratureSearchEffectExecutionComposer(
+                        productContexts, planIds, persistedRecoverer,
+                        effectIntentRepository, claims, executor,
+                        java.time.Instant::now, json);
+        AuthenticatedEffectDrivenStepProgressionComposer progression =
+                new AuthenticatedEffectDrivenStepProgressionComposer(
+                        productContexts, planIds, progressionInspector,
+                        persistedRecoverer, effectIntentRepository,
+                        effectOutcomeRepository, completion,
+                        persistedActivation);
+        var composer =
+                new AuthenticatedPersistentPlanAgentLoopComposer(
+                        productContexts, planIds, stepRecoveryRepository,
+                        persistedRecoverer, persistedActivation, kernel,
+                        effects, progression,
+                        mock(io.paperagent.v2.runtime.execution.replan
+                                .composition.BoundedStepReplanComposer.class));
+
+        var bounded = composer.execute(
+                USER_ID, TURN_ID,
+                PersistentPlanAgentLoopTestSupport.command(
+                        1, scenario.lease()));
+        assertEquals(PersistentPlanAgentLoopState.REPLAN_REQUIRED,
+                bounded.state());
+        PersistedStepRecoveryActive active =
+                (PersistedStepRecoveryActive) stepRecoveryRepository
+                        .inspect(planId).value().orElseThrow();
+        assertEquals(scenario.secondStepId(),
+                active.activation().stepId());
+        var source = active.checkpoint().checkpoint();
+        var states = new java.util.LinkedHashMap<>(
+                source.stepStates());
+        states.put(scenario.secondStepId(),
+                io.paperagent.v2.contracts.StepExecutionState.PAUSED);
+        var event = new io.paperagent.v2.contracts.EventEnvelope(
+                new io.paperagent.v2.contracts.EventId(
+                        "pause-current-step-b"),
+                source.taskFrameId(), source.planId(),
+                source.lastEventSequence() + 1,
+                source.createdAt().plusSeconds(1),
+                new io.paperagent.v2.contracts.EventType(
+                        "STEP_PAUSED"),
+                Optional.of(
+                        active.activation().activationEvent().id()),
+                "pause-current-step-b",
+                new io.paperagent.v2.contracts.InlineEventPayload(
+                        new io.paperagent.v2.contracts.ObjectValue(
+                                java.util.Map.of())));
+        var paused = new io.paperagent.v2.contracts.Checkpoint(
+                source.taskFrameId(), source.planId(),
+                source.revisionId(), source.revisionNumber(),
+                event.sequence(),
+                io.paperagent.v2.contracts.PlanExecutionState.PAUSED,
+                states, source.receiptReferences(),
+                source.createdAt().plusSeconds(1));
+
+        var result = stepInterruptionRepository.pause(
+                new StepPauseRequest(
+                        planId, scenario.lease().leaseToken(),
+                        scenario.lease().fencingToken(),
+                        source.revisionId(), source.revisionNumber(),
+                        active.checkpoint().version(),
+                        source.lastEventSequence(),
+                        scenario.secondStepId(), event, paused));
+
+        assertEquals(
+                io.paperagent.v2.persistence.PersistenceOutcome.APPLIED,
+                result.outcome());
+        assertEquals(1, count("agent_v2_step_interruptions"));
+        assertEquals(
+                io.paperagent.v2.persistence.PersistenceOutcome.REJECTED,
+                stepRecoveryRepository.inspect(planId).outcome());
     }
 
     @Test

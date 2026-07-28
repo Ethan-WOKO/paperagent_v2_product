@@ -77,6 +77,8 @@ import static org.mockito.Mockito.when;
         ProductReceiptCodec.class,
         ProductReceiptMarkerReader.class,
         ProductStepRecoveryTransactions.class,
+        ProductActiveStepReplanMarkerReader.class,
+        ProductActiveStepReplanCodec.class,
         ProductStepInterruptionMarkerReader.class,
         ProductStepInterruptionCodec.class,
         ProductStepCompletionMarkerReader.class,

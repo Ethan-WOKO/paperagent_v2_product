@@ -33,7 +33,9 @@
   recovery folds zero or more markers by source event sequence. Effect writers
   revalidate the exact current ACTIVE cut under the Plan lock, so prior
   completed Steps remain valid history; lifecycle writers reserve V54 event
-  identities in that same lock domain.
+  identities against known stores in that same lock domain. This is not a
+  database-enforced cross-Plan global event registry; concurrent cross-Plan
+  reuse remains a separately scoped residual risk.
 - Excluded: legacy Agent loop/planner/verifier services, arbitrary tools,
   Controller/API/UI cutover, background retry, Workspace/Project mutation,
   and automatic model-generated replan proposals.

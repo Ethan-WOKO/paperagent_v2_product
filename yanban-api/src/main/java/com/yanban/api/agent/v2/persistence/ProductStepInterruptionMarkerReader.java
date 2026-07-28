@@ -19,16 +19,19 @@ class ProductStepInterruptionMarkerReader {
     private final ProductExecutionStartJpaRepository starts;
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepCompletionJpaRepository completions;
+    private final ProductActiveStepReplanJpaRepository replans;
 
     ProductStepInterruptionMarkerReader(
             ProductStepInterruptionCodec codec,
             ProductExecutionStartJpaRepository starts,
             ProductStepActivationJpaRepository activations,
-            ProductStepCompletionJpaRepository completions) {
+            ProductStepCompletionJpaRepository completions,
+            ProductActiveStepReplanJpaRepository replans) {
         this.codec = codec;
         this.starts = starts;
         this.activations = activations;
         this.completions = completions;
+        this.replans = replans;
     }
 
     Marker decode(ProductStepInterruptionEntity row) {
@@ -99,11 +102,19 @@ class ProductStepInterruptionMarkerReader {
         Checkpoint source = active.checkpoint().checkpoint();
         Checkpoint target =
                 marker.result().interruptedCheckpoint().checkpoint();
+        long sourceVersion = active.checkpoint().version();
+        long sourceSequence = source.lastEventSequence();
+        long resultVersion = sourceVersion + 1;
+        long resultSequence = sourceSequence + 1;
         boolean valid = starts.findByStartEventId(
                         row.interruptionEventId()).isEmpty()
                 && activations.findById(
                         row.interruptionEventId()).isEmpty()
                 && completions.findById(
+                        row.interruptionEventId()).isEmpty()
+                && replans.findBySupersessionEventId(
+                        row.interruptionEventId()).isEmpty()
+                && replans.findByReplanEventId(
                         row.interruptionEventId()).isEmpty()
                 && row.planId().equals(active.plan().id().value())
                 && row.stepId().equals(active.activation()
@@ -111,12 +122,14 @@ class ProductStepInterruptionMarkerReader {
                 && row.sourceRevisionId().equals(
                         source.revisionId().value())
                 && row.sourceRevisionNumber() == source.revisionNumber()
-                && row.sourceCheckpointVersion() == 3
-                && row.sourceEventSequence() == 2
-                && row.resultCheckpointVersion() == 4
-                && row.resultEventSequence() == 3
-                && marker.result().interruptedCheckpoint().version() == 4
-                && marker.result().interruptionEvent().sequence() == 3
+                && row.sourceCheckpointVersion() == sourceVersion
+                && row.sourceEventSequence() == sourceSequence
+                && row.resultCheckpointVersion() == resultVersion
+                && row.resultEventSequence() == resultSequence
+                && marker.result().interruptedCheckpoint().version()
+                        == resultVersion
+                && marker.result().interruptionEvent().sequence()
+                        == resultSequence
                 && marker.result().interruptionEvent().planId()
                         .equals(active.plan().id())
                 && marker.result().interruptionEvent().taskFrameId()
@@ -124,14 +137,14 @@ class ProductStepInterruptionMarkerReader {
                 && request.expectedRevisionId().equals(source.revisionId())
                 && request.expectedRevisionNumber()
                         == source.revisionNumber()
-                && request.expectedCheckpointVersion() == 3
-                && request.expectedEventHeadSequence() == 2
+                && request.expectedCheckpointVersion() == sourceVersion
+                && request.expectedEventHeadSequence() == sourceSequence
                 && request.stepId().equals(active.activation().stepId())
                 && target.taskFrameId().equals(source.taskFrameId())
                 && target.planId().equals(source.planId())
                 && target.revisionId().equals(source.revisionId())
                 && target.revisionNumber() == source.revisionNumber()
-                && target.lastEventSequence() == 3
+                && target.lastEventSequence() == resultSequence
                 && !target.createdAt().isBefore(source.createdAt())
                 && target.receiptReferences().equals(
                         source.receiptReferences())

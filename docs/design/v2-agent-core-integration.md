@@ -103,13 +103,16 @@ without Provider or tool activity. There is no recursion, scheduler, polling,
 sleep, hidden retry, Controller, API, or UI traffic activation.
 
 V54 adds an append-only relational active-Step replan marker. Each marker has
-globally unique supersession and replan event identities, canonical
+two event identities checked for collisions against the known lifecycle
+stores inside the serialized Plan-lock authority domain, canonical
 hash-protected request/result documents, consecutive source/supersession/
-replacement heads, and the retained lease owner/fence. Writes serialize on
-the Plan bootstrap row. Exact replay is classified from the immutable marker
-before mutable time or lease inspection; new writes then re-read the current
-ACTIVE fold, completion/interruption occupancy, live lease, and source heads
-inside the same lock domain.
+replacement heads, and the retained lease owner/fence. Exact replay is
+classified from the immutable marker before mutable time or lease inspection;
+new writes then re-read the current ACTIVE fold, durable EffectIntent
+occupancy, completion/interruption occupancy, live lease, and source heads
+inside the same lock domain. V54 does not claim database-enforced global event
+identity across different Plans and lifecycle tables; that requires a future
+unified event registry.
 
 Recovery folds zero or more V54 markers in source-event order between the
 existing activation/completion transitions. It verifies the complete ACTIVE
@@ -613,24 +616,28 @@ retry, sleep, release, repair, or clean up. It executes no Step and performs no
 Project or Workspace access, file or network operation, model, Provider,
 Sandbox, tool, Controller, API, UI, schema, or legacy Agent behavior.
 
-## Product first active-Step interruption persistence boundary
+## Product current active-Step interruption persistence boundary
 
 The product database implements the stable V2
 `StepInterruptionRepository` through V47. One immutable interruption row
-records exactly one first active-Step `PAUSE`, `FAIL`, or `CANCEL` transition.
-Its explicit kind, canonical format-1 request and result documents, extracted
-authority columns, and lowercase SHA-256 digests bind the version-3,
-sequence-2 activation cut to version 4, sequence 3.
+records exactly one current active-Step `PAUSE`, `FAIL`, or `CANCEL`
+transition. Its explicit kind, canonical format-1 request and result
+documents, extracted authority columns, and lowercase SHA-256 digests bind
+the recovered source checkpoint/event head to its consecutive interruption
+checkpoint/event.
 
-Every attempt locks the Plan bootstrap authority before reconstructing the
-canonical committed execution start, optional exact confirmed Project
-execution context, and single first-Step activation. A permanent exact replay
-is validated before mutable lease state or time. A new write observes one
-trusted database time, validates the exact current lease and active Step, and
-atomically appends only the matching terminal or paused Step and Plan state.
-Same-Plan contenders serialize on the bootstrap row; the global event key and
-unique Plan key arbitrate cross-Plan and cross-kind races. Corrupt, duplicate,
-or cross-bound occupied cuts fail closed without changing prior authority.
+Every attempt locks the Plan bootstrap authority. Permanent exact replay is
+validated before mutable recovery, lease state, or time. A new write folds the
+authoritative Step lifecycle under that same lock, requires the candidate to
+be its unique current ACTIVE activation, observes one trusted database time,
+validates the exact current lease, and atomically appends only the matching
+terminal or paused Step and Plan state. This supports a later Step after prior
+completions and an activated replan replacement. Same-Plan contenders
+serialize on the bootstrap row, and known lifecycle stores are checked for
+event-ID collisions in that lock domain. Cross-Plan concurrent reuse of one
+event ID is a residual risk until a separately scoped unified event registry
+exists. Corrupt, duplicate, obsolete, or cross-bound occupied cuts fail closed
+without changing prior authority.
 
 This adapter does not execute a Step, release or retry a lease, persist an
 effect or receipt, resume or recover execution, read or mutate Project or

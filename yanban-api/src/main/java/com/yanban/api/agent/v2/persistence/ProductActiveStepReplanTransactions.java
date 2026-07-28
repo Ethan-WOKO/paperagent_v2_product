@@ -42,6 +42,7 @@ class ProductActiveStepReplanTransactions {
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepInterruptionJpaRepository interruptions;
     private final ProductStepCompletionJpaRepository completions;
+    private final ProductEffectIntentJpaRepository effectIntents;
     private final ProductActiveStepReplanTimeSource time;
 
     ProductActiveStepReplanTransactions(
@@ -55,6 +56,7 @@ class ProductActiveStepReplanTransactions {
             ProductStepActivationJpaRepository activations,
             ProductStepInterruptionJpaRepository interruptions,
             ProductStepCompletionJpaRepository completions,
+            ProductEffectIntentJpaRepository effectIntents,
             ProductActiveStepReplanTimeSource time) {
         this.bootstraps = bootstraps;
         this.replans = replans;
@@ -66,6 +68,7 @@ class ProductActiveStepReplanTransactions {
         this.activations = activations;
         this.interruptions = interruptions;
         this.completions = completions;
+        this.effectIntents = effectIntents;
         this.time = time;
     }
 
@@ -101,6 +104,11 @@ class ProductActiveStepReplanTransactions {
             return inspected.outcome() == PersistenceOutcome.REJECTED
                     && inspected.failure().isPresent()
                     ? notEligible() : partial();
+        }
+        if (effectIntents.findAllByPlanId(request.planId().value()).stream()
+                .anyMatch(row -> row.stepId().equals(
+                        active.activation().stepId().value()))) {
+            return notEligible();
         }
         ProductLeaseEntity lease = leases
                 .findFirstByPlanIdOrderByFencingTokenDesc(

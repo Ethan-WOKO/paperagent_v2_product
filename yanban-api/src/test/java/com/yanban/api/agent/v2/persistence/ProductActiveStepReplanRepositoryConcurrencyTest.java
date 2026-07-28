@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.persistence;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.paperagent.v2.contracts.Checkpoint;
 import io.paperagent.v2.contracts.CompletionFact;
+import io.paperagent.v2.contracts.EffectIntent;
 import io.paperagent.v2.contracts.EventEnvelope;
 import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.EventType;
@@ -13,12 +14,17 @@ import io.paperagent.v2.contracts.PlanRevision;
 import io.paperagent.v2.contracts.PlanRevisionId;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.StepExecutionState;
+import io.paperagent.v2.contracts.ToolCallId;
 import io.paperagent.v2.persistence.ActiveStepReplanRequest;
+import io.paperagent.v2.persistence.EffectIntentRequest;
+import io.paperagent.v2.persistence.PersistedActiveStepReplan;
 import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.StepCancelRequest;
+import io.paperagent.v2.persistence.StepFailRequest;
+import io.paperagent.v2.persistence.StepPauseRequest;
 import io.paperagent.v2.persistence.StepActivationRequest;
 import io.paperagent.v2.persistence.StepCompletionRequest;
 import io.paperagent.v2.persistence.VersionedCheckpoint;
@@ -55,6 +61,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         ProductActiveStepReplanTransactions.class,
         ProductActiveStepReplanMarkerReader.class,
         ProductActiveStepReplanCodec.class,
+        ProductEffectIntentRepositoryAdapter.class,
+        ProductEffectIntentTransactions.class,
         ProductStepActivationRepositoryAdapter.class,
         ProductStepActivationTransactions.class,
         ProductStepInterruptionRepositoryAdapter.class,
@@ -90,6 +98,10 @@ class ProductActiveStepReplanRepositoryConcurrencyTest {
     @jakarta.annotation.Resource
     private ProductStepCompletionRepositoryAdapter completionAdapter;
     @jakarta.annotation.Resource
+    private ProductStepRecoveryRepositoryAdapter recoveryAdapter;
+    @jakarta.annotation.Resource
+    private ProductEffectIntentRepositoryAdapter effectIntentAdapter;
+    @jakarta.annotation.Resource
     private ProductPlanBootstrapJpaRepository bootstraps;
     @jakarta.annotation.Resource
     private ProductPlanBootstrapCodec bootstrapCodec;
@@ -111,12 +123,15 @@ class ProductActiveStepReplanRepositoryConcurrencyTest {
     private ProductStepCompletionJpaRepository completions;
     @jakarta.annotation.Resource
     private ProductStepCompletionEvidenceJpaRepository completionEvidence;
+    @jakarta.annotation.Resource
+    private ProductEffectIntentJpaRepository effectIntents;
 
     @BeforeEach
     void reset() {
         completionEvidence.deleteAll();
         completions.deleteAll();
         replans.deleteAll();
+        effectIntents.deleteAll();
         interruptions.deleteAll();
         activations.deleteAll();
         starts.deleteAll();
@@ -199,6 +214,52 @@ class ProductActiveStepReplanRepositoryConcurrencyTest {
     }
 
     @Test
+    void replacementActiveStepSupportsPauseFailAndCancel() {
+        for (InterruptionKind kind : InterruptionKind.values()) {
+            reset();
+            Scenario scenario = seedActive(
+                    "replacement-interruption-"
+                            + kind.name().toLowerCase());
+            PersistedActiveStepReplan replan = adapter
+                    .supersedeAndReplan(scenario.request())
+                    .value().orElseThrow();
+            StepActivationRequest activation =
+                    ProductActiveStepReplanTestSupport.activationAfter(
+                            replan, "lease-token",
+                            "after-replan-interruption-"
+                                    + kind.name().toLowerCase());
+            var activationResult = activationAdapter.activate(activation);
+            assertEquals(PersistenceOutcome.APPLIED,
+                    activationResult.outcome(),
+                    () -> "replacement activation rejected: "
+                            + activationResult.failure());
+            PersistedStepActivation active =
+                    activationResult.value().orElseThrow();
+
+            PersistenceResult<?> result =
+                    interruptReplacement(
+                            kind, replan, active,
+                            "replacement-" + kind.name().toLowerCase());
+
+            assertEquals(PersistenceOutcome.APPLIED, result.outcome());
+            assertEquals(PersistenceOutcome.REPLAYED,
+                    interruptReplacement(
+                            kind, replan, active,
+                            "replacement-"
+                                    + kind.name().toLowerCase())
+                            .outcome());
+            var terminal = recoveryAdapter.inspect(replan.planId());
+            assertEquals(PersistenceOutcome.REJECTED,
+                    terminal.outcome());
+            assertEquals(
+                    io.paperagent.v2.persistence.PersistenceErrorCode
+                            .STEP_RECOVERY_NOT_ELIGIBLE,
+                    terminal.failure().orElseThrow().code());
+            assertEquals(1, interruptions.count());
+        }
+    }
+
+    @Test
     void interruptionAndReplanRaceCommitOneAuthorityChain()
             throws Exception {
         Scenario scenario = seedActive("interruption-race");
@@ -241,6 +302,31 @@ class ProductActiveStepReplanRepositoryConcurrencyTest {
         assertEquals(1, replans.count() + completions.count());
         assertTrue(replans.count() == 0
                 || completions.count() == 0);
+    }
+
+    @Test
+    void effectIntentAndReplanRaceCommitOneAuthorityChain()
+            throws Exception {
+        Scenario scenario = seedActive("intent-replan-race");
+        EffectIntentRequest intent = new EffectIntentRequest(
+                new EffectIntent(
+                        new ToolCallId("tool-intent-replan-race"),
+                        scenario.request().planId(),
+                        scenario.request().activeStepId(),
+                        "literature.search",
+                        new ObjectValue(Map.of())),
+                "lease-token", 3,
+                scenario.activation().activationEvent().id());
+
+        var outcomes = race(List.of(
+                () -> effectIntentAdapter.persist(intent),
+                () -> adapter.supersedeAndReplan(
+                        scenario.request())));
+
+        assertEquals(2, outcomes.size());
+        assertEquals(1, effectIntents.count() + replans.count());
+        assertTrue(effectIntents.count() == 0
+                || replans.count() == 0);
     }
 
     @Test
@@ -448,6 +534,68 @@ class ProductActiveStepReplanRepositoryConcurrencyTest {
                 event, completed, checkpoint);
     }
 
+    private PersistenceResult<?> interruptReplacement(
+            InterruptionKind kind,
+            PersistedActiveStepReplan replan,
+            PersistedStepActivation active,
+            String suffix) {
+        Checkpoint source = active.activatedCheckpoint().checkpoint();
+        Map<PlanStepId, StepExecutionState> states =
+                new LinkedHashMap<>(source.stepStates());
+        states.put(active.stepId(), switch (kind) {
+            case PAUSE -> StepExecutionState.PAUSED;
+            case FAIL -> StepExecutionState.FAILED;
+            case CANCEL -> StepExecutionState.CANCELLED;
+        });
+        EventEnvelope event = new EventEnvelope(
+                new EventId("event-" + suffix),
+                source.taskFrameId(), source.planId(),
+                source.lastEventSequence() + 1,
+                source.createdAt().plusSeconds(1),
+                new EventType("STEP_" + kind.name() + "D"),
+                Optional.of(active.activationEvent().id()),
+                "replacement-interruption",
+                new InlineEventPayload(new ObjectValue(Map.of())));
+        Checkpoint target = new Checkpoint(
+                source.taskFrameId(), source.planId(),
+                source.revisionId(), source.revisionNumber(),
+                event.sequence(), switch (kind) {
+                    case PAUSE -> PlanExecutionState.PAUSED;
+                    case FAIL -> PlanExecutionState.FAILED;
+                    case CANCEL -> PlanExecutionState.CANCELLED;
+                }, states, source.receiptReferences(),
+                source.createdAt().plusSeconds(1));
+        return switch (kind) {
+            case PAUSE -> interruptionAdapter.pause(
+                    new StepPauseRequest(
+                            replan.planId(), "lease-token",
+                            active.fencingToken(),
+                            source.revisionId(),
+                            source.revisionNumber(),
+                            active.activatedCheckpoint().version(),
+                            source.lastEventSequence(),
+                            active.stepId(), event, target));
+            case FAIL -> interruptionAdapter.fail(
+                    new StepFailRequest(
+                            replan.planId(), "lease-token",
+                            active.fencingToken(),
+                            source.revisionId(),
+                            source.revisionNumber(),
+                            active.activatedCheckpoint().version(),
+                            source.lastEventSequence(),
+                            active.stepId(), event, target));
+            case CANCEL -> interruptionAdapter.cancel(
+                    new StepCancelRequest(
+                            replan.planId(), "lease-token",
+                            active.fencingToken(),
+                            source.revisionId(),
+                            source.revisionNumber(),
+                            active.activatedCheckpoint().version(),
+                            source.lastEventSequence(),
+                            active.stepId(), event, target));
+        };
+    }
+
     private static ActiveStepReplanRequest withSupersessionEventId(
             ActiveStepReplanRequest source, String eventId) {
         EventEnvelope supersession = new EventEnvelope(
@@ -515,6 +663,12 @@ class ProductActiveStepReplanRepositoryConcurrencyTest {
             pool.shutdownNow();
             pool.awaitTermination(10, TimeUnit.SECONDS);
         }
+    }
+
+    private enum InterruptionKind {
+        PAUSE,
+        FAIL,
+        CANCEL
     }
 
     private record Scenario(

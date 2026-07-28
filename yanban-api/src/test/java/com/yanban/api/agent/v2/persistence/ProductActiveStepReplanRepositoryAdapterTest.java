@@ -4,7 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.paperagent.v2.contracts.PlanRevision;
 import io.paperagent.v2.contracts.PlanValidators;
 import io.paperagent.v2.contracts.Plan;
+import io.paperagent.v2.contracts.EffectIntent;
+import io.paperagent.v2.contracts.ObjectValue;
+import io.paperagent.v2.contracts.ToolCallId;
 import io.paperagent.v2.persistence.ActiveStepReplanRequest;
+import io.paperagent.v2.persistence.EffectIntentRequest;
+import io.paperagent.v2.persistence.EffectResultRequest;
 import io.paperagent.v2.persistence.PersistedActiveStepReplan;
 import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
@@ -42,6 +47,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
         ProductActiveStepReplanTransactions.class,
         ProductActiveStepReplanMarkerReader.class,
         ProductActiveStepReplanCodec.class,
+        ProductEffectIntentRepositoryAdapter.class,
+        ProductEffectIntentTransactions.class,
+        ProductEffectOutcomeRepositoryAdapter.class,
+        ProductEffectOutcomeTransactions.class,
         ProductStepRecoveryTransactions.class,
         ProductStepRecoveryRepositoryAdapter.class,
         ProductStepInterruptionMarkerReader.class,
@@ -109,11 +118,21 @@ class ProductActiveStepReplanRepositoryAdapterTest {
     @jakarta.annotation.Resource
     private ProductActiveStepReplanJpaRepository replans;
     @jakarta.annotation.Resource
+    private ProductEffectIntentRepositoryAdapter effectIntentAdapter;
+    @jakarta.annotation.Resource
+    private ProductEffectIntentJpaRepository effectIntents;
+    @jakarta.annotation.Resource
+    private ProductEffectOutcomeRepositoryAdapter effectOutcomeAdapter;
+    @jakarta.annotation.Resource
+    private ProductEffectOutcomeResultJpaRepository effectResults;
+    @jakarta.annotation.Resource
     private JdbcTemplate jdbc;
 
     @BeforeEach
     void reset() {
         replans.deleteAll();
+        effectResults.deleteAll();
+        effectIntents.deleteAll();
         activations.deleteAll();
         starts.deleteAll();
         leases.deleteAll();
@@ -167,6 +186,65 @@ class ProductActiveStepReplanRepositoryAdapterTest {
                 new io.paperagent.v2.contracts.PlanStepId(
                         "replacement-h2"),
                 ready.readyStepId());
+    }
+
+    @Test
+    void pendingDurableIntentMakesActiveStepReplanIneligible() {
+        Scenario scenario = seedActive("pending-intent");
+        var request = scenario.request();
+        var intent = new EffectIntent(
+                new ToolCallId("tool-pending-intent"),
+                request.planId(), request.activeStepId(),
+                "literature.search", new ObjectValue(java.util.Map.of()));
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectIntentAdapter.persist(new EffectIntentRequest(
+                        intent, "lease-token", 3,
+                        scenario.activation().activationEvent().id()))
+                        .outcome());
+
+        var rejected = adapter.supersedeAndReplan(request);
+
+        assertEquals(PersistenceOutcome.REJECTED, rejected.outcome());
+        assertEquals(
+                PersistenceErrorCode.ACTIVE_STEP_REPLAN_NOT_ELIGIBLE,
+                rejected.failure().orElseThrow().code());
+        assertEquals(0, replans.count());
+        assertEquals(1, effectIntents.count());
+    }
+
+    @Test
+    void durableOutcomeStillNeedsProgressionBeforeReplan() {
+        Scenario scenario = seedActive("durable-outcome");
+        var request = scenario.request();
+        String toolCallId = "tool-durable-outcome";
+        var intent = new EffectIntent(
+                new ToolCallId(toolCallId),
+                request.planId(), request.activeStepId(),
+                "literature.search", new ObjectValue(java.util.Map.of()));
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectIntentAdapter.persist(new EffectIntentRequest(
+                        intent, "lease-token", 3,
+                        scenario.activation().activationEvent().id()))
+                        .outcome());
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectOutcomeAdapter.recordResult(
+                        new EffectResultRequest(
+                                ProductEffectOutcomeCodecTest.receipt(
+                                        io.paperagent.v2.contracts
+                                                .ReceiptStatus.SUCCESS,
+                                        "receipt-durable-outcome",
+                                        toolCallId),
+                                "lease-token", 3))
+                        .outcome());
+
+        var rejected = adapter.supersedeAndReplan(request);
+
+        assertEquals(PersistenceOutcome.REJECTED, rejected.outcome());
+        assertEquals(
+                PersistenceErrorCode.ACTIVE_STEP_REPLAN_NOT_ELIGIBLE,
+                rejected.failure().orElseThrow().code());
+        assertEquals(0, replans.count());
+        assertEquals(1, effectResults.count());
     }
 
     @Test
