@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,9 +35,12 @@ class DeterministicProductStepTurnAdapterTest {
     @Test
     void allowedCallProducesDeterministicAuthorityBoundIntent() {
         AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        AtomicInteger calls = new AtomicInteger();
         ModelProvider provider = request -> {
             captured.set(request);
-            return toolResponse("provider-call", TOOL.id());
+            return toolResponse(
+                    "transient-provider-call-" + calls.incrementAndGet(),
+                    TOOL.id());
         };
         var adapter = adapter(provider);
         var input = ProductProviderAdapterTestFixtures.input("effect");
@@ -57,6 +61,43 @@ class DeterministicProductStepTurnAdapterTest {
                 request.planRevisionId());
         assertEquals(Optional.of(input.activeStep().id()), request.stepId());
         assertEquals(1, request.generationOptions().maxProposedToolCalls());
+    }
+
+    @Test
+    void changedArgumentsOrToolKeepTheSameDurableSlotIdentity() {
+        AtomicInteger calls = new AtomicInteger();
+        ToolDescriptor secondTool = new ToolDescriptor(
+                new ToolId("paper.polish"), "polish paper", Set.of());
+        ModelProvider provider = request -> {
+            int call = calls.incrementAndGet();
+            return new ModelResponse(
+                    Optional.empty(),
+                    List.of(new ProposedToolCall(
+                            "transient-" + call,
+                            call == 1 ? TOOL.id() : secondTool.id(),
+                            new ObjectValue(Map.of(
+                                    "query",
+                                    new TextValue("agents-" + call))))),
+                    FinishReason.TOOL_CALLS,
+                    usage(),
+                    Map.of());
+        };
+        var adapter = new DeterministicProductStepTurnAdapter(
+                provider,
+                List.of(TOOL, secondTool),
+                new ProductStepTurnConfiguration(512, 0.1d));
+        var input = ProductProviderAdapterTestFixtures.input("conflict-slot");
+
+        EffectIntentDecision first = assertInstanceOf(
+                EffectIntentDecision.class, adapter.decide(input));
+        EffectIntentDecision changed = assertInstanceOf(
+                EffectIntentDecision.class, adapter.decide(input));
+
+        assertEquals(first.intent().toolCallId(), changed.intent().toolCallId());
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                first.intent().arguments(), changed.intent().arguments());
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                first.intent().kind(), changed.intent().kind());
     }
 
     @Test

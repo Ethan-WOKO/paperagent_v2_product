@@ -44,11 +44,13 @@ import io.paperagent.v2.persistence.LeaseRecord;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
+import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.VersionedCheckpoint;
 import io.paperagent.v2.runtime.execution.kernel.DefaultSingleTurnStepKernel;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnIntentPersisted;
+import io.paperagent.v2.runtime.execution.kernel.SingleTurnPersistenceRejected;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLeaseDisposition;
@@ -91,6 +93,7 @@ class AuthenticatedAgentTurnStepTurnVerticalTest {
 
         AtomicInteger modelCalls = new AtomicInteger();
         AtomicReference<ChatRequest> mapped = new AtomicReference<>();
+        AtomicReference<String> query = new AtomicReference<>("agents");
         ChatModelProvider chat = new ChatModelProvider() {
             @Override
             public String providerName() {
@@ -99,18 +102,21 @@ class AuthenticatedAgentTurnStepTurnVerticalTest {
 
             @Override
             public ChatResponse chat(ChatRequest request) {
-                modelCalls.incrementAndGet();
+                int callNumber = modelCalls.incrementAndGet();
                 mapped.set(request);
                 return new ChatResponse(
                         new ChatMessage(
                                 "assistant",
                                 null,
                                 List.of(new ToolCall(
-                                        "stable-provider-call",
+                                        "transient-provider-call-"
+                                                + callNumber,
                                         "function",
                                         new ToolCall.FunctionCall(
                                                 "literature.search",
-                                                "{\"query\":\"agents\"}"))),
+                                                "{\"query\":\""
+                                                        + query.get()
+                                                        + "\"}"))),
                                 null),
                         "tool_calls",
                         new ChatResponse.Usage(3, 2, 5));
@@ -147,6 +153,10 @@ class AuthenticatedAgentTurnStepTurnVerticalTest {
         var replay = assertInstanceOf(
                 AuthenticatedAgentTurnStepTurnExecuted.class,
                 composer.execute(7L, 42L, command()));
+        query.set("changed");
+        var changed = assertInstanceOf(
+                AuthenticatedAgentTurnStepTurnExecuted.class,
+                composer.execute(7L, 42L, command()));
 
         var firstPersisted = assertInstanceOf(
                 SingleTurnIntentPersisted.class, first.outcome());
@@ -155,13 +165,19 @@ class AuthenticatedAgentTurnStepTurnVerticalTest {
         assertEquals(firstPersisted.persistedIntent(),
                 replayPersisted.persistedIntent());
         assertEquals(
-                List.of(PersistenceOutcome.APPLIED, PersistenceOutcome.REPLAYED),
+                List.of(
+                        PersistenceOutcome.APPLIED,
+                        PersistenceOutcome.REPLAYED,
+                        PersistenceOutcome.REJECTED),
                 intents.outcomes);
-        assertEquals(2, modelCalls.get());
-        assertEquals(2, intents.requests.size());
+        assertInstanceOf(SingleTurnPersistenceRejected.class, changed.outcome());
+        assertEquals(3, modelCalls.get());
+        assertEquals(3, intents.requests.size());
         assertEquals(intents.requests.get(0).intent().toolCallId(),
                 intents.requests.get(1).intent().toolCallId());
-        verify(recoverer, times(2)).recover(any());
+        assertEquals(intents.requests.get(0).intent().toolCallId(),
+                intents.requests.get(2).intent().toolCallId());
+        verify(recoverer, times(3)).recover(any());
         assertNull(mapped.get().apiKey());
         assertNull(mapped.get().apiUrl());
         assertEquals(active.recovery().activation().activationEvent().id(),
@@ -269,20 +285,33 @@ class AuthenticatedAgentTurnStepTurnVerticalTest {
             implements EffectIntentRepository {
         private final List<EffectIntentRequest> requests = new ArrayList<>();
         private final List<PersistenceOutcome> outcomes = new ArrayList<>();
+        private EffectIntentRequest first;
 
         @Override
         public PersistenceResult<PersistedEffectIntent> persist(
                 EffectIntentRequest request) {
             requests.add(request);
+            if (first != null && !first.intent().equals(request.intent())) {
+                PersistenceResult<PersistedEffectIntent> conflict =
+                        PersistenceResult.rejected(
+                                PersistenceErrorCode.CONFLICTING_REPLAY,
+                                "effectIntent.intent");
+                outcomes.add(conflict.outcome());
+                return conflict;
+            }
             PersistedEffectIntent persisted = new PersistedEffectIntent(
                     request.intent(),
                     "owner",
                     request.fencingToken(),
                     request.expectedActivationEventId());
-            PersistenceResult<PersistedEffectIntent> result =
-                    requests.size() == 1
-                            ? PersistenceResult.applied(persisted)
-                            : PersistenceResult.replayed(persisted);
+            PersistenceResult<PersistedEffectIntent> result;
+            if (first == null) {
+                first = request;
+                result = PersistenceResult.applied(persisted);
+            } else {
+                result =
+                        PersistenceResult.replayed(persisted);
+            }
             outcomes.add(result.outcome());
             return result;
         }

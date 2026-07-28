@@ -934,7 +934,10 @@ The deterministic Step-turn adapter owns an immutable allowlist and provider
 configuration. Assistant-only output yields `NoEffectDecision`. Exactly one
 allowlisted proposed call yields one `EffectIntentDecision`; its ToolCall ID is
 the lowercase SHA-256 of the authoritative TaskFrame/Plan/revision/Step
-binding, deterministic model request identity, and stable provider call ID.
+binding, deterministic model request identity, fixed single-call slot zero,
+and no model-generated field. The provider's transient call ID, selected tool,
+and arguments are response content and never participate in durable identity;
+a changed replay therefore conflicts at the same ToolCall ID.
 Exact restart replay therefore proposes the same immutable intent, allowing
 the existing `EffectIntentRepository` to classify it as `REPLAYED` rather than
 creating a duplicate. Empty, malformed, multiple-call, unknown-tool,

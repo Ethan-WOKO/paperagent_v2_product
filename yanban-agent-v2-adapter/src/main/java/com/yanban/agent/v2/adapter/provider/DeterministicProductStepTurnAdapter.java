@@ -32,6 +32,8 @@ import java.util.Optional;
 
 /** Deterministically maps one authoritative active Step to one model turn. */
 public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
+    private static final int SINGLE_CALL_SLOT = 0;
+
     private final ModelProvider provider;
     private final List<ToolDescriptor> tools;
     private final Map<ToolId, ToolDescriptor> toolsById;
@@ -95,7 +97,7 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
                     "productStepTurn.response.proposedToolCalls.toolId");
         }
         return new EffectIntentDecision(new EffectIntent(
-                toolCallId(authority, request, call),
+                toolCallId(authority, request),
                 authority.input().plan().id(),
                 authority.input().activeStep().id(),
                 call.toolId().value(),
@@ -165,11 +167,10 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
 
     private static ToolCallId toolCallId(
             Authority authority,
-            ModelRequest request,
-            ProposedToolCall call) {
+            ModelRequest request) {
         String stable = binding(authority)
                 + "\0" + request.requestId().value()
-                + "\0" + call.providerCallId();
+                + "\0call-slot\0" + SINGLE_CALL_SLOT;
         return new ToolCallId("product-tool-call." + sha256(stable));
     }
 
