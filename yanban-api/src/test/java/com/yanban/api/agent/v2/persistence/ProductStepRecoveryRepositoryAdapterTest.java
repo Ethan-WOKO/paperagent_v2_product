@@ -9,6 +9,7 @@ import io.paperagent.v2.contracts.InlineEventPayload;
 import io.paperagent.v2.contracts.ObjectValue;
 import io.paperagent.v2.contracts.PlanExecutionState;
 import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
@@ -16,6 +17,7 @@ import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepCompletion;
 import io.paperagent.v2.persistence.PersistedStepInterruption;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
+import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
@@ -202,14 +204,16 @@ class ProductStepRecoveryRepositoryAdapterTest {
     }
 
     @Test
-    void canonicalSourceWithoutActivationIsNotEligible() {
+    void canonicalSourceWithoutActivationIsReady() {
         PersistedPlanBootstrap bootstrap =
                 ProductPlanBootstrapTestFixtures.workspace(
                         "not-active", "task-a");
         seedH0(bootstrap);
-        assertFailure(adapter.inspect(bootstrap.plan().id()),
-                PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE,
-                "stepRecovery");
+        var readyResult = adapter.inspect(bootstrap.plan().id());
+        assertEquals(PersistenceOutcome.FOUND, readyResult.outcome());
+        var ready = readyResult.value().orElseThrow();
+        assertEquals(new PlanStepId("step-a"),
+                ((PersistedStepRecoveryReady) ready).readyStepId());
 
         StepActivationRequest request =
                 ProductStepActivationTestFixtures.request(
@@ -344,9 +348,32 @@ class ProductStepRecoveryRepositoryAdapterTest {
                         "multiple", "task-x");
         seedH0(multiple);
         seedActivation(multiple, "owner", 1);
-        StepActivationRequest second =
+        StepActivationRequest first =
                 ProductStepActivationTestFixtures.request(
                         multiple, "token", 1, "activation-second");
+        PlanStepId secondId = new PlanStepId("step-b");
+        Map<PlanStepId, StepExecutionState> secondStates =
+                new LinkedHashMap<>(
+                        first.activatedCheckpoint().stepStates());
+        secondStates.put(new PlanStepId("step-a"),
+                StepExecutionState.NOT_STARTED);
+        secondStates.put(secondId, StepExecutionState.ACTIVE);
+        StepActivationRequest second = new StepActivationRequest(
+                first.planId(), first.leaseToken(), first.fencingToken(),
+                first.expectedRevisionId(), first.expectedRevisionNumber(),
+                first.expectedCheckpointVersion(),
+                first.expectedEventHeadSequence(), secondId,
+                first.activationEvent(),
+                new Checkpoint(
+                        first.activatedCheckpoint().taskFrameId(),
+                        first.activatedCheckpoint().planId(),
+                        first.activatedCheckpoint().revisionId(),
+                        first.activatedCheckpoint().revisionNumber(),
+                        first.activatedCheckpoint().lastEventSequence(),
+                        first.activatedCheckpoint().planState(),
+                        secondStates,
+                        first.activatedCheckpoint().receiptReferences(),
+                        first.activatedCheckpoint().createdAt()));
         saveActivation(second, "owner", 1,
                 ProductStepActivationTestFixtures.NOW.plusSeconds(2));
         assertFailure(adapter.inspect(multiple.plan().id()),
@@ -487,7 +514,7 @@ class ProductStepRecoveryRepositoryAdapterTest {
     }
 
     @Test
-    void canonicalCompletionIsNotEligibleAndDualOccupancyIsPartial() {
+    void canonicalCompletionIsReadyAndDualOccupancyIsPartial() {
         PersistedPlanBootstrap bootstrap =
                 ProductPlanBootstrapTestFixtures.workspace(
                         "completed", "task-completed");
@@ -498,9 +525,11 @@ class ProductStepRecoveryRepositoryAdapterTest {
                 seedCompletion(bootstrap, activation, "completion");
 
         long rows = totalAuthorityRows();
-        assertFailure(adapter.inspect(bootstrap.plan().id()),
-                PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE,
-                "stepRecovery");
+        var readyResult = adapter.inspect(bootstrap.plan().id());
+        assertEquals(PersistenceOutcome.FOUND, readyResult.outcome());
+        var ready = readyResult.value().orElseThrow();
+        assertEquals(new PlanStepId("step-b"),
+                ((PersistedStepRecoveryReady) ready).readyStepId());
         assertEquals(rows, totalAuthorityRows());
 
         jdbc.update("update agent_v2_step_completions "

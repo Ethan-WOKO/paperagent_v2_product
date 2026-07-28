@@ -30,11 +30,6 @@ import java.util.Map;
 /** Composes one already-fenced active-Step completion persistence attempt. */
 public final class DefaultActiveStepCompletionComposer
         implements ActiveStepCompletionComposer {
-    private static final long ACTIVE_CHECKPOINT_VERSION = 3;
-    private static final long ACTIVE_EVENT_SEQUENCE = 2;
-    private static final long COMPLETED_CHECKPOINT_VERSION = 4;
-    private static final long COMPLETION_EVENT_SEQUENCE = 3;
-
     private final ActiveStepCompletionMaterializer materializer;
     private final StepCompletionRepository repository;
 
@@ -185,7 +180,7 @@ public final class DefaultActiveStepCompletionComposer
                 || !persisted.completedRevision().equals(
                         materialized.completedRevision())
                 || persisted.completedCheckpoint().version()
-                        != COMPLETED_CHECKPOINT_VERSION
+                        != materialized.expectedCheckpointVersion() + 1
                 || !persisted.completedCheckpoint().checkpoint().equals(
                         materialized.completedCheckpoint())) {
             throw inconsistent(
@@ -239,9 +234,9 @@ public final class DefaultActiveStepCompletionComposer
                         && output.expectedRevisionNumber()
                                 == currentRevision.number()
                         && output.expectedCheckpointVersion()
-                                == ACTIVE_CHECKPOINT_VERSION
+                                == current.version()
                         && output.expectedEventHeadSequence()
-                                == ACTIVE_EVENT_SEQUENCE
+                                == checkpoint.lastEventSequence()
                         && output.stepId().equals(stepId)
                         && fact.stepId().equals(stepId)
                         && fact.outcomeHash().equals(
@@ -252,6 +247,7 @@ public final class DefaultActiveStepCompletionComposer
                                 input.completionFactDraft().receiptReferences())
                         && expectedEvent(
                                 input, active.taskFrame().id(), planId,
+                                checkpoint.lastEventSequence() + 1,
                                 output.completionEvent())
                         && revision.id().equals(input.revisionDraft().id())
                         && revision.taskFrameId().equals(active.taskFrame().id())
@@ -268,7 +264,7 @@ public final class DefaultActiveStepCompletionComposer
                         && completed.revisionId().equals(revision.id())
                         && completed.revisionNumber() == revision.number()
                         && completed.lastEventSequence()
-                                == COMPLETION_EVENT_SEQUENCE
+                                == checkpoint.lastEventSequence() + 1
                         && completed.planState() == (allSucceeded
                                 ? PlanExecutionState.SUCCEEDED
                                 : PlanExecutionState.ACTIVE)
@@ -291,12 +287,13 @@ public final class DefaultActiveStepCompletionComposer
             ActiveStepCompletionMaterializationRequest input,
             io.paperagent.v2.contracts.TaskFrameId taskFrameId,
             PlanId planId,
+            long expectedSequence,
             EventEnvelope event) {
         var draft = input.eventDraft();
         return event.id().equals(draft.id())
                 && event.taskFrameId().equals(taskFrameId)
                 && event.planId().equals(planId)
-                && event.sequence() == COMPLETION_EVENT_SEQUENCE
+                && event.sequence() == expectedSequence
                 && event.occurredAt().equals(draft.occurredAt())
                 && event.type().equals(draft.type())
                 && event.causationId().equals(draft.causationId())

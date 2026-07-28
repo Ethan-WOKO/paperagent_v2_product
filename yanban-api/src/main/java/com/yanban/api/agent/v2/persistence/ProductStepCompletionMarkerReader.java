@@ -243,8 +243,10 @@ class ProductStepCompletionMarkerReader {
                         .equals(active.plan().id())
                 && request.completionEvent().taskFrameId()
                         .equals(active.taskFrame().id())
-                && request.completionEvent().sequence() == 3
-                && result.completedCheckpoint().version() == 4
+                && request.completionEvent().sequence()
+                        == active.activation().activationEvent().sequence() + 1
+                && result.completedCheckpoint().version()
+                        == active.checkpoint().version() + 1
                 && canonicalCheckpoint(request, active, completedPlan);
         return valid ? marker : null;
     }

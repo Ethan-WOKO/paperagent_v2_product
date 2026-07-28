@@ -3,14 +3,29 @@ package com.yanban.api.agent.v2.persistence;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.ReceiptStatus;
+import io.paperagent.v2.contracts.Checkpoint;
+import io.paperagent.v2.contracts.CompletionFact;
+import io.paperagent.v2.contracts.EventEnvelope;
+import io.paperagent.v2.contracts.EventId;
+import io.paperagent.v2.contracts.EventType;
+import io.paperagent.v2.contracts.InlineEventPayload;
+import io.paperagent.v2.contracts.ObjectValue;
+import io.paperagent.v2.contracts.Plan;
+import io.paperagent.v2.contracts.PlanExecutionState;
 import io.paperagent.v2.contracts.PlanRevision;
 import io.paperagent.v2.contracts.PlanRevisionId;
+import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.contracts.TaskFrameId;
 import io.paperagent.v2.persistence.EffectResultRequest;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.StepCompletionRequest;
+import io.paperagent.v2.persistence.StepActivationRequest;
+import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
+import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
+import io.paperagent.v2.persistence.PersistedStepRecoverySucceeded;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -25,6 +40,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -41,6 +61,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @Import({
         ProductStepCompletionRepositoryAdapter.class,
         ProductStepCompletionTransactions.class,
+        ProductStepActivationRepositoryAdapter.class,
+        ProductStepActivationTransactions.class,
         ProductStepCompletionMarkerReader.class,
         ProductStepCompletionCodec.class,
         ProductEffectOutcomeRepositoryAdapter.class,
@@ -100,6 +122,10 @@ class ProductStepCompletionRepositoryAdapterTest {
 
     @jakarta.annotation.Resource
     private ProductStepCompletionRepositoryAdapter adapter;
+    @jakarta.annotation.Resource
+    private ProductStepActivationRepositoryAdapter activationAdapter;
+    @jakarta.annotation.Resource
+    private ProductStepRecoveryRepositoryAdapter recoveryAdapter;
     @jakarta.annotation.Resource
     private ProductEffectIntentRepositoryAdapter intentAdapter;
     @jakarta.annotation.Resource
@@ -174,6 +200,175 @@ class ProductStepCompletionRepositoryAdapterTest {
         time.fail = true;
         jdbc.update("DELETE FROM agent_v2_plan_leases");
         assertEquals(applied, replayed(adapter.complete(request)));
+    }
+
+    @Test
+    void persistedTwoStepLifecycleRecoversReadyActiveAndSucceeded() {
+        StepCompletionRequest completeA =
+                request("completion-step-a", List.of());
+        var completedA = applied(adapter.complete(completeA));
+
+        var readyResult = recoveryAdapter.inspect(
+                scenario.bootstrap().plan().id());
+        assertEquals(PersistenceOutcome.FOUND, readyResult.outcome());
+        var ready = (PersistedStepRecoveryReady)
+                readyResult.value().orElseThrow();
+        assertEquals(new PlanStepId("step-b"), ready.readyStepId());
+        assertEquals(4, ready.checkpoint().version());
+        assertEquals(3,
+                ready.checkpoint().checkpoint().lastEventSequence());
+
+        StepActivationRequest activateB = activateB(ready);
+        var activatedB = applied(activationAdapter.activate(activateB));
+        var activeResult = recoveryAdapter.inspect(
+                scenario.bootstrap().plan().id());
+        assertEquals(
+                PersistenceOutcome.FOUND, activeResult.outcome(),
+                activeResult.toString());
+        var active = (PersistedStepRecoveryActive)
+                activeResult.value().orElseThrow();
+        assertEquals(new PlanStepId("step-b"),
+                active.activation().stepId());
+        assertEquals(5, active.checkpoint().version());
+        assertEquals(4,
+                active.checkpoint().checkpoint().lastEventSequence());
+
+        StepCompletionRequest completeB = completeB(active);
+        var completedB = applied(adapter.complete(completeB));
+        var succeededResult = recoveryAdapter.inspect(
+                scenario.bootstrap().plan().id());
+        assertEquals(PersistenceOutcome.FOUND, succeededResult.outcome());
+        var succeeded = (PersistedStepRecoverySucceeded)
+                succeededResult.value().orElseThrow();
+        assertEquals(6, succeeded.checkpoint().version());
+        assertEquals(5,
+                succeeded.checkpoint().checkpoint().lastEventSequence());
+        assertEquals(PlanExecutionState.SUCCEEDED,
+                succeeded.checkpoint().checkpoint().planState());
+        assertEquals(2,
+                succeeded.plan().latestRevision().completedFacts().size());
+
+        jdbc.update("DELETE FROM agent_v2_plan_leases");
+        assertEquals(activatedB,
+                replayed(activationAdapter.activate(activateB)));
+        assertEquals(completedA, replayed(adapter.complete(completeA)));
+        assertEquals(completedB, replayed(adapter.complete(completeB)));
+    }
+
+    @Test
+    void concurrentReadyStepActivationProducesOneAuthoritativeResult()
+            throws Exception {
+        applied(adapter.complete(request("completion-step-a", List.of())));
+        var ready = (PersistedStepRecoveryReady) recoveryAdapter.inspect(
+                scenario.bootstrap().plan().id()).value().orElseThrow();
+        StepActivationRequest activateB = activateB(ready);
+        CountDownLatch waiting = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        var contenders = Executors.newFixedThreadPool(2);
+        try {
+            var first = contenders.submit(() -> {
+                waiting.countDown();
+                start.await();
+                return activationAdapter.activate(activateB);
+            });
+            var second = contenders.submit(() -> {
+                waiting.countDown();
+                start.await();
+                return activationAdapter.activate(activateB);
+            });
+            waiting.await();
+            start.countDown();
+            var results = List.of(first.get(), second.get());
+
+            assertEquals(1, results.stream()
+                    .filter(result -> result.outcome()
+                            == PersistenceOutcome.APPLIED)
+                    .count());
+            assertEquals(1, results.stream()
+                    .filter(result -> result.outcome()
+                            == PersistenceOutcome.REPLAYED)
+                    .count());
+            assertEquals(2, activations.count());
+            assertEquals(1, activations.findAllByPlanId(
+                            scenario.bootstrap().plan().id().value()).stream()
+                    .filter(row -> row.stepId().equals("step-b"))
+                    .count());
+        } finally {
+            contenders.shutdownNow();
+        }
+    }
+
+    private StepActivationRequest activateB(PersistedStepRecoveryReady ready) {
+        PlanStepId step = ready.readyStepId();
+        Checkpoint source = ready.checkpoint().checkpoint();
+        Map<PlanStepId, StepExecutionState> states =
+                new LinkedHashMap<>(source.stepStates());
+        states.put(step, StepExecutionState.ACTIVE);
+        EventEnvelope event = new EventEnvelope(
+                new EventId("activation-step-b"),
+                ready.taskFrame().id(), ready.planId(),
+                source.lastEventSequence() + 1,
+                ProductStepCompletionTestFixtures.NOW.plusSeconds(3),
+                new EventType("STEP_ACTIVATED"),
+                Optional.of(new EventId("completion-step-a")),
+                "activation-b-correlation",
+                new InlineEventPayload(new ObjectValue(Map.of())));
+        Checkpoint checkpoint = new Checkpoint(
+                source.taskFrameId(), source.planId(), source.revisionId(),
+                source.revisionNumber(), event.sequence(),
+                PlanExecutionState.ACTIVE, states,
+                source.receiptReferences(),
+                ProductStepCompletionTestFixtures.NOW.plusSeconds(3));
+        return new StepActivationRequest(
+                ready.planId(), "token-completion", 1,
+                ready.plan().latestRevision().id(),
+                ready.plan().latestRevision().number(),
+                ready.checkpoint().version(), source.lastEventSequence(),
+                step, event, checkpoint);
+    }
+
+    private StepCompletionRequest completeB(PersistedStepRecoveryActive active) {
+        Checkpoint source = active.checkpoint().checkpoint();
+        Plan current = active.plan();
+        PlanRevision previous = current.latestRevision();
+        PlanStepId step = active.activation().stepId();
+        CompletionFact fact = new CompletionFact(
+                step, "outcome-hash-b",
+                ProductStepCompletionTestFixtures.NOW.plusSeconds(4),
+                List.of());
+        Map<PlanStepId, CompletionFact> facts =
+                new LinkedHashMap<>(previous.completedFacts());
+        facts.put(step, fact);
+        PlanRevision completed = new PlanRevision(
+                new PlanRevisionId("revision-completed-step-b"),
+                previous.taskFrameId(), previous.number() + 1,
+                Optional.of(previous.id()), "step b completed",
+                ProductStepCompletionTestFixtures.NOW.plusSeconds(4),
+                previous.steps(), facts);
+        Map<PlanStepId, StepExecutionState> states =
+                new LinkedHashMap<>(source.stepStates());
+        states.put(step, StepExecutionState.SUCCEEDED);
+        EventEnvelope event = new EventEnvelope(
+                new EventId("completion-step-b"),
+                active.taskFrame().id(), active.planId(),
+                source.lastEventSequence() + 1,
+                ProductStepCompletionTestFixtures.NOW.plusSeconds(4),
+                new EventType("STEP_COMPLETED"),
+                Optional.of(active.activation().activationEvent().id()),
+                "completion-b-correlation",
+                new InlineEventPayload(new ObjectValue(Map.of())));
+        Checkpoint checkpoint = new Checkpoint(
+                source.taskFrameId(), source.planId(), completed.id(),
+                completed.number(), event.sequence(),
+                PlanExecutionState.SUCCEEDED, states,
+                source.receiptReferences(),
+                ProductStepCompletionTestFixtures.NOW.plusSeconds(4));
+        return new StepCompletionRequest(
+                active.planId(), "token-completion", 1,
+                previous.id(), previous.number(),
+                active.checkpoint().version(),
+                source.lastEventSequence(), step, fact, event,
+                completed, checkpoint);
     }
 
     @Test

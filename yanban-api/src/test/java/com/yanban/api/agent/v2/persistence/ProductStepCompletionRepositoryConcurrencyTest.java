@@ -272,12 +272,12 @@ class ProductStepCompletionRepositoryConcurrencyTest {
         replayed(outcomeAdapter.appendProgress(progressRequest));
         replayed(outcomeAdapter.recordResult(resultRequest));
         failure(intentAdapter.persist(intent("tool-after-completion")),
-                PersistenceErrorCode.EFFECT_INTENT_PARTIAL_STATE,
-                "effectIntent.source");
+                PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE,
+                "stepRecovery");
         failure(outcomeAdapter.appendProgress(progress(
                         intentRequest, "progress-after-completion", 2)),
-                PersistenceErrorCode.EFFECT_OUTCOME_PARTIAL_STATE,
-                "effectOutcome.source");
+                PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
+                "effectIntent.stepId");
         EffectResultRequest changed = result(
                 intentRequest, "receipt-after-completion");
         failure(outcomeAdapter.recordResult(changed),

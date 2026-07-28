@@ -61,7 +61,7 @@ class StepRecoveryRepositoryTest {
     }
 
     @Test
-    void invalidMissingAndStartedButInactivePlansHaveStableClassifications() {
+    void invalidMissingAndStartedPlanHaveStableClassifications() {
         InMemoryState empty = new InMemoryState(
                 new PersistenceFixtures.MutableCountingClock(PersistenceFixtures.T0));
         StepRecoveryRepository recovery = new InMemoryStepRecoveryRepository(empty);
@@ -71,8 +71,13 @@ class StepRecoveryRepositoryTest {
                 PersistenceErrorCode.NOT_FOUND, "planId");
 
         Harness started = startedHarness("started-only", PersistenceFixtures.taskFrame());
-        assertFailure(started.recovery().inspect(started.plan().id()),
-                PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE, "stepRecovery");
+        PersistenceResult<StepRecoverySnapshot> ready =
+                started.recovery().inspect(started.plan().id());
+        assertEquals(PersistenceOutcome.FOUND, ready.outcome());
+        assertEquals(
+                PersistenceFixtures.STEP_1,
+                ((PersistedStepRecoveryReady) ready.value().orElseThrow())
+                        .readyStepId());
     }
 
     @Test
@@ -85,8 +90,11 @@ class StepRecoveryRepositoryTest {
         Harness completed = activeHarness("complete", PersistenceFixtures.taskFrame());
         requireApplied(completed.completions().complete(
                 completionRequest(completed, "complete")));
-        assertFailure(completed.recovery().inspect(completed.plan().id()),
-                PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE, "stepRecovery");
+        PersistenceResult<StepRecoverySnapshot> ready =
+                completed.recovery().inspect(completed.plan().id());
+        assertEquals(PersistenceOutcome.FOUND, ready.outcome());
+        assertTrue(ready.value().orElseThrow()
+                instanceof PersistedStepRecoveryReady);
     }
 
     @Test

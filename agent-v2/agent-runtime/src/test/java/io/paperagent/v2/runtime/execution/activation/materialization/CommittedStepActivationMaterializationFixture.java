@@ -3,6 +3,7 @@ package io.paperagent.v2.runtime.execution.activation.materialization;
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.Checkpoint;
+import io.paperagent.v2.contracts.CompletionFact;
 import io.paperagent.v2.contracts.EventEnvelope;
 import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.EventType;
@@ -27,6 +28,7 @@ import io.paperagent.v2.contracts.TextValue;
 import io.paperagent.v2.persistence.PersistedExecutionStart;
 import io.paperagent.v2.persistence.PersistedExecutionStartCommitted;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
+import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
 import io.paperagent.v2.persistence.VersionedCheckpoint;
 
 import java.time.Duration;
@@ -151,6 +153,37 @@ final class CommittedStepActivationMaterializationFixture {
                 Optional.empty(),
                 "correlation-activation-" + suffix,
                 payload("activation-" + suffix));
+    }
+
+    static PersistedStepRecoveryReady laterReady(String suffix) {
+        PersistedExecutionStartCommitted committed = committed(suffix);
+        Plan initialPlan = committed.currentPlan();
+        PlanRevision first = initialPlan.latestRevision();
+        PlanStepId completedStep = first.steps().get(0).id();
+        PlanStepId readyStep = first.steps().get(1).id();
+        CompletionFact fact = new CompletionFact(
+                completedStep, "outcome-" + suffix, T0.plusSeconds(2),
+                List.of());
+        PlanRevision second = new PlanRevision(
+                new PlanRevisionId("revision-after-first-" + suffix),
+                first.taskFrameId(), 2, Optional.of(first.id()),
+                "complete first", T0.plusSeconds(2), first.steps(),
+                Map.of(completedStep, fact));
+        Plan plan = new Plan(
+                initialPlan.id(), initialPlan.taskFrameId(),
+                List.of(first, second));
+        Map<PlanStepId, StepExecutionState> states =
+                allStates(plan, StepExecutionState.NOT_STARTED);
+        states.put(completedStep, StepExecutionState.SUCCEEDED);
+        Checkpoint checkpoint = new Checkpoint(
+                committed.bootstrap().taskFrame().id(), plan.id(),
+                second.id(), second.number(), 3,
+                PlanExecutionState.ACTIVE, states, List.of(),
+                T0.plusSeconds(2));
+        return new PersistedStepRecoveryReady(
+                committed.bootstrap().taskFrame(), plan,
+                new VersionedCheckpoint(4, checkpoint),
+                readyStep, Optional.empty());
     }
 
     static MaterializedStepActivation materialized(String suffix) {
