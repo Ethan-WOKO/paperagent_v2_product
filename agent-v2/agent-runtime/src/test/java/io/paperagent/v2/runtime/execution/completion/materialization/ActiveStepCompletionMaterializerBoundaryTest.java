@@ -78,15 +78,10 @@ class ActiveStepCompletionMaterializerBoundaryTest {
     @Test
     void deterministicImplementationHasNoCollaboratorOrSideEffectPort() {
         assertEquals(
-                3,
+                0,
                 DeterministicActiveStepCompletionMaterializer.class
                         .getDeclaredFields()
                         .length);
-        assertTrue(Arrays.stream(
-                        DeterministicActiveStepCompletionMaterializer.class
-                                .getDeclaredFields())
-                .allMatch(field -> Modifier.isStatic(field.getModifiers())
-                        && field.getType() == long.class));
         assertEquals(
                 1,
                 DeterministicActiveStepCompletionMaterializer.class

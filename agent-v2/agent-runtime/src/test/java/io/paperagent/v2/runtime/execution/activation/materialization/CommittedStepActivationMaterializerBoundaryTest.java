@@ -28,18 +28,30 @@ class CommittedStepActivationMaterializerBoundaryTest {
     private static final Set<String> PRODUCTION_FILES = Set.of(
             "StepActivationEventDraft.java",
             "CommittedStepActivationMaterializationRequest.java",
+            "ReadyStepActivationMaterializationRequest.java",
             "MaterializedStepActivation.java",
             "CommittedStepActivationMaterializer.java",
             "DeterministicCommittedStepActivationMaterializer.java",
+            "DeterministicReadyStepActivationMaterializer.java",
             "CommittedStepActivationMaterializationValidationCode.java",
             "CommittedStepActivationMaterializationValidationException.java",
             "CommittedStepActivationMaterializationValues.java");
     private static final Set<String> ALLOWED_PERSISTENCE_IMPORTS = Set.of(
             "import io.paperagent.v2.persistence"
                     + ".PersistedExecutionStartCommitted;");
+    private static final Set<String> ALLOWED_READY_PERSISTENCE_IMPORTS = Set.of(
+            "import io.paperagent.v2.persistence"
+                    + ".PersistedStepRecoveryReady;");
     private static final Set<String> ALLOWED_JDK_IMPORTS = Set.of(
             "import java.time.Instant;",
             "import java.util.Optional;");
+    private static final Set<String> ALLOWED_READY_JDK_IMPORTS = Set.of(
+            "import java.time.Instant;",
+            "import java.util.LinkedHashMap;",
+            "import java.util.Map;",
+            "import java.util.Objects;",
+            "import java.util.Set;",
+            "import java.util.stream.Collectors;");
     private static final List<String> FORBIDDEN_MARKERS = List.of(
             "StepActivationRequest",
             "StepActivationRepository",
@@ -357,10 +369,10 @@ class CommittedStepActivationMaterializerBoundaryTest {
                     continue;
                 }
                 assertTrue(
-                        ALLOWED_JDK_IMPORTS.contains(trimmed)
+                        allowedJdkImports(sourcePath).contains(trimmed)
                                 || trimmed.startsWith(
                                         "import io.paperagent.v2.contracts.")
-                                || ALLOWED_PERSISTENCE_IMPORTS
+                                || allowedPersistenceImports(sourcePath)
                                         .contains(trimmed),
                         () -> sourcePath
                                 + " crosses committed activation"
@@ -393,7 +405,8 @@ class CommittedStepActivationMaterializerBoundaryTest {
                 String trimmed = line.trim();
                 if (trimmed.contains("io.paperagent.v2.persistence")) {
                     assertTrue(
-                            ALLOWED_PERSISTENCE_IMPORTS.contains(trimmed),
+                            allowedPersistenceImports(sourcePath)
+                                    .contains(trimmed),
                             () -> sourcePath
                                     + " contains non-allowlisted persistence "
                                     + "reference: "
@@ -418,6 +431,17 @@ class CommittedStepActivationMaterializerBoundaryTest {
             }
         }
         assertEquals(1, implementationCount);
+    }
+
+    private static Set<String> allowedJdkImports(Path sourcePath) {
+        return sourcePath.getFileName().toString().contains("ReadyStep")
+                ? ALLOWED_READY_JDK_IMPORTS : ALLOWED_JDK_IMPORTS;
+    }
+
+    private static Set<String> allowedPersistenceImports(Path sourcePath) {
+        return sourcePath.getFileName().toString().contains("ReadyStep")
+                ? ALLOWED_READY_PERSISTENCE_IMPORTS
+                : ALLOWED_PERSISTENCE_IMPORTS;
     }
 
     private static int implementationCount(String source) {
