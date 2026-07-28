@@ -11,6 +11,7 @@ import io.paperagent.v2.runtime.execution.activation.composition.StepActivationC
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationComposer;
 import io.paperagent.v2.runtime.execution.activation.materialization.CommittedStepActivationMaterializer;
 import io.paperagent.v2.runtime.execution.activation.materialization.DeterministicCommittedStepActivationMaterializer;
+import io.paperagent.v2.runtime.execution.activation.materialization.DeterministicReadyStepActivationMaterializer;
 import io.paperagent.v2.runtime.execution.start.FreshExecutionStarted;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -144,12 +145,16 @@ class AuthenticatedAgentTurnStepActivationCompositionTest {
                 .collect(Collectors.toSet());
         assertEquals(Set.of(
                         CommittedStepActivationMaterializer.class,
+                        DeterministicReadyStepActivationMaterializer.class,
                         LeaseRepository.class,
                         StepActivationRepository.class),
                 fieldTypes);
         assertInstanceOf(
                 DeterministicCommittedStepActivationMaterializer.class,
                 fieldValue(composer, "materializer"));
+        assertInstanceOf(
+                DeterministicReadyStepActivationMaterializer.class,
+                fieldValue(composer, "readyMaterializer"));
         assertInstanceOf(
                 LeaseRepository.class,
                 fieldValue(composer, "leaseRepository"));
