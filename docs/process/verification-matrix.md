@@ -70,3 +70,16 @@ PR 只有满足以下任一条件才可以合并：
 2. product adapter PR 必须测试其直接连接的 V1 入口和 V2 契约。
 3. API 切换 PR 才增加对应端到端流程；里程碑验收再运行完整相关门禁。
 4. 每次检查 `agent-v2/` 不含 `com.yanban` 依赖、生成物、密钥或本地数据。
+
+## V2 Project Candidate focused gate
+
+- Run only the Candidate composition, delivery, service, migration,
+  controller, exact Step-selection/dispatch, and directly affected Project
+  effect tests.
+- Compile `yanban-api` with dependencies; run the single Candidate frontend
+  Vitest file and the frontend production build.
+- Verify the diff contains only frozen MODIFY paths, original Project bytes
+  remain unchanged, durable failure creates no Candidate, and UI handoff still
+  requires sandbox validation plus explicit apply confirmation.
+- Do not run unrelated full product suites without a concrete dependency or
+  failure that justifies expanding scope.

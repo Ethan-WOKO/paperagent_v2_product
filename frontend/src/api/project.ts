@@ -85,6 +85,31 @@ export interface V2ProjectReadAnalysisTurnResponse {
   replayed: boolean;
 }
 
+export interface V2ProjectCandidateTurnRequest {
+  objective: string;
+  paths: string[];
+  clientRequestId: string;
+}
+
+export type V2ProjectCandidateStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+
+export interface V2ProjectCandidateTurnResponse {
+  projectId: number;
+  sessionId: number;
+  clientRequestId: string;
+  status: V2ProjectCandidateStatus;
+  terminal: boolean;
+  turnId: number;
+  planId?: string;
+  projectVersion: string;
+  candidateArtifactId?: number;
+  candidateFingerprint?: string;
+  diffFingerprint?: string;
+  assistantMessageId?: number;
+  errorCode?: string;
+  replayed: boolean;
+}
+
 export type CandidateValidationProfile = 'MAVEN_TEST' | 'MAVEN_VERIFY' | 'JAVA_SOURCE_RUN'
   | 'PYTHON_SOURCE_RUN' | 'C_SOURCE_RUN' | 'CPP_SOURCE_RUN';
 
@@ -214,6 +239,25 @@ export function readV2ProjectReadAnalysisTurn(
 ) {
   return http.get<V2ProjectReadAnalysisTurnResponse>(
     `/projects/${projectId}/agent/sessions/${sessionId}/v2/read-analysis-turns/${encodeURIComponent(clientRequestId)}`,
+  );
+}
+export function startV2ProjectCandidateTurn(
+  projectId: number,
+  sessionId: number,
+  payload: V2ProjectCandidateTurnRequest,
+) {
+  return http.post<V2ProjectCandidateTurnResponse>(
+    `/projects/${projectId}/agent/sessions/${sessionId}/v2/candidate-turns`,
+    payload,
+  );
+}
+export function readV2ProjectCandidateTurn(
+  projectId: number,
+  sessionId: number,
+  clientRequestId: string,
+) {
+  return http.get<V2ProjectCandidateTurnResponse>(
+    `/projects/${projectId}/agent/sessions/${sessionId}/v2/candidate-turns/${encodeURIComponent(clientRequestId)}`,
   );
 }
 export function createProjectPlan(projectId: number, sessionId: number, payload: CreateAgentPlanPayload) {

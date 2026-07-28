@@ -59,6 +59,8 @@ import java.util.Optional;
 @Service
 public class AuthenticatedPersistentPlanAgentLoopComposer {
     private static final String LITERATURE_SEARCH = "literature.search";
+    private static final String PROJECT_CANDIDATE_COMPOSE =
+            "project.candidate.compose";
 
     private final AgentTurnProductContextResolver contexts;
     private final ProductPlanIdDerivation planIds;
@@ -187,7 +189,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             String effectKind = intent.persistedIntent().intent().kind();
             if (!LITERATURE_SEARCH.equals(effectKind)
                     && !"project.read".equals(effectKind)
-                    && !"project.search".equals(effectKind)) {
+                    && !"project.search".equals(effectKind)
+                    && !PROJECT_CANDIDATE_COMPOSE.equals(effectKind)) {
                 return outcome(planId, cycle,
                         PersistentPlanAgentLoopState
                                 .UNSUPPORTED_INTENT,

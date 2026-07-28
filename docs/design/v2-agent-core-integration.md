@@ -1150,3 +1150,31 @@ Project messages, legacy Plans, direct reads/search, literature and paper
 surfaces are not rerouted. This boundary adds no write/apply/rollback/export,
 command/Sandbox execution, generic router, automatic repair/replan, or legacy
 Agent orchestration.
+
+## Explicit Project Candidate boundary
+
+Project chat now has a separate opt-in V2 Candidate route. Intake freezes the
+owner-qualified PROJECT session, current ProjectVersion, bounded objective, and
+one to four exact existing text paths. Its persistent Plan contains exact
+read Steps followed by one `project.candidate.compose` Step. The product Step
+selector and loop add only that exact effect kind.
+
+The compose intent itself is code-owned and carries no replacement authority.
+Inside the effect, the Provider sees the frozen objective and bounded source
+files as untrusted data and returns strict JSON replacements. Server code
+rejects missing, duplicate, extra, malformed, unchanged, binary, or oversized
+content before computing a canonical MODIFY-only WorkspaceDiff. No source
+Project bytes are written.
+
+After the exact Plan reaches a successful terminal recovery cut, the adapter
+rechecks the current ProjectVersion, rereads original bytes for attestation,
+and narrowly calls the mature Candidate artifact service. V58 durably binds
+the resulting artifact and Candidate/diff fingerprints to the original
+request. Candidate publication and the binding share a transaction; terminal
+failure creates no review artifact. The existing Changes inspector then owns
+sandbox validation, selected-change review, If-Match/idempotency enforcement,
+explicit confirmation, and revision creation. V2 never calls apply.
+
+This boundary does not add ADD/DELETE, command or network execution,
+automatic apply/repair/replan, generic natural-language routing, a real
+external Provider smoke test, or any dependency from V2 core to product code.

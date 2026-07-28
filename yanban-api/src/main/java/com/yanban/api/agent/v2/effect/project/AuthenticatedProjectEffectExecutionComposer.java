@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisAuthoritySource;
+import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisEffectAuthority;
+import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectGateway;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnWorkspacePortFactory;
@@ -59,6 +61,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final PlanExecutionContextRepository executionContexts;
     private final AuthenticatedAgentTurnWorkspacePortFactory workspaces;
     private final ProjectAnalysisAuthoritySource authorities;
+    private final ProjectCandidateEffectGateway candidateAuthorities;
+    private final ProjectCandidateCompositionEffect candidateComposition;
     private final ObjectMapper json;
 
     public AuthenticatedProjectEffectExecutionComposer(
@@ -71,6 +75,23 @@ public class AuthenticatedProjectEffectExecutionComposer {
             AuthenticatedAgentTurnWorkspacePortFactory workspaces,
             ProjectAnalysisAuthoritySource authorities,
             ObjectMapper json) {
+        this(contexts, planIds, recoverer, intents, claims, executionContexts,
+                workspaces, authorities, null, null, json);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AuthenticatedProjectEffectExecutionComposer(
+            AgentTurnProductContextResolver contexts,
+            ProductPlanIdDerivation planIds,
+            StepRecoverer recoverer,
+            EffectIntentRepository intents,
+            ProductEffectExecutionClaimRepository claims,
+            PlanExecutionContextRepository executionContexts,
+            AuthenticatedAgentTurnWorkspacePortFactory workspaces,
+            ProjectAnalysisAuthoritySource authorities,
+            ProjectCandidateEffectGateway candidateAuthorities,
+            ProjectCandidateCompositionEffect candidateComposition,
+            ObjectMapper json) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.recoverer = recoverer;
@@ -79,6 +100,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
         this.executionContexts = executionContexts;
         this.workspaces = workspaces;
         this.authorities = authorities;
+        this.candidateAuthorities = candidateAuthorities;
+        this.candidateComposition = candidateComposition;
         this.json = json;
     }
 
@@ -112,16 +135,40 @@ public class AuthenticatedProjectEffectExecutionComposer {
                                 .activationEvent().id())
                 || !intent.leaseOwnerId().equals(active.lease().ownerId())
                 || intent.fencingToken() != active.lease().fencingToken()
-                || !KINDS.contains(intent.intent().kind())) {
+                || !KINDS.contains(intent.intent().kind())
+                        && !ProjectCandidateCompositionEffect.KIND.equals(
+                                intent.intent().kind())) {
             throw failed();
         }
-        var authority = authorities.require(
-                planId.value(), intent.intent().stepId().value());
-        String arguments = canonical(intent.intent().arguments());
-        if (!authority.kind().equals(intent.intent().kind())
-                || !authority.argumentJson().equals(arguments)
-                || !authority.argumentSha256().equals(hash(arguments))) {
-            throw failed();
+        if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
+            if (candidateAuthorities == null || candidateComposition == null) {
+                throw failed();
+            }
+            var candidate = candidateAuthorities.require(planId.value(),
+                    intent.intent().stepId().value());
+            String arguments = canonical(intent.intent().arguments());
+            if (!candidate.kind().equals(intent.intent().kind())
+                    || !candidate.authorityJson().equals(arguments)
+                    || !candidate.authoritySha256().equals(hash(arguments))) throw failed();
+        } else {
+            ProjectAnalysisEffectAuthority authority;
+            try {
+                authority = authorities.require(
+                        planId.value(), intent.intent().stepId().value());
+            } catch (RuntimeException missingAnalysis) {
+                if (candidateAuthorities == null) throw failed();
+                var candidate = candidateAuthorities.require(
+                        planId.value(), intent.intent().stepId().value());
+                authority = new ProjectAnalysisEffectAuthority(
+                        candidate.kind(), candidate.authorityJson(),
+                        candidate.authoritySha256());
+            }
+            String arguments = canonical(intent.intent().arguments());
+            if (!authority.kind().equals(intent.intent().kind())
+                    || !authority.argumentJson().equals(arguments)
+                    || !authority.argumentSha256().equals(hash(arguments))) {
+                throw failed();
+            }
         }
         var contextResult = executionContexts.inspect(planId);
         if (contextResult.outcome() != PersistenceOutcome.FOUND
@@ -138,14 +185,29 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 command.recoveryAttempt().leaseToken(),
                 active.lease().fencingToken(), started,
                 () -> receipt(intent, workspace, verified.workspace(),
-                        started)));
+                        context.identity().projectId(), userId, turnId, started)));
         return new AuthenticatedProjectEffectExecutionOutcome(
                 claimed.result(), claimed.replayed());
     }
 
     private ExecutionReceipt receipt(
             PersistedEffectIntent intent, WorkspacePort workspace,
-            io.paperagent.v2.contracts.WorkspaceRef ref, Instant started) {
+            io.paperagent.v2.contracts.WorkspaceRef ref, Long projectId,
+            Long userId, Long turnId, Instant started) {
+        if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
+            var candidate = candidateComposition.execute(intent, workspace, ref,
+                    userId, turnId, projectId, started);
+            ObjectNode output = json.createObjectNode();
+            output.put("diffFingerprint", candidate.diffFingerprint());
+            Instant ended = Instant.now();
+            return new ExecutionReceipt(
+                    new ReceiptId("project-receipt." + hash(
+                            intent.intent().toolCallId().value())),
+                    intent.intent().toolCallId(), ReceiptStatus.SUCCESS,
+                    started, ended, java.util.Optional.of(0),
+                    java.util.Optional.empty(), capture(write(output)),
+                    OutputCapture.empty(), List.of(), java.util.Optional.empty(), List.of());
+        }
         boolean success = true;
         String output;
         try {

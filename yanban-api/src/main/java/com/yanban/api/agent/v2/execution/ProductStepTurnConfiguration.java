@@ -52,6 +52,10 @@ public class ProductStepTurnConfiguration {
                 new ToolDescriptor(
                         new ToolId("project.search"),
                         "Search one literal query in the frozen Project Workspace.",
+                        Set.of()),
+                new ToolDescriptor(
+                        new ToolId("project.candidate.compose"),
+                        "Create bounded full-text replacements for the exact frozen Project targets in an isolated Workspace.",
                         Set.of()));
     }
 
@@ -69,13 +73,21 @@ public class ProductStepTurnConfiguration {
                     "select effect_kind from agent_v2_project_analysis_steps "
                             + "where plan_id = ? and step_id = ?",
                     String.class, planId, stepId);
+            List<String> candidateKinds = jdbc.queryForList(
+                    "select effect_kind from agent_v2_project_candidate_steps "
+                            + "where plan_id = ? and step_id = ?",
+                    String.class, planId, stepId);
             List<String> literaturePlans = jdbc.queryForList(
                     "select plan_id from agent_v2_literature_deliveries "
                             + "where plan_id = ?",
                     String.class, planId);
             String kind = null;
-            if (projectKinds.size() == 1 && literaturePlans.isEmpty()) {
+            if (projectKinds.size() == 1 && candidateKinds.isEmpty()
+                    && literaturePlans.isEmpty()) {
                 kind = projectKinds.get(0);
+            } else if (candidateKinds.size() == 1 && projectKinds.isEmpty()
+                    && literaturePlans.isEmpty()) {
+                kind = candidateKinds.get(0);
             } else if (projectKinds.isEmpty()
                     && literaturePlans.size() == 1
                     && "literature-search".equals(stepId)) {
