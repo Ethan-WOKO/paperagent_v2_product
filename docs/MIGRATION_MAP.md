@@ -117,3 +117,39 @@
 - Excluded: Project writes, command/Sandbox execution, diff acceptance,
   revision apply, automatic replan/repair, arbitrary tools, and legacy Agent
   planner/service/verifier execution.
+
+## Opt-in V2 Project modification Candidate
+
+- Status: `REUSE_WITH_ADAPTER`.
+- Assessed product entries: `CandidateChangeArtifactService`, the immutable
+  Candidate envelope/change-set contracts, `CandidateSandboxValidationService`,
+  `CandidateValidationApplicationGate`, `ProjectRevisionWorkflowService`, and
+  the existing Changes inspector.
+- Reuse decision: the V2 path calls only the mature Candidate artifact service
+  after a successful V2 terminal cut. It does not reuse the legacy Agent
+  planner, completion verifier, Candidate tool executor, or fixed execution
+  chain. Existing sandbox validation and revision application sources remain
+  unchanged.
+- Authority: V58 binds authenticated user/Project/session/request, the frozen
+  ProjectVersion, objective, exact 1-4 paths, Plan, Workspace, and each Step
+  effect. `project.candidate.compose` accepts only the exact code-owned
+  `{"operation":"compose"}` intent. Provider replacement JSON is untrusted
+  content and must contain every frozen path exactly once and no other path.
+- Mutation: replacements are bounded UTF-8 full text and are written only to
+  the isolated V2 Workspace. A successful effect requires a canonical,
+  non-empty MODIFY-only WorkspaceDiff for exactly the frozen paths. The
+  original Project is reread only for Candidate attestation and remains
+  unchanged.
+- Delivery: only a terminal successful Plan may publish the existing-format
+  Candidate. Artifact identity, Candidate fingerprint, and a stable diff
+  fingerprint are bound durably before one assistant handoff. Exact replay and
+  concurrent delivery converge on that binding; durable failure has no
+  Candidate.
+- UI: the explicit form uses POST plus scoped GET recovery, refreshes and
+  selects the returned Candidate, then leaves the existing sandbox validation,
+  selected-change review, If-Match, idempotency, and explicit apply
+  confirmation as the sole ProjectVersion mutation route.
+- Excluded: ADD/DELETE, automatic apply, arbitrary command/network/Sandbox
+  execution, retry/repair/replan, generic message routing, legacy Agent
+  orchestration, and changes to the V2 core or mature Candidate/revision
+  implementations.

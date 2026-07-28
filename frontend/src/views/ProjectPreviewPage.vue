@@ -673,6 +673,48 @@
               </div>
             </div>
           </details>
+          <details class="v2-project-analysis" :open="projectCandidateOpen || undefined">
+            <summary>
+              <span>
+                <strong>Propose reviewed changes</strong>
+                <small>Isolated Workspace; explicit validation and apply required</small>
+              </span>
+              <NTag size="tiny" type="warning">V2 Candidate</NTag>
+            </summary>
+            <div class="v2-project-analysis__body">
+              <p>Choose 1–4 existing text files. V2 prepares MODIFY-only replacements and opens the existing Candidate review flow; it never applies them automatically.</p>
+              <NInput v-model:value="projectCandidateForm.objective" type="textarea"
+                :maxlength="2000" :autosize="{ minRows: 2, maxRows: 4 }"
+                placeholder="Describe the exact modification objective" />
+              <NInput v-model:value="projectCandidateForm.pathsText" type="textarea"
+                :autosize="{ minRows: 2, maxRows: 5 }"
+                placeholder="One existing Project-relative text path per line" />
+              <NAlert v-if="projectCandidateError" type="error" :show-icon="false">
+                {{ projectCandidateError }}
+              </NAlert>
+              <section v-if="projectCandidateOutcome" class="v2-project-analysis__outcome">
+                <header>
+                  <NTag size="tiny" :type="projectCandidateOutcome.status === 'SUCCEEDED' ? 'success' : projectCandidateOutcome.status === 'FAILED' ? 'error' : 'info'">
+                    {{ projectCandidateOutcome.status }}
+                  </NTag>
+                  <span>Project version {{ shortHash(projectCandidateOutcome.projectVersion) }}</span>
+                </header>
+                <p v-if="projectCandidateOutcome.status === 'SUCCEEDED'">
+                  Candidate #{{ projectCandidateOutcome.candidateArtifactId }} is selected in Changes.
+                  Sandbox validation and explicit confirmation are still required.
+                </p>
+                <p v-else-if="projectCandidateOutcome.status === 'RUNNING'">Preparing an isolated review Candidate…</p>
+                <p v-else>Candidate was not created. <code>{{ projectCandidateOutcome.errorCode }}</code></p>
+              </section>
+              <div class="v2-project-analysis__actions">
+                <NButton type="primary" :loading="projectCandidateStarting || projectCandidatePolling"
+                  :disabled="!activeProject || !projectCandidateForm.objective.trim() || !projectCandidateForm.pathsText.trim()"
+                  @click="startProjectCandidate">
+                  Prepare Candidate
+                </NButton>
+              </div>
+            </div>
+          </details>
           <div class="project-composer">
             <NInput v-model:value="chatInput" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="Ask about this read-only Project..." @keydown="handleComposerKeydown" />
             <NButton type="primary" :loading="loading.send" :disabled="!chatInput.trim() || !activeProject" @click="sendChat">Send</NButton>
@@ -797,7 +839,7 @@ import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import ProjectContextDebugPanel from '@/components/ProjectContextDebugPanel.vue';
 import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, listMessages, listPlans, updateSession as updateAgentSession, type AgentContextSnapshotResponse, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse } from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectContextSnapshots, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, readV2ProjectReadAnalysisTurn, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, startV2ProjectReadAnalysisTurn, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse, type V2ProjectReadAnalysisTurnResponse } from '@/api/project';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectContextSnapshots, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, readV2ProjectCandidateTurn, readV2ProjectReadAnalysisTurn, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, startV2ProjectCandidateTurn, startV2ProjectReadAnalysisTurn, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse, type V2ProjectCandidateTurnResponse, type V2ProjectReadAnalysisTurnResponse } from '@/api/project';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
 import {
@@ -830,6 +872,15 @@ import {
   startThenPollV2ProjectAnalysis,
   type V2ProjectAnalysisRequestIdentity,
 } from '@/utils/v2ProjectAnalysis';
+import {
+  isCurrentV2ProjectCandidateRequest,
+  isDefinitiveV2ProjectCandidateStartRejection,
+  isV2ProjectCandidateConfirmedNotCreated,
+  newV2ProjectCandidateClientRequestId,
+  normalizeV2ProjectCandidateForm,
+  startThenPollV2ProjectCandidate,
+  type V2ProjectCandidateRequestIdentity,
+} from '@/utils/v2ProjectCandidate';
 
 type ProjectChatRole = 'user' | 'assistant' | 'process';
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
@@ -957,6 +1008,16 @@ const projectAnalysisForm = reactive({
 let projectAnalysisAbortController: AbortController | null = null;
 let projectAnalysisSequence = 0;
 let projectAnalysisClientRequestId: string | null = null;
+const V2_PROJECT_CANDIDATE_STORAGE_KEY = 'yanban.v2ProjectCandidate.activeRequest.';
+const projectCandidateOpen = ref(false);
+const projectCandidateStarting = ref(false);
+const projectCandidatePolling = ref(false);
+const projectCandidateError = ref('');
+const projectCandidateOutcome = ref<V2ProjectCandidateTurnResponse | null>(null);
+const projectCandidateForm = reactive({ objective: '', pathsText: '' });
+let projectCandidateAbortController: AbortController | null = null;
+let projectCandidateSequence = 0;
+let projectCandidateClientRequestId: string | null = null;
 
 const loading = reactive({
   projects: false,
@@ -2086,8 +2147,163 @@ async function startProjectAnalysis() {
   }
 }
 
+function currentProjectCandidateIdentity(): V2ProjectCandidateRequestIdentity {
+  return {
+    projectId: activeProjectId.value,
+    sessionId: activeSessionId.value,
+    clientRequestId: projectCandidateClientRequestId,
+    sequence: projectCandidateSequence,
+  };
+}
+
+function stopProjectCandidatePolling() {
+  projectCandidateSequence += 1;
+  projectCandidateAbortController?.abort();
+  projectCandidateAbortController = null;
+  projectCandidatePolling.value = false;
+}
+
+function candidateStorageKey(projectId: number, sessionId: number) {
+  return `${V2_PROJECT_CANDIDATE_STORAGE_KEY}${projectId}.${sessionId}`;
+}
+
+function clearStoredProjectCandidateRequest(projectId: number, sessionId: number) {
+  window.localStorage.removeItem(candidateStorageKey(projectId, sessionId));
+}
+
+function storedProjectCandidateRequest(projectId: number, sessionId: number) {
+  return window.localStorage.getItem(candidateStorageKey(projectId, sessionId))?.trim() || null;
+}
+
+async function presentProjectCandidate(
+  projectId: number,
+  sessionId: number,
+  outcome: V2ProjectCandidateTurnResponse,
+  epoch: number,
+) {
+  if (outcome.status !== 'SUCCEEDED' || !outcome.candidateArtifactId
+      || epoch !== projectEpoch || projectId !== activeProjectId.value
+      || sessionId !== activeSessionId.value) return;
+  await Promise.all([
+    loadMessages(sessionId, epoch).catch(() => undefined),
+    loadCandidates(sessionId, epoch),
+  ]);
+  const candidate = candidates.value.find((item) => item.artifact.id === outcome.candidateArtifactId);
+  if (candidate) selectCandidate(candidate);
+}
+
+async function recoverProjectCandidate(projectId: number, sessionId: number) {
+  const clientRequestId = storedProjectCandidateRequest(projectId, sessionId);
+  if (!clientRequestId) return;
+  projectCandidateOpen.value = true;
+  projectCandidateError.value = '';
+  stopProjectCandidatePolling();
+  projectCandidateClientRequestId = clientRequestId;
+  const sequence = projectCandidateSequence;
+  const expected = { projectId, sessionId, clientRequestId, sequence };
+  const controller = new AbortController();
+  projectCandidateAbortController = controller;
+  projectCandidatePolling.value = true;
+  const epoch = projectEpoch;
+  try {
+    const outcome = await startThenPollV2ProjectCandidate(
+      async () => (await readV2ProjectCandidateTurn(projectId, sessionId, clientRequestId)).data,
+      async () => (await readV2ProjectCandidateTurn(projectId, sessionId, clientRequestId)).data,
+      {
+        signal: controller.signal,
+        onOutcome: (value) => {
+          if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
+            projectCandidateOutcome.value = value;
+          }
+        },
+      },
+    );
+    if (!isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) return;
+    projectCandidateOutcome.value = outcome;
+    clearStoredProjectCandidateRequest(projectId, sessionId);
+    await presentProjectCandidate(projectId, sessionId, outcome, epoch);
+  } catch (cause) {
+    if (controller.signal.aborted) return;
+    if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
+      if (isV2ProjectCandidateConfirmedNotCreated(cause)) {
+        clearStoredProjectCandidateRequest(projectId, sessionId);
+      }
+      projectCandidateError.value = apiError(cause);
+    }
+  } finally {
+    if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
+      projectCandidatePolling.value = false;
+      projectCandidateAbortController = null;
+    }
+  }
+}
+
+async function startProjectCandidate() {
+  const projectId = activeProjectId.value;
+  if (!projectId || projectCandidateStarting.value || projectCandidatePolling.value) return;
+  const epoch = projectEpoch;
+  projectCandidateStarting.value = true;
+  projectCandidateError.value = '';
+  projectCandidateOutcome.value = null;
+  const clientRequestId = newV2ProjectCandidateClientRequestId();
+  try {
+    const sessionId = await ensureSession();
+    if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
+    const pending = storedProjectCandidateRequest(projectId, sessionId);
+    if (pending) {
+      await recoverProjectCandidate(projectId, sessionId);
+      return;
+    }
+    const request = normalizeV2ProjectCandidateForm(projectCandidateForm, clientRequestId);
+    stopProjectCandidatePolling();
+    projectCandidateClientRequestId = clientRequestId;
+    const sequence = projectCandidateSequence;
+    const expected = { projectId, sessionId, clientRequestId, sequence };
+    window.localStorage.setItem(candidateStorageKey(projectId, sessionId), clientRequestId);
+    const controller = new AbortController();
+    projectCandidateAbortController = controller;
+    projectCandidatePolling.value = true;
+    const outcome = await startThenPollV2ProjectCandidate(
+      async () => (await startV2ProjectCandidateTurn(projectId, sessionId, request)).data,
+      async () => (await readV2ProjectCandidateTurn(projectId, sessionId, clientRequestId)).data,
+      {
+        signal: controller.signal,
+        onOutcome: (value) => {
+          if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
+            projectCandidateOutcome.value = value;
+          }
+        },
+      },
+    );
+    if (!isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) return;
+    projectCandidateOutcome.value = outcome;
+    clearStoredProjectCandidateRequest(projectId, sessionId);
+    await presentProjectCandidate(projectId, sessionId, outcome, epoch);
+  } catch (cause) {
+    const sessionId = activeSessionId.value;
+    if (epoch === projectEpoch && projectId === activeProjectId.value) {
+      if (sessionId && (isDefinitiveV2ProjectCandidateStartRejection(cause)
+          || isV2ProjectCandidateConfirmedNotCreated(cause))) {
+        clearStoredProjectCandidateRequest(projectId, sessionId);
+      }
+      projectCandidateError.value = apiError(cause);
+    }
+  } finally {
+    if (epoch === projectEpoch && projectId === activeProjectId.value) {
+      projectCandidateStarting.value = false;
+      projectCandidatePolling.value = false;
+      projectCandidateAbortController = null;
+    }
+  }
+}
+
 async function selectProject(projectId: number) {
   stopProjectAnalysisPolling();
+  stopProjectCandidatePolling();
+  projectCandidateStarting.value = false;
+  projectCandidateClientRequestId = null;
+  projectCandidateOutcome.value = null;
+  projectCandidateError.value = '';
   projectAnalysisStarting.value = false;
   projectAnalysisClientRequestId = null;
   projectAnalysisOutcome.value = null;
@@ -2198,6 +2414,7 @@ async function loadConversation(epoch = projectEpoch) {
     await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch), loadCandidates(sessionId, epoch)]);
     if (epoch === projectEpoch && activeProjectId.value) {
       void recoverProjectAnalysis(activeProjectId.value, sessionId);
+      void recoverProjectCandidate(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -2581,6 +2798,11 @@ async function refreshCandidates() {
 async function selectConversation(sessionId: number) {
   if (sessionId === activeSessionId.value || loading.send) return;
   stopProjectAnalysisPolling();
+  stopProjectCandidatePolling();
+  projectCandidateStarting.value = false;
+  projectCandidateClientRequestId = null;
+  projectCandidateOutcome.value = null;
+  projectCandidateError.value = '';
   projectAnalysisStarting.value = false;
   projectAnalysisClientRequestId = null;
   projectAnalysisOutcome.value = null;
@@ -2612,6 +2834,7 @@ async function selectConversation(sessionId: number) {
     await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch), loadCandidates(sessionId, epoch)]);
     if (epoch === projectEpoch && activeProjectId.value) {
       void recoverProjectAnalysis(activeProjectId.value, sessionId);
+      void recoverProjectCandidate(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -2627,6 +2850,11 @@ async function startNewConversation() {
   const project = activeProject.value;
   if (!project || loading.send) return;
   stopProjectAnalysisPolling();
+  stopProjectCandidatePolling();
+  projectCandidateStarting.value = false;
+  projectCandidateClientRequestId = null;
+  projectCandidateOutcome.value = null;
+  projectCandidateError.value = '';
   projectAnalysisStarting.value = false;
   projectAnalysisClientRequestId = null;
   projectAnalysisOutcome.value = null;
@@ -2709,6 +2937,7 @@ async function deleteConversation(session: AgentSessionResponse) {
     projectSessions.value = projectSessions.value.filter((item) => item.id !== session.id);
     if (!wasActive) return;
     stopProjectAnalysisPolling();
+    stopProjectCandidatePolling();
     projectAnalysisStarting.value = false;
     projectAnalysisClientRequestId = null;
     projectAnalysisOutcome.value = null;
@@ -2750,6 +2979,7 @@ async function removeActiveProject() {
   try {
     await deleteProject(projectId);
     stopProjectAnalysisPolling();
+    stopProjectCandidatePolling();
     projectAnalysisStarting.value = false;
     projectAnalysisClientRequestId = null;
     projectAnalysisOutcome.value = null;
@@ -2827,6 +3057,7 @@ async function submitProject() {
 onMounted(loadProjects);
 onUnmounted(() => {
   stopProjectAnalysisPolling();
+  stopProjectCandidatePolling();
   closeProjectSocket();
   if (planPoll != null) window.clearTimeout(planPoll);
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);

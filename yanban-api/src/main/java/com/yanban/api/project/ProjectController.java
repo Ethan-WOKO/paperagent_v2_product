@@ -13,6 +13,9 @@ import com.yanban.api.agent.AgentContextSnapshotResponse;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisRequest;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisResponse;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisService;
+import com.yanban.api.agent.v2.compatibility.project.V2ProjectCandidateRequest;
+import com.yanban.api.agent.v2.compatibility.project.V2ProjectCandidateResponse;
+import com.yanban.api.agent.v2.compatibility.project.V2ProjectCandidateService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -44,22 +47,25 @@ public class ProjectController {
     private final ProjectRevisionWorkflowService revisionWorkflow;
     private final CandidateSandboxValidationService candidateValidations;
     private final V2ProjectAnalysisService v2ProjectAnalysis;
+    private final V2ProjectCandidateService v2ProjectCandidate;
 
     /** Compatibility constructor for focused existing controller tests. */
     public ProjectController(ProjectService projectService) {
         this(projectService, null, null, null, java.util.Optional.empty(),
-                java.util.Optional.empty());
+                java.util.Optional.empty(), java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService) {
         this(projectService, projectAgentRuntimeService, null, null,
-                java.util.Optional.empty(), java.util.Optional.empty());
+                java.util.Optional.empty(), java.util.Optional.empty(),
+                java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
                              ProjectUploadService projectUploadService) {
         this(projectService, projectAgentRuntimeService, projectUploadService,
-                null, java.util.Optional.empty(), java.util.Optional.empty());
+                null, java.util.Optional.empty(), java.util.Optional.empty(),
+                java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
@@ -67,7 +73,7 @@ public class ProjectController {
                              ProjectRevisionWorkflowService revisionWorkflow) {
         this(projectService, projectAgentRuntimeService, projectUploadService,
                 revisionWorkflow, java.util.Optional.empty(),
-                java.util.Optional.empty());
+                java.util.Optional.empty(), java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
@@ -76,6 +82,17 @@ public class ProjectController {
                              java.util.Optional<CandidateSandboxValidationService> candidateValidations) {
         this(projectService, projectAgentRuntimeService, projectUploadService,
                 revisionWorkflow, candidateValidations,
+                java.util.Optional.empty(), java.util.Optional.empty());
+    }
+
+    public ProjectController(ProjectService projectService,
+                             ProjectAgentRuntimeService projectAgentRuntimeService,
+                             ProjectUploadService projectUploadService,
+                             ProjectRevisionWorkflowService revisionWorkflow,
+                             java.util.Optional<CandidateSandboxValidationService> candidateValidations,
+                             java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis) {
+        this(projectService, projectAgentRuntimeService, projectUploadService,
+                revisionWorkflow, candidateValidations, v2ProjectAnalysis,
                 java.util.Optional.empty());
     }
 
@@ -85,13 +102,15 @@ public class ProjectController {
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow,
                              java.util.Optional<CandidateSandboxValidationService> candidateValidations,
-                             java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis) {
+                             java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis,
+                             java.util.Optional<V2ProjectCandidateService> v2ProjectCandidate) {
         this.projectService = projectService;
         this.projectAgentRuntimeService = projectAgentRuntimeService;
         this.projectUploadService = projectUploadService;
         this.revisionWorkflow = revisionWorkflow;
         this.candidateValidations = candidateValidations.orElse(null);
         this.v2ProjectAnalysis = v2ProjectAnalysis.orElse(null);
+        this.v2ProjectCandidate = v2ProjectCandidate.orElse(null);
     }
 
     @GetMapping
@@ -288,6 +307,30 @@ public class ProjectController {
         }
         return v2ProjectAnalysis.read(
                 userId, projectId, sessionId, clientRequestId);
+    }
+
+    @PostMapping("/{projectId}/agent/sessions/{sessionId}/v2/candidate-turns")
+    public V2ProjectCandidateResponse startV2ProjectCandidate(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @PathVariable Long sessionId,
+            @RequestBody V2ProjectCandidateRequest request) {
+        if (v2ProjectCandidate == null) {
+            throw new IllegalStateException("V2 Project Candidate is not configured");
+        }
+        return v2ProjectCandidate.execute(userId, projectId, sessionId, request);
+    }
+
+    @GetMapping("/{projectId}/agent/sessions/{sessionId}/v2/candidate-turns/{clientRequestId}")
+    public V2ProjectCandidateResponse readV2ProjectCandidate(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @PathVariable Long sessionId,
+            @PathVariable String clientRequestId) {
+        if (v2ProjectCandidate == null) {
+            throw new IllegalStateException("V2 Project Candidate is not configured");
+        }
+        return v2ProjectCandidate.read(userId, projectId, sessionId, clientRequestId);
     }
 
     @org.springframework.web.bind.annotation.PostMapping("/{projectId}/agent/sessions/{sessionId}/plans")

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -311,6 +312,196 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 provider, verified.workspace(),
                 json.createObjectNode().put("path", "missing.md")));
     }
+
+    @Test
+    void candidateAuthorityDispatchesExactCompositionAndBindsReceiptOutput() {
+        String arguments = "{\"operation\":\"compose\"}";
+        var fixture = candidateFixture(
+                new com.yanban.api.agent.v2.compatibility.project
+                        .ProjectCandidateEffectAuthority(
+                                ProjectCandidateCompositionEffect.KIND,
+                                arguments, sha256(arguments),
+                                7L, 8L, 9L, 42L, "version",
+                                "improve", List.of("paper.md")));
+
+        var outcome = fixture.composer.execute(
+                7L, 42L, fixture.command);
+
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
+                outcome.result().receipt().status());
+        assertTrue(outcome.result().receipt().standardOutput()
+                .inlineText().orElseThrow()
+                .contains("\"diffFingerprint\":\"" + "d".repeat(64) + "\""));
+        verify(fixture.composition).execute(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(fixture.workspace),
+                org.mockito.ArgumentMatchers.eq(ref()),
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.eq(8L),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void mismatchedOrCrossBoundCandidateAuthorityFailsBeforeMutation() {
+        String arguments = "{\"operation\":\"compose\"}";
+        var crossUser = candidateFixture(
+                new com.yanban.api.agent.v2.compatibility.project
+                        .ProjectCandidateEffectAuthority(
+                                ProjectCandidateCompositionEffect.KIND,
+                                arguments, sha256(arguments),
+                                99L, 8L, 9L, 42L, "version",
+                                "improve", List.of("paper.md")));
+        assertThrows(IllegalStateException.class, () -> crossUser.composer.execute(
+                7L, 42L, crossUser.command));
+        verifyNoInteractions(crossUser.claims, crossUser.workspaces,
+                crossUser.composition);
+
+        var mismatchedArguments = candidateFixture(
+                new com.yanban.api.agent.v2.compatibility.project
+                        .ProjectCandidateEffectAuthority(
+                                ProjectCandidateCompositionEffect.KIND,
+                                "{}", sha256("{}"),
+                                7L, 8L, 9L, 42L, "version",
+                                "improve", List.of("paper.md")));
+        assertThrows(IllegalStateException.class,
+                () -> mismatchedArguments.composer.execute(
+                        7L, 42L, mismatchedArguments.command));
+        verifyNoInteractions(mismatchedArguments.claims,
+                mismatchedArguments.workspaces,
+                mismatchedArguments.composition);
+    }
+
+    private CandidateExecutionFixture candidateFixture(
+            com.yanban.api.agent.v2.compatibility.project
+                    .ProjectCandidateEffectAuthority authority) {
+        var contexts = mock(com.yanban.api.agent.v2
+                .AgentTurnProductContextResolver.class);
+        var planIds = new com.yanban.agent.v2.adapter.bootstrap
+                .ProductPlanIdDerivation();
+        var recoverer = mock(io.paperagent.v2.runtime.execution.recovery
+                .composition.StepRecoverer.class);
+        var intents = mock(io.paperagent.v2.persistence
+                .EffectIntentRepository.class);
+        var claims = mock(com.yanban.api.agent.v2.persistence
+                .ProductEffectExecutionClaimRepository.class);
+        var executionContexts = mock(io.paperagent.v2.persistence
+                .PlanExecutionContextRepository.class);
+        var workspaces = mock(com.yanban.api.agent.v2.workspace
+                .AuthenticatedAgentTurnWorkspacePortFactory.class);
+        var analysisAuthorities = mock(com.yanban.api.agent.v2.compatibility
+                .project.ProjectAnalysisAuthoritySource.class);
+        var candidateAuthorities = mock(com.yanban.api.agent.v2.compatibility
+                .project.ProjectCandidateEffectGateway.class);
+        var composition = mock(ProjectCandidateCompositionEffect.class);
+        var identity = new com.yanban.core.agent.AgentRunIdentity(
+                "AGENT_TURN", "turn-42", 7L, 9L, 8L);
+        var planId = planIds.derive(identity);
+        when(contexts.resolve(7L, 42L)).thenReturn(
+                new com.yanban.api.agent.v2.VerifiedAgentTurnProductContext(
+                        identity, Optional.of("version")));
+        var recovery = mock(io.paperagent.v2.persistence
+                .PersistedStepRecoveryActive.class);
+        var activation = mock(io.paperagent.v2.persistence
+                .PersistedStepActivation.class);
+        var event = mock(io.paperagent.v2.contracts.EventEnvelope.class);
+        var stepId = new io.paperagent.v2.contracts.PlanStepId(
+                "project-candidate-compose");
+        var activationId = new io.paperagent.v2.contracts.EventId(
+                "candidate-activation");
+        when(recovery.planId()).thenReturn(planId);
+        when(recovery.activation()).thenReturn(activation);
+        when(activation.stepId()).thenReturn(stepId);
+        when(activation.activationEvent()).thenReturn(event);
+        when(event.id()).thenReturn(activationId);
+        var lease = new io.paperagent.v2.persistence.LeaseRecord(
+                planId, "owner", "token", 1L,
+                Instant.now().minusSeconds(1),
+                Instant.now().plusSeconds(60));
+        var active = new io.paperagent.v2.runtime.execution.recovery
+                .composition.RecoveredActiveStep(
+                        recovery, lease,
+                        io.paperagent.v2.runtime.execution.recovery
+                                .composition.StepRecoveryLeaseDisposition
+                                .RETAINED_FOR_RECOVERY);
+        when(recoverer.recover(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(active);
+        var toolCallId = new io.paperagent.v2.contracts.ToolCallId(
+                "candidate-tool");
+        var persistedIntent = new io.paperagent.v2.persistence
+                .PersistedEffectIntent(
+                        new io.paperagent.v2.contracts.EffectIntent(
+                                toolCallId, planId, stepId,
+                                ProjectCandidateCompositionEffect.KIND,
+                                new io.paperagent.v2.contracts.ObjectValue(
+                                        Map.of("operation",
+                                                new io.paperagent.v2.contracts
+                                                        .TextValue("compose")))),
+                        "owner", 1L, activationId);
+        when(intents.find(toolCallId)).thenReturn(
+                io.paperagent.v2.persistence.PersistenceResult.found(
+                        persistedIntent));
+        when(candidateAuthorities.require(planId.value(), stepId.value()))
+                .thenReturn(authority);
+        var confirmed = mock(io.paperagent.v2.persistence
+                .PersistedPlanExecutionContextConfirmed.class);
+        var spec = mock(io.paperagent.v2.contracts
+                .WorkspaceMaterializationSpec.class);
+        when(confirmed.materializationSpec()).thenReturn(spec);
+        when(executionContexts.inspect(planId)).thenReturn(
+                io.paperagent.v2.persistence.PersistenceResult.found(
+                        confirmed));
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        var verified = mock(io.paperagent.v2.workspace
+                .VerifiedWorkspaceMaterialization.class);
+        when(verified.workspace()).thenReturn(ref());
+        when(workspace.inspectMaterialization(spec)).thenReturn(verified);
+        when(workspaces.create(7L, 42L)).thenReturn(workspace);
+        when(composition.execute(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(workspace),
+                org.mockito.ArgumentMatchers.eq(ref()),
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.eq(8L),
+                org.mockito.ArgumentMatchers.any())).thenReturn(
+                        new ProjectCandidateCompositionEffect.CandidateResult(
+                                null, null, "d".repeat(64)));
+        when(claims.execute(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call -> {
+                    var request = (com.yanban.api.agent.v2.persistence
+                            .ProductEffectExecutionClaimRequest)
+                            call.getArgument(0);
+                    var receipt = request.execution().get();
+                    return new com.yanban.api.agent.v2.persistence
+                            .ProductEffectExecutionClaimResult(
+                                    new io.paperagent.v2.persistence
+                                            .PersistedEffectResult(
+                                                    receipt, "owner", 1L),
+                                    false);
+                });
+        var composer = new AuthenticatedProjectEffectExecutionComposer(
+                contexts, planIds, recoverer, intents, claims,
+                executionContexts, workspaces, analysisAuthorities,
+                candidateAuthorities, composition, json);
+        var command = new AuthenticatedProjectEffectExecutionCommand(
+                planId, toolCallId,
+                new io.paperagent.v2.runtime.execution.recovery.composition
+                        .StepRecoveryLeaseAttempt(
+                                "owner", "token", lease.expiresAt()));
+        return new CandidateExecutionFixture(
+                composer, command, claims, workspaces, composition, workspace);
+    }
+
+    private record CandidateExecutionFixture(
+            AuthenticatedProjectEffectExecutionComposer composer,
+            AuthenticatedProjectEffectExecutionCommand command,
+            com.yanban.api.agent.v2.persistence
+                    .ProductEffectExecutionClaimRepository claims,
+            com.yanban.api.agent.v2.workspace
+                    .AuthenticatedAgentTurnWorkspacePortFactory workspaces,
+            ProjectCandidateCompositionEffect composition,
+            WorkspacePort workspace) {}
 
     private static WorkspaceRef ref() {
         return new WorkspaceRef(

@@ -304,6 +304,40 @@ class PersistentPlanAgentLoopVerticalTest {
     }
 
     @Test
+    void projectCandidateComposeDispatchesOnlyToProjectEffectComposer() {
+        var fixture = PersistentPlanAgentLoopTestSupport.fixture();
+        var active = PersistentPlanAgentLoopTestSupport.active(
+                fixture.planId(), "project-candidate-compose");
+        var intent = PersistentPlanAgentLoopTestSupport.intent(
+                fixture.planId(), active.stepId(), "project-candidate",
+                "project.candidate.compose");
+        PersistedStepRecoverySucceeded succeeded =
+                mock(PersistedStepRecoverySucceeded.class);
+        when(succeeded.planId()).thenReturn(fixture.planId());
+        when(fixture.inspections().inspect(fixture.planId()))
+                .thenReturn(PersistenceResult.found(active.recovery()));
+        when(fixture.recoverer().recover(any())).thenReturn(active.active());
+        when(fixture.kernel().run(any())).thenReturn(intent.outcome());
+        var projectEffect = PersistentPlanAgentLoopTestSupport
+                .successfulProjectEffect(intent.toolCallId());
+        when(fixture.projectEffects().execute(eq(USER_ID), eq(TURN_ID), any()))
+                .thenReturn(projectEffect);
+        var progressed = PersistentPlanAgentLoopTestSupport.progression(
+                fixture.planId(), active.stepId(),
+                EffectDrivenStepProgressionState.PLAN_SUCCEEDED, succeeded);
+        when(fixture.progression().progress(eq(USER_ID), eq(TURN_ID), any()))
+                .thenReturn(progressed);
+
+        var outcome = fixture.composer().execute(
+                USER_ID, TURN_ID,
+                PersistentPlanAgentLoopTestSupport.command(1));
+
+        assertEquals(PersistentPlanAgentLoopState.PLAN_SUCCEEDED, outcome.state());
+        verify(fixture.projectEffects()).execute(eq(USER_ID), eq(TURN_ID), any());
+        verifyNoInteractions(fixture.effects());
+    }
+
+    @Test
     void realH2TwoStepLoopAndTerminalRestartKeepOneDurableChain() {
         VerifiedAgentTurnProductContext context =
                 new VerifiedAgentTurnProductContext(

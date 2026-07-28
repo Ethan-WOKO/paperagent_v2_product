@@ -13,6 +13,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
 
 class ProductStepTurnConfigurationTest {
     @Test
@@ -52,5 +54,33 @@ class ProductStepTurnConfigurationTest {
         assertEquals("literature.search", tools.get(0).id().value());
         assertEquals("project.read", tools.get(1).id().value());
         assertEquals("project.search", tools.get(2).id().value());
+        assertEquals("project.candidate.compose", tools.get(3).id().value());
+    }
+
+    @Test
+    void selectorReturnsOnlyPersistedCandidateComposeAuthority() {
+        var configuration = new ProductStepTurnConfiguration();
+        var jdbc = mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        when(jdbc.queryForList(contains("agent_v2_project_analysis_steps"),
+                eq(String.class), any(), any())).thenReturn(List.of());
+        when(jdbc.queryForList(contains("agent_v2_project_candidate_steps"),
+                eq(String.class), any(), any()))
+                .thenReturn(List.of("project.candidate.compose"));
+        when(jdbc.queryForList(contains("agent_v2_literature_deliveries"),
+                eq(String.class), any())).thenReturn(List.of());
+        var input = mock(io.paperagent.v2.runtime.execution.kernel.StepTurnInput.class);
+        var plan = mock(io.paperagent.v2.contracts.Plan.class);
+        var step = mock(io.paperagent.v2.contracts.PlanStep.class);
+        when(input.plan()).thenReturn(plan);
+        when(input.activeStep()).thenReturn(step);
+        when(plan.id()).thenReturn(new io.paperagent.v2.contracts.PlanId("plan"));
+        when(step.id()).thenReturn(new io.paperagent.v2.contracts.PlanStepId(
+                "project-candidate-compose"));
+
+        var selected = configuration.agentV2StepToolSelector(
+                jdbc, configuration.agentV2AllowedTools()).select(input);
+
+        assertEquals(1, selected.size());
+        assertEquals("project.candidate.compose", selected.get(0).id().value());
     }
 }
