@@ -15,6 +15,8 @@ import io.paperagent.v2.runtime.execution.activation.composition
         .StepActivationLeaseDisposition;
 import io.paperagent.v2.runtime.execution.activation.composition
         .StepActivationLeaseRejected;
+import io.paperagent.v2.runtime.execution.activation.composition
+        .StepActivationPersistenceRejected;
 import io.paperagent.v2.runtime.execution.recovery.composition
         .StepRecoveryLeaseDisposition;
 import io.paperagent.v2.runtime.execution.recovery.composition
@@ -274,6 +276,61 @@ class AuthenticatedEffectDrivenStepProgressionComposerTest {
         verify(fixture.recoverer, never()).recover(any());
         verify(fixture.completion, never()).compose(any());
         verify(fixture.activation, never()).composeReady(any());
+    }
+
+    @Test
+    void interruptionAfterStaleActiveInspectionPreventsCompletion() {
+        var fixture = new EffectDrivenStepProgressionTestFixtures();
+        when(fixture.inspector.inspect(fixture.planId))
+                .thenReturn(PersistenceResult.found(fixture.activeA))
+                .thenReturn(PersistenceResult.rejected(
+                        io.paperagent.v2.persistence.PersistenceErrorCode
+                                .STEP_RECOVERY_NOT_ELIGIBLE,
+                        "interrupted"));
+        when(fixture.recoverer.recover(any())).thenReturn(
+                new StepRecoveryLeaseRejected(
+                        fixture.planId,
+                        new io.paperagent.v2.persistence.PersistenceFailure(
+                                io.paperagent.v2.persistence
+                                        .PersistenceErrorCode
+                                        .STEP_RECOVERY_NOT_ELIGIBLE,
+                                "interrupted"),
+                        StepRecoveryLeaseDisposition.NOT_ACQUIRED));
+
+        assertThrows(
+                EffectDrivenStepProgressionException.class,
+                () -> fixture.composer.progress(
+                        7L, 42L, fixture.command()));
+        verify(fixture.completion, never()).compose(any());
+        verify(fixture.activation, never()).composeReady(any());
+    }
+
+    @Test
+    void replanAfterStaleReadyInspectionCannotAuthorizeActivation() {
+        var fixture = new EffectDrivenStepProgressionTestFixtures();
+        when(fixture.inspector.inspect(fixture.planId))
+                .thenReturn(PersistenceResult.found(fixture.readyB))
+                .thenReturn(PersistenceResult.rejected(
+                        io.paperagent.v2.persistence.PersistenceErrorCode
+                                .STEP_RECOVERY_NOT_ELIGIBLE,
+                        "replanned"));
+        when(fixture.activation.composeReady(any())).thenReturn(
+                new StepActivationPersistenceRejected(
+                        fixture.planId,
+                        new io.paperagent.v2.persistence.PersistenceFailure(
+                                io.paperagent.v2.persistence
+                                        .PersistenceErrorCode
+                                        .STEP_ACTIVATION_NOT_ELIGIBLE,
+                                "replanned"),
+                        StepActivationLeaseDisposition
+                                .RETAINED_FOR_RECOVERY));
+
+        assertThrows(
+                EffectDrivenStepProgressionException.class,
+                () -> fixture.composer.progress(
+                        7L, 42L, fixture.command()));
+        verify(fixture.completion, never()).compose(any());
+        verify(fixture.activation).composeReady(any());
     }
 
     private static PersistedEffectIntent changedIntent(

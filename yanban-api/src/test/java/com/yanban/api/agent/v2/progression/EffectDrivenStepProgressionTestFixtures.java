@@ -180,8 +180,22 @@ final class EffectDrivenStepProgressionTestFixtures {
             StepActivationRepository activations,
             EffectIntentRepository intents,
             EffectOutcomeRepository outcomes) {
+        return seedDatabase(
+                bootstraps, leases, starts, activations, intents, outcomes,
+                true);
+    }
+
+    static DatabaseScenario seedDatabase(
+            PlanBootstrapRepository bootstraps,
+            LeaseRepository leases,
+            ExecutionStartRepository starts,
+            StepActivationRepository activations,
+            EffectIntentRepository intents,
+            EffectOutcomeRepository outcomes,
+            boolean twoSteps) {
         var fixture = new EffectDrivenStepProgressionTestFixtures();
-        Plan plan = fixture.activeA.plan();
+        Plan plan = twoSteps
+                ? fixture.activeA.plan() : fixture.activeA(false).plan();
         PlanRevision revision = plan.latestRevision();
         Map<PlanStepId, StepExecutionState> initial = new LinkedHashMap<>();
         revision.steps().forEach(step ->

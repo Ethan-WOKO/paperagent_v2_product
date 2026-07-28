@@ -296,6 +296,29 @@ class EffectDrivenStepProgressionVerticalTest {
     }
 
     @Test
+    void productDatabaseSingleStepBecomesSucceededWithoutActivation() {
+        clearV2Rows();
+        var scenario = EffectDrivenStepProgressionTestFixtures.seedDatabase(
+                bootstrapRepository, leaseRepository,
+                executionStartRepository, stepActivationRepository,
+                effectIntentRepository, effectOutcomeRepository, false);
+        when(productContexts.resolve(7L, 42L))
+                .thenReturn(scenario.fixture().context);
+
+        var applied = persistedComposer.progress(
+                7L, 42L, scenario.command());
+        var replayed = persistedComposer.progress(
+                7L, 42L, scenario.command());
+
+        assertEquals(EffectDrivenStepProgressionState.PLAN_SUCCEEDED,
+                applied.state());
+        assertEquals(EffectDrivenStepProgressionState.PLAN_SUCCEEDED,
+                replayed.state());
+        assertEquals(1, count("agent_v2_step_completions"));
+        assertEquals(1, count("agent_v2_step_activations"));
+    }
+
+    @Test
     void singleStepCompletesToSucceededWithoutActivation() {
         var fixture = new EffectDrivenStepProgressionTestFixtures();
         var succeeded = fixture.succeeded();
