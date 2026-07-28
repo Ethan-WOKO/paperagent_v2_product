@@ -72,6 +72,28 @@ class V2ProjectCandidateServiceTest {
     }
 
     @Test
+    void requestHashUsesUnambiguousEncodingForDelimiterBearingPayloads() {
+        AgentSession session = mock(AgentSession.class);
+        when(session.getScope()).thenReturn(AgentSessionScope.PROJECT);
+        when(session.getProjectId()).thenReturn(8L);
+        when(sessions.findByIdAndUserId(9L, 7L)).thenReturn(Optional.of(session));
+        when(deliveries.findMatching(any(), anyString()))
+                .thenThrow(new IllegalStateException("stop after hashing"));
+
+        assertThrows(IllegalStateException.class, () -> service.execute(
+                7L, 8L, 9L, new V2ProjectCandidateRequest(
+                        "a", List.of("b\0c"), "same-request")));
+        assertThrows(IllegalStateException.class, () -> service.execute(
+                7L, 8L, 9L, new V2ProjectCandidateRequest(
+                        "a\0b", List.of("c"), "same-request")));
+
+        var hashes = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(deliveries, times(2)).findMatching(any(), hashes.capture());
+        assertNotEquals(hashes.getAllValues().get(0), hashes.getAllValues().get(1));
+        verifyNoInteractions(projects);
+    }
+
+    @Test
     void terminalGetReplaysSameCandidateAndFailedGetIsDefinitiveNotCreated() {
         var successKey = new ProjectCandidateDeliveryKey(7L, 8L, 9L, "success");
         var success = new ProjectCandidateDeliveryEntity(successKey, "a".repeat(64),

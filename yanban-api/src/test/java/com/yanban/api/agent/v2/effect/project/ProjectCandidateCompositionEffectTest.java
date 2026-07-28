@@ -3,7 +3,11 @@ package com.yanban.api.agent.v2.effect.project;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.CandidateChangeArtifactService;
 import com.yanban.api.agent.v2.compatibility.project.*;
+import com.yanban.api.artifact.AgentArtifactService;
+import com.yanban.api.artifact.ArtifactResponse;
 import com.yanban.api.project.ProjectService;
+import com.yanban.core.research.FileHash;
+import com.yanban.core.research.ProjectRelativePath;
 import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.providers.*;
@@ -13,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -133,19 +138,121 @@ class ProjectCandidateCompositionEffectTest {
         verify(persistenceFailure.projects, never()).delete(anyLong(), anyLong());
     }
 
+    @Test
+    void realCandidateServiceAcceptsPublishedIntentAndEvidenceAsValidatedNotApplied() {
+        String originalHash = sha("old text");
+        String version = com.yanban.core.research.ProjectManifestIdentity.derive(
+                List.of(new com.yanban.core.research.ProjectManifestIdentity.Entry(
+                        new ProjectRelativePath("README.md"),
+                        new FileHash(originalHash), 8))).value();
+        Fixture fixture = fixture(
+                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}",
+                version);
+        AgentArtifactService artifacts = mock(AgentArtifactService.class);
+        var realCandidates = new CandidateChangeArtifactService(
+                artifacts, fixture.projects, json);
+        var realEffect = new ProjectCandidateCompositionEffect(
+                fixture.gateway, realCandidates, fixture.provider,
+                fixture.projects, json);
+        var snapshot = new com.yanban.core.agent.sandbox.SandboxWorkspaceSnapshot(
+                new com.yanban.core.agent.sandbox.SandboxWorkspaceRef(
+                        8L, new com.yanban.core.research.ProjectVersionRef(version)),
+                List.of(new com.yanban.core.agent.sandbox.SandboxFileSnapshot(
+                        new ProjectRelativePath("README.md"),
+                        new FileHash(originalHash), 8)));
+        var materialized = new ProjectService.SandboxWorkspaceMaterialization(
+                snapshot, Map.of("README.md", "old text"));
+        when(fixture.projects.manifest(7L, 8L)).thenReturn(
+                new com.yanban.api.project.ProjectManifestResponse(
+                        8L, version, List.of(
+                        new com.yanban.api.project.ProjectFileEntry(
+                                "README.md", 8, Instant.now(), originalHash))));
+        when(fixture.projects.readFile(7L, 8L, "README.md")).thenReturn(
+                new com.yanban.api.project.ProjectFileResponse(
+                        "README.md", "old text", 8, Instant.now(), originalHash));
+        when(fixture.projects.materializeSandbox(
+                eq(7L), eq(8L), eq(Set.of("README.md"))))
+                .thenReturn(materialized);
+        AtomicReference<ArtifactResponse> persisted = new AtomicReference<>();
+        when(artifacts.createCandidateArtifact(
+                eq(7L), eq(9L), anyString(), anyString())).thenAnswer(call -> {
+                    var artifact = new ArtifactResponse(
+                            42L, 7L, 9L, call.getArgument(2), "TEXT",
+                            call.getArgument(3),
+                            CandidateChangeArtifactService.SOURCE_TYPE,
+                            List.of(), "ACTIVE", null, null, null,
+                            Instant.EPOCH, Instant.EPOCH);
+                    persisted.set(artifact);
+                    return artifact;
+                });
+
+        realEffect.execute(fixture.intent, fixture.workspace,
+                fixture.ref, 7L, 42L, 8L, Instant.EPOCH);
+        var published = realEffect.publish(
+                "plan", 7L, 42L, fixture.workspace,
+                fixture.ref, Instant.EPOCH.plusSeconds(1));
+        when(artifacts.getArtifact(7L, 42L)).thenAnswer(
+                ignored -> persisted.get());
+        var reviewed = realCandidates.getCurrent(7L, 42L);
+
+        assertEquals(com.yanban.core.agent.sandbox.CandidateChangeSet
+                .GovernanceStatus.VALIDATED, reviewed.governanceStatus());
+        assertEquals(com.yanban.core.agent.sandbox.CandidateChangeSet
+                .ApplicationStatus.NOT_APPLIED, reviewed.applicationStatus());
+        assertEquals(8L, reviewed.projectId());
+        assertEquals(version, reviewed.projectVersion().value());
+        assertEquals(List.of("README.md"), reviewed.changes().stream()
+                .map(change -> change.relativePath().value()).toList());
+        assertEquals(originalHash,
+                reviewed.changes().get(0).baseFileHash().sha256());
+        assertEquals(reviewed.fingerprint().sha256(),
+                published.candidateFingerprint());
+        assertEquals(64, published.diffFingerprint().length());
+        verify(fixture.gateway).bindCandidate(
+                "plan", 42L, reviewed.fingerprint().sha256(),
+                published.diffFingerprint());
+    }
+
+    @Test
+    void binaryAndMissingWorkspaceInputsFailBeforeProviderOrCandidate() {
+        Fixture binary = fixture(
+                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new\"}]}");
+        when(binary.workspace.read(
+                binary.ref, new ProjectPath("README.md")))
+                .thenReturn(new byte[]{1});
+        assertThrows(IllegalStateException.class, () -> binary.effect.execute(
+                binary.intent, binary.workspace, binary.ref,
+                7L, 42L, 8L, Instant.now()));
+        verifyNoInteractions(binary.candidates, binary.projects);
+
+        Fixture missing = fixture(
+                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new\"}]}");
+        when(missing.workspace.read(
+                missing.ref, new ProjectPath("README.md")))
+                .thenThrow(new IllegalArgumentException("missing"));
+        assertThrows(IllegalArgumentException.class, () -> missing.effect.execute(
+                missing.intent, missing.workspace, missing.ref,
+                7L, 42L, 8L, Instant.now()));
+        verifyNoInteractions(missing.candidates, missing.projects);
+    }
+
     private Fixture fixture(String output) {
+        return fixture(output, "a".repeat(64));
+    }
+
+    private Fixture fixture(String output, String version) {
         var gateway = mock(ProjectCandidateEffectGateway.class);
         var candidates = mock(CandidateChangeArtifactService.class);
         var provider = mock(ModelProvider.class);
         var projects = mock(ProjectService.class);
         var workspace = mock(WorkspacePort.class);
         var ref = new WorkspaceRef(new WorkspaceId("workspace"),
-                new ProjectVersionRef("8", "a".repeat(64)));
+                new ProjectVersionRef("8", version));
         String authorityJson = "{\"operation\":\"compose\"}";
         when(gateway.require("plan", "project-candidate-compose")).thenReturn(
                 new ProjectCandidateEffectAuthority(
                         ProjectCandidateCompositionEffect.KIND, authorityJson,
-                        sha(authorityJson), 7L, 8L, 9L, 42L, "a".repeat(64),
+                        sha(authorityJson), 7L, 8L, 9L, 42L, version,
                         "improve", List.of("README.md")));
         if (output == null) {
             when(provider.complete(any())).thenReturn(new ProviderFailure(
@@ -182,7 +289,8 @@ class ProjectCandidateCompositionEffectTest {
                 ProjectCandidateCompositionEffect.KIND,
                 new ObjectValue(Map.of("operation", new TextValue("compose")))),
                 "owner", 1L, new EventId("activation"));
-        return new Fixture(effect, gateway, candidates, projects, workspace, ref, files, intent);
+        return new Fixture(effect, gateway, candidates, provider, projects,
+                workspace, ref, files, intent);
     }
 
     private static String sha(String value) {
@@ -196,7 +304,8 @@ class ProjectCandidateCompositionEffectTest {
     }
     private record Fixture(ProjectCandidateCompositionEffect effect,
             ProjectCandidateEffectGateway gateway,
-            CandidateChangeArtifactService candidates, ProjectService projects,
+            CandidateChangeArtifactService candidates, ModelProvider provider,
+            ProjectService projects,
             WorkspacePort workspace, WorkspaceRef ref, Map<String, byte[]> files,
             PersistedEffectIntent intent) {}
 }

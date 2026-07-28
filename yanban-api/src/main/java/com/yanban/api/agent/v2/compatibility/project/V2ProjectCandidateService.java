@@ -345,6 +345,12 @@ public class V2ProjectCandidateService {
                 + key.sessionId() + "\0" + key.clientRequestId();
     }
     private record Request(String objective, List<String> paths, String requestId) {
-        String canonical() { return objective + "\0" + String.join("\0", paths); }
+        String canonical() {
+            StringBuilder value = new StringBuilder()
+                    .append(objective.length()).append(':').append(objective)
+                    .append(paths.size()).append(':');
+            paths.forEach(path -> value.append(path.length()).append(':').append(path));
+            return value.toString();
+        }
     }
 }

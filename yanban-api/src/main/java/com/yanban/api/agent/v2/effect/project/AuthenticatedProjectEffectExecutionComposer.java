@@ -149,7 +149,15 @@ public class AuthenticatedProjectEffectExecutionComposer {
             String arguments = canonical(intent.intent().arguments());
             if (!candidate.kind().equals(intent.intent().kind())
                     || !candidate.authorityJson().equals(arguments)
-                    || !candidate.authoritySha256().equals(hash(arguments))) throw failed();
+                    || !candidate.authoritySha256().equals(hash(arguments))
+                    || !userId.equals(candidate.userId())
+                    || !turnId.equals(candidate.turnId())
+                    || !context.identity().projectId().equals(candidate.projectId())
+                    || !context.identity().sessionId().equals(candidate.sessionId())
+                    || context.projectVersionId()
+                            .filter(candidate.projectVersion()::equals).isEmpty()) {
+                throw failed();
+            }
         } else {
             ProjectAnalysisEffectAuthority authority;
             try {
