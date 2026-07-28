@@ -23,6 +23,7 @@ import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ResourceLimits;
 import io.paperagent.v2.contracts.Route;
 import io.paperagent.v2.persistence.PersistedStepRecoverySucceeded;
+import io.paperagent.v2.persistence.LeaseRepository;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.StepRecoveryRepository;
 import io.paperagent.v2.runtime.execution.ExecutionStartEventDraft;
@@ -68,6 +69,7 @@ public class V2LiteratureTurnService {
     private final AuthenticatedPersistentPlanAgentLoopComposer loop;
     private final StepRecoveryRepository recovery;
     private final DefaultFinalSynthesisComposer synthesis;
+    private final LeaseRepository leases;
 
     public V2LiteratureTurnService(
             AgentSessionRepository sessions,
@@ -75,13 +77,15 @@ public class V2LiteratureTurnService {
             AuthenticatedAgentTurnFreshExecutionStartComposer starts,
             AuthenticatedPersistentPlanAgentLoopComposer loop,
             StepRecoveryRepository recovery,
-            DefaultFinalSynthesisComposer synthesis) {
+            DefaultFinalSynthesisComposer synthesis,
+            LeaseRepository leases) {
         this.sessions = sessions;
         this.deliveries = deliveries;
         this.starts = starts;
         this.loop = loop;
         this.recovery = recovery;
         this.synthesis = synthesis;
+        this.leases = leases;
     }
 
     public V2LiteratureTurnResponse execute(
@@ -117,7 +121,7 @@ public class V2LiteratureTurnService {
                 .substring(0, 32);
         Instant now = Instant.now();
         String initialToken = "lease-" + hash(
-                requestHash + "\0" + now.toEpochMilli());
+                owner + "\0" + requestHash + "\0" + now.toEpochMilli());
         LiteratureDeliveryEntity delivery = deliveries.open(
                 userId, sessionId, request.requestId(), requestHash,
                 request.query(), request.topK(), request.yearFrom(),
@@ -129,9 +133,21 @@ public class V2LiteratureTurnService {
         if (!delivery.leaseExpiresAt().isAfter(now)) {
             delivery = deliveries.rotateExpiredLease(
                     delivery.id(),
-                    "lease-" + hash(requestHash + "\0"
+                    "lease-" + hash(owner + "\0" + requestHash + "\0"
                             + now.toEpochMilli() + "\0recovery"),
                     now.plus(Duration.ofMinutes(10)), now);
+            if (delivery.planId() != null) {
+                var takeover = leases.acquire(
+                        new io.paperagent.v2.contracts.PlanId(
+                                delivery.planId()),
+                        delivery.leaseOwnerId(), delivery.leaseToken(),
+                        delivery.leaseExpiresAt());
+                if (takeover.outcome() != PersistenceOutcome.APPLIED
+                        && takeover.outcome() != PersistenceOutcome.REPLAYED) {
+                    throw new IllegalStateException(
+                            "V2 literature lease takeover failed");
+                }
+            }
         }
 
         Instant authorityTime = delivery.createdAt();
@@ -238,7 +254,7 @@ public class V2LiteratureTurnService {
 
     private static FreshExecutionStartAttempt startAttempt(
             LiteratureDeliveryEntity delivery, Instant now) {
-        String suffix = hash(delivery.requestSha256());
+        String suffix = deliverySuffix(delivery);
         return new FreshExecutionStartAttempt(
                 delivery.leaseOwnerId(), delivery.leaseToken(),
                 delivery.leaseExpiresAt(),
@@ -254,7 +270,7 @@ public class V2LiteratureTurnService {
 
     private static PersistentPlanAgentLoopCommand loopCommand(
             LiteratureDeliveryEntity delivery, Instant now) {
-        String suffix = hash(delivery.requestSha256());
+        String suffix = deliverySuffix(delivery);
         return new PersistentPlanAgentLoopCommand(
                 1,
                 new StepRecoveryLeaseAttempt(
@@ -276,6 +292,14 @@ public class V2LiteratureTurnService {
                         delivery.leaseOwnerId(), delivery.leaseToken(),
                         delivery.leaseExpiresAt()),
                 Optional.empty());
+    }
+
+    private static String deliverySuffix(
+            LiteratureDeliveryEntity delivery) {
+        LiteratureDeliveryKey id = delivery.id();
+        return hash(id.userId() + "\0" + id.sessionId() + "\0"
+                + id.clientRequestId() + "\0"
+                + delivery.requestSha256());
     }
 
     private static Request normalize(V2LiteratureTurnRequest input) {

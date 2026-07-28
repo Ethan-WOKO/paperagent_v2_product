@@ -32,6 +32,6 @@ CREATE TABLE agent_v2_literature_deliveries (
     created_at TIMESTAMP(6) NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL,
     PRIMARY KEY (user_id, session_id, client_request_id),
-    CONSTRAINT fk_agent_v2_delivery_session FOREIGN KEY (session_id)
-        REFERENCES agent_sessions(id) ON DELETE CASCADE
+    CONSTRAINT fk_agent_v2_delivery_synthesis FOREIGN KEY (synthesis_id)
+        REFERENCES agent_v2_final_syntheses(synthesis_id)
 );

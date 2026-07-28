@@ -18,10 +18,6 @@ class V55FinalSynthesisMigrationTest {
                      "src/test/resources/db/migration-h2/"
                              + "V55__create_agent_v2_final_syntheses.sql"))) {
             try (var statement = connection.createStatement()) {
-                statement.executeUpdate(
-                        "create table agent_sessions (id bigint primary key)");
-                statement.executeUpdate(
-                        "insert into agent_sessions(id) values (9)");
                 RunScript.execute(connection, script);
                 statement.executeUpdate("""
                         insert into agent_v2_final_syntheses
@@ -52,12 +48,15 @@ class V55FinalSynthesisMigrationTest {
                     result.next();
                     assertEquals(1, result.getInt(1));
                 }
-                statement.executeUpdate(
-                        "delete from agent_sessions where id=9");
-                try (var result = statement.executeQuery(
-                        "select count(*) from agent_v2_literature_deliveries")) {
-                    result.next();
-                    assertEquals(0, result.getInt(1));
+                try (var keys = connection.getMetaData().getImportedKeys(
+                        null, null, "AGENT_V2_LITERATURE_DELIVERIES")) {
+                    int keyCount = 0;
+                    while (keys.next()) {
+                        keyCount++;
+                        assertEquals("AGENT_V2_FINAL_SYNTHESES",
+                                keys.getString("PKTABLE_NAME"));
+                    }
+                    assertEquals(1, keyCount);
                 }
             }
         }
