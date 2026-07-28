@@ -58,7 +58,7 @@ class ProductEffectExecutionClaimTransactions {
         if (bootstraps.lockByPlanId(planId).isEmpty()) {
             throw failed("authority.plan");
         }
-        validateAuthority(request);
+        ProductLeaseEntity authoritativeLease = validateAuthority(request);
 
         ProductEffectOutcomeResultEntity resultRow =
                 results.findById(request.intent().intent().toolCallId().value())
@@ -91,6 +91,10 @@ class ProductEffectExecutionClaimTransactions {
                 || !receipt.toolCallId().equals(intent.toolCallId())) {
             throw failed("execution.receipt");
         }
+        entityManager.refresh(authoritativeLease);
+        validateLease(
+                authoritativeLease, request, receipt.endedAt(),
+                "authority.leaseAfterExecution");
         EffectResultRequest effectRequest = new EffectResultRequest(
                 receipt, request.leaseToken(), request.fencingToken());
         PersistedEffectResult persisted = new PersistedEffectResult(
@@ -114,7 +118,8 @@ class ProductEffectExecutionClaimTransactions {
         return new ProductEffectExecutionClaimResult(persisted, false);
     }
 
-    private void validateAuthority(ProductEffectExecutionClaimRequest request) {
+    private ProductLeaseEntity validateAuthority(
+            ProductEffectExecutionClaimRequest request) {
         PersistedEffectIntent durable = markers.intent(
                 request.intent().intent().toolCallId().value());
         var recovery = request.recovery();
@@ -148,13 +153,26 @@ class ProductEffectExecutionClaimTransactions {
         ProductLeaseEntity lease = leases
                 .findFirstByPlanIdOrderByFencingTokenDesc(
                         intent.intent().planId().value()).orElse(null);
-        if (lease == null || lease.releasedAt() != null
+        validateLease(lease, request, request.observedAt(), "authority.lease");
+        return lease;
+    }
+
+    private static void validateLease(
+            ProductLeaseEntity lease,
+            ProductEffectExecutionClaimRequest request,
+            java.time.Instant effectiveAt,
+            String path) {
+        if (lease == null || effectiveAt == null
+                || lease.releasedAt() != null
+                || !lease.planId().equals(request.lease().planId().value())
                 || !lease.leaseToken().equals(request.leaseToken())
+                || !lease.leaseToken().equals(request.lease().leaseToken())
                 || !lease.ownerId().equals(request.lease().ownerId())
                 || lease.fencingToken() != request.fencingToken()
                 || lease.fencingToken() != request.lease().fencingToken()
-                || request.lease().isExpiredAt(request.observedAt())) {
-            throw failed("authority.lease");
+                || !lease.expiresAt().equals(request.lease().expiresAt())
+                || !effectiveAt.isBefore(lease.expiresAt())) {
+            throw failed(path);
         }
     }
 

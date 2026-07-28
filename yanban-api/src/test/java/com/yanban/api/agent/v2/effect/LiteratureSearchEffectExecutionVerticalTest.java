@@ -55,8 +55,7 @@ class LiteratureSearchEffectExecutionVerticalTest {
         var fixture = new LiteratureSearchEffectTestFixtures();
         var changed = fixture.intent(Map.of(
                 "query", new TextValue("topic"),
-                "topK", new NumberValue(BigDecimal.valueOf(21)),
-                "clientRequestId", new TextValue("model-authority")));
+                "topK", new NumberValue(BigDecimal.valueOf(21))));
         when(fixture.intents.find(fixture.command().toolCallId()))
                 .thenReturn(PersistenceResult.found(changed));
 
@@ -67,6 +66,46 @@ class LiteratureSearchEffectExecutionVerticalTest {
         verify(fixture.claims, never()).execute(any());
         verify(fixture.executor, never()).execute(any());
         assertNull(ToolExecutionContext.getCurrentUserId());
+    }
+
+    @Test
+    void modelSuppliedClientRequestIdFailsAtFieldBoundary() {
+        rejectModelAuthority("clientRequestId");
+    }
+
+    @Test
+    void modelSuppliedProjectIdFailsAtFieldBoundary() {
+        rejectModelAuthority("projectId");
+    }
+
+    private static void rejectModelAuthority(String field) {
+        var fixture = new LiteratureSearchEffectTestFixtures();
+        var changed = fixture.intent(Map.of(
+                "query", new TextValue("topic"),
+                field, new TextValue("model-authority")));
+        when(fixture.intents.find(fixture.command().toolCallId()))
+                .thenReturn(PersistenceResult.found(changed));
+        var failure = assertThrows(
+                AuthenticatedLiteratureSearchEffectExecutionException.class,
+                () -> fixture.composer.execute(7L, 42L, fixture.command()));
+        assertEquals("intent.arguments.fields", failure.path());
+        verify(fixture.claims, never()).execute(any());
+        verify(fixture.executor, never()).execute(any());
+    }
+
+    @Test
+    void projectBindingComesOnlyFromVerifiedContextAndFrozenTaskFrame() {
+        var fixture = new LiteratureSearchEffectTestFixtures();
+        fixture.useProject(44L);
+
+        fixture.composer.execute(7L, 42L, fixture.command());
+
+        ArgumentCaptor<ToolCall> call =
+                ArgumentCaptor.forClass(ToolCall.class);
+        verify(fixture.executor).execute(call.capture());
+        assertEquals(44L,
+                call.getValue().arguments().path("projectId").longValue());
+        assertNull(ToolExecutionContext.getCurrentProjectId());
     }
 
     @Test
@@ -87,6 +126,59 @@ class LiteratureSearchEffectExecutionVerticalTest {
                 .inlineText().orElseThrow();
         assertEquals("literature_search_start failed", error);
         assertFalse(error.contains("secret"));
+    }
+
+    @Test
+    void throwingExecutorProducesSanitizedFailureAndClearsThreadContext() {
+        var fixture = new LiteratureSearchEffectTestFixtures();
+        when(fixture.executor.execute(any()))
+                .thenThrow(new IllegalStateException(
+                        "credential=secret stack trace"));
+
+        var receipt = fixture.composer.execute(
+                7L, 42L, fixture.command()).result().receipt();
+        assertEquals(ReceiptStatus.FAILURE, receipt.status());
+        assertEquals("literature_search_start failed",
+                receipt.standardError().inlineText().orElseThrow());
+        assertNull(ToolExecutionContext.getCurrentUserId());
+        assertNull(ToolExecutionContext.getResolvedAllowedTools());
+    }
+
+    @Test
+    void receiptIdentityAndTimesAreDeterministicAndCallerOwned() {
+        var first = new LiteratureSearchEffectTestFixtures();
+        var second = new LiteratureSearchEffectTestFixtures();
+
+        var firstReceipt = first.composer.execute(
+                7L, 42L, first.command()).result().receipt();
+        var secondReceipt = second.composer.execute(
+                7L, 42L, second.command()).result().receipt();
+        assertEquals(firstReceipt.id(), secondReceipt.id());
+        assertEquals(LiteratureSearchEffectTestFixtures.START,
+                firstReceipt.startedAt());
+        assertEquals(
+                LiteratureSearchEffectTestFixtures.START.plusMillis(1),
+                firstReceipt.endedAt());
+    }
+
+    @Test
+    void oversizedProductOutputIsBoundedAndMarkedTruncated() {
+        var fixture = new LiteratureSearchEffectTestFixtures();
+        var output = fixture.json.createObjectNode();
+        output.put("taskId", 99L);
+        output.put("status", "x".repeat(5_000) + "secret-tail");
+        when(fixture.executor.execute(any())).thenReturn(
+                ToolResult.success(
+                        fixture.command().toolCallId().value(),
+                        "literature_search_start", output));
+
+        var capture = fixture.composer.execute(
+                7L, 42L, fixture.command()).result().receipt()
+                .standardOutput();
+        assertEquals(true, capture.truncated());
+        assertEquals(2_048, capture.inlineText().orElseThrow().length());
+        assertFalse(capture.inlineText().orElseThrow()
+                .contains("secret-tail"));
     }
 
     @Test

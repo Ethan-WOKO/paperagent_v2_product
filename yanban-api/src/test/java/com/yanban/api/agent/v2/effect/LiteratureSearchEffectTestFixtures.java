@@ -17,6 +17,7 @@ import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.ObjectValue;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.ProjectVersionRef;
 import io.paperagent.v2.contracts.TaskFrame;
 import io.paperagent.v2.contracts.TextValue;
 import io.paperagent.v2.contracts.ToolCallId;
@@ -71,6 +72,7 @@ final class LiteratureSearchEffectTestFixtures {
             START.plusSeconds(60));
     final PersistedEffectIntent intent;
     final RecoveredActiveStep active;
+    final TaskFrame taskFrame;
     final AuthenticatedLiteratureSearchEffectExecutionComposer composer;
 
     LiteratureSearchEffectTestFixtures() {
@@ -79,7 +81,7 @@ final class LiteratureSearchEffectTestFixtures {
         PersistedStepActivation activation =
                 mock(PersistedStepActivation.class);
         EventEnvelope event = mock(EventEnvelope.class);
-        TaskFrame taskFrame = mock(TaskFrame.class);
+        taskFrame = mock(TaskFrame.class);
         when(recovery.planId()).thenReturn(planId);
         when(recovery.activation()).thenReturn(activation);
         when(recovery.taskFrame()).thenReturn(taskFrame);
@@ -122,13 +124,34 @@ final class LiteratureSearchEffectTestFixtures {
     }
 
     PersistedEffectIntent intent(Map<String, io.paperagent.v2.contracts.ContractValue> args) {
+        return intent(
+                AuthenticatedLiteratureSearchEffectExecutionComposer.V2_TOOL,
+                STEP, ACTIVATION, lease.ownerId(), lease.fencingToken(), args);
+    }
+
+    PersistedEffectIntent intent(
+            String kind,
+            PlanStepId step,
+            EventId activation,
+            String owner,
+            long fence,
+            Map<String, io.paperagent.v2.contracts.ContractValue> args) {
         return new PersistedEffectIntent(
                 new EffectIntent(
-                        TOOL_CALL, planId, STEP,
-                        AuthenticatedLiteratureSearchEffectExecutionComposer
-                                .V2_TOOL,
+                        TOOL_CALL, planId, step, kind,
                         new ObjectValue(args)),
-                lease.ownerId(), lease.fencingToken(), ACTIVATION);
+                owner, fence, activation);
+    }
+
+    void useProject(long projectId) {
+        var projectContext = new VerifiedAgentTurnProductContext(
+                new AgentRunIdentity(
+                        "AGENT_TURN", "42", 7L, 11L, projectId),
+                Optional.of("manifest-v1"));
+        when(contexts.resolve(7L, 42L)).thenReturn(projectContext);
+        when(taskFrame.sourceProjectVersion()).thenReturn(Optional.of(
+                new ProjectVersionRef(
+                        String.valueOf(projectId), "manifest-v1")));
     }
 
     AuthenticatedLiteratureSearchEffectExecutionCommand command() {

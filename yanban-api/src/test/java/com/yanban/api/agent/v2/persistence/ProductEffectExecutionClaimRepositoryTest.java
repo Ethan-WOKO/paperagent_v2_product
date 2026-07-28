@@ -1,6 +1,14 @@
 package com.yanban.api.agent.v2.persistence;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yanban.api.agent.LiteratureSearchStartToolExecutor;
+import com.yanban.core.tool.ToolCall;
+import com.yanban.core.tool.ToolExecutionContext;
+import com.yanban.paper.domain.LiteratureSearchTaskRepository;
+import com.yanban.paper.literature.LiteratureSearchTaskService;
 import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import io.paperagent.v2.contracts.Checkpoint;
 import io.paperagent.v2.contracts.EffectIntent;
@@ -10,6 +18,13 @@ import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.contracts.ToolCallId;
+import io.paperagent.v2.contracts.ExecutionReceipt;
+import io.paperagent.v2.contracts.ObjectValue;
+import io.paperagent.v2.contracts.OutputCapture;
+import io.paperagent.v2.contracts.ReceiptId;
+import io.paperagent.v2.contracts.ReceiptStatus;
+import io.paperagent.v2.contracts.TextValue;
+import io.paperagent.v2.persistence.EffectIntentRequest;
 import io.paperagent.v2.persistence.LeaseRecord;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedEffectResult;
@@ -17,6 +32,13 @@ import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.VersionedCheckpoint;
 import jakarta.persistence.EntityManager;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -26,6 +48,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -35,7 +59,139 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+@DataJpaTest
+@TestPropertySource(properties = {
+        "spring.flyway.enabled=false",
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "spring.datasource.url=jdbc:h2:mem:v2effect_claim_behavior;"
+                + "MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000"
+})
+@Import({
+        ProductEffectExecutionClaimRepository.class,
+        ProductEffectExecutionClaimTransactions.class,
+        ProductEffectOutcomeCodec.class,
+        ProductEffectOutcomeMarkerReader.class,
+        ProductEffectIntentRepositoryAdapter.class,
+        ProductEffectIntentTransactions.class,
+        ProductEffectIntentCodec.class,
+        ProductReceiptCodec.class,
+        ProductReceiptMarkerReader.class,
+        ProductStepRecoveryTransactions.class,
+        ProductStepInterruptionMarkerReader.class,
+        ProductStepInterruptionCodec.class,
+        ProductStepCompletionMarkerReader.class,
+        ProductStepCompletionCodec.class,
+        ProductPlanExecutionContextCodec.class,
+        ProductPlanBootstrapCodec.class,
+        ProductExecutionStartCodec.class,
+        ProductStepActivationCodec.class,
+        ProductEffectExecutionClaimRepositoryTest.Configuration.class
+})
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ProductEffectExecutionClaimRepositoryTest {
+    static class Configuration {
+        @Bean
+        ObjectMapper objectMapper() {
+            return new ObjectMapper();
+        }
+
+        @Bean
+        ProductLeaseTimeSource leaseTimeSource() {
+            return () -> ProductStepActivationTestFixtures.NOW;
+        }
+    }
+
+    @jakarta.annotation.Resource
+    ProductEffectExecutionClaimRepository repository;
+    @jakarta.annotation.Resource
+    ProductEffectIntentRepositoryAdapter intentAdapter;
+    @jakarta.annotation.Resource
+    ProductEffectExecutionClaimJpaRepository claimRows;
+    @jakarta.annotation.Resource
+    ProductEffectOutcomeResultJpaRepository resultRows;
+    @jakarta.annotation.Resource
+    ProductReceiptJpaRepository receiptRows;
+    @jakarta.annotation.Resource
+    ProductEffectIntentJpaRepository intentRows;
+    @jakarta.annotation.Resource
+    ProductReceiptToolCallClaimJpaRepository ownershipRows;
+    @jakarta.annotation.Resource
+    ProductStepActivationJpaRepository activationRows;
+    @jakarta.annotation.Resource
+    ProductExecutionStartJpaRepository startRows;
+    @jakarta.annotation.Resource
+    ProductLeaseJpaRepository leaseRows;
+    @jakarta.annotation.Resource
+    ProductPlanBootstrapJpaRepository bootstrapRows;
+    @jakarta.annotation.Resource
+    ProductPlanBootstrapCodec bootstrapCodec;
+    @jakarta.annotation.Resource
+    ProductExecutionStartCodec startCodec;
+    @jakarta.annotation.Resource
+    ProductStepActivationCodec persistedActivationCodec;
+    @jakarta.annotation.Resource
+    LiteratureSearchTaskRepository literatureTasks;
+    @jakarta.annotation.Resource
+    ObjectMapper objectMapper;
+
+    @BeforeEach
+    void clearDatabase() {
+        resultRows.deleteAll();
+        receiptRows.deleteAll();
+        claimRows.deleteAll();
+        literatureTasks.deleteAll();
+        intentRows.deleteAll();
+        ownershipRows.deleteAll();
+        activationRows.deleteAll();
+        startRows.deleteAll();
+        leaseRows.deleteAll();
+        bootstrapRows.deleteAll();
+    }
+
+    @Test
+    void realProductTaskClaimReceiptAndOutcomeCommitAtomically() {
+        Scenario scenario = scenario("atomic-success");
+        AtomicInteger invocations = new AtomicInteger();
+
+        ProductEffectExecutionClaimResult result = repository.execute(
+                request(scenario, scenario.lease().expiresAt().minusSeconds(1),
+                        invocations));
+
+        assertEquals(false, result.replayed());
+        assertEquals(1, invocations.get());
+        assertEquals(1, literatureTasks.count());
+        assertEquals(1, claimRows.count());
+        assertEquals(1, receiptRows.count());
+        assertEquals(1, resultRows.count());
+        assertEquals(
+                "v2-request-" + scenario.intent().intent().toolCallId().value(),
+                literatureTasks.findAll().get(0).getClientRequestId());
+    }
+
+    @Test
+    void executionThatEndsAtLeaseExpiryRollsBackAndLaterValidCallExecutes() {
+        Scenario scenario = scenario("lease-expiry");
+        AtomicInteger expiredInvocations = new AtomicInteger();
+
+        ProductEffectExecutionClaimException failure = assertThrows(
+                ProductEffectExecutionClaimException.class,
+                () -> repository.execute(request(
+                        scenario, scenario.lease().expiresAt(),
+                        expiredInvocations)));
+        assertEquals("authority.leaseAfterExecution", failure.path());
+        assertEquals(1, expiredInvocations.get());
+        assertAtomicRows(0);
+
+        AtomicInteger retryInvocations = new AtomicInteger();
+        ProductEffectExecutionClaimResult recovered = repository.execute(
+                request(scenario,
+                        scenario.lease().expiresAt().minusSeconds(1),
+                        retryInvocations));
+        assertEquals(false, recovered.replayed());
+        assertEquals(1, retryInvocations.get());
+        assertAtomicRows(1);
+    }
+
     @Test
     void precedingStepCompletionDoesNotBlockCurrentActiveStepReplay() {
         var bootstraps = mock(ProductPlanBootstrapJpaRepository.class);
@@ -109,9 +265,12 @@ class ProductEffectExecutionClaimRepositoryTest {
                 "plan-a", "step-b", "activation-b"))
                 .thenReturn(Optional.empty());
         ProductLeaseEntity leaseRow = mock(ProductLeaseEntity.class);
+        when(leaseRow.planId()).thenReturn("plan-a");
         when(leaseRow.leaseToken()).thenReturn("token");
         when(leaseRow.ownerId()).thenReturn("owner");
         when(leaseRow.fencingToken()).thenReturn(2L);
+        when(leaseRow.expiresAt()).thenReturn(
+                Instant.parse("2026-07-28T00:10:00Z"));
         when(leases.findFirstByPlanIdOrderByFencingTokenDesc("plan-a"))
                 .thenReturn(Optional.of(leaseRow));
         ProductEffectOutcomeResultEntity resultRow =
@@ -149,6 +308,167 @@ class ProductEffectExecutionClaimRepositoryTest {
                     "DELETE FROM agent_v2_effect_intents "
                             + "WHERE tool_call_id='tool-a'"));
         }
+    }
+
+    Scenario scenario(String suffix) {
+        String plan = "plan-" + suffix;
+        String token = "token-" + suffix;
+        ProductEffectIntentTestFixtures.Scenario seeded =
+                ProductEffectIntentTestFixtures.seed(
+                        plan, "task-" + suffix, "owner-" + suffix,
+                        token, 1, bootstrapRows, bootstrapCodec, leaseRows,
+                        startRows, startCodec, activationRows,
+                        persistedActivationCodec);
+        EffectIntentRequest intentRequest =
+                ProductEffectIntentTestFixtures.request(
+                        seeded, "tool-" + suffix, token, 1,
+                        "literature.search",
+                        new ObjectValue(Map.of(
+                                "query", new TextValue("graph retrieval"))));
+        PersistedEffectIntent intent = intentAdapter.persist(intentRequest)
+                .value().orElseThrow();
+        PersistedStepRecoveryActive recovery =
+                new PersistedStepRecoveryActive(
+                        seeded.bootstrap().taskFrame(),
+                        seeded.bootstrap().plan(),
+                        seeded.persistedActivation().activatedCheckpoint(),
+                        seeded.persistedActivation(), Optional.empty());
+        LeaseRecord lease = new LeaseRecord(
+                seeded.bootstrap().plan().id(),
+                "owner-" + suffix, token, 1,
+                ProductStepActivationTestFixtures.NOW.minusSeconds(1),
+                ProductStepActivationTestFixtures.NOW.plusSeconds(60));
+        return new Scenario(recovery, lease, intent);
+    }
+
+    ProductEffectExecutionClaimRequest request(
+            Scenario scenario, Instant endedAt,
+            AtomicInteger invocations) {
+        return new ProductEffectExecutionClaimRequest(
+                scenario.recovery(), scenario.lease(), scenario.intent(),
+                scenario.lease().leaseToken(),
+                scenario.lease().fencingToken(),
+                ProductStepActivationTestFixtures.NOW.plusSeconds(2),
+                () -> executeLiteratureStart(
+                        scenario, endedAt, invocations));
+    }
+
+    private ExecutionReceipt executeLiteratureStart(
+            Scenario scenario, Instant endedAt,
+            AtomicInteger invocations) {
+        invocations.incrementAndGet();
+        LiteratureSearchStartToolExecutor executor = realExecutor();
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("query", "graph retrieval");
+        args.put("topK", 8);
+        args.put("includeBibtex", true);
+        args.put("clientRequestId",
+                "v2-request-" + scenario.intent().intent()
+                        .toolCallId().value());
+        ToolExecutionContext.clear();
+        ToolExecutionContext.setCurrentUserId(7L);
+        ToolExecutionContext.setResolvedAllowedTools(
+                Set.of("literature_search_start"));
+        final com.yanban.core.tool.ToolResult toolResult;
+        try {
+            toolResult = executor.execute(new ToolCall(
+                    scenario.intent().intent().toolCallId().value(),
+                    "literature_search_start", args));
+        } finally {
+            ToolExecutionContext.clear();
+        }
+        if (!toolResult.success()) {
+            throw new AssertionError("real product task start failed");
+        }
+        return new ExecutionReceipt(
+                new ReceiptId("receipt-" + scenario.intent().intent()
+                        .toolCallId().value()),
+                scenario.intent().intent().toolCallId(),
+                ReceiptStatus.SUCCESS,
+                ProductStepActivationTestFixtures.NOW.plusSeconds(3),
+                endedAt, Optional.of(0), Optional.empty(),
+                OutputCapture.inline(
+                        toolResult.output().toString(), false),
+                OutputCapture.empty(), List.of(), Optional.empty(),
+                List.of());
+    }
+
+    @SuppressWarnings("unchecked")
+    private LiteratureSearchStartToolExecutor realExecutor() {
+        try {
+            ObjectProvider<?> emptyProvider = mock(ObjectProvider.class);
+            when(emptyProvider.getIfAvailable()).thenReturn(null);
+            LiteratureSearchTaskService service =
+                    new LiteratureSearchTaskService(
+                            literatureTasks,
+                            (ObjectProvider) emptyProvider,
+                            (ObjectProvider) emptyProvider,
+                            (ObjectProvider) emptyProvider);
+            Class<?> supportType = Class.forName(
+                    "com.yanban.api.agent.LiteratureSearchTaskToolSupport");
+            var supportConstructor = supportType.getDeclaredConstructor(
+                    LiteratureSearchTaskService.class, ObjectMapper.class);
+            supportConstructor.setAccessible(true);
+            Object support = supportConstructor.newInstance(
+                    service, objectMapper);
+            var executorConstructor =
+                    LiteratureSearchStartToolExecutor.class
+                            .getConstructors()[0];
+            return (LiteratureSearchStartToolExecutor)
+                    executorConstructor.newInstance(support, objectMapper);
+        } catch (ReflectiveOperationException exception) {
+            throw new AssertionError(exception);
+        }
+    }
+
+    private void assertAtomicRows(long expected) {
+        assertEquals(expected, literatureTasks.count());
+        assertEquals(expected, claimRows.count());
+        assertEquals(expected, receiptRows.count());
+        assertEquals(expected, resultRows.count());
+    }
+
+    record Scenario(
+            PersistedStepRecoveryActive recovery,
+            LeaseRecord lease,
+            PersistedEffectIntent intent) {
+    }
+
+    static ProductEffectExecutionClaimRepositoryTest harness(
+            org.springframework.context.ApplicationContext context) {
+        var value = new ProductEffectExecutionClaimRepositoryTest();
+        value.repository = context.getBean(
+                ProductEffectExecutionClaimRepository.class);
+        value.intentAdapter = context.getBean(
+                ProductEffectIntentRepositoryAdapter.class);
+        value.claimRows = context.getBean(
+                ProductEffectExecutionClaimJpaRepository.class);
+        value.resultRows = context.getBean(
+                ProductEffectOutcomeResultJpaRepository.class);
+        value.receiptRows = context.getBean(
+                ProductReceiptJpaRepository.class);
+        value.intentRows = context.getBean(
+                ProductEffectIntentJpaRepository.class);
+        value.ownershipRows = context.getBean(
+                ProductReceiptToolCallClaimJpaRepository.class);
+        value.activationRows = context.getBean(
+                ProductStepActivationJpaRepository.class);
+        value.startRows = context.getBean(
+                ProductExecutionStartJpaRepository.class);
+        value.leaseRows = context.getBean(
+                ProductLeaseJpaRepository.class);
+        value.bootstrapRows = context.getBean(
+                ProductPlanBootstrapJpaRepository.class);
+        value.bootstrapCodec = context.getBean(
+                ProductPlanBootstrapCodec.class);
+        value.startCodec = context.getBean(
+                ProductExecutionStartCodec.class);
+        value.persistedActivationCodec = context.getBean(
+                ProductStepActivationCodec.class);
+        value.literatureTasks = context.getBean(
+                LiteratureSearchTaskRepository.class);
+        value.objectMapper = context.getBean(ObjectMapper.class);
+        return value;
     }
 
     static String schema(String name) throws Exception {
