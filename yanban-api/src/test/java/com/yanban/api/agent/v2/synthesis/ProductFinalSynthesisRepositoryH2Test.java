@@ -18,6 +18,9 @@ import io.paperagent.v2.contracts.WorkspaceId;
 import io.paperagent.v2.contracts.WorkspaceRef;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -103,6 +106,46 @@ class ProductFinalSynthesisRepositoryH2Test {
                 + "where plan_id = ?", value.planId().value());
         assertThrows(IllegalStateException.class,
                 () -> repository.find(value.planId()));
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void readsV55LegacyLiteratureCanonicalRow() throws Exception {
+        FinalSynthesis value = new FinalSynthesis(
+                new FinalSynthesisId("legacy-synthesis"),
+                new TaskFrameId("legacy-task"),
+                new PlanId("legacy-plan"),
+                new PlanRevisionId("legacy-revision"),
+                Optional.empty(), Optional.empty(),
+                List.of(new ReceiptId("legacy-receipt")),
+                "Legacy literature result.",
+                Instant.parse("2026-07-01T00:00:00Z"));
+        String receipts = "[\"legacy-receipt\"]";
+        String canonical = value.id().value() + "\n"
+                + value.taskFrameId().value() + "\n"
+                + value.planId().value() + "\n"
+                + value.planRevisionId().value() + "\n"
+                + receipts + "\n" + value.narrative() + "\n"
+                + value.observedAt();
+        String hash = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(
+                        canonical.getBytes(StandardCharsets.UTF_8)));
+        jdbc.update("""
+                insert into agent_v2_final_syntheses (
+                  plan_id, synthesis_id, task_frame_id, plan_revision_id,
+                  source_project_id, source_project_version_id,
+                  workspace_diff_json, receipt_ids_json, narrative,
+                  observed_at, canonical_sha256, committed_at
+                ) values (?, ?, ?, ?, null, null, null, ?, ?, ?, ?, ?)
+                """,
+                value.planId().value(), value.id().value(),
+                value.taskFrameId().value(),
+                value.planRevisionId().value(), receipts,
+                value.narrative(), value.observedAt(), hash,
+                Instant.parse("2026-07-01T00:00:01Z"));
+
+        assertEquals(value,
+                repository.find(value.planId()).value().orElseThrow());
     }
 
     private static FinalSynthesis synthesis() {

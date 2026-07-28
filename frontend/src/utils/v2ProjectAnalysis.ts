@@ -124,3 +124,24 @@ export async function pollV2ProjectAnalysis(
     await sleep(intervalMs);
   }
 }
+
+export async function startThenPollV2ProjectAnalysis(
+  start: () => Promise<V2ProjectReadAnalysisTurnResponse>,
+  read: () => Promise<V2ProjectReadAnalysisTurnResponse>,
+  options: PollV2ProjectAnalysisOptions = {},
+) {
+  let startFailure: unknown;
+  try {
+    const outcome = await start();
+    options.onOutcome?.(outcome);
+    if (isV2ProjectAnalysisTerminal(outcome)) return outcome;
+  } catch (cause) {
+    startFailure = cause;
+  }
+  try {
+    return await pollV2ProjectAnalysis(read, options);
+  } catch (recoveryFailure) {
+    if (startFailure !== undefined) throw startFailure;
+    throw recoveryFailure;
+  }
+}

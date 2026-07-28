@@ -25,7 +25,7 @@ class ProjectControllerV2AnalysisTest {
                 new V2ProjectAnalysisResponse(
                         8L, 9L, "request-1", "SUCCEEDED",
                         true, 10L, "plan", "version",
-                        "analysis", 11L, false);
+                        "analysis", 11L, null, false);
         when(service.execute(7L, 8L, 9L, request))
                 .thenReturn(response);
         when(service.read(7L, 8L, 9L, "request-1"))

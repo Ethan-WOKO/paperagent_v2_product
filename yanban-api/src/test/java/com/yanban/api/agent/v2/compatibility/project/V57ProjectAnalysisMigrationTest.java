@@ -23,6 +23,7 @@ class V57ProjectAnalysisMigrationTest {
             assertTrue(sql.contains("agent_v2_project_analysis_deliveries"));
             assertTrue(sql.contains("agent_v2_project_analysis_steps"));
             assertTrue(sql.contains("argument_sha256"));
+            assertTrue(sql.contains("error_code"));
         }
     }
 }

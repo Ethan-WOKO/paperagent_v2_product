@@ -81,6 +81,7 @@ export interface V2ProjectReadAnalysisTurnResponse {
   projectVersion: string;
   finalText?: string;
   assistantMessageId?: number;
+  errorCode?: string;
   replayed: boolean;
 }
 

@@ -11,5 +11,6 @@ public record V2ProjectAnalysisResponse(
         String projectVersion,
         String finalText,
         Long assistantMessageId,
+        String errorCode,
         boolean replayed) {
 }

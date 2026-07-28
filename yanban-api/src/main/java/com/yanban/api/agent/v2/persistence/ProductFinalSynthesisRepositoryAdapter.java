@@ -128,7 +128,12 @@ public class ProductFinalSynthesisRepositoryAdapter
                 row.narrative(), row.observedAt());
         String canonical = canonical(
                 value, row.receiptIdsJson(), row.workspaceDiffJson());
-        if (!sha256(canonical).equals(row.canonicalSha256())) {
+        boolean valid = sha256(canonical).equals(row.canonicalSha256());
+        if (!valid && value.sourceProjectVersion().isEmpty()) {
+            valid = sha256(legacyCanonical(value, row.receiptIdsJson()))
+                    .equals(row.canonicalSha256());
+        }
+        if (!valid) {
             throw new IllegalStateException("stored final synthesis integrity failure");
         }
         return value;
@@ -145,7 +150,8 @@ public class ProductFinalSynthesisRepositoryAdapter
 
     private static String canonical(
             FinalSynthesis value, String receiptJson, String workspaceJson) {
-        return value.id().value() + "\n" + value.taskFrameId().value()
+        return "v2\n" + value.id().value() + "\n"
+                + value.taskFrameId().value()
                 + "\n" + value.planId().value() + "\n"
                 + value.planRevisionId().value() + "\n"
                 + value.sourceProjectVersion()
@@ -154,6 +160,14 @@ public class ProductFinalSynthesisRepositoryAdapter
                         .map(ProjectVersionRef::versionId).orElse("")
                 + "\n" + (workspaceJson == null ? "" : workspaceJson)
                 + "\n" + receiptJson
+                + "\n" + value.narrative() + "\n" + value.observedAt();
+    }
+
+    private static String legacyCanonical(
+            FinalSynthesis value, String receiptJson) {
+        return value.id().value() + "\n" + value.taskFrameId().value()
+                + "\n" + value.planId().value() + "\n"
+                + value.planRevisionId().value() + "\n" + receiptJson
                 + "\n" + value.narrative() + "\n" + value.observedAt();
     }
 

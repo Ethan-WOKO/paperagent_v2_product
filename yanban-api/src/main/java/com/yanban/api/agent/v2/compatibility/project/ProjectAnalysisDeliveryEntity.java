@@ -43,6 +43,8 @@ class ProjectAnalysisDeliveryEntity {
     private Long assistantMessageId;
     @Column(name = "status", nullable = false, length = 32)
     private String status;
+    @Column(name = "error_code", length = 64)
+    private String errorCode;
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
     @Column(name = "updated_at", nullable = false)
@@ -91,6 +93,7 @@ class ProjectAnalysisDeliveryEntity {
     String synthesisId() { return synthesisId; }
     Long assistantMessageId() { return assistantMessageId; }
     String status() { return status; }
+    String errorCode() { return errorCode; }
     Instant createdAt() { return createdAt; }
 
     void bindPlan(String value) {
@@ -105,6 +108,12 @@ class ProjectAnalysisDeliveryEntity {
         updatedAt = Instant.now();
     }
 
+    void rotateLease(String token, Instant expiresAt) {
+        leaseToken = token;
+        leaseExpiresAt = expiresAt;
+        updatedAt = Instant.now();
+    }
+
     void complete(String plan, String synthesis, Long assistant) {
         bindPlan(plan);
         if ("SUCCEEDED".equals(status)) {
@@ -116,6 +125,18 @@ class ProjectAnalysisDeliveryEntity {
         synthesisId = synthesis;
         assistantMessageId = assistant;
         status = "SUCCEEDED";
+        errorCode = null;
+        updatedAt = Instant.now();
+    }
+
+    void fail(String code) {
+        if ("SUCCEEDED".equals(status)) throw conflict();
+        if ("FAILED".equals(status)) {
+            if (!code.equals(errorCode)) throw conflict();
+            return;
+        }
+        status = "FAILED";
+        errorCode = code;
         updatedAt = Instant.now();
     }
 

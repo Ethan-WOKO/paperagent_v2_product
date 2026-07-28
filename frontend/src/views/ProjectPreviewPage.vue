@@ -656,6 +656,10 @@
                 </header>
                 <MarkdownMessage v-if="projectAnalysisOutcome.finalText" :content="projectAnalysisOutcome.finalText" variant="project" />
                 <p v-else-if="projectAnalysisOutcome.status === 'RUNNING'">{{ t('project.v2Analysis.running') }}</p>
+                <p v-else-if="projectAnalysisOutcome.status === 'FAILED'">
+                  {{ t('project.v2Analysis.failed') }}
+                  <code v-if="projectAnalysisOutcome.errorCode">{{ projectAnalysisOutcome.errorCode }}</code>
+                </p>
               </section>
               <div class="v2-project-analysis__actions">
                 <NButton
@@ -821,6 +825,7 @@ import {
   newV2ProjectAnalysisClientRequestId,
   normalizeV2ProjectAnalysisForm,
   pollV2ProjectAnalysis,
+  startThenPollV2ProjectAnalysis,
   type V2ProjectAnalysisRequestIdentity,
 } from '@/utils/v2ProjectAnalysis';
 
@@ -2019,30 +2024,53 @@ async function startProjectAnalysis() {
   try {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
+    const pendingRequestId = storedProjectAnalysisRequest(projectId, sessionId);
+    if (pendingRequestId) {
+      await runProjectAnalysisPolling(projectId, sessionId, pendingRequestId);
+      return;
+    }
     const request = normalizeV2ProjectAnalysisForm(projectAnalysisForm, clientRequestId);
     stopProjectAnalysisPolling();
     projectAnalysisClientRequestId = clientRequestId;
     const sequence = projectAnalysisSequence;
     const expected = { projectId, sessionId, clientRequestId, sequence };
     storeProjectAnalysisRequest(projectId, sessionId, clientRequestId);
-    const response = (await startV2ProjectReadAnalysisTurn(projectId, sessionId, request)).data;
+    const controller = new AbortController();
+    projectAnalysisAbortController = controller;
+    projectAnalysisPolling.value = true;
+    const response = await startThenPollV2ProjectAnalysis(
+      async () => (await startV2ProjectReadAnalysisTurn(projectId, sessionId, request)).data,
+      async () => (await readV2ProjectReadAnalysisTurn(projectId, sessionId, clientRequestId)).data,
+      {
+        signal: controller.signal,
+        onOutcome: (outcome) => {
+          if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
+            projectAnalysisOutcome.value = outcome;
+          }
+        },
+      },
+    );
     if (!isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) return;
     projectAnalysisOutcome.value = response;
-    if (isV2ProjectAnalysisTerminal(response)) {
-      clearStoredProjectAnalysisRequest(projectId, sessionId);
-      if (response.status === 'SUCCEEDED') {
-        await loadMessages(sessionId, epoch).catch(() => undefined);
-      }
-      return;
+    clearStoredProjectAnalysisRequest(projectId, sessionId);
+    if (response.status === 'SUCCEEDED') {
+      await loadMessages(sessionId, epoch).catch(() => undefined);
     }
-    await runProjectAnalysisPolling(projectId, sessionId, clientRequestId);
   } catch (cause) {
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      projectAnalysisError.value = apiError(cause);
+      const sessionId = activeSessionId.value;
+      if (sessionId && storedProjectAnalysisRequest(projectId, sessionId)
+          === clientRequestId) {
+        projectAnalysisError.value = apiError(cause);
+      } else {
+        projectAnalysisError.value = apiError(cause);
+      }
     }
   } finally {
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
       projectAnalysisStarting.value = false;
+      projectAnalysisPolling.value = false;
+      projectAnalysisAbortController = null;
     }
   }
 }

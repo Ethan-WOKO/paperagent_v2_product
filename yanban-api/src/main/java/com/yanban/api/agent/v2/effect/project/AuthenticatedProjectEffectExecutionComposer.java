@@ -49,7 +49,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private static final Set<String> KINDS =
             Set.of("project.read", "project.search");
     private static final int MAX_FILE_BYTES = 64 * 1024;
-    private static final int MAX_CAPTURE = 64 * 1024;
+    private static final int MAX_CAPTURE_CHARS = 256 * 1024;
 
     private final AgentTurnProductContextResolver contexts;
     private final ProductPlanIdDerivation planIds;
@@ -252,7 +252,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private String write(com.fasterxml.jackson.databind.JsonNode node) {
         try {
             String value = json.writeValueAsString(node);
-            if (value.length() > MAX_CAPTURE) throw failed();
+            if (value.length() > MAX_CAPTURE_CHARS) throw failed();
             return value;
         } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
             throw failed();
@@ -270,7 +270,13 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(bytes)).toString();
-            if (value.indexOf('\0') >= 0) throw failed();
+            if (value.codePoints().anyMatch(character ->
+                    character < 0x20
+                            && character != '\t'
+                            && character != '\n'
+                            && character != '\r')) {
+                throw failed();
+            }
             return value;
         } catch (CharacterCodingException exception) {
             throw failed();

@@ -8,6 +8,7 @@ import {
   newV2ProjectAnalysisClientRequestId,
   normalizeV2ProjectAnalysisForm,
   pollV2ProjectAnalysis,
+  startThenPollV2ProjectAnalysis,
 } from '../src/utils/v2ProjectAnalysis';
 
 function outcome(status: V2ProjectReadAnalysisTurnResponse['status']): V2ProjectReadAnalysisTurnResponse {
@@ -96,6 +97,29 @@ describe('V2 Project analysis polling and isolation', () => {
       now: () => now,
       sleep: async (milliseconds) => { now += milliseconds; },
     })).rejects.toThrow('project-analysis-poll-timeout');
+  });
+
+  it('recovers a lost POST response by polling the same request identity', async () => {
+    const clientRequestId = 'project-analysis-response-loss';
+    const start = vi.fn(async () => {
+      throw new Error('response-lost');
+    });
+    const states = [outcome('RUNNING'), outcome('SUCCEEDED')]
+      .map((value) => ({ ...value, clientRequestId }));
+    const read = vi.fn(async () => states.shift()!);
+
+    const result = await startThenPollV2ProjectAnalysis(
+      start, read, {
+        intervalMs: 1_500,
+        sleep: async () => undefined,
+        now: () => 0,
+      },
+    );
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(result.clientRequestId).toBe(clientRequestId);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });
 

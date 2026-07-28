@@ -173,35 +173,82 @@ public class V2ProjectAnalysisService {
                     "V2 Project analysis requires the routed Project session");
         }
         Request request = normalize(input);
-        var manifest = projects.manifest(userId, projectId);
-        if (manifest == null || !projectId.equals(manifest.projectId())
-                || manifest.version() == null
-                || manifest.version().isBlank()) {
-            throw new IllegalArgumentException(
-                    "Project version is unavailable");
-        }
-        Set<String> manifestPaths = manifest.files().stream()
-                .map(value -> value.path()).collect(
-                        java.util.stream.Collectors.toSet());
-        if (!manifestPaths.containsAll(request.paths())) {
-            throw new IllegalArgumentException(
-                    "Project analysis path is unavailable");
-        }
         String requestHash = hash(request.canonical());
+        ProjectAnalysisDeliveryKey deliveryKey =
+                new ProjectAnalysisDeliveryKey(
+                        userId, projectId, sessionId, request.requestId());
+        Optional<ProjectAnalysisDeliveryEntity> existing =
+                deliveries.findMatching(deliveryKey, requestHash);
+        if (existing.isPresent()
+                && isTerminal(existing.orElseThrow())) {
+            return response(existing.orElseThrow(), true);
+        }
         String owner = "v2-project-analysis-" + hash(
                 userId + "\0" + projectId + "\0" + sessionId + "\0"
                         + request.requestId()).substring(0, 24);
         Instant now = Instant.now();
         String token = "lease-" + hash(owner + "\0" + requestHash);
-        ProjectAnalysisDeliveryEntity delivery = deliveries.open(
-                userId, projectId, sessionId, request.requestId(),
-                requestHash, request.objective(), request.paths(),
-                request.searchQuery(), request.maxSearchResults(),
-                manifest.version(), owner, token,
-                now.plus(Duration.ofMinutes(10)));
-        if ("SUCCEEDED".equals(delivery.status())) {
+        ProjectAnalysisDeliveryEntity delivery;
+        if (existing.isPresent()) {
+            delivery = existing.orElseThrow();
+        } else {
+            var manifest = projects.manifest(userId, projectId);
+            if (manifest == null || !projectId.equals(manifest.projectId())
+                    || manifest.version() == null
+                    || manifest.version().isBlank()) {
+                throw new IllegalArgumentException(
+                        "Project version is unavailable");
+            }
+            Set<String> manifestPaths = manifest.files().stream()
+                    .map(value -> value.path()).collect(
+                            java.util.stream.Collectors.toSet());
+            if (!manifestPaths.containsAll(request.paths())) {
+                throw new IllegalArgumentException(
+                        "Project analysis path is unavailable");
+            }
+            delivery = deliveries.open(
+                    userId, projectId, sessionId, request.requestId(),
+                    requestHash, request.objective(), request.paths(),
+                    request.searchQuery(), request.maxSearchResults(),
+                    manifest.version(), owner, token,
+                    now.plus(Duration.ofMinutes(10)));
+        }
+        if (isTerminal(delivery)) {
             return response(delivery, true);
         }
+        if (!delivery.leaseExpiresAt().isAfter(now)) {
+            delivery = deliveries.rotateExpiredLease(
+                    delivery.id(),
+                    "lease-" + hash(owner + "\0" + requestHash + "\0"
+                            + now.toEpochMilli() + "\0recovery"),
+                    now.plus(Duration.ofMinutes(10)), now);
+            if (delivery.planId() != null) {
+                var takeover = leases.acquire(
+                        new io.paperagent.v2.contracts.PlanId(
+                                delivery.planId()),
+                        delivery.leaseOwnerId(), delivery.leaseToken(),
+                        delivery.leaseExpiresAt());
+                if (takeover.outcome() != PersistenceOutcome.APPLIED
+                        && takeover.outcome()
+                                != PersistenceOutcome.REPLAYED) {
+                    return response(deliveries.fail(
+                            delivery.id(),
+                            "PROJECT_ANALYSIS_LEASE_FAILED"), false);
+                }
+            }
+        }
+        try {
+            return executeRunning(userId, projectId, request, delivery);
+        } catch (RuntimeException failure) {
+            return response(deliveries.fail(
+                    delivery.id(), "PROJECT_ANALYSIS_FAILED"), false);
+        }
+    }
+
+    private V2ProjectAnalysisResponse executeRunning(
+            Long userId, Long projectId, Request request,
+            ProjectAnalysisDeliveryEntity initialDelivery) {
+        ProjectAnalysisDeliveryEntity delivery = initialDelivery;
         var verified = turnContexts.resolve(userId, delivery.turnId());
         if (!projectId.equals(verified.identity().projectId())
                 || verified.projectVersionId().filter(
@@ -282,6 +329,12 @@ public class V2ProjectAnalysisService {
                 composed.synthesis().narrative());
         return response(delivery,
                 composed.disposition() == FinalSynthesisDisposition.REPLAYED);
+    }
+
+    private static boolean isTerminal(
+            ProjectAnalysisDeliveryEntity delivery) {
+        return "SUCCEEDED".equals(delivery.status())
+                || "FAILED".equals(delivery.status());
     }
 
     private DefaultFinalSynthesisComposer synthesis(Request request) {
@@ -390,7 +443,7 @@ public class V2ProjectAnalysisService {
                                 delivery.planId())).value().orElseThrow()
                                 .narrative()
                         : null,
-                delivery.assistantMessageId(), replayed);
+                delivery.assistantMessageId(), delivery.errorCode(), replayed);
     }
 
     private ProductPersistentPlanBootstrapCommand bootstrap(

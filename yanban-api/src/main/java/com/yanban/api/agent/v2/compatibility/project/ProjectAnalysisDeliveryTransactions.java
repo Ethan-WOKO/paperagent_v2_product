@@ -12,6 +12,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -94,6 +95,13 @@ class ProjectAnalysisDeliveryTransactions {
         }
     }
 
+    @Transactional(readOnly = true)
+    Optional<ProjectAnalysisDeliveryEntity> findMatching(
+            ProjectAnalysisDeliveryKey key, String requestHash) {
+        return deliveries.findById(key)
+                .map(value -> same(value, requestHash));
+    }
+
     @Transactional
     ProjectAnalysisDeliveryEntity bindPlanAndSteps(
             ProjectAnalysisDeliveryKey key, String planId,
@@ -134,11 +142,26 @@ class ProjectAnalysisDeliveryTransactions {
     }
 
     @Transactional
+    ProjectAnalysisDeliveryEntity rotateExpiredLease(
+            ProjectAnalysisDeliveryKey key, String token,
+            Instant expiresAt, Instant now) {
+        ProjectAnalysisDeliveryEntity delivery = locked(key);
+        if (!"SUCCEEDED".equals(delivery.status())
+                && !"FAILED".equals(delivery.status())
+                && !delivery.leaseExpiresAt().isAfter(now)) {
+            delivery.rotateLease(token, expiresAt);
+            deliveries.saveAndFlush(delivery);
+        }
+        return delivery;
+    }
+
+    @Transactional
     ProjectAnalysisDeliveryEntity deliver(
             ProjectAnalysisDeliveryKey key, String planId,
             String synthesisId, String narrative) {
         ProjectAnalysisDeliveryEntity delivery = locked(key);
-        if ("SUCCEEDED".equals(delivery.status())) return delivery;
+        if ("SUCCEEDED".equals(delivery.status())
+                || "FAILED".equals(delivery.status())) return delivery;
         AgentMessage assistant = messages.saveAndFlush(new AgentMessage(
                 key.sessionId(), key.userId(), "assistant",
                 narrative, null, null));
@@ -148,6 +171,23 @@ class ProjectAnalysisDeliveryTransactions {
         turn.complete(assistant.getId());
         turns.saveAndFlush(turn);
         delivery.complete(planId, synthesisId, assistant.getId());
+        return deliveries.saveAndFlush(delivery);
+    }
+
+    @Transactional
+    ProjectAnalysisDeliveryEntity fail(
+            ProjectAnalysisDeliveryKey key, String errorCode) {
+        ProjectAnalysisDeliveryEntity delivery = locked(key);
+        if ("FAILED".equals(delivery.status())
+                || "SUCCEEDED".equals(delivery.status())) return delivery;
+        AgentTurn turn = turns.findById(delivery.turnId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "project analysis turn disappeared"));
+        if (AgentTurn.STATUS_RUNNING.equals(turn.getStatus())) {
+            turn.fail(null, errorCode);
+            turns.saveAndFlush(turn);
+        }
+        delivery.fail(errorCode);
         return deliveries.saveAndFlush(delivery);
     }
 

@@ -26,6 +26,7 @@ CREATE TABLE agent_v2_project_analysis_deliveries (
     synthesis_id VARCHAR(128) NULL,
     assistant_message_id BIGINT NULL,
     status VARCHAR(32) NOT NULL,
+    error_code VARCHAR(64) NULL,
     created_at TIMESTAMP(6) NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL,
     PRIMARY KEY (user_id, project_id, session_id, client_request_id),
