@@ -8,6 +8,7 @@ import com.yanban.core.model.ChatResponse;
 import io.paperagent.v2.persistence.EffectIntentRepository;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -41,7 +42,7 @@ class ProductStepTurnConfigurationTest {
                 fake, new ObjectMapper(), "deepseek", "test-model");
         var tools = configuration.agentV2AllowedTools();
         var turn = configuration.agentV2StepTurnPort(
-                provider, tools, 512, 0.1d);
+                provider, input -> List.of(tools.get(0)), 512, 0.1d);
         var kernel = configuration.singleTurnStepKernel(
                 turn, mock(EffectIntentRepository.class));
 
@@ -49,5 +50,7 @@ class ProductStepTurnConfigurationTest {
         assertNotNull(turn);
         assertNotNull(kernel);
         assertEquals("literature.search", tools.get(0).id().value());
+        assertEquals("project.read", tools.get(1).id().value());
+        assertEquals("project.search", tools.get(2).id().value());
     }
 }

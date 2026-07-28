@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.synthesis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.persistence.ProductFinalSynthesisRepositoryAdapter;
@@ -10,8 +11,16 @@ import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanRevisionId;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.TaskFrameId;
+import io.paperagent.v2.contracts.DiffId;
+import io.paperagent.v2.contracts.ProjectVersionRef;
+import io.paperagent.v2.contracts.WorkspaceDiff;
+import io.paperagent.v2.contracts.WorkspaceId;
+import io.paperagent.v2.contracts.WorkspaceRef;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -65,8 +74,78 @@ class ProductFinalSynthesisRepositoryH2Test {
             executor.shutdownNow();
         }
         assertEquals(1L, jdbc.queryForObject(
-                "select count(*) from agent_v2_final_syntheses",
-                Long.class));
+                "select count(*) from agent_v2_final_syntheses "
+                        + "where plan_id = 'plan-h2'", Long.class));
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void projectProvenanceRoundTripsAndMismatchFailsClosed() {
+        ProjectVersionRef source = new ProjectVersionRef(
+                "42", "version-42");
+        WorkspaceDiff diff = new WorkspaceDiff(
+                new DiffId("diff-h2"),
+                new WorkspaceRef(new WorkspaceId("workspace-h2"), source),
+                List.of(), Instant.parse("2026-07-28T00:00:01Z"));
+        FinalSynthesis value = new FinalSynthesis(
+                new FinalSynthesisId("synthesis-project-h2"),
+                new TaskFrameId("task-project-h2"),
+                new PlanId("plan-project-h2"),
+                new PlanRevisionId("revision-project-h2"),
+                Optional.of(source), Optional.of(diff),
+                List.of(new ReceiptId("receipt-project-h2")),
+                "Read-only Project analysis.",
+                Instant.parse("2026-07-28T00:00:02Z"));
+
+        assertEquals(PersistenceOutcome.APPLIED,
+                repository.append(value).outcome());
+        assertEquals(value,
+                repository.find(value.planId()).value().orElseThrow());
+        jdbc.update("update agent_v2_final_syntheses "
+                + "set source_project_version_id = null "
+                + "where plan_id = ?", value.planId().value());
+        assertThrows(IllegalStateException.class,
+                () -> repository.find(value.planId()));
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void readsV55LegacyLiteratureCanonicalRow() throws Exception {
+        FinalSynthesis value = new FinalSynthesis(
+                new FinalSynthesisId("legacy-synthesis"),
+                new TaskFrameId("legacy-task"),
+                new PlanId("legacy-plan"),
+                new PlanRevisionId("legacy-revision"),
+                Optional.empty(), Optional.empty(),
+                List.of(new ReceiptId("legacy-receipt")),
+                "Legacy literature result.",
+                Instant.parse("2026-07-01T00:00:00Z"));
+        String receipts = "[\"legacy-receipt\"]";
+        String canonical = value.id().value() + "\n"
+                + value.taskFrameId().value() + "\n"
+                + value.planId().value() + "\n"
+                + value.planRevisionId().value() + "\n"
+                + receipts + "\n" + value.narrative() + "\n"
+                + value.observedAt();
+        String hash = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(
+                        canonical.getBytes(StandardCharsets.UTF_8)));
+        jdbc.update("""
+                insert into agent_v2_final_syntheses (
+                  plan_id, synthesis_id, task_frame_id, plan_revision_id,
+                  source_project_id, source_project_version_id,
+                  workspace_diff_json, receipt_ids_json, narrative,
+                  observed_at, canonical_sha256, committed_at
+                ) values (?, ?, ?, ?, null, null, null, ?, ?, ?, ?, ?)
+                """,
+                value.planId().value(), value.id().value(),
+                value.taskFrameId().value(),
+                value.planRevisionId().value(), receipts,
+                value.narrative(), value.observedAt(), hash,
+                Instant.parse("2026-07-01T00:00:01Z"));
+
+        assertEquals(value,
+                repository.find(value.planId()).value().orElseThrow());
     }
 
     private static FinalSynthesis synthesis() {

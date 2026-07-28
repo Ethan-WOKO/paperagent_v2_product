@@ -10,7 +10,7 @@ import io.paperagent.v2.runtime.synthesis.FinalSynthesisDisposition;
 import io.paperagent.v2.runtime.synthesis.FinalSynthesisNarrator;
 import io.paperagent.v2.runtime.synthesis.FinalSynthesisReceiptSource;
 import io.paperagent.v2.runtime.synthesis.FinalSynthesisStore;
-import io.paperagent.v2.runtime.synthesis.LiteratureIntentOwnershipSource;
+import io.paperagent.v2.runtime.synthesis.ExactIntentOwnershipSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -54,8 +54,8 @@ public class ProductFinalSynthesisConfiguration {
                     ? result.value()
                     : java.util.Optional.empty();
         };
-        LiteratureIntentOwnershipSource intentSource =
-                (toolCallId, planId, stepId, kind) -> {
+        ExactIntentOwnershipSource intentSource =
+                (toolCallId, planId, stepId) -> {
                     var result = intents.find(toolCallId);
                     return result.outcome() == PersistenceOutcome.FOUND
                             && result.value().orElseThrow().intent().planId()
@@ -63,7 +63,7 @@ public class ProductFinalSynthesisConfiguration {
                             && result.value().orElseThrow().intent().stepId()
                             .equals(stepId)
                             && result.value().orElseThrow().intent().kind()
-                            .equals(kind);
+                            .equals("literature.search");
                 };
         return new DefaultFinalSynthesisComposer(
                 synthesisStore, receiptSource, intentSource, narrator);

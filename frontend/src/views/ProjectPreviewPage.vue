@@ -607,6 +607,72 @@
             :dropped-label="t('project.context.dropped')"
             @refresh="loadContextDebug()"
           />
+          <details class="v2-project-analysis" :open="projectAnalysisOpen || undefined" @toggle="syncProjectAnalysisOpen">
+            <summary>
+              <span>
+                <strong>{{ t('project.v2Analysis.title') }}</strong>
+                <small>{{ t('project.v2Analysis.readOnly') }}</small>
+              </span>
+              <NTag size="tiny" type="info">V2</NTag>
+            </summary>
+            <div class="v2-project-analysis__body">
+              <p>{{ t('project.v2Analysis.description') }}</p>
+              <NInput
+                v-model:value="projectAnalysisForm.objective"
+                type="textarea"
+                :maxlength="2000"
+                :autosize="{ minRows: 2, maxRows: 4 }"
+                :placeholder="t('project.v2Analysis.objective')"
+              />
+              <NInput
+                v-model:value="projectAnalysisForm.pathsText"
+                type="textarea"
+                :autosize="{ minRows: 2, maxRows: 5 }"
+                :placeholder="t('project.v2Analysis.paths')"
+              />
+              <div class="v2-project-analysis__search">
+                <NInput
+                  v-model:value="projectAnalysisForm.searchQuery"
+                  :maxlength="256"
+                  clearable
+                  :placeholder="t('project.v2Analysis.search')"
+                />
+                <NInputNumber
+                  v-model:value="projectAnalysisForm.maxSearchResults"
+                  :min="1"
+                  :max="20"
+                  :disabled="!projectAnalysisForm.searchQuery.trim()"
+                />
+              </div>
+              <NAlert v-if="projectAnalysisError" type="error" :show-icon="false">
+                {{ projectAnalysisError }}
+              </NAlert>
+              <section v-if="projectAnalysisOutcome" class="v2-project-analysis__outcome">
+                <header>
+                  <NTag size="tiny" :type="projectAnalysisOutcome.status === 'SUCCEEDED' ? 'success' : projectAnalysisOutcome.status === 'FAILED' ? 'error' : 'info'">
+                    {{ projectAnalysisOutcome.status }}
+                  </NTag>
+                  <span>{{ t('project.v2Analysis.version') }} {{ shortHash(projectAnalysisOutcome.projectVersion) }}</span>
+                </header>
+                <MarkdownMessage v-if="projectAnalysisOutcome.finalText" :content="projectAnalysisOutcome.finalText" variant="project" />
+                <p v-else-if="projectAnalysisOutcome.status === 'RUNNING'">{{ t('project.v2Analysis.running') }}</p>
+                <p v-else-if="projectAnalysisOutcome.status === 'FAILED'">
+                  {{ t('project.v2Analysis.failed') }}
+                  <code v-if="projectAnalysisOutcome.errorCode">{{ projectAnalysisOutcome.errorCode }}</code>
+                </p>
+              </section>
+              <div class="v2-project-analysis__actions">
+                <NButton
+                  type="primary"
+                  :loading="projectAnalysisStarting || projectAnalysisPolling"
+                  :disabled="!activeProject || !projectAnalysisForm.objective.trim() || !projectAnalysisForm.pathsText.trim()"
+                  @click="startProjectAnalysis"
+                >
+                  {{ t('project.v2Analysis.start') }}
+                </NButton>
+              </div>
+            </div>
+          </details>
           <div class="project-composer">
             <NInput v-model:value="chatInput" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="Ask about this read-only Project..." @keydown="handleComposerKeydown" />
             <NButton type="primary" :loading="loading.send" :disabled="!chatInput.trim() || !activeProject" @click="sendChat">Send</NButton>
@@ -724,14 +790,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
+import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NInputNumber, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import ProjectContextDebugPanel from '@/components/ProjectContextDebugPanel.vue';
 import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, listMessages, listPlans, updateSession as updateAgentSession, type AgentContextSnapshotResponse, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse } from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectContextSnapshots, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectContextSnapshots, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, readV2ProjectReadAnalysisTurn, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, startV2ProjectReadAnalysisTurn, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse, type V2ProjectReadAnalysisTurnResponse } from '@/api/project';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
 import {
@@ -753,6 +819,17 @@ import {
   taskOutcomePresentation,
 } from '@/utils/projectResultPresentation';
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
+import {
+  isCurrentV2ProjectAnalysisRequest,
+  isDefinitiveV2ProjectAnalysisStartRejection,
+  isV2ProjectAnalysisConfirmedNotCreated,
+  isV2ProjectAnalysisTerminal,
+  newV2ProjectAnalysisClientRequestId,
+  normalizeV2ProjectAnalysisForm,
+  pollV2ProjectAnalysis,
+  startThenPollV2ProjectAnalysis,
+  type V2ProjectAnalysisRequestIdentity,
+} from '@/utils/v2ProjectAnalysis';
 
 type ProjectChatRole = 'user' | 'assistant' | 'process';
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
@@ -865,6 +942,21 @@ let currentSocket: WebSocket | null = null;
 let activeClientRequestId: string | null = null;
 let currentAssistantMessageId: string | null = null;
 let currentProcessMessageId: string | null = null;
+const V2_PROJECT_ANALYSIS_STORAGE_KEY = 'yanban.v2ProjectAnalysis.activeRequest.';
+const projectAnalysisOpen = ref(false);
+const projectAnalysisStarting = ref(false);
+const projectAnalysisPolling = ref(false);
+const projectAnalysisError = ref('');
+const projectAnalysisOutcome = ref<V2ProjectReadAnalysisTurnResponse | null>(null);
+const projectAnalysisForm = reactive({
+  objective: '',
+  pathsText: '',
+  searchQuery: '',
+  maxSearchResults: 10 as number | null,
+});
+let projectAnalysisAbortController: AbortController | null = null;
+let projectAnalysisSequence = 0;
+let projectAnalysisClientRequestId: string | null = null;
 
 const loading = reactive({
   projects: false,
@@ -1843,7 +1935,163 @@ async function loadProjects() {
   }
 }
 
+function currentProjectAnalysisIdentity(): V2ProjectAnalysisRequestIdentity {
+  return {
+    projectId: activeProjectId.value,
+    sessionId: activeSessionId.value,
+    clientRequestId: projectAnalysisClientRequestId,
+    sequence: projectAnalysisSequence,
+  };
+}
+
+function syncProjectAnalysisOpen(event: Event) {
+  projectAnalysisOpen.value = (event.currentTarget as HTMLDetailsElement).open;
+}
+
+function stopProjectAnalysisPolling() {
+  projectAnalysisSequence += 1;
+  projectAnalysisAbortController?.abort();
+  projectAnalysisAbortController = null;
+  projectAnalysisPolling.value = false;
+}
+
+function storeProjectAnalysisRequest(projectId: number, sessionId: number, clientRequestId: string) {
+  window.localStorage.setItem(`${V2_PROJECT_ANALYSIS_STORAGE_KEY}${projectId}.${sessionId}`, clientRequestId);
+}
+
+function clearStoredProjectAnalysisRequest(projectId: number, sessionId: number) {
+  window.localStorage.removeItem(`${V2_PROJECT_ANALYSIS_STORAGE_KEY}${projectId}.${sessionId}`);
+}
+
+function storedProjectAnalysisRequest(projectId: number, sessionId: number) {
+  const value = window.localStorage.getItem(`${V2_PROJECT_ANALYSIS_STORAGE_KEY}${projectId}.${sessionId}`);
+  return value?.trim() || null;
+}
+
+async function runProjectAnalysisPolling(projectId: number, sessionId: number, clientRequestId: string) {
+  stopProjectAnalysisPolling();
+  projectAnalysisClientRequestId = clientRequestId;
+  const sequence = projectAnalysisSequence;
+  const expected = { projectId, sessionId, clientRequestId, sequence };
+  const controller = new AbortController();
+  projectAnalysisAbortController = controller;
+  projectAnalysisPolling.value = true;
+  try {
+    const terminal = await pollV2ProjectAnalysis(
+      async () => (await readV2ProjectReadAnalysisTurn(projectId, sessionId, clientRequestId)).data,
+      {
+        signal: controller.signal,
+        onOutcome: (outcome) => {
+          if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
+            projectAnalysisOutcome.value = outcome;
+          }
+        },
+      },
+    );
+    if (!isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) return;
+    projectAnalysisOutcome.value = terminal;
+    clearStoredProjectAnalysisRequest(projectId, sessionId);
+    if (terminal.status === 'SUCCEEDED') {
+      await loadMessages(sessionId, projectEpoch).catch(() => undefined);
+    }
+  } catch (cause) {
+    if (controller.signal.aborted) return;
+    if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
+      if (isV2ProjectAnalysisConfirmedNotCreated(cause)) {
+        clearStoredProjectAnalysisRequest(projectId, sessionId);
+      }
+      projectAnalysisError.value = apiError(cause);
+    }
+  } finally {
+    if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
+      projectAnalysisPolling.value = false;
+      projectAnalysisAbortController = null;
+    }
+  }
+}
+
+async function recoverProjectAnalysis(projectId: number, sessionId: number) {
+  const clientRequestId = storedProjectAnalysisRequest(projectId, sessionId);
+  if (!clientRequestId) return;
+  projectAnalysisOpen.value = true;
+  projectAnalysisError.value = '';
+  await runProjectAnalysisPolling(projectId, sessionId, clientRequestId);
+}
+
+async function startProjectAnalysis() {
+  const projectId = activeProjectId.value;
+  if (!projectId || projectAnalysisStarting.value || projectAnalysisPolling.value) return;
+  const epoch = projectEpoch;
+  const clientRequestId = newV2ProjectAnalysisClientRequestId();
+  projectAnalysisStarting.value = true;
+  projectAnalysisError.value = '';
+  projectAnalysisOutcome.value = null;
+  try {
+    const sessionId = await ensureSession();
+    if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
+    const pendingRequestId = storedProjectAnalysisRequest(projectId, sessionId);
+    if (pendingRequestId) {
+      await runProjectAnalysisPolling(projectId, sessionId, pendingRequestId);
+      return;
+    }
+    const request = normalizeV2ProjectAnalysisForm(projectAnalysisForm, clientRequestId);
+    stopProjectAnalysisPolling();
+    projectAnalysisClientRequestId = clientRequestId;
+    const sequence = projectAnalysisSequence;
+    const expected = { projectId, sessionId, clientRequestId, sequence };
+    storeProjectAnalysisRequest(projectId, sessionId, clientRequestId);
+    const controller = new AbortController();
+    projectAnalysisAbortController = controller;
+    projectAnalysisPolling.value = true;
+    const response = await startThenPollV2ProjectAnalysis(
+      async () => (await startV2ProjectReadAnalysisTurn(projectId, sessionId, request)).data,
+      async () => (await readV2ProjectReadAnalysisTurn(projectId, sessionId, clientRequestId)).data,
+      {
+        signal: controller.signal,
+        onOutcome: (outcome) => {
+          if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
+            projectAnalysisOutcome.value = outcome;
+          }
+        },
+      },
+    );
+    if (!isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) return;
+    projectAnalysisOutcome.value = response;
+    clearStoredProjectAnalysisRequest(projectId, sessionId);
+    if (response.status === 'SUCCEEDED') {
+      await loadMessages(sessionId, epoch).catch(() => undefined);
+    }
+  } catch (cause) {
+    if (epoch === projectEpoch && projectId === activeProjectId.value) {
+      const sessionId = activeSessionId.value;
+      if (sessionId && (
+        isDefinitiveV2ProjectAnalysisStartRejection(cause)
+        || isV2ProjectAnalysisConfirmedNotCreated(cause)
+      )) {
+        clearStoredProjectAnalysisRequest(projectId, sessionId);
+      }
+      if (sessionId && storedProjectAnalysisRequest(projectId, sessionId)
+          === clientRequestId) {
+        projectAnalysisError.value = apiError(cause);
+      } else {
+        projectAnalysisError.value = apiError(cause);
+      }
+    }
+  } finally {
+    if (epoch === projectEpoch && projectId === activeProjectId.value) {
+      projectAnalysisStarting.value = false;
+      projectAnalysisPolling.value = false;
+      projectAnalysisAbortController = null;
+    }
+  }
+}
+
 async function selectProject(projectId: number) {
+  stopProjectAnalysisPolling();
+  projectAnalysisStarting.value = false;
+  projectAnalysisClientRequestId = null;
+  projectAnalysisOutcome.value = null;
+  projectAnalysisError.value = '';
   closeProjectSocket();
   currentAssistantMessageId = null;
   currentProcessMessageId = null;
@@ -1948,6 +2196,9 @@ async function loadConversation(epoch = projectEpoch) {
     loading.messages = true;
     loading.plans = true;
     await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch), loadCandidates(sessionId, epoch)]);
+    if (epoch === projectEpoch && activeProjectId.value) {
+      void recoverProjectAnalysis(activeProjectId.value, sessionId);
+    }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
   } finally {
@@ -2329,6 +2580,11 @@ async function refreshCandidates() {
 
 async function selectConversation(sessionId: number) {
   if (sessionId === activeSessionId.value || loading.send) return;
+  stopProjectAnalysisPolling();
+  projectAnalysisStarting.value = false;
+  projectAnalysisClientRequestId = null;
+  projectAnalysisOutcome.value = null;
+  projectAnalysisError.value = '';
   closeProjectSocket();
   currentAssistantMessageId = null;
   currentProcessMessageId = null;
@@ -2354,6 +2610,9 @@ async function selectConversation(sessionId: number) {
   loading.plans = true;
   try {
     await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch), loadCandidates(sessionId, epoch)]);
+    if (epoch === projectEpoch && activeProjectId.value) {
+      void recoverProjectAnalysis(activeProjectId.value, sessionId);
+    }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
   } finally {
@@ -2367,6 +2626,11 @@ async function selectConversation(sessionId: number) {
 async function startNewConversation() {
   const project = activeProject.value;
   if (!project || loading.send) return;
+  stopProjectAnalysisPolling();
+  projectAnalysisStarting.value = false;
+  projectAnalysisClientRequestId = null;
+  projectAnalysisOutcome.value = null;
+  projectAnalysisError.value = '';
   closeProjectSocket();
   currentAssistantMessageId = null;
   currentProcessMessageId = null;
@@ -2444,6 +2708,10 @@ async function deleteConversation(session: AgentSessionResponse) {
     await deleteAgentSession(session.id);
     projectSessions.value = projectSessions.value.filter((item) => item.id !== session.id);
     if (!wasActive) return;
+    stopProjectAnalysisPolling();
+    projectAnalysisStarting.value = false;
+    projectAnalysisClientRequestId = null;
+    projectAnalysisOutcome.value = null;
     closeProjectSocket();
     currentAssistantMessageId = null;
     currentProcessMessageId = null;
@@ -2481,6 +2749,10 @@ async function removeActiveProject() {
   error.value = '';
   try {
     await deleteProject(projectId);
+    stopProjectAnalysisPolling();
+    projectAnalysisStarting.value = false;
+    projectAnalysisClientRequestId = null;
+    projectAnalysisOutcome.value = null;
     closeProjectSocket();
     currentAssistantMessageId = null;
     currentProcessMessageId = null;
@@ -2554,6 +2826,7 @@ async function submitProject() {
 
 onMounted(loadProjects);
 onUnmounted(() => {
+  stopProjectAnalysisPolling();
   closeProjectSocket();
   if (planPoll != null) window.clearTimeout(planPoll);
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);

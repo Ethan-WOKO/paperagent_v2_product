@@ -6,6 +6,8 @@ import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.effect.AuthenticatedLiteratureSearchEffectExecutionCommand;
 import com.yanban.api.agent.v2.effect.AuthenticatedLiteratureSearchEffectExecutionComposer;
 import com.yanban.api.agent.v2.effect.AuthenticatedLiteratureSearchEffectExecutionOutcome;
+import com.yanban.api.agent.v2.effect.project.AuthenticatedProjectEffectExecutionCommand;
+import com.yanban.api.agent.v2.effect.project.AuthenticatedProjectEffectExecutionComposer;
 import com.yanban.api.agent.v2.progression.AuthenticatedEffectDrivenStepProgressionComposer;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionCommand;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionOutcome;
@@ -65,6 +67,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
     private final StepActivationComposer activation;
     private final SingleTurnStepKernel kernel;
     private final AuthenticatedLiteratureSearchEffectExecutionComposer effects;
+    private final AuthenticatedProjectEffectExecutionComposer projectEffects;
     private final AuthenticatedEffectDrivenStepProgressionComposer progression;
     private final BoundedStepReplanComposer replans;
 
@@ -76,6 +79,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             StepActivationComposer activation,
             SingleTurnStepKernel kernel,
             AuthenticatedLiteratureSearchEffectExecutionComposer effects,
+            AuthenticatedProjectEffectExecutionComposer projectEffects,
             AuthenticatedEffectDrivenStepProgressionComposer progression,
             BoundedStepReplanComposer replans) {
         this.contexts = contexts;
@@ -85,6 +89,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         this.activation = activation;
         this.kernel = kernel;
         this.effects = effects;
+        this.projectEffects = projectEffects;
         this.progression = progression;
         this.replans = replans;
     }
@@ -179,8 +184,10 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                     instanceof SingleTurnIntentPersisted intent)) {
                 throw protocol("kernelOutcome");
             }
-            if (!LITERATURE_SEARCH.equals(
-                    intent.persistedIntent().intent().kind())) {
+            String effectKind = intent.persistedIntent().intent().kind();
+            if (!LITERATURE_SEARCH.equals(effectKind)
+                    && !"project.read".equals(effectKind)
+                    && !"project.search".equals(effectKind)) {
                 return outcome(planId, cycle,
                         PersistentPlanAgentLoopState
                                 .UNSUPPORTED_INTENT,
@@ -189,20 +196,33 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                         Optional.empty(), Optional.empty());
             }
 
-            AuthenticatedLiteratureSearchEffectExecutionOutcome effect;
+            io.paperagent.v2.persistence.PersistedEffectResult effectResult;
             try {
-                effect = effects.execute(
-                        userId, agentTurnId,
-                        new AuthenticatedLiteratureSearchEffectExecutionCommand(
-                                planId,
-                                intent.persistedIntent().intent()
-                                        .toolCallId(),
-                                recoveryAttempt));
+                if (LITERATURE_SEARCH.equals(effectKind)) {
+                    AuthenticatedLiteratureSearchEffectExecutionOutcome effect =
+                            effects.execute(
+                                    userId, agentTurnId,
+                                    new AuthenticatedLiteratureSearchEffectExecutionCommand(
+                                            planId,
+                                            intent.persistedIntent().intent()
+                                                    .toolCallId(),
+                                            recoveryAttempt));
+                    effectResult = effect.result();
+                } else {
+                    var effect = projectEffects.execute(
+                            userId, agentTurnId,
+                            new AuthenticatedProjectEffectExecutionCommand(
+                                    planId,
+                                    intent.persistedIntent().intent()
+                                            .toolCallId(),
+                                    recoveryAttempt));
+                    effectResult = effect.result();
+                }
             } catch (RuntimeException exception) {
                 throw protocol("effect");
             }
-            if (effect == null
-                    || !effect.result().receipt()
+            if (effectResult == null
+                    || !effectResult.receipt()
                             .toolCallId().equals(
                                     intent.persistedIntent().intent()
                                             .toolCallId())) {

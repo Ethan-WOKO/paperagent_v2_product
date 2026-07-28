@@ -158,6 +158,8 @@ final class PersistentPlanAgentLoopTestSupport {
                 mock(SingleTurnStepKernel.class);
         AuthenticatedLiteratureSearchEffectExecutionComposer effects =
                 mock(AuthenticatedLiteratureSearchEffectExecutionComposer.class);
+        var projectEffects = mock(com.yanban.api.agent.v2.effect.project
+                .AuthenticatedProjectEffectExecutionComposer.class);
         AuthenticatedEffectDrivenStepProgressionComposer progression =
                 mock(AuthenticatedEffectDrivenStepProgressionComposer.class);
         BoundedStepReplanComposer replans =
@@ -165,11 +167,12 @@ final class PersistentPlanAgentLoopTestSupport {
         AuthenticatedPersistentPlanAgentLoopComposer composer =
                 new AuthenticatedPersistentPlanAgentLoopComposer(
                         contexts, planIds, inspections, recoverer,
-                        activation, kernel, effects, progression,
+                        activation, kernel, effects, projectEffects, progression,
                         replans);
         return new LoopFixture(
                 planId, contexts, inspections, recoverer, activation,
-                kernel, effects, progression, replans, composer);
+                kernel, effects, projectEffects, progression, replans,
+                composer);
     }
 
     static ActiveCut active(PlanId planId, String step) {
@@ -210,6 +213,17 @@ final class PersistentPlanAgentLoopTestSupport {
         when(result.receipt()).thenReturn(receipt);
         return new AuthenticatedLiteratureSearchEffectExecutionOutcome(
                 result, false);
+    }
+
+    static com.yanban.api.agent.v2.effect.project
+            .AuthenticatedProjectEffectExecutionOutcome
+            successfulProjectEffect(ToolCallId toolCallId) {
+        var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
+        when(receipt.toolCallId()).thenReturn(toolCallId);
+        PersistedEffectResult result = mock(PersistedEffectResult.class);
+        when(result.receipt()).thenReturn(receipt);
+        return new com.yanban.api.agent.v2.effect.project
+                .AuthenticatedProjectEffectExecutionOutcome(result, false);
     }
 
     static EffectDrivenStepProgressionOutcome progression(
@@ -381,6 +395,9 @@ final class PersistentPlanAgentLoopTestSupport {
             StepActivationComposer activation,
             SingleTurnStepKernel kernel,
             AuthenticatedLiteratureSearchEffectExecutionComposer effects,
+            com.yanban.api.agent.v2.effect.project
+                    .AuthenticatedProjectEffectExecutionComposer
+                    projectEffects,
             AuthenticatedEffectDrivenStepProgressionComposer progression,
             BoundedStepReplanComposer replans,
             AuthenticatedPersistentPlanAgentLoopComposer composer) {

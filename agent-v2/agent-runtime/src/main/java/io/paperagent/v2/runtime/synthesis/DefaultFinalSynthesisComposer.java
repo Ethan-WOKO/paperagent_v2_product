@@ -20,13 +20,13 @@ import java.util.Map;
 public final class DefaultFinalSynthesisComposer {
     private final FinalSynthesisStore syntheses;
     private final FinalSynthesisReceiptSource receipts;
-    private final LiteratureIntentOwnershipSource intents;
+    private final ExactIntentOwnershipSource intents;
     private final FinalSynthesisNarrator narrator;
 
     public DefaultFinalSynthesisComposer(
             FinalSynthesisStore syntheses,
             FinalSynthesisReceiptSource receipts,
-            LiteratureIntentOwnershipSource intents,
+            ExactIntentOwnershipSource intents,
             FinalSynthesisNarrator narrator) {
         this.syntheses = required(syntheses);
         this.receipts = required(receipts);
@@ -100,7 +100,7 @@ public final class DefaultFinalSynthesisComposer {
             }
             if (!intents.owns(
                     receipt.toolCallId(), planId,
-                    receiptOwners.get(receiptId), "literature.search")) {
+                    receiptOwners.get(receiptId))) {
                 throw failure("receiptOwnership");
             }
             String summary = receipt.standardOutput().inlineText()
