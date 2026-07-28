@@ -120,3 +120,6 @@ jobs:
 
       - name: Test deterministic V2 active-Step completion materialization
         run: mvn -pl agent-v2/agent-runtime -am -Dtest=DeterministicActiveStepCompletionMaterializerTest,ActiveStepCompletionMaterializerBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Test V2 active-Step completion persistence composition
+        run: mvn -pl agent-v2/agent-runtime -am -Dtest=DefaultActiveStepCompletionComposerTest,ActiveStepCompletionCompositionBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
