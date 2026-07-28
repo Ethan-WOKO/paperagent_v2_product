@@ -1,0 +1,198 @@
+package io.paperagent.v2.runtime.synthesis;
+
+import io.paperagent.v2.contracts.CompletionFact;
+import io.paperagent.v2.contracts.ExecutionReceipt;
+import io.paperagent.v2.contracts.FinalSynthesis;
+import io.paperagent.v2.contracts.FinalSynthesisId;
+import io.paperagent.v2.contracts.PlanRevision;
+import io.paperagent.v2.contracts.ReceiptId;
+import io.paperagent.v2.contracts.ReceiptStatus;
+import io.paperagent.v2.persistence.EffectIntentRepository;
+import io.paperagent.v2.persistence.FinalSynthesisRepository;
+import io.paperagent.v2.persistence.PersistenceOutcome;
+import io.paperagent.v2.persistence.ReceiptRepository;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/** Creates one replayable delivery strictly from a terminal recovered authority cut. */
+public final class DefaultFinalSynthesisComposer {
+    private final FinalSynthesisRepository syntheses;
+    private final ReceiptRepository receipts;
+    private final EffectIntentRepository intents;
+    private final FinalSynthesisNarrator narrator;
+
+    public DefaultFinalSynthesisComposer(
+            FinalSynthesisRepository syntheses,
+            ReceiptRepository receipts,
+            EffectIntentRepository intents,
+            FinalSynthesisNarrator narrator) {
+        this.syntheses = required(syntheses);
+        this.receipts = required(receipts);
+        this.intents = required(intents);
+        this.narrator = required(narrator);
+    }
+
+    public FinalSynthesisCompositionResult compose(
+            FinalSynthesisCompositionRequest request) {
+        required(request);
+        var cut = request.terminalCut();
+        var planId = cut.plan().id();
+
+        var prior = syntheses.find(planId);
+        if (prior.outcome() == PersistenceOutcome.FOUND) {
+            FinalSynthesis value = prior.value().orElseThrow();
+            if (!value.planRevisionId().equals(cut.plan().latestRevision().id())
+                    || !value.taskFrameId().equals(cut.taskFrame().id())
+                    || !value.sourceProjectVersion().equals(
+                    cut.taskFrame().sourceProjectVersion())
+                    || !value.workspaceDiff().equals(request.workspaceDiff())
+                    || !value.receiptIds().equals(
+                    cut.checkpoint().checkpoint().receiptReferences())) {
+                throw failure("replay");
+            }
+            return new FinalSynthesisCompositionResult(
+                    value, PersistenceOutcome.REPLAYED);
+        }
+        if (prior.outcome() != PersistenceOutcome.REJECTED
+                || prior.failure().isEmpty()
+                || prior.failure().orElseThrow().code()
+                != io.paperagent.v2.persistence.PersistenceErrorCode.NOT_FOUND) {
+            throw failure("lookup");
+        }
+
+        PlanRevision revision = cut.plan().latestRevision();
+        var checkpoint = cut.checkpoint().checkpoint();
+        if (!cut.taskFrame().id().equals(cut.plan().taskFrameId())
+                || !checkpoint.taskFrameId().equals(cut.taskFrame().id())
+                || !checkpoint.planId().equals(planId)
+                || !checkpoint.revisionId().equals(revision.id())
+                || checkpoint.revisionNumber() != revision.number()
+                || checkpoint.planState()
+                != io.paperagent.v2.contracts.PlanExecutionState.SUCCEEDED) {
+            throw failure("terminal");
+        }
+
+        List<ReceiptId> authoritativeIds = new ArrayList<>();
+        Map<ReceiptId, io.paperagent.v2.contracts.PlanStepId> receiptOwners =
+                new LinkedHashMap<>();
+        for (var step : revision.steps()) {
+            CompletionFact fact = revision.completedFacts().get(step.id());
+            if (fact == null) {
+                throw failure("completionFacts");
+            }
+            for (ReceiptId receiptId : fact.receiptReferences()) {
+                if (receiptOwners.put(receiptId, step.id()) != null) {
+                    throw failure("receiptSet");
+                }
+                authoritativeIds.add(receiptId);
+            }
+        }
+        if (authoritativeIds.isEmpty()
+                || !authoritativeIds.equals(checkpoint.receiptReferences())) {
+            throw failure("receiptSet");
+        }
+
+        List<FinalSynthesisReceiptProjection> projections = new ArrayList<>();
+        for (ReceiptId receiptId : authoritativeIds) {
+            var found = receipts.find(receiptId);
+            if (found.outcome() != PersistenceOutcome.FOUND) {
+                throw failure("receipt");
+            }
+            ExecutionReceipt receipt = found.value().orElseThrow();
+            if (!receipt.id().equals(receiptId)
+                    || receipt.status() != ReceiptStatus.SUCCESS) {
+                throw failure("receipt");
+            }
+            var intent = intents.find(receipt.toolCallId());
+            if (intent.outcome() != PersistenceOutcome.FOUND
+                    || !intent.value().orElseThrow().intent().planId().equals(planId)
+                    || !intent.value().orElseThrow().intent().stepId().equals(
+                    receiptOwners.get(receiptId))
+                    || !"literature.search".equals(
+                    intent.value().orElseThrow().intent().kind())) {
+                throw failure("receiptOwnership");
+            }
+            String summary = receipt.standardOutput().inlineText()
+                    .map(DefaultFinalSynthesisComposer::bounded)
+                    .orElse("output-referenced");
+            projections.add(new FinalSynthesisReceiptProjection(
+                    receipt.id(), receipt.toolCallId(),
+                    receipt.status().name(), summary));
+        }
+
+        String narrative;
+        try {
+            narrative = narrator.narrate(new FinalSynthesisNarrationRequest(
+                    cut.taskFrame().id(), planId, revision.id(), projections));
+        } catch (RuntimeException exception) {
+            throw failure("provider");
+        }
+        if (narrative == null || narrative.isBlank() || narrative.length() > 4_096) {
+            throw failure("provider");
+        }
+        FinalSynthesis candidate = new FinalSynthesis(
+                new FinalSynthesisId("synthesis-" + hash(
+                        planId.value() + "\0" + revision.id().value())),
+                cut.taskFrame().id(), planId, revision.id(),
+                cut.taskFrame().sourceProjectVersion(),
+                request.workspaceDiff(), authoritativeIds,
+                narrative.strip(), request.observedAt());
+        var appended = syntheses.append(candidate);
+        if (appended.outcome() != PersistenceOutcome.APPLIED
+                && appended.outcome() != PersistenceOutcome.REPLAYED) {
+            // A concurrent equivalent writer may already have committed.
+            var winner = syntheses.find(planId);
+            if (winner.outcome() == PersistenceOutcome.FOUND
+                    && equivalent(candidate, winner.value().orElseThrow())) {
+                return new FinalSynthesisCompositionResult(
+                        winner.value().orElseThrow(), PersistenceOutcome.REPLAYED);
+            }
+            throw failure("persist");
+        }
+        return new FinalSynthesisCompositionResult(
+                appended.value().orElseThrow(), appended.outcome());
+    }
+
+    private static boolean equivalent(FinalSynthesis left, FinalSynthesis right) {
+        return left.id().equals(right.id())
+                && left.taskFrameId().equals(right.taskFrameId())
+                && left.planId().equals(right.planId())
+                && left.planRevisionId().equals(right.planRevisionId())
+                && left.sourceProjectVersion().equals(right.sourceProjectVersion())
+                && left.workspaceDiff().equals(right.workspaceDiff())
+                && left.receiptIds().equals(right.receiptIds())
+                && left.narrative().equals(right.narrative());
+    }
+
+    private static String bounded(String value) {
+        String sanitized = value.replaceAll("[\\p{Cntrl}&&[^\\r\\n\\t]]", " ");
+        return sanitized.length() <= 512 ? sanitized : sanitized.substring(0, 512);
+    }
+
+    private static String hash(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 unavailable");
+        }
+    }
+
+    private static <T> T required(T value) {
+        if (value == null) {
+            throw new IllegalArgumentException("final synthesis collaborator is required");
+        }
+        return value;
+    }
+
+    private static FinalSynthesisCompositionException failure(String stage) {
+        return new FinalSynthesisCompositionException(stage);
+    }
+}

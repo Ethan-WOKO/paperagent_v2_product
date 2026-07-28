@@ -10,7 +10,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductActiveStepReplanRepositoryAdapter
+public class ProductActiveStepReplanRepositoryAdapter
         implements ActiveStepReplanRepository {
     private final ProductActiveStepReplanTransactions transactions;
 

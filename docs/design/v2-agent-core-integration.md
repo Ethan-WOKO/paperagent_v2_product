@@ -1050,3 +1050,39 @@ write.
 This boundary executes no Provider or product tool, touches no
 ToolExecutionContext, implements no failed-effect retry, repair, replan or
 autonomous loop, and exposes no Controller/API/UI traffic.
+
+## Opt-in workspace literature turn and final delivery boundary
+
+The first user-visible V2 entry is explicit and narrow:
+`POST /api/v1/agent/sessions/{sessionId}/v2/literature-turns`. It accepts only
+bounded literature query options and a required client request ID. The server
+authenticates the session owner, rejects Project sessions, freezes a
+single-Step persistent Plan, and composes the existing bootstrap, fenced start,
+bounded persistent loop, governed `literature.search` effect, and terminal
+recovery boundaries. The ordinary messages endpoint remains on its existing
+path.
+
+`FinalSynthesis.workspaceDiff` is now conditional. A non-Project synthesis
+must have neither source ProjectVersion nor Workspace diff. A Project
+synthesis must have both and their provenance must match exactly; no virtual
+Workspace or ProjectVersion is manufactured for chat.
+
+Final delivery is derived only from the exact successful terminal cut. Ordered
+completion Receipt references must equal the terminal checkpoint references,
+and each successful Receipt must resolve to a same-Plan
+`literature.search` intent. The synthesis Provider sees only bounded,
+sanitized Receipt projections marked as untrusted data and receives an empty
+tool list. Provider failure, empty text, or a proposed tool call cannot produce
+a successful synthesis or assistant message.
+
+V55 stores one canonical synthesis per Plan and a separate replayable
+literature-delivery record. The latter is created with the user message and
+Agent turn, then atomically binds the one assistant message after synthesis
+exists. Same client request IDs serialize through a bounded lock stripe and
+the durable fingerprint; exact retries reuse the delivery, while changed
+payloads conflict. The delivery promises only that the search task was created
+or queued, not that literature results have already been retrieved.
+
+This boundary does not add Project routing, literature status/result/cancel,
+generic natural-language planning, another tool, UI, streaming, scheduling,
+Workspace mutation, ProjectVersion acceptance, or legacy Agent orchestration.

@@ -13,7 +13,7 @@ public record FinalSynthesis(
         PlanId planId,
         PlanRevisionId planRevisionId,
         Optional<ProjectVersionRef> sourceProjectVersion,
-        WorkspaceDiff workspaceDiff,
+        Optional<WorkspaceDiff> workspaceDiff,
         List<ReceiptId> receiptIds,
         String narrative,
         Instant observedAt) {
@@ -26,8 +26,15 @@ public record FinalSynthesis(
         sourceProjectVersion = Contracts.required(sourceProjectVersion, "finalSynthesis.sourceProjectVersion")
                 .map(value -> new ProjectVersionRef(value.projectId(), value.versionId()));
         workspaceDiff = Contracts.required(workspaceDiff, "finalSynthesis.workspaceDiff");
+        if (sourceProjectVersion.isEmpty() != workspaceDiff.isEmpty()) {
+            Contracts.fail(
+                    ViolationCode.INCONSISTENT_REFERENCE,
+                    "finalSynthesis.workspaceDiff",
+                    "workspace diff presence must match source project version presence");
+        }
         if (sourceProjectVersion.isPresent()
-                && !sourceProjectVersion.get().equals(workspaceDiff.workspace().sourceProjectVersion())) {
+                && !sourceProjectVersion.get().equals(
+                        workspaceDiff.orElseThrow().workspace().sourceProjectVersion())) {
             Contracts.fail(
                     ViolationCode.INCONSISTENT_REFERENCE,
                     "finalSynthesis.sourceProjectVersion",

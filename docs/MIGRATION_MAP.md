@@ -44,3 +44,29 @@
   exact caller proposal may be applied from that ACTIVE stall. A hard product
   cycle limit after an intent was persisted still returns `REPLAN_REQUIRED`
   without a replan write; the governed effect must not be abandoned.
+
+## Opt-in literature turn and durable final delivery
+
+- Status: `V2_COMPOSE_WITH_PRODUCT_ADAPTERS`.
+- Product entry:
+  `POST /api/v1/agent/sessions/{sessionId}/v2/literature-turns`.
+- Scope: authenticated owner-qualified `WORKSPACE` sessions only. Project
+  sessions are rejected and the legacy messages endpoint is unchanged.
+- Intake: the server freezes one TaskFrame and one bounded
+  `literature.search` Step from the structured request. Client input cannot
+  provide Plan, Step, ToolCall, lease, Project, or Receipt authority.
+- Delivery authority: only a terminal `PersistedStepRecoverySucceeded` cut is
+  eligible. Its checkpoint Receipt order must exactly equal the ordered
+  completion facts; every Receipt must be successful and owned by a persisted
+  `literature.search` intent for the same Plan.
+- Synthesis: Receipt payloads are reduced to bounded projections explicitly
+  labelled untrusted, the Provider receives no tools, and empty/tool-calling/
+  failed Provider results create no successful synthesis or assistant message.
+- Replay: V55 records the request fingerprint and explicit delivery state.
+  Same-key retries and same-process concurrency converge on one turn, Plan,
+  synthesis, and assistant message; changed payload reuse conflicts.
+- Semantics: success states only that the literature search task was durably
+  created or queued. It does not claim that paper results were returned.
+- Excluded: Project routing, literature status/result/cancel, UI, generic
+  planning, other tools, Workspace mutation, ProjectVersion apply, and legacy
+  Agent planning/execution/final-synthesis services.

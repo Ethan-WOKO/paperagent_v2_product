@@ -8,7 +8,7 @@ import io.paperagent.v2.persistence.StepCompletionRequest;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductStepCompletionRepositoryAdapter
+public class ProductStepCompletionRepositoryAdapter
         implements StepCompletionRepository {
     private final ProductStepCompletionTransactions transactions;
 

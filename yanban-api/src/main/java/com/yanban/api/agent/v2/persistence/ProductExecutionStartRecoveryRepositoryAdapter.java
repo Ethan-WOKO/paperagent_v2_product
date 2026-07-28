@@ -8,7 +8,7 @@ import io.paperagent.v2.persistence.PersistenceResult;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductExecutionStartRecoveryRepositoryAdapter
+public class ProductExecutionStartRecoveryRepositoryAdapter
         implements ExecutionStartRecoveryRepository {
     private final ProductExecutionStartRecoveryTransactions transactions;
 

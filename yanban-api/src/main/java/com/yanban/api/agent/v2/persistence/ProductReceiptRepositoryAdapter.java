@@ -8,7 +8,7 @@ import io.paperagent.v2.persistence.ReceiptRepository;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductReceiptRepositoryAdapter
+public class ProductReceiptRepositoryAdapter
         implements ReceiptRepository {
     private final ProductReceiptTransactions transactions;
 
