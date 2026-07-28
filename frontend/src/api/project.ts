@@ -60,6 +60,30 @@ export interface ProjectRevisionOperationResponse {
   completedAt: string;
 }
 
+export interface V2ProjectReadAnalysisTurnRequest {
+  objective: string;
+  paths: string[];
+  searchQuery?: string;
+  maxSearchResults?: number;
+  clientRequestId: string;
+}
+
+export type V2ProjectReadAnalysisStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+
+export interface V2ProjectReadAnalysisTurnResponse {
+  projectId: number;
+  sessionId: number;
+  clientRequestId: string;
+  status: V2ProjectReadAnalysisStatus;
+  terminal: boolean;
+  turnId: number;
+  planId?: string;
+  projectVersion: string;
+  finalText?: string;
+  assistantMessageId?: number;
+  replayed: boolean;
+}
+
 export type CandidateValidationProfile = 'MAVEN_TEST' | 'MAVEN_VERIFY' | 'JAVA_SOURCE_RUN'
   | 'PYTHON_SOURCE_RUN' | 'C_SOURCE_RUN' | 'CPP_SOURCE_RUN';
 
@@ -171,6 +195,25 @@ export function readProjectFile(projectId: number, path: string) { return http.g
 export function searchProject(projectId: number, query: string) { return http.get<ProjectSearchHit[]>(`/projects/${projectId}/search`, { params: { query, maxResults: 50 } }); }
 export function sendProjectMessage(projectId: number, sessionId: number, payload: SendMessageRequestPayload) {
   return http.post<SendMessageResponse>(`/projects/${projectId}/agent/sessions/${sessionId}/messages`, payload);
+}
+export function startV2ProjectReadAnalysisTurn(
+  projectId: number,
+  sessionId: number,
+  payload: V2ProjectReadAnalysisTurnRequest,
+) {
+  return http.post<V2ProjectReadAnalysisTurnResponse>(
+    `/projects/${projectId}/agent/sessions/${sessionId}/v2/read-analysis-turns`,
+    payload,
+  );
+}
+export function readV2ProjectReadAnalysisTurn(
+  projectId: number,
+  sessionId: number,
+  clientRequestId: string,
+) {
+  return http.get<V2ProjectReadAnalysisTurnResponse>(
+    `/projects/${projectId}/agent/sessions/${sessionId}/v2/read-analysis-turns/${encodeURIComponent(clientRequestId)}`,
+  );
 }
 export function createProjectPlan(projectId: number, sessionId: number, payload: CreateAgentPlanPayload) {
   return http.post<AgentPlanResponse>(`/projects/${projectId}/agent/sessions/${sessionId}/plans`, payload);

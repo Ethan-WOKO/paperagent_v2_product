@@ -35,35 +35,44 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
     private static final int SINGLE_CALL_SLOT = 0;
 
     private final ModelProvider provider;
-    private final List<ToolDescriptor> tools;
-    private final Map<ToolId, ToolDescriptor> toolsById;
+    private final ProductStepToolSelector toolSelector;
     private final ProductStepTurnConfiguration configuration;
 
     public DeterministicProductStepTurnAdapter(
             ModelProvider provider,
             List<ToolDescriptor> tools,
             ProductStepTurnConfiguration configuration) {
-        if (provider == null || tools == null || configuration == null) {
+        this(provider, fixed(tools), configuration);
+    }
+
+    private static ProductStepToolSelector fixed(
+            List<ToolDescriptor> tools) {
+        if (tools == null) {
+            throw failure(ProductStepTurnError.INVALID_CONFIGURATION,
+                    "productStepTurn.tools");
+        }
+        List<ToolDescriptor> copy = List.copyOf(tools);
+        return input -> copy;
+    }
+
+    public DeterministicProductStepTurnAdapter(
+            ModelProvider provider,
+            ProductStepToolSelector toolSelector,
+            ProductStepTurnConfiguration configuration) {
+        if (provider == null || toolSelector == null || configuration == null) {
             throw failure(ProductStepTurnError.INVALID_CONFIGURATION,
                     "productStepTurn");
         }
         this.provider = provider;
-        this.tools = List.copyOf(tools);
-        Map<ToolId, ToolDescriptor> indexed = new LinkedHashMap<>();
-        for (ToolDescriptor tool : this.tools) {
-            if (tool == null || indexed.put(tool.id(), tool) != null) {
-                throw failure(ProductStepTurnError.INVALID_CONFIGURATION,
-                        "productStepTurn.tools");
-            }
-        }
-        this.toolsById = Map.copyOf(indexed);
+        this.toolSelector = toolSelector;
         this.configuration = configuration;
     }
 
     @Override
     public StepTurnDecision decide(StepTurnInput input) {
         Authority authority = authority(input);
-        ModelRequest request = request(authority);
+        Tools selected = tools(authority.input());
+        ModelRequest request = request(authority, selected.values());
         ModelProviderResult result;
         try {
             result = provider.complete(request);
@@ -92,7 +101,7 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
                     "productStepTurn.response.proposedToolCalls");
         }
         ProposedToolCall call = response.proposedToolCalls().get(0);
-        if (!toolsById.containsKey(call.toolId())) {
+        if (!selected.byId().containsKey(call.toolId())) {
             throw failure(ProductStepTurnError.UNKNOWN_TOOL,
                     "productStepTurn.response.proposedToolCalls.toolId");
         }
@@ -104,7 +113,8 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
                 call.arguments()));
     }
 
-    private ModelRequest request(Authority authority) {
+    private ModelRequest request(
+            Authority authority, List<ToolDescriptor> selectedTools) {
         String binding = binding(authority);
         return new ModelRequest(
                 new ModelRequestId("product-turn." + sha256("request\0" + binding)),
@@ -112,13 +122,36 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
                 List.of(
                         new ModelMessage(MessageRole.SYSTEM, systemMessage()),
                         new ModelMessage(MessageRole.USER, userMessage(authority))),
-                tools,
+                selectedTools,
                 configuration.generationOptions(),
                 Optional.of(authority.input().taskFrame().id()),
                 Optional.of(authority.input().plan().id()),
                 Optional.of(authority.revision().id()),
                 Optional.of(authority.input().activeStep().id()),
                 false);
+    }
+
+    private Tools tools(StepTurnInput input) {
+        try {
+            List<ToolDescriptor> selected =
+                    List.copyOf(toolSelector.select(input));
+            if (selected.size() != 1 || selected.get(0) == null) {
+                throw failure(ProductStepTurnError.INVALID_AUTHORITY,
+                        "productStepTurn.tools");
+            }
+            Map<ToolId, ToolDescriptor> indexed = new LinkedHashMap<>();
+            ToolDescriptor descriptor = selected.get(0);
+            if (indexed.put(descriptor.id(), descriptor) != null) {
+                throw failure(ProductStepTurnError.INVALID_AUTHORITY,
+                        "productStepTurn.tools");
+            }
+            return new Tools(selected, Map.copyOf(indexed));
+        } catch (ProductStepTurnException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw failure(ProductStepTurnError.INVALID_AUTHORITY,
+                    "productStepTurn.tools");
+        }
     }
 
     private static Authority authority(StepTurnInput input) {
@@ -197,5 +230,10 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
     }
 
     private record Authority(StepTurnInput input, PlanRevision revision) {
+    }
+
+    private record Tools(
+            List<ToolDescriptor> values,
+            Map<ToolId, ToolDescriptor> byId) {
     }
 }

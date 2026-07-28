@@ -64,7 +64,7 @@ class DeterministicProductStepTurnAdapterTest {
     }
 
     @Test
-    void changedArgumentsOrToolKeepTheSameDurableSlotIdentity() {
+    void persistedSelectorExposesExactlyOneToolAndRejectsAnotherKind() {
         AtomicInteger calls = new AtomicInteger();
         ToolDescriptor secondTool = new ToolDescriptor(
                 new ToolId("paper.polish"), "polish paper", Set.of());
@@ -84,20 +84,45 @@ class DeterministicProductStepTurnAdapterTest {
         };
         var adapter = new DeterministicProductStepTurnAdapter(
                 provider,
-                List.of(TOOL, secondTool),
+                input -> List.of(TOOL),
                 new ProductStepTurnConfiguration(512, 0.1d));
         var input = ProductProviderAdapterTestFixtures.input("conflict-slot");
 
         EffectIntentDecision first = assertInstanceOf(
                 EffectIntentDecision.class, adapter.decide(input));
-        EffectIntentDecision changed = assertInstanceOf(
-                EffectIntentDecision.class, adapter.decide(input));
+        ProductStepTurnException changed = assertThrows(
+                ProductStepTurnException.class, () -> adapter.decide(input));
+        assertEquals(ProductStepTurnError.UNKNOWN_TOOL, changed.code());
+        assertEquals("literature.search", first.intent().kind());
+    }
 
-        assertEquals(first.intent().toolCallId(), changed.intent().toolCallId());
-        org.junit.jupiter.api.Assertions.assertNotEquals(
-                first.intent().arguments(), changed.intent().arguments());
-        org.junit.jupiter.api.Assertions.assertNotEquals(
-                first.intent().kind(), changed.intent().kind());
+    @Test
+    void emptyOrFailingSelectorRejectsBeforeProvider() {
+        AtomicInteger providerCalls = new AtomicInteger();
+        ModelProvider provider = request -> {
+            providerCalls.incrementAndGet();
+            return toolResponse("unexpected", TOOL.id());
+        };
+        var empty = new DeterministicProductStepTurnAdapter(
+                provider, input -> List.of(),
+                new ProductStepTurnConfiguration(512, 0.1d));
+        var failed = new DeterministicProductStepTurnAdapter(
+                provider, input -> {
+                    throw new IllegalStateException("private authority");
+                },
+                new ProductStepTurnConfiguration(512, 0.1d));
+
+        assertEquals(ProductStepTurnError.INVALID_AUTHORITY,
+                assertThrows(ProductStepTurnException.class,
+                        () -> empty.decide(
+                                ProductProviderAdapterTestFixtures.input(
+                                        "empty-selector"))).code());
+        assertEquals(ProductStepTurnError.INVALID_AUTHORITY,
+                assertThrows(ProductStepTurnException.class,
+                        () -> failed.decide(
+                                ProductProviderAdapterTestFixtures.input(
+                                        "failed-selector"))).code());
+        assertEquals(0, providerCalls.get());
     }
 
     @Test

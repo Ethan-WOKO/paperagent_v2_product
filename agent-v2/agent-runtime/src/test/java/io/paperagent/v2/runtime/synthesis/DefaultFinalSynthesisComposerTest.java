@@ -158,7 +158,7 @@ class DefaultFinalSynthesisComposerTest {
         var composer = new DefaultFinalSynthesisComposer(
                 emptyStore(appendCalls),
                 ignored -> Optional.empty(),
-                (toolCallId, planId, stepId, kind) -> {
+                (toolCallId, planId, stepId) -> {
                     intentCalls.incrementAndGet();
                     return true;
                 },
@@ -201,7 +201,7 @@ class DefaultFinalSynthesisComposerTest {
                     receiptCalls.incrementAndGet();
                     return Optional.empty();
                 },
-                (toolCallId, planId, stepId, kind) -> {
+                (toolCallId, planId, stepId) -> {
                     intentCalls.incrementAndGet();
                     return true;
                 },
@@ -237,7 +237,7 @@ class DefaultFinalSynthesisComposerTest {
         var composer = new DefaultFinalSynthesisComposer(
                 emptyStore(appendCalls),
                 ignored -> Optional.of(failedReceipt),
-                (toolCallId, planId, stepId, kind) -> {
+                (toolCallId, planId, stepId) -> {
                     intentCalls.incrementAndGet();
                     return true;
                 },
@@ -272,7 +272,7 @@ class DefaultFinalSynthesisComposerTest {
         var composer = new DefaultFinalSynthesisComposer(
                 emptyStore(appendCalls),
                 ignored -> Optional.of(corruptedReceipt),
-                (toolCallId, planId, stepId, kind) -> {
+                (toolCallId, planId, stepId) -> {
                     intentCalls.incrementAndGet();
                     return true;
                 },
@@ -305,7 +305,7 @@ class DefaultFinalSynthesisComposerTest {
         var composer = new DefaultFinalSynthesisComposer(
                 store(new InMemoryFinalSynthesisRepository()),
                 ignored -> Optional.of(receipt),
-                (toolCallId, planId, stepId, kind) -> false,
+                (toolCallId, planId, stepId) -> false,
                 request -> {
                     narrationCalls.incrementAndGet();
                     return "unexpected";
@@ -372,9 +372,9 @@ class DefaultFinalSynthesisComposerTest {
         };
     }
 
-    private static LiteratureIntentOwnershipSource intentSource(
+    private static ExactIntentOwnershipSource intentSource(
             io.paperagent.v2.persistence.EffectIntentRepository repository) {
-        return (toolCallId, planId, stepId, kind) -> {
+        return (toolCallId, planId, stepId) -> {
             var result = repository.find(toolCallId);
             return result.outcome() == PersistenceOutcome.FOUND
                     && result.value().orElseThrow().intent().planId()
@@ -382,7 +382,7 @@ class DefaultFinalSynthesisComposerTest {
                     && result.value().orElseThrow().intent().stepId()
                     .equals(stepId)
                     && result.value().orElseThrow().intent().kind()
-                    .equals(kind);
+                    .equals("literature.search");
         };
     }
 

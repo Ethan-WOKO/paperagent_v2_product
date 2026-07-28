@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.agent.v2.adapter.provider.DeterministicProductStepTurnAdapter;
 import com.yanban.agent.v2.adapter.provider.ProductChatModelProviderAdapter;
 import com.yanban.agent.v2.adapter.provider.ProductModelProviderConfiguration;
+import com.yanban.agent.v2.adapter.provider.ProductStepToolSelector;
 import com.yanban.core.model.ChatModelProvider;
 import io.paperagent.v2.contracts.ToolDescriptor;
 import io.paperagent.v2.contracts.ToolId;
@@ -16,9 +17,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 
 /** Product wiring for one credential-free provider-backed V2 Step turn. */
 @Configuration
@@ -37,22 +40,62 @@ public class ProductStepTurnConfiguration {
 
     @Bean("agentV2AllowedTools")
     List<ToolDescriptor> agentV2AllowedTools() {
-        return List.of(new ToolDescriptor(
-                new ToolId("literature.search"),
-                "Search the product literature index using structured criteria.",
-                Set.of()));
+        return List.of(
+                new ToolDescriptor(
+                        new ToolId("literature.search"),
+                        "Search the product literature index using structured criteria.",
+                        Set.of()),
+                new ToolDescriptor(
+                        new ToolId("project.read"),
+                        "Read one exact frozen Project text path.",
+                        Set.of()),
+                new ToolDescriptor(
+                        new ToolId("project.search"),
+                        "Search one literal query in the frozen Project Workspace.",
+                        Set.of()));
+    }
+
+    @Bean
+    ProductStepToolSelector agentV2StepToolSelector(
+            JdbcTemplate jdbc,
+            @Qualifier("agentV2AllowedTools") List<ToolDescriptor> tools) {
+        Map<String, ToolDescriptor> descriptors = tools.stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        value -> value.id().value(), value -> value));
+        return input -> {
+            String planId = input.plan().id().value();
+            String stepId = input.activeStep().id().value();
+            List<String> projectKinds = jdbc.queryForList(
+                    "select effect_kind from agent_v2_project_analysis_steps "
+                            + "where plan_id = ? and step_id = ?",
+                    String.class, planId, stepId);
+            List<String> literaturePlans = jdbc.queryForList(
+                    "select plan_id from agent_v2_literature_deliveries "
+                            + "where plan_id = ?",
+                    String.class, planId);
+            String kind = null;
+            if (projectKinds.size() == 1 && literaturePlans.isEmpty()) {
+                kind = projectKinds.get(0);
+            } else if (projectKinds.isEmpty()
+                    && literaturePlans.size() == 1
+                    && "literature-search".equals(stepId)) {
+                kind = "literature.search";
+            }
+            ToolDescriptor selected = descriptors.get(kind);
+            return selected == null ? List.of() : List.of(selected);
+        };
     }
 
     @Bean
     StepTurnPort agentV2StepTurnPort(
             ModelProvider provider,
-            @Qualifier("agentV2AllowedTools") List<ToolDescriptor> tools,
+            ProductStepToolSelector toolSelector,
             @Value("${yanban.agent.v2.max-output-tokens:2048}")
                     int maxOutputTokens,
             @Value("${yanban.agent.v2.temperature:0.2}") double temperature) {
         return new DeterministicProductStepTurnAdapter(
                 provider,
-                tools,
+                toolSelector,
                 new com.yanban.agent.v2.adapter.provider
                         .ProductStepTurnConfiguration(
                                 maxOutputTokens, temperature));

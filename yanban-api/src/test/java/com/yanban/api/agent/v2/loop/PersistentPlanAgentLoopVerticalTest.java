@@ -345,7 +345,10 @@ class PersistentPlanAgentLoopVerticalTest {
                 new AuthenticatedPersistentPlanAgentLoopComposer(
                         productContexts, planIds, stepRecoveryRepository,
                         persistedRecoverer, persistedActivation, kernel,
-                        effects, progression,
+                        effects,
+                        mock(com.yanban.api.agent.v2.effect.project
+                                .AuthenticatedProjectEffectExecutionComposer.class),
+                        progression,
                         mock(io.paperagent.v2.runtime.execution.replan
                                 .composition.BoundedStepReplanComposer.class));
         var command = PersistentPlanAgentLoopTestSupport.command(
@@ -451,7 +454,10 @@ class PersistentPlanAgentLoopVerticalTest {
                 new AuthenticatedPersistentPlanAgentLoopComposer(
                         productContexts, planIds, stepRecoveryRepository,
                         persistedRecoverer, persistedActivation, kernel,
-                        effects, progression,
+                        effects,
+                        mock(com.yanban.api.agent.v2.effect.project
+                                .AuthenticatedProjectEffectExecutionComposer.class),
+                        progression,
                         mock(io.paperagent.v2.runtime.execution.replan
                                 .composition.BoundedStepReplanComposer.class));
 

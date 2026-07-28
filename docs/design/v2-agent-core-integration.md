@@ -1119,3 +1119,34 @@ the existing safe HTTP(S) policy and BibTeX remains collapsed until requested.
 Ordinary message send, legacy Plan mode, Project pages, V2 kernel/loop/replan
 contracts, retrieval workers, ranking, and legacy Agent orchestration are
 unchanged.
+
+## Explicit read-only Project analysis boundary
+
+Project chat now has one opt-in V2 read-analysis route. The server validates an
+owner-qualified PROJECT session, freezes the current ProjectVersion, and
+creates a deterministic Plan containing one `project.read` Step for each of
+one to four normalized paths and, optionally, one final literal
+`project.search` Step. V57 stores the immutable request and exact per-Step
+effect authority before the persistent loop invokes a Provider.
+
+The product Step adapter selects exactly one tool from that persisted
+authority. Empty, multiple, unknown, or cross-bound selection fails before the
+Provider. The Project effects revalidate the recovered ACTIVE Step, intent,
+lease fence, canonical arguments, confirmed execution context, and adopted
+Workspace. Reads are bounded UTF-8 text and search is literal, sorted, and
+bounded; neither operation exposes a host path or mutates the Workspace.
+
+Only terminal successful recovery with exact successful Receipt ownership may
+produce the final analysis. The synthesis Provider receives bounded
+projections marked untrusted and no tools. Project final-synthesis persistence
+canonically retains its source ProjectVersion and present, matching
+zero-change WorkspaceDiff; legacy non-Project literature rows remain the
+both-absent representation. Delivery materializes at most one assistant
+message and exact reload/retry returns that same authority.
+
+ProjectPreviewPage owns the explicit structured form, stable request ID,
+project/session-scoped recovery, bounded polling, and cleanup. Existing
+Project messages, legacy Plans, direct reads/search, literature and paper
+surfaces are not rerouted. This boundary adds no write/apply/rollback/export,
+command/Sandbox execution, generic router, automatic repair/replan, or legacy
+Agent orchestration.

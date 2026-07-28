@@ -92,3 +92,28 @@
 - Excluded: legacy Agent planning/loop/verification, Project routing, new V2
   Steps, retrieval/ranking/worker rewrites, and generic natural-language
   routing.
+
+## Opt-in read-only V2 Project analysis
+
+- Status: `REUSE_WITH_ADAPTER`.
+- Assessed product entries: authenticated Project sessions, immutable Project
+  manifests, the V2 local Workspace port, and the existing Project chat UI.
+- Authority: V57 freezes the exact user/Project/session/request/version/Plan
+  binding and one exact effect kind and canonical argument document per Step.
+  The Provider receives exactly that Step's one tool descriptor; model output
+  cannot change path, query, Project, version, Workspace, or permission facts.
+- Effects: `project.read` reads one requested UTF-8 text path up to 64 KiB.
+  `project.search` performs literal, sorted, bounded search only inside the
+  confirmed frozen Workspace. Traversal, links, binary/oversized/missing
+  content, changed versions, and cross-bound intents fail closed.
+- Delivery: terminal successful recovery and exact owned Receipts produce one
+  no-tools synthesis with matching ProjectVersion and an empty Workspace diff.
+  Project provenance is now stored canonically by the existing final-synthesis
+  adapter. One delivery row owns at most one assistant message and exact
+  request replay.
+- UI: ProjectPreviewPage exposes an explicit opt-in form with 1-4 paths,
+  optional literal search, scoped reload recovery, and bounded polling.
+  Ordinary Project messages and legacy Project Plans remain unchanged.
+- Excluded: Project writes, command/Sandbox execution, diff acceptance,
+  revision apply, automatic replan/repair, arbitrary tools, and legacy Agent
+  planner/service/verifier execution.

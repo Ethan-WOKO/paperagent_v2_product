@@ -158,6 +158,8 @@ final class PersistentPlanAgentLoopTestSupport {
                 mock(SingleTurnStepKernel.class);
         AuthenticatedLiteratureSearchEffectExecutionComposer effects =
                 mock(AuthenticatedLiteratureSearchEffectExecutionComposer.class);
+        var projectEffects = mock(com.yanban.api.agent.v2.effect.project
+                .AuthenticatedProjectEffectExecutionComposer.class);
         AuthenticatedEffectDrivenStepProgressionComposer progression =
                 mock(AuthenticatedEffectDrivenStepProgressionComposer.class);
         BoundedStepReplanComposer replans =
@@ -165,7 +167,7 @@ final class PersistentPlanAgentLoopTestSupport {
         AuthenticatedPersistentPlanAgentLoopComposer composer =
                 new AuthenticatedPersistentPlanAgentLoopComposer(
                         contexts, planIds, inspections, recoverer,
-                        activation, kernel, effects, progression,
+                        activation, kernel, effects, projectEffects, progression,
                         replans);
         return new LoopFixture(
                 planId, contexts, inspections, recoverer, activation,

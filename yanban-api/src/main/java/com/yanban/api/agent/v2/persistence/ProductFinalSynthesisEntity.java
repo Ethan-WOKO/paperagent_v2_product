@@ -18,6 +18,12 @@ class ProductFinalSynthesisEntity {
     private String taskFrameId;
     @Column(name = "plan_revision_id", length = 128, nullable = false)
     private String planRevisionId;
+    @Column(name = "source_project_id", length = 128)
+    private String sourceProjectId;
+    @Column(name = "source_project_version_id", length = 128)
+    private String sourceProjectVersionId;
+    @Column(name = "workspace_diff_json", columnDefinition = "LONGTEXT")
+    private String workspaceDiffJson;
     @Column(name = "receipt_ids_json", columnDefinition = "LONGTEXT", nullable = false)
     private String receiptIdsJson;
     @Column(name = "narrative", columnDefinition = "LONGTEXT", nullable = false)
@@ -36,12 +42,17 @@ class ProductFinalSynthesisEntity {
 
     ProductFinalSynthesisEntity(
             String planId, String synthesisId, String taskFrameId,
-            String planRevisionId, String receiptIdsJson, String narrative,
+            String planRevisionId, String sourceProjectId,
+            String sourceProjectVersionId, String workspaceDiffJson,
+            String receiptIdsJson, String narrative,
             Instant observedAt, String canonicalSha256, Instant committedAt) {
         this.planId = planId;
         this.synthesisId = synthesisId;
         this.taskFrameId = taskFrameId;
         this.planRevisionId = planRevisionId;
+        this.sourceProjectId = sourceProjectId;
+        this.sourceProjectVersionId = sourceProjectVersionId;
+        this.workspaceDiffJson = workspaceDiffJson;
         this.receiptIdsJson = receiptIdsJson;
         this.narrative = narrative;
         this.observedAt = observedAt;
@@ -53,6 +64,9 @@ class ProductFinalSynthesisEntity {
     String synthesisId() { return synthesisId; }
     String taskFrameId() { return taskFrameId; }
     String planRevisionId() { return planRevisionId; }
+    String sourceProjectId() { return sourceProjectId; }
+    String sourceProjectVersionId() { return sourceProjectVersionId; }
+    String workspaceDiffJson() { return workspaceDiffJson; }
     String receiptIdsJson() { return receiptIdsJson; }
     String narrative() { return narrative; }
     Instant observedAt() { return observedAt; }
