@@ -40,6 +40,7 @@ public class LiteratureSearchTaskService {
 
     private static final Set<String> TERMINAL_STATUSES = Set.of(STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED);
     private static final Set<String> CANCEL_STATUSES = Set.of(STATUS_CANCEL_REQUESTED, STATUS_CANCELLING, STATUS_CANCELLED);
+    private static final Set<String> ACTIVE_STATUSES = Set.of(STATUS_PENDING, STATUS_RUNNING);
     private static final Duration DEFAULT_PENDING_AGE = Duration.ofMinutes(2);
     private static final Duration DEFAULT_RUNNING_TIMEOUT = Duration.ofMinutes(10);
     private static final int DEFAULT_SCAN_BATCH_SIZE = 50;
@@ -119,10 +120,14 @@ public class LiteratureSearchTaskService {
         if (TERMINAL_STATUSES.contains(task.getStatus())) {
             return task;
         }
-        task.setStatus(STATUS_CANCEL_REQUESTED);
-        task.setCurrentStage("CANCEL_REQUESTED");
-        task.setCancelReason(trimToNull(cancelReason));
-        LiteratureSearchTask saved = tasks.save(task);
+        int updated = tasks.requestCancelIfActive(
+                taskId, userId, ACTIVE_STATUSES,
+                STATUS_CANCEL_REQUESTED, "CANCEL_REQUESTED",
+                trimToNull(cancelReason), Instant.now());
+        LiteratureSearchTask saved = ownedTask(userId, taskId);
+        if (updated == 0) {
+            return saved;
+        }
         syncUnifiedTask(saved);
         recordEvent(saved, AgentTaskEventTypes.TASK_CANCEL_REQUESTED, "用户请求停止文献检索任务", null);
         return saved;
@@ -160,15 +165,19 @@ public class LiteratureSearchTaskService {
         if (TERMINAL_STATUSES.contains(task.getStatus())) {
             return task;
         }
-        task.setResultJson(resultJson);
-        task.setRawCandidateCount(rawCandidateCount);
-        task.setUniqueCandidateCount(uniqueCandidateCount);
-        task.setSourceAttempts(sourceAttempts);
-        task.setSourceFailuresJson(sourceFailuresJson);
-        task.setStatus(STATUS_COMPLETED);
-        task.setCurrentStage("COMPLETE");
-        task.setFinishedAt(Instant.now());
-        LiteratureSearchTask saved = tasks.save(task);
+        Instant finishedAt = Instant.now();
+        int updated = tasks.completeIfActive(
+                taskId, userId, ACTIVE_STATUSES,
+                resultJson, rawCandidateCount, uniqueCandidateCount,
+                sourceAttempts, sourceFailuresJson,
+                STATUS_COMPLETED, "COMPLETE", finishedAt);
+        LiteratureSearchTask saved = ownedTask(userId, taskId);
+        if (updated == 0) {
+            if (CANCEL_STATUSES.contains(saved.getStatus())) {
+                return markCancelled(userId, taskId);
+            }
+            return saved;
+        }
         syncUnifiedTask(saved);
         recordEvent(saved, AgentTaskEventTypes.TASK_COMPLETED, "文献检索任务已完成", null);
         return saved;

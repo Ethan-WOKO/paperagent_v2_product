@@ -1086,3 +1086,36 @@ or queued, not that literature results have already been retrieved.
 This boundary does not add Project routing, literature status/result/cancel,
 generic natural-language planning, another tool, UI, streaming, scheduling,
 Workspace mutation, ProjectVersion acceptance, or legacy Agent orchestration.
+
+## V2 literature task outcome and existing chat UI boundary
+
+The explicit non-Project literature turn now retains the authoritative
+product task produced by its governed effect. A successful sanitized
+`literature.search` Receipt is parsed inside the existing effect-claim
+transaction. Its positive task ID must resolve to the same owner, turn,
+delivery request, query options, and null-Project product task before V56 can
+bind it. Task creation, delivery binding, Receipt, and EffectOutcome therefore
+commit or roll back together; client and model input never supply task
+identity.
+
+Owner/session/client-request scoped read and cancel endpoints resolve only this
+binding after rechecking WORKSPACE scope and task ownership. Cancellation
+delegates to the existing product task service. Reads expose the real task
+stage and bounded counts, source warnings, and allowlisted paper fields.
+Completed results with source warnings are presented as `PARTIAL`; corrupt,
+oversized, or structurally invalid result JSON creates neither paper output
+nor a successful result message.
+
+Concurrent reads serialize on the delivery row. The first valid completed
+read appends one code-owned assistant result message and writes its immutable
+binding; exact serial or concurrent replay returns the same message. Pending
+and running tasks never create a result message, while failed and cancelled
+tasks never fabricate papers.
+
+The existing chat page exposes a structured Search Papers form and uses the
+explicit V2 start, bounded polling, and scoped cancel APIs. Polling state is
+isolated by session and cleared on session change or unmount. Paper links use
+the existing safe HTTP(S) policy and BibTeX remains collapsed until requested.
+Ordinary message send, legacy Plan mode, Project pages, V2 kernel/loop/replan
+contracts, retrieval workers, ranking, and legacy Agent orchestration are
+unchanged.

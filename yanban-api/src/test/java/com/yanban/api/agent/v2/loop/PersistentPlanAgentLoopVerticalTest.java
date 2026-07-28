@@ -332,7 +332,9 @@ class PersistentPlanAgentLoopVerticalTest {
                                         "durable query step-"
                                                 + (authorityCall.getAndIncrement()
                                                 == 0 ? "a" : "b"),
-                                        10, null, false)));
+                                        10, null, false)),
+                        mock(com.yanban.api.agent.v2.compatibility.literature
+                                .LiteratureDeliveryTaskBindingService.class));
         AuthenticatedEffectDrivenStepProgressionComposer progression =
                 new AuthenticatedEffectDrivenStepProgressionComposer(
                         productContexts, planIds, progressionInspector,
@@ -436,7 +438,9 @@ class PersistentPlanAgentLoopVerticalTest {
                                 new com.yanban.api.agent.v2.compatibility
                                         .literature.LiteratureSearchRequestAuthority(
                                         "durable query step-a",
-                                        10, null, false)));
+                                        10, null, false)),
+                        mock(com.yanban.api.agent.v2.compatibility.literature
+                                .LiteratureDeliveryTaskBindingService.class));
         AuthenticatedEffectDrivenStepProgressionComposer progression =
                 new AuthenticatedEffectDrivenStepProgressionComposer(
                         productContexts, planIds, progressionInspector,

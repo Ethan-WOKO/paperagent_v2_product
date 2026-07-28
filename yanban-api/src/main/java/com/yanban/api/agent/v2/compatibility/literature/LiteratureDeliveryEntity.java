@@ -37,6 +37,10 @@ class LiteratureDeliveryEntity {
     private String synthesisId;
     @Column(name = "assistant_message_id")
     private Long assistantMessageId;
+    @Column(name = "literature_task_id")
+    private Long literatureTaskId;
+    @Column(name = "result_assistant_message_id")
+    private Long resultAssistantMessageId;
     @Column(name = "status", nullable = false, length = 32)
     private String status;
     @Column(name = "created_at", nullable = false)
@@ -83,6 +87,8 @@ class LiteratureDeliveryEntity {
     String planId() { return planId; }
     String synthesisId() { return synthesisId; }
     Long assistantMessageId() { return assistantMessageId; }
+    Long literatureTaskId() { return literatureTaskId; }
+    Long resultAssistantMessageId() { return resultAssistantMessageId; }
     String status() { return status; }
     Instant createdAt() { return createdAt; }
 
@@ -112,6 +118,32 @@ class LiteratureDeliveryEntity {
     void rotateLease(String token, Instant expiresAt) {
         leaseToken = token;
         leaseExpiresAt = expiresAt;
+        updatedAt = Instant.now();
+    }
+
+    void bindLiteratureTask(Long taskId) {
+        if (taskId == null || taskId <= 0) {
+            throw new IllegalArgumentException("literature task is invalid");
+        }
+        if (literatureTaskId != null && !literatureTaskId.equals(taskId)) {
+            throw new IllegalStateException(
+                    "literature task authority conflict");
+        }
+        literatureTaskId = taskId;
+        updatedAt = Instant.now();
+    }
+
+    void bindResultAssistantMessage(Long messageId) {
+        if (messageId == null || messageId <= 0) {
+            throw new IllegalArgumentException(
+                    "literature result message is invalid");
+        }
+        if (resultAssistantMessageId != null
+                && !resultAssistantMessageId.equals(messageId)) {
+            throw new IllegalStateException(
+                    "literature result message authority conflict");
+        }
+        resultAssistantMessageId = messageId;
         updatedAt = Instant.now();
     }
 }

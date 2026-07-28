@@ -4,6 +4,8 @@ import com.yanban.api.security.JwtUser;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnRequest;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnResponse;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeResponse;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeService;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -26,13 +28,16 @@ public class AgentController {
     private final AgentService agentService;
     private final AgentContextSnapshotService contextSnapshotService;
     private final V2LiteratureTurnService v2LiteratureTurns;
+    private final V2LiteratureOutcomeService v2LiteratureOutcomes;
 
     public AgentController(AgentService agentService,
                            AgentContextSnapshotService contextSnapshotService,
-                           V2LiteratureTurnService v2LiteratureTurns) {
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes) {
         this.agentService = agentService;
         this.contextSnapshotService = contextSnapshotService;
         this.v2LiteratureTurns = v2LiteratureTurns;
+        this.v2LiteratureOutcomes = v2LiteratureOutcomes;
     }
 
     @PostMapping
@@ -84,6 +89,24 @@ public class AgentController {
             @Valid @RequestBody V2LiteratureTurnRequest request) {
         return v2LiteratureTurns.execute(
                 currentUser.id(), sessionId, request);
+    }
+
+    @GetMapping("/{sessionId}/v2/literature-turns/{clientRequestId}")
+    public V2LiteratureOutcomeResponse getV2LiteratureTurn(
+            @AuthenticationPrincipal JwtUser currentUser,
+            @PathVariable Long sessionId,
+            @PathVariable String clientRequestId) {
+        return v2LiteratureOutcomes.get(
+                currentUser.id(), sessionId, clientRequestId);
+    }
+
+    @PostMapping("/{sessionId}/v2/literature-turns/{clientRequestId}/cancel")
+    public V2LiteratureOutcomeResponse cancelV2LiteratureTurn(
+            @AuthenticationPrincipal JwtUser currentUser,
+            @PathVariable Long sessionId,
+            @PathVariable String clientRequestId) {
+        return v2LiteratureOutcomes.cancel(
+                currentUser.id(), sessionId, clientRequestId);
     }
 
     @GetMapping("/{sessionId}/context-snapshots")

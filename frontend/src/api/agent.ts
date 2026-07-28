@@ -282,6 +282,89 @@ export function sendMessage(sessionId: number, payload: SendMessageRequestPayloa
   return http.post<SendMessageResponse>(`/agent/sessions/${sessionId}/messages`, payload);
 }
 
+export interface V2LiteratureTurnRequest {
+  query: string;
+  topK: number;
+  yearFrom?: number | null;
+  includeBibtex: boolean;
+  clientRequestId: string;
+}
+
+export interface V2LiteratureTurnStartResponse {
+  sessionId: number;
+  turnId: number;
+  userMessageId: number;
+  assistantMessageId: number;
+  clientRequestId: string;
+  planId: string;
+  synthesisId: string;
+  assistantContent: string;
+  replayed: boolean;
+}
+
+export type V2LiteratureTaskStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'CANCEL_REQUESTED'
+  | 'CANCELLING'
+  | 'COMPLETED'
+  | 'PARTIAL'
+  | 'FAILED'
+  | 'CANCELLED';
+
+export interface V2LiteraturePaperItem {
+  cardId: number | null;
+  title: string;
+  authors: string[];
+  year: number | null;
+  venue: string | null;
+  doi: string | null;
+  arxivId: string | null;
+  openAlexId: string | null;
+  url: string | null;
+  source: string | null;
+  score: number | null;
+  bibtex?: string | null;
+}
+
+export interface V2LiteratureTurnOutcomeResponse {
+  sessionId: number;
+  turnId: number;
+  clientRequestId: string;
+  literatureTaskId: number;
+  status: V2LiteratureTaskStatus;
+  stage: string | null;
+  terminal: boolean;
+  cancellable: boolean;
+  requestedTopK: number;
+  includeBibtex: boolean;
+  resultMessageId: number | null;
+  resultCount: number;
+  totalCount: number;
+  sourceFailures: string[];
+  items: V2LiteraturePaperItem[];
+}
+
+export function startV2LiteratureTurn(sessionId: number, payload: V2LiteratureTurnRequest) {
+  return http.post<V2LiteratureTurnStartResponse>(
+    `/agent/sessions/${sessionId}/v2/literature-turns`,
+    payload,
+  );
+}
+
+export function getV2LiteratureTurn(sessionId: number, clientRequestId: string) {
+  return http.get<V2LiteratureTurnOutcomeResponse>(
+    `/agent/sessions/${sessionId}/v2/literature-turns/${encodeURIComponent(clientRequestId)}`,
+  );
+}
+
+export function cancelV2LiteratureTurn(sessionId: number, clientRequestId: string) {
+  return http.post<V2LiteratureTurnOutcomeResponse>(
+    `/agent/sessions/${sessionId}/v2/literature-turns/${encodeURIComponent(clientRequestId)}/cancel`,
+    {},
+  );
+}
+
 export interface AgentPlanStepResponse {
   id: number;
   stepKey: string;

@@ -70,3 +70,25 @@
 - Excluded: Project routing, literature status/result/cancel, UI, generic
   planning, other tools, Workspace mutation, ProjectVersion apply, and legacy
   Agent planning/execution/final-synthesis services.
+
+## V2 literature task outcomes and chat UI
+
+- Status: `REUSE_WITH_ADAPTER`.
+- Assessed product entries: `LiteratureSearchTask`,
+  `LiteratureSearchTaskService`, the existing asynchronous OpenAlex/arXiv
+  worker and result materializer, and the existing chat presentation shell.
+- Authority: the successful `literature.search` ExecutionReceipt supplies the
+  only task ID. The effect-claim transaction locks the owner/turn delivery,
+  verifies the owner-qualified non-Project task and its frozen request, and
+  writes the task binding before the Receipt and EffectOutcome can commit.
+- Outcome access: owner/session/client-request reads and cancellation resolve
+  only that durable binding. Reads project bounded allowlisted paper fields
+  from the product result and persist at most one code-owned result assistant
+  message under the delivery row lock. Corrupt or oversized results fail
+  closed without a message.
+- UI: the explicit Search Papers form uses the V2 start endpoint, bounded
+  polling, scoped cancellation, session/unmount cleanup, safe links, and
+  collapsed BibTeX. Ordinary messages and legacy Plan mode are unchanged.
+- Excluded: legacy Agent planning/loop/verification, Project routing, new V2
+  Steps, retrieval/ranking/worker rewrites, and generic natural-language
+  routing.

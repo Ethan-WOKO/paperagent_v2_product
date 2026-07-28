@@ -252,12 +252,87 @@
                 />
               </div>
               <div class="chat-composer__quick-actions">
-                <button type="button" @click="draft = '/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex'">Search Papers</button>
+                <button type="button" :aria-expanded="literatureFormOpen" @click="openLiteratureForm">{{ t('chat.literature.open') }}</button>
                 <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
                 <button type="button" @click="planMode = !planMode">{{ planMode ? 'ReAct Mode' : 'Plan Mode' }}</button>
                 <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
               </div>
             </div>
+            <section v-if="literatureFormOpen" class="v2-literature-panel" :aria-label="t('chat.literature.title')">
+              <div class="v2-literature-panel__heading">
+                <div>
+                  <strong>{{ t('chat.literature.title') }}</strong>
+                  <small>{{ t('chat.literature.help') }}</small>
+                </div>
+                <button type="button" class="v2-literature-panel__close" @click="literatureFormOpen = false">×</button>
+              </div>
+              <div class="v2-literature-form">
+                <label class="v2-literature-form__query">
+                  <span>{{ t('chat.literature.query') }}</span>
+                  <NInput v-model:value="literatureForm.query" :placeholder="t('chat.literature.queryPlaceholder')" />
+                </label>
+                <label>
+                  <span>{{ t('chat.literature.topK') }}</span>
+                  <input v-model.number="literatureForm.topK" type="number" min="1" max="20" />
+                </label>
+                <label>
+                  <span>{{ t('chat.literature.yearFrom') }}</span>
+                  <input v-model.number="literatureForm.yearFrom" type="number" min="1900" :max="new Date().getFullYear() + 1" :placeholder="t('common.optional')" />
+                </label>
+                <NCheckbox v-model:checked="literatureForm.includeBibtex">{{ t('chat.literature.includeBibtex') }}</NCheckbox>
+              </div>
+              <div class="v2-literature-panel__actions">
+                <NButton
+                  type="primary"
+                  size="small"
+                  :loading="literatureStarting"
+                  :disabled="literaturePolling || literatureStarting"
+                  @click="startLiteratureSearch"
+                >{{ t('chat.literature.start') }}</NButton>
+                <NButton
+                  v-if="literatureOutcome?.cancellable"
+                  size="small"
+                  secondary
+                  :loading="literatureCancelling"
+                  @click="cancelLiteratureSearch"
+                >{{ t('chat.literature.cancel') }}</NButton>
+              </div>
+              <div
+                v-if="literatureOutcome"
+                class="v2-literature-outcome"
+                :class="'v2-literature-outcome--' + literaturePresentation?.tone"
+              >
+                <div class="v2-literature-outcome__status">
+                  <strong>{{ literatureStatusLabel }}</strong>
+                  <span>{{ literaturePresentation?.stage }}</span>
+                  <small v-if="literaturePolling">{{ t('chat.literature.polling') }}</small>
+                </div>
+                <p v-if="literatureOutcome.sourceFailures.length" class="v2-literature-outcome__warning">
+                  {{ t('chat.literature.sourceWarnings') }}: {{ literatureOutcome.sourceFailures.join('; ') }}
+                </p>
+                <div v-if="literaturePresentation?.papers.length" class="v2-literature-results">
+                  <article v-for="paper in literaturePresentation.papers" :key="paper.cardId ?? paper.doi ?? paper.title" class="v2-literature-card">
+                    <div class="v2-literature-card__heading">
+                      <strong>{{ paper.title }}</strong>
+                      <span v-if="paper.score != null">{{ paper.score.toFixed(3) }}</span>
+                    </div>
+                    <p v-if="paper.authors.length">{{ paper.authors.join(', ') }}</p>
+                    <small>{{ [paper.year, paper.venue, paper.source].filter(Boolean).join(' · ') }}</small>
+                    <div class="v2-literature-card__identifiers">
+                      <span v-if="paper.doi">DOI: {{ paper.doi }}</span>
+                      <span v-if="paper.arxivId">arXiv: {{ paper.arxivId }}</span>
+                      <span v-if="paper.openAlexId">OpenAlex: {{ paper.openAlexId }}</span>
+                      <a v-if="paper.safeUrl" :href="paper.safeUrl" target="_blank" rel="noopener noreferrer">{{ t('chat.literature.openSource') }}</a>
+                    </div>
+                    <details v-if="paper.bibtex" class="v2-literature-bibtex">
+                      <summary>{{ t('chat.literature.bibtex') }}</summary>
+                      <pre>{{ paper.bibtex }}</pre>
+                    </details>
+                  </article>
+                </div>
+              </div>
+              <p v-if="literatureError" class="v2-literature-panel__error">{{ literatureError }}</p>
+            </section>
             <NInput
               v-model:value="draft"
               type="textarea"
@@ -344,14 +419,17 @@ import { downloadArtifact, getArtifact, saveArtifactToKnowledge } from '@/api/ar
 import { getDemoConfig } from '@/api/demo';
 import { mergeKbUpload, uploadChunk, type KbDocumentResponse } from '@/api/knowledge';
 import {
+  cancelV2LiteratureTurn,
   createPlan,
   createSession,
   deleteSession as deleteAgentSession,
   executePlanAsync,
+  getV2LiteratureTurn,
   getPlan,
   listMessages,
   listSessions,
   sendMessage as sendAgentMessage,
+  startV2LiteratureTurn,
   updateSession as updateAgentSession,
   type AgentDebugPayload,
   type AgentMessageResponse,
@@ -359,12 +437,20 @@ import {
   type AgentPlanStepResponse,
   type SendMessageResponse,
   type AgentSessionResponse,
+  type V2LiteratureTurnOutcomeResponse,
 } from '@/api/agent';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { getSettings, type UserSettingsResponse } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
 import { projectPlanExecutionOutcome, projectPlanFinalAnswer, projectPlanLifecycle } from '@/utils/projectCompletion';
+import {
+  isCurrentV2LiteratureRequest,
+  newV2LiteratureClientRequestId,
+  normalizeV2LiteratureForm,
+  pollV2Literature,
+  presentV2LiteratureOutcome,
+} from '@/utils/v2Literature';
 import { ui } from '@/ui';
 
 type MessageRole = 'user' | 'assistant' | 'system' | 'tool' | 'process';
@@ -494,8 +580,26 @@ const chatAttachments = ref<ChatUploadAttachment[]>([]);
 const chatUploading = ref(false);
 const chatUploadProgress = ref(0);
 const chatUploadStatus = ref('');
+const literatureFormOpen = ref(false);
+const literatureForm = ref({
+  query: '',
+  topK: 5 as number | null,
+  yearFrom: null as number | null,
+  includeBibtex: false,
+});
+const literatureOutcome = ref<V2LiteratureTurnOutcomeResponse | null>(null);
+const literatureStarting = ref(false);
+const literaturePolling = ref(false);
+const literatureCancelling = ref(false);
+const literatureError = ref('');
+const literatureClientRequestId = ref<string | null>(null);
+const literaturePollTimers = new Set<number>();
+let literaturePollController: AbortController | null = null;
+let literatureRecoverySequence = 0;
+let literatureStartSequence = 0;
 const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
 const SESSION_STORAGE_KEY = 'yanban.chat.selectedSessionId';
+const LITERATURE_REQUEST_STORAGE_PREFIX = 'yanban.chat.v2Literature.';
 const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 const SUPPORTED_DEEPSEEK_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
@@ -587,6 +691,24 @@ const minimapPreviewStyle = computed(() => {
 
 const isDemoExperience = computed(() => route.query.demo === '1' || Boolean(authStore.currentUser?.demo));
 const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && demoQuestionPanelOpen.value);
+const literaturePresentation = computed(() => (
+  literatureOutcome.value ? presentV2LiteratureOutcome(literatureOutcome.value) : null
+));
+const literatureStatusLabel = computed(() => {
+  const status = literatureOutcome.value?.status;
+  if (!status) return '';
+  const keys = {
+    PENDING: 'chat.literature.status.pending',
+    RUNNING: 'chat.literature.status.running',
+    CANCEL_REQUESTED: 'chat.literature.status.cancelRequested',
+    CANCELLING: 'chat.literature.status.cancelling',
+    COMPLETED: 'chat.literature.status.completed',
+    PARTIAL: 'chat.literature.status.partial',
+    FAILED: 'chat.literature.status.failed',
+    CANCELLED: 'chat.literature.status.cancelled',
+  } as const;
+  return t(keys[status]);
+});
 
 onMounted(async () => {
   applyMobileChatDefaults();
@@ -627,8 +749,22 @@ watch(
   }
 );
 
+watch(selectedSessionId, (sessionId, previousSessionId) => {
+  if (sessionId === previousSessionId) return;
+  literatureStartSequence += 1;
+  stopLiteraturePolling();
+  literatureOutcome.value = null;
+  literatureError.value = '';
+  literatureClientRequestId.value = null;
+  if (sessionId) {
+    void recoverLiteratureSearch(sessionId);
+  }
+});
+
 onBeforeUnmount(() => {
+  literatureStartSequence += 1;
   currentSocket.value?.close();
+  stopLiteraturePolling();
   cancelMinimapHoverClear();
   Object.keys(messageRowRefs).forEach((key) => {
     delete messageRowRefs[key];
@@ -637,6 +773,202 @@ onBeforeUnmount(() => {
     delete minimapItemRefs[key];
   });
 });
+
+function openLiteratureForm() {
+  literatureFormOpen.value = true;
+  if (literaturePresentation.value?.terminal) {
+    literatureOutcome.value = null;
+    literatureClientRequestId.value = null;
+    literatureError.value = '';
+  }
+}
+
+async function ensureLiteratureSession() {
+  if (selectedSessionId.value) {
+    return selectedSessionId.value;
+  }
+  const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+  const { data } = await createSession({
+    title: t('chat.newSession'),
+    ragDisabled: ragDisabled.value,
+    modelProvider: selectedModel.provider,
+    model: selectedModel.model,
+  });
+  sessions.value = [data, ...sessions.value];
+  applySelectedSession(data.id);
+  await nextTick();
+  return data.id;
+}
+
+async function startLiteratureSearch() {
+  if (literatureStarting.value || literaturePolling.value) return;
+  literatureError.value = '';
+  if (literaturePresentation.value?.terminal) {
+    literatureOutcome.value = null;
+    literatureClientRequestId.value = null;
+  }
+  let request;
+  try {
+    const stableRequestId = literatureClientRequestId.value ?? newV2LiteratureClientRequestId();
+    request = normalizeV2LiteratureForm(literatureForm.value, stableRequestId);
+    literatureClientRequestId.value = stableRequestId;
+  } catch (error) {
+    literatureError.value = literatureValidationMessage(error);
+    return;
+  }
+  literatureStarting.value = true;
+  try {
+    const sessionId = await ensureLiteratureSession();
+    const startSequence = ++literatureStartSequence;
+    literatureClientRequestId.value = request.clientRequestId;
+    await startV2LiteratureTurn(sessionId, request);
+    if (!isCurrentV2LiteratureRequest(
+      {
+        sessionId,
+        clientRequestId: request.clientRequestId,
+        sequence: startSequence,
+      },
+      {
+        sessionId: selectedSessionId.value,
+        clientRequestId: literatureClientRequestId.value,
+        sequence: literatureStartSequence,
+      },
+    )) return;
+    storeLiteratureRequestId(sessionId, request.clientRequestId);
+    await runLiteraturePolling(sessionId, request.clientRequestId);
+  } catch (error) {
+    if (!isAbortError(error)) {
+      literatureError.value = t('chat.literature.failure');
+    }
+  } finally {
+    literatureStarting.value = false;
+  }
+}
+
+async function runLiteraturePolling(sessionId: number, clientRequestId: string) {
+  stopLiteraturePolling();
+  const controller = new AbortController();
+  literaturePollController = controller;
+  literaturePolling.value = true;
+  try {
+    const terminal = await pollV2Literature(
+      async () => (await getV2LiteratureTurn(sessionId, clientRequestId)).data,
+      {
+        signal: controller.signal,
+        sleep: (milliseconds) => literaturePollSleep(milliseconds, controller.signal),
+        onOutcome: (outcome) => {
+          if (selectedSessionId.value === sessionId && literatureClientRequestId.value === clientRequestId) {
+            literatureOutcome.value = outcome;
+          }
+        },
+      },
+    );
+    if (selectedSessionId.value === sessionId && terminal.resultMessageId != null) {
+      await reloadCurrentMessages(sessionId);
+    }
+  } catch (error) {
+    if (!isAbortError(error)) {
+      literatureError.value = error instanceof Error && error.message === 'literature-poll-timeout'
+        ? t('chat.literature.timeout')
+        : t('chat.literature.failure');
+    }
+  } finally {
+    if (literaturePollController === controller) {
+      literaturePollController = null;
+      literaturePolling.value = false;
+    }
+  }
+}
+
+async function recoverLiteratureSearch(sessionId: number) {
+  const recoverySequence = ++literatureRecoverySequence;
+  const clientRequestId = readLiteratureRequestId(sessionId);
+  if (!clientRequestId) return;
+  literatureClientRequestId.value = clientRequestId;
+  literatureFormOpen.value = true;
+  try {
+    const { data } = await getV2LiteratureTurn(sessionId, clientRequestId);
+    if (recoverySequence !== literatureRecoverySequence || selectedSessionId.value !== sessionId) return;
+    literatureOutcome.value = data;
+    if (!data.terminal) {
+      await runLiteraturePolling(sessionId, clientRequestId);
+    }
+  } catch (error) {
+    if (!isAbortError(error) && recoverySequence === literatureRecoverySequence) {
+      clearLiteratureRequestId(sessionId);
+      literatureClientRequestId.value = null;
+    }
+  }
+}
+
+async function cancelLiteratureSearch() {
+  const sessionId = selectedSessionId.value;
+  const clientRequestId = literatureClientRequestId.value;
+  if (!sessionId || !clientRequestId || literatureCancelling.value) return;
+  literatureCancelling.value = true;
+  literatureError.value = '';
+  try {
+    const { data } = await cancelV2LiteratureTurn(sessionId, clientRequestId);
+    literatureOutcome.value = data;
+    if (!data.terminal && !literaturePolling.value) {
+      await runLiteraturePolling(sessionId, clientRequestId);
+    }
+  } catch {
+    literatureError.value = t('chat.literature.cancelFailure');
+  } finally {
+    literatureCancelling.value = false;
+  }
+}
+
+function literaturePollSleep(milliseconds: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      literaturePollTimers.delete(timer);
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      window.clearTimeout(timer);
+      literaturePollTimers.delete(timer);
+      reject(new DOMException('Polling aborted', 'AbortError'));
+    };
+    literaturePollTimers.add(timer);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function stopLiteraturePolling() {
+  literatureRecoverySequence += 1;
+  literaturePollController?.abort();
+  literaturePollController = null;
+  literaturePollTimers.forEach((timer) => window.clearTimeout(timer));
+  literaturePollTimers.clear();
+  literaturePolling.value = false;
+}
+
+function literatureValidationMessage(error: unknown) {
+  if (!(error instanceof Error)) return t('chat.literature.validation');
+  if (error.message === 'query-required') return t('chat.literature.queryRequired');
+  if (error.message === 'top-k-out-of-range') return t('chat.literature.topKInvalid');
+  if (error.message === 'year-out-of-range') return t('chat.literature.yearInvalid');
+  return t('chat.literature.validation');
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function storeLiteratureRequestId(sessionId: number, clientRequestId: string) {
+  window.localStorage.setItem(LITERATURE_REQUEST_STORAGE_PREFIX + sessionId, clientRequestId);
+}
+
+function readLiteratureRequestId(sessionId: number) {
+  return window.localStorage.getItem(LITERATURE_REQUEST_STORAGE_PREFIX + sessionId);
+}
+
+function clearLiteratureRequestId(sessionId: number) {
+  window.localStorage.removeItem(LITERATURE_REQUEST_STORAGE_PREFIX + sessionId);
+}
 
 async function loadDemoConfigIfNeeded() {
   if (!isDemoExperience.value) {

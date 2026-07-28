@@ -9264,6 +9264,181 @@ html:not(.canvas-scale-active) .chat-messages,
   gap: 14px !important;
 }
 
+/* Explicit V2 literature outcome panel; ordinary composer behavior stays separate. */
+.v2-literature-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #2563eb) 24%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card-color, #fff) 96%, var(--primary-color, #2563eb));
+}
+
+.v2-literature-panel__heading,
+.v2-literature-panel__actions,
+.v2-literature-card__heading,
+.v2-literature-card__identifiers {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.v2-literature-panel__heading {
+  justify-content: space-between;
+}
+
+.v2-literature-panel__heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.v2-literature-panel__heading small,
+.v2-literature-card small {
+  color: var(--text-color-3, #64748b);
+}
+
+.v2-literature-panel__close {
+  border: 0;
+  background: transparent;
+  color: var(--text-color-2, #475569);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.v2-literature-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px 112px auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.v2-literature-form label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-color-2, #475569);
+  font-size: 12px;
+}
+
+.v2-literature-form input {
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border: 1px solid var(--border-color, #d7dee8);
+  border-radius: 6px;
+  background: var(--input-color, #fff);
+  color: var(--text-color-1, #0f172a);
+}
+
+.v2-literature-outcome {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-left: 3px solid #3b82f6;
+  border-radius: 8px;
+  background: rgb(59 130 246 / 7%);
+}
+
+.v2-literature-outcome--success {
+  border-left-color: #16a34a;
+  background: rgb(22 163 74 / 7%);
+}
+
+.v2-literature-outcome--warning {
+  border-left-color: #d97706;
+  background: rgb(217 119 6 / 7%);
+}
+
+.v2-literature-outcome--error {
+  border-left-color: #dc2626;
+  background: rgb(220 38 38 / 7%);
+}
+
+.v2-literature-outcome__status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.v2-literature-outcome__status small {
+  margin-left: auto;
+  color: var(--text-color-3, #64748b);
+}
+
+.v2-literature-outcome__warning,
+.v2-literature-panel__error {
+  margin: 0;
+  color: #b45309;
+  font-size: 12px;
+}
+
+.v2-literature-panel__error {
+  color: #dc2626;
+}
+
+.v2-literature-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 8px;
+}
+
+.v2-literature-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-color, #d7dee8);
+  border-radius: 8px;
+  background: var(--card-color, #fff);
+}
+
+.v2-literature-card__heading {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.v2-literature-card p {
+  margin: 0;
+  color: var(--text-color-2, #475569);
+  font-size: 12px;
+}
+
+.v2-literature-card__identifiers {
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.v2-literature-card__identifiers a {
+  color: var(--primary-color, #2563eb);
+}
+
+.v2-literature-bibtex summary {
+  cursor: pointer;
+  color: var(--primary-color, #2563eb);
+  font-size: 12px;
+}
+
+.v2-literature-bibtex pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgb(15 23 42 / 7%);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .v2-literature-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .v2-literature-form__query {
+    grid-column: 1 / -1;
+  }
+}
+
 .app-frame--non-chat .paper-status-box,
 .app-frame--non-chat .paper-event-item,
 .app-frame--non-chat .paper-history-item,

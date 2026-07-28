@@ -8,6 +8,7 @@ import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthority;
 import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthoritySource;
+import com.yanban.api.agent.v2.compatibility.literature.LiteratureDeliveryTaskBindingService;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimResult;
 import com.yanban.core.agent.AgentRunIdentity;
@@ -62,6 +63,8 @@ final class LiteratureSearchEffectTestFixtures {
     final ObjectMapper json = new ObjectMapper();
     final LiteratureSearchRequestAuthoritySource authorities =
             mock(LiteratureSearchRequestAuthoritySource.class);
+    final LiteratureDeliveryTaskBindingService taskBindings =
+            mock(LiteratureDeliveryTaskBindingService.class);
     final AtomicInteger time = new AtomicInteger();
     final LiteratureSearchEffectExecutionTimeSource times =
             () -> START.plusMillis(time.getAndIncrement());
@@ -127,7 +130,7 @@ final class LiteratureSearchEffectTestFixtures {
                         output));
         composer = new AuthenticatedLiteratureSearchEffectExecutionComposer(
                 contexts, planIds, recoverer, intents, claims, executor,
-                times, json, authorities);
+                times, json, authorities, taskBindings);
     }
 
     PersistedEffectIntent intent(Map<String, io.paperagent.v2.contracts.ContractValue> args) {

@@ -12,14 +12,30 @@ import static org.mockito.Mockito.when;
 import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.paper.domain.LiteratureSearchTask;
 import com.yanban.paper.domain.LiteratureSearchTaskRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -143,7 +159,15 @@ class LiteratureSearchTaskServiceTest {
     void requestCancelMovesNonTerminalTaskToCancelRequested() {
         LiteratureSearchTask task = task(LiteratureSearchTaskService.STATUS_RUNNING);
         when(tasks.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(Optional.of(task));
-        when(tasks.save(any(LiteratureSearchTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(tasks.requestCancelIfActive(
+                eq(TASK_ID), eq(USER_ID), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    task.setStatus(
+                            LiteratureSearchTaskService.STATUS_CANCEL_REQUESTED);
+                    task.setCurrentStage("CANCEL_REQUESTED");
+                    task.setCancelReason("user stopped");
+                    return 1;
+                });
 
         LiteratureSearchTask cancelled = service.requestCancel(USER_ID, TASK_ID, "user stopped");
 
@@ -337,5 +361,161 @@ class LiteratureSearchTaskServiceTest {
         ObjectProvider<AgentTaskEventRecorder> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(eventRecorder);
         return provider;
+    }
+}
+
+@DataJpaTest(properties = {
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "spring.datasource.url=jdbc:h2:mem:literature_task_transitions;"
+                + "MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000"
+})
+@ContextConfiguration(
+        classes = LiteratureSearchTaskServiceH2ConcurrencyTest.TestConfig.class)
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
+class LiteratureSearchTaskServiceH2ConcurrencyTest {
+    private static final Long USER_ID = 11L;
+
+    @Autowired
+    LiteratureSearchTaskRepository tasks;
+    LiteratureSearchTaskService service;
+    @Autowired
+    PlatformTransactionManager transactions;
+    @Autowired
+    EntityManager entityManager;
+
+    @SpringBootConfiguration
+    @EnableAutoConfiguration
+    @EntityScan(basePackageClasses = LiteratureSearchTask.class)
+    @EnableJpaRepositories(
+            basePackageClasses = LiteratureSearchTaskRepository.class)
+    static class TestConfig {
+    }
+
+    @BeforeEach
+    void clean() {
+        tasks.deleteAll();
+        service = new LiteratureSearchTaskService(tasks, null, null);
+    }
+
+    @Test
+    void committedCompletionCannotBeOverwrittenByStaleCancel()
+            throws Exception {
+        LiteratureSearchTask task = runningTask("completion-wins");
+        var completionWritten = new CountDownLatch(1);
+        var releaseCompletion = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            var completion = pool.submit(() -> transaction(() -> {
+                lock(task.getId());
+                LiteratureSearchTask result = service.saveResult(
+                        USER_ID, task.getId(), "{\"items\":[]}",
+                        1, 1, 2, "[]");
+                completionWritten.countDown();
+                await(releaseCompletion);
+                return result;
+            }));
+            assertThat(completionWritten.await(5, TimeUnit.SECONDS)).isTrue();
+            var staleCancelStarted = new CountDownLatch(1);
+            var staleCancel = pool.submit(() -> {
+                staleCancelStarted.countDown();
+                return transaction(() -> service.requestCancel(
+                        USER_ID, task.getId(), "too late"));
+            });
+            assertThat(staleCancelStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            Thread.sleep(200);
+
+            releaseCompletion.countDown();
+            completion.get(5, TimeUnit.SECONDS);
+            staleCancel.get(5, TimeUnit.SECONDS);
+
+            LiteratureSearchTask stored = tasks.findById(task.getId())
+                    .orElseThrow();
+            assertThat(stored.getStatus())
+                    .isEqualTo(LiteratureSearchTaskService.STATUS_COMPLETED);
+            assertThat(stored.getResultJson()).isEqualTo("{\"items\":[]}");
+            assertThat(stored.getCancelReason()).isNull();
+        } finally {
+            releaseCompletion.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void committedCancelCannotBeOverwrittenByStaleCompletion()
+            throws Exception {
+        LiteratureSearchTask task = runningTask("cancel-wins");
+        var cancelWritten = new CountDownLatch(1);
+        var releaseCancel = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            var cancellation = pool.submit(() -> transaction(() -> {
+                lock(task.getId());
+                LiteratureSearchTask result = service.requestCancel(
+                        USER_ID, task.getId(), "stop now");
+                cancelWritten.countDown();
+                await(releaseCancel);
+                return result;
+            }));
+            assertThat(cancelWritten.await(5, TimeUnit.SECONDS)).isTrue();
+            var staleCompletionStarted = new CountDownLatch(1);
+            var staleCompletion = pool.submit(() -> {
+                staleCompletionStarted.countDown();
+                return transaction(() -> service.saveResult(
+                        USER_ID, task.getId(),
+                        "{\"items\":[{\"title\":\"stale\"}]}",
+                        1, 1, 2, "[]"));
+            });
+            assertThat(staleCompletionStarted.await(
+                    5, TimeUnit.SECONDS)).isTrue();
+            Thread.sleep(200);
+
+            releaseCancel.countDown();
+            cancellation.get(5, TimeUnit.SECONDS);
+            staleCompletion.get(5, TimeUnit.SECONDS);
+
+            LiteratureSearchTask stored = tasks.findById(task.getId())
+                    .orElseThrow();
+            assertThat(stored.getStatus())
+                    .isEqualTo(LiteratureSearchTaskService.STATUS_CANCELLED);
+            assertThat(stored.getResultJson()).isNull();
+            assertThat(stored.getCancelReason()).isEqualTo("stop now");
+        } finally {
+            releaseCancel.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    private LiteratureSearchTask runningTask(String suffix) {
+        return tasks.saveAndFlush(new LiteratureSearchTask(
+                USER_ID, null, "hybrid RAG", "hybrid rag", 8, null, true,
+                LiteratureSearchTaskService.STATUS_RUNNING, "SEARCHING",
+                "request-" + suffix, "idem-" + suffix));
+    }
+
+    private void lock(Long taskId) {
+        entityManager.find(
+                LiteratureSearchTask.class, taskId,
+                LockModeType.PESSIMISTIC_WRITE);
+    }
+
+    private <T> T transaction(java.util.concurrent.Callable<T> work) {
+        return new TransactionTemplate(transactions).execute(status -> {
+            try {
+                return work.call();
+            } catch (Exception exception) {
+                throw new IllegalStateException(exception);
+            }
+        });
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Timed out waiting for interleaving");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(exception);
+        }
     }
 }

@@ -19,6 +19,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnResponse;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeResponse;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeService;
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSessionSummaryService;
@@ -92,6 +94,9 @@ class AgentControllerIntegrationTest {
     @MockBean
     V2LiteratureTurnService v2LiteratureTurnService;
 
+    @MockBean
+    V2LiteratureOutcomeService v2LiteratureOutcomeService;
+
     @Test
     void explicitV2LiteratureEndpointIsAuthenticatedAndDelegates() throws Exception {
         String token = registerAndGetToken("agent_v2_literature_user");
@@ -116,6 +121,46 @@ class AgentControllerIntegrationTest {
                 .andExpect(jsonPath("$.assistantMessageId").value(43));
         verify(v2LiteratureTurnService).execute(
                 any(), eq(sessionId), any());
+    }
+
+    @Test
+    void v2LiteratureOutcomeReadAndCancelAreAuthenticatedAndDelegated()
+            throws Exception {
+        String token = registerAndGetToken("agent_v2_outcome_user");
+        long sessionId = createSession(token, "V2 outcome");
+        V2LiteratureOutcomeResponse response =
+                new V2LiteratureOutcomeResponse(
+                        sessionId, 41L, "request-79", 99L,
+                        "RUNNING", "SEARCHING", false, true,
+                        10, false, null, 0, 0,
+                        List.of(), List.of());
+        when(v2LiteratureOutcomeService.get(
+                any(), eq(sessionId), eq("request-79")))
+                .thenReturn(response);
+        when(v2LiteratureOutcomeService.cancel(
+                any(), eq(sessionId), eq("request-79")))
+                .thenReturn(response);
+
+        mockMvc.perform(get(
+                        "/api/v1/agent/sessions/{id}/v2/"
+                                + "literature-turns/{requestId}",
+                        sessionId, "request-79")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.literatureTaskId").value(99))
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+        mockMvc.perform(post(
+                        "/api/v1/agent/sessions/{id}/v2/"
+                                + "literature-turns/{requestId}/cancel",
+                        sessionId, "request-79")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellable").value(true));
+
+        verify(v2LiteratureOutcomeService).get(
+                any(), eq(sessionId), eq("request-79"));
+        verify(v2LiteratureOutcomeService).cancel(
+                any(), eq(sessionId), eq("request-79"));
     }
 
     @Test

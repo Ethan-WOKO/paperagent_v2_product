@@ -17,4 +17,11 @@ interface LiteratureDeliveryJpaRepository
 
     Optional<LiteratureDeliveryEntity> findByIdUserIdAndTurnId(
             Long userId, Long turnId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select delivery from LiteratureDeliveryEntity delivery "
+            + "where delivery.id.userId = :userId "
+            + "and delivery.turnId = :turnId")
+    Optional<LiteratureDeliveryEntity> findLockedByUserIdAndTurnId(
+            @Param("userId") Long userId, @Param("turnId") Long turnId);
 }
