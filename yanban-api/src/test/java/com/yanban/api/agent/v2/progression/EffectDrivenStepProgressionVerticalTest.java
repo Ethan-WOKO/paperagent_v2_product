@@ -166,8 +166,8 @@ class EffectDrivenStepProgressionVerticalTest {
 
         String owner = "db-owner";
         String token = "db-token";
-        var expires = EffectDrivenStepProgressionTestFixtures.T0
-                .plusSeconds(300);
+        var expires = EffectDrivenStepProgressionTestFixtures
+                .databaseLeaseExpiry();
         var lease = leaseRepository.acquire(
                 fixture.planId, owner, token, expires)
                 .value().orElseThrow();
@@ -243,9 +243,10 @@ class EffectDrivenStepProgressionVerticalTest {
                 fixture.planId,
                 EffectDrivenStepProgressionTestFixtures.TOOL,
                 new io.paperagent.v2.runtime.execution.recovery.composition
-                        .StepRecoveryLeaseAttempt(owner, token, expires),
+                        .StepRecoveryLeaseAttempt(
+                                owner, token, lease.expiresAt()),
                 new EffectDrivenStepProgressionActivationLeaseAttempt(
-                        owner, token, expires));
+                        owner, token, lease.expiresAt()));
 
         var applied = persistedComposer.progress(7L, 42L, command);
         var replayed = persistedComposer.progress(7L, 42L, command);

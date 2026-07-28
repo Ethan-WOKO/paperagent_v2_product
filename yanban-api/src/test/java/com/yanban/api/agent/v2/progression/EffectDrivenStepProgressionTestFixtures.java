@@ -72,6 +72,7 @@ import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLease
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -209,7 +210,7 @@ final class EffectDrivenStepProgressionTestFixtures {
 
         String owner = "db-owner";
         String token = "db-token";
-        Instant expires = T0.plusSeconds(300);
+        Instant expires = databaseLeaseExpiry();
         LeaseRecord lease = leases.acquire(
                 fixture.planId, owner, token, expires)
                 .value().orElseThrow();
@@ -258,9 +259,9 @@ final class EffectDrivenStepProgressionTestFixtures {
                 new EffectDrivenStepProgressionCommand(
                         fixture.planId, TOOL,
                         new StepRecoveryLeaseAttempt(
-                                owner, token, expires),
+                                owner, token, lease.expiresAt()),
                         new EffectDrivenStepProgressionActivationLeaseAttempt(
-                                owner, token, expires)));
+                                owner, token, lease.expiresAt())));
     }
 
     private static void requireApplied(PersistenceResult<?> result) {
@@ -268,6 +269,11 @@ final class EffectDrivenStepProgressionTestFixtures {
             throw new AssertionError("database seed was not applied: "
                     + result.outcome());
         }
+    }
+
+    static Instant databaseLeaseExpiry() {
+        return Instant.now().truncatedTo(ChronoUnit.MICROS)
+                .plus(Duration.ofMinutes(10));
     }
 
     record DatabaseScenario(
