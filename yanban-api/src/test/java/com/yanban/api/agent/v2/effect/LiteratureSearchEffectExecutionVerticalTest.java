@@ -48,6 +48,9 @@ class LiteratureSearchEffectExecutionVerticalTest {
         assertEquals(86, requestId.length());
         assertEquals(true,
                 requestId.matches("v2-literature-request\\.[0-9a-f]{64}"));
+        var receipt = outcome.result().receipt();
+        verify(fixture.taskBindings).bindSuccessfulReceipt(
+                7L, 42L, receipt);
     }
 
     @Test
@@ -126,6 +129,8 @@ class LiteratureSearchEffectExecutionVerticalTest {
                 .inlineText().orElseThrow();
         assertEquals("literature_search_start failed", error);
         assertFalse(error.contains("secret"));
+        verify(fixture.taskBindings, never())
+                .bindSuccessfulReceipt(any(), any(), any());
     }
 
     @Test

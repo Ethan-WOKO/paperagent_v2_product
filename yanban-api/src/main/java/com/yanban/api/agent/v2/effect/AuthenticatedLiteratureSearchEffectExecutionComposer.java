@@ -9,6 +9,7 @@ import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthority;
 import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthoritySource;
+import com.yanban.api.agent.v2.compatibility.literature.LiteratureDeliveryTaskBindingService;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
 import com.yanban.core.tool.ToolCall;
@@ -33,6 +34,7 @@ import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryCompo
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLeaseDisposition;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -60,7 +62,9 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
     private final LiteratureSearchEffectExecutionTimeSource timeSource;
     private final ObjectMapper json;
     private final LiteratureSearchRequestAuthoritySource authorities;
+    private final LiteratureDeliveryTaskBindingService taskBindings;
 
+    @Autowired
     public AuthenticatedLiteratureSearchEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
             ProductPlanIdDerivation planIds,
@@ -70,7 +74,8 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             LiteratureSearchStartToolExecutor executor,
             LiteratureSearchEffectExecutionTimeSource timeSource,
             ObjectMapper json,
-            LiteratureSearchRequestAuthoritySource authorities) {
+            LiteratureSearchRequestAuthoritySource authorities,
+            LiteratureDeliveryTaskBindingService taskBindings) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.recoverer = recoverer;
@@ -80,6 +85,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
         this.timeSource = timeSource;
         this.json = json;
         this.authorities = authorities;
+        this.taskBindings = taskBindings;
     }
 
     public AuthenticatedLiteratureSearchEffectExecutionOutcome execute(
@@ -116,7 +122,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                             active.recovery(), active.lease(), intent,
                             command.recoveryAttempt().leaseToken(),
                             active.lease().fencingToken(), observedAt,
-                            () -> invoke(context, command, arguments,
+                            () -> invoke(context, turnId, command, arguments,
                                     observedAt)));
             return new AuthenticatedLiteratureSearchEffectExecutionOutcome(
                     result.result(), result.replayed());
@@ -246,6 +252,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
 
     private ExecutionReceipt invoke(
             VerifiedAgentTurnProductContext context,
+            Long turnId,
             AuthenticatedLiteratureSearchEffectExecutionCommand command,
             ObjectNode arguments,
             Instant startedAt) {
@@ -277,7 +284,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                 ? OutputCapture.empty()
                 : OutputCapture.inline(
                         "literature_search_start failed", false);
-        return new ExecutionReceipt(
+        ExecutionReceipt receipt = new ExecutionReceipt(
                 new ReceiptId(deterministic(
                         "v2-literature-receipt",
                         command.toolCallId().value())),
@@ -288,6 +295,11 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                 success ? Optional.empty()
                         : Optional.of("LITERATURE_START_FAILED"),
                 stdout, stderr, List.of(), Optional.empty(), List.of());
+        if (receipt.status() == ReceiptStatus.SUCCESS) {
+            taskBindings.bindSuccessfulReceipt(
+                    context.identity().userId(), turnId, receipt);
+        }
+        return receipt;
     }
 
     private static boolean validSuccess(

@@ -20,7 +20,8 @@ class AgentControllerV2LiteratureEndpointTest {
         AgentService legacy = mock(AgentService.class);
         V2LiteratureTurnService v2 = mock(V2LiteratureTurnService.class);
         var controller = new AgentController(
-                legacy, mock(AgentContextSnapshotService.class), v2);
+                legacy, mock(AgentContextSnapshotService.class), v2,
+                mock(V2LiteratureOutcomeService.class));
         var request = new V2LiteratureTurnRequest(
                 "agents", 10, null, true, "request-77");
         var expected = new V2LiteratureTurnResponse(
@@ -39,7 +40,8 @@ class AgentControllerV2LiteratureEndpointTest {
         AgentService legacy = mock(AgentService.class);
         V2LiteratureTurnService v2 = mock(V2LiteratureTurnService.class);
         var controller = new AgentController(
-                legacy, mock(AgentContextSnapshotService.class), v2);
+                legacy, mock(AgentContextSnapshotService.class), v2,
+                mock(V2LiteratureOutcomeService.class));
         var request = new SendMessageRequest(
                 "hello", false, null, "legacy-request", null);
         SendMessageResponse expected = mock(SendMessageResponse.class);
