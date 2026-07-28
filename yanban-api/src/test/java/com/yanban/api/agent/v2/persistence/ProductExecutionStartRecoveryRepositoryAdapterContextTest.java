@@ -15,15 +15,20 @@ import org.springframework.aop.support.DefaultPointcutAdvisor;
 import org.springframework.aop.support.annotation.AnnotationMatchingPointcut;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.stereotype.Repository;
+import org.springframework.context.annotation.Profile;
 import java.lang.reflect.Modifier;
 import java.util.List;
 
 class ProductExecutionStartRecoveryRepositoryAdapterContextTest {
     @Test
     void repositoryCanReceiveTheClassBasedProxyUsedByTheApplication() {
-        try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.getEnvironment().setActiveProfiles(
+                    "execution-start-recovery-adapter-context-test");
+            context.register(Config.class);
+            context.refresh();
             var adapter = context.getBean(
                     ProductExecutionStartRecoveryRepositoryAdapter.class);
 
@@ -48,7 +53,8 @@ class ProductExecutionStartRecoveryRepositoryAdapterContextTest {
         }
     }
 
-    @Configuration
+    @TestConfiguration
+    @Profile("execution-start-recovery-adapter-context-test")
     static class Config {
         @Bean
         static DefaultAdvisorAutoProxyCreator classProxyCreator() {
