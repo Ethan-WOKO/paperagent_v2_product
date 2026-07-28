@@ -14,7 +14,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductPlanExecutionContextRepositoryAdapter
+public class ProductPlanExecutionContextRepositoryAdapter
         implements PlanExecutionContextRepository {
     private final ProductPlanExecutionContextTransactions transactions;
 

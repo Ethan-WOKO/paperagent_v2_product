@@ -8,7 +8,7 @@ import io.paperagent.v2.persistence.StepRecoverySnapshot;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductStepRecoveryRepositoryAdapter
+public class ProductStepRecoveryRepositoryAdapter
         implements StepRecoveryRepository {
     private final ProductStepRecoveryTransactions transactions;
 

@@ -9,7 +9,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductStepActivationRepositoryAdapter
+public class ProductStepActivationRepositoryAdapter
         implements StepActivationRepository {
     private final ProductStepActivationTransactions transactions;
 

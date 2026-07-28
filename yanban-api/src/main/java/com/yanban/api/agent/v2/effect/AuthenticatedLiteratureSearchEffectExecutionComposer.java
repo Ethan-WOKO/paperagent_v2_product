@@ -7,6 +7,8 @@ import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.LiteratureSearchStartToolExecutor;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthority;
+import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthoritySource;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
 import com.yanban.core.tool.ToolCall;
@@ -57,6 +59,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
     private final LiteratureSearchStartToolExecutor executor;
     private final LiteratureSearchEffectExecutionTimeSource timeSource;
     private final ObjectMapper json;
+    private final LiteratureSearchRequestAuthoritySource authorities;
 
     public AuthenticatedLiteratureSearchEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
@@ -66,7 +69,8 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             ProductEffectExecutionClaimRepository claims,
             LiteratureSearchStartToolExecutor executor,
             LiteratureSearchEffectExecutionTimeSource timeSource,
-            ObjectMapper json) {
+            ObjectMapper json,
+            LiteratureSearchRequestAuthoritySource authorities) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.recoverer = recoverer;
@@ -75,6 +79,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
         this.executor = executor;
         this.timeSource = timeSource;
         this.json = json;
+        this.authorities = authorities;
     }
 
     public AuthenticatedLiteratureSearchEffectExecutionOutcome execute(
@@ -101,6 +106,10 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             validateIntent(active, intent, command);
             ObjectNode arguments = arguments(intent.intent().arguments(),
                     context, active, command);
+            requireAuthority(
+                    authorities.find(userId, turnId).orElseThrow(
+                            () -> failed("request.authority")),
+                    arguments);
             Instant observedAt = requiredTime(timeSource.now(), "time.start");
             var result = claims.execute(
                     new ProductEffectExecutionClaimRequest(
@@ -113,6 +122,23 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                     result.result(), result.replayed());
         } finally {
             ToolExecutionContext.clear();
+        }
+    }
+
+    private static void requireAuthority(
+            LiteratureSearchRequestAuthority authority,
+            ObjectNode arguments) {
+        boolean yearMatches = authority.yearFrom() == null
+                ? !arguments.has("yearFrom")
+                : arguments.path("yearFrom").canConvertToInt()
+                && arguments.path("yearFrom").intValue()
+                == authority.yearFrom();
+        if (!authority.query().equals(arguments.path("query").asText())
+                || authority.topK() != arguments.path("topK").asInt(10)
+                || authority.includeBibtex()
+                != arguments.path("includeBibtex").asBoolean(false)
+                || !yearMatches) {
+            throw failed("request.authority");
         }
     }
 

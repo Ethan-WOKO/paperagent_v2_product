@@ -17,6 +17,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnResponse;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSessionSummaryService;
@@ -86,6 +88,35 @@ class AgentControllerIntegrationTest {
 
     @MockBean
     KnowledgeSearchService knowledgeSearchService;
+
+    @MockBean
+    V2LiteratureTurnService v2LiteratureTurnService;
+
+    @Test
+    void explicitV2LiteratureEndpointIsAuthenticatedAndDelegates() throws Exception {
+        String token = registerAndGetToken("agent_v2_literature_user");
+        long sessionId = createSession(token, "V2 literature");
+        when(v2LiteratureTurnService.execute(
+                any(), eq(sessionId), any())).thenReturn(
+                new V2LiteratureTurnResponse(
+                        sessionId, 41L, 42L, 43L, "request-77",
+                        "plan-77", "synthesis-77", "queued", false));
+
+        mockMvc.perform(post(
+                        "/api/v1/agent/sessions/{id}/v2/literature-turns",
+                        sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"query":"agent systems","topK":10,
+                                 "clientRequestId":"request-77"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.planId").value("plan-77"))
+                .andExpect(jsonPath("$.assistantMessageId").value(43));
+        verify(v2LiteratureTurnService).execute(
+                any(), eq(sessionId), any());
+    }
 
     @Test
     void createSessionSendMessageAndListPersistedMessages() throws Exception {

@@ -58,7 +58,7 @@ class FinalSynthesisValidationTest {
         assertEquals(PLAN_ID, synthesis.planId());
         assertEquals(PLAN_REVISION_ID, synthesis.planRevisionId());
         assertEquals(Optional.of(SOURCE_PROJECT_VERSION), synthesis.sourceProjectVersion());
-        assertEquals(WORKSPACE_DIFF, synthesis.workspaceDiff());
+        assertEquals(Optional.of(WORKSPACE_DIFF), synthesis.workspaceDiff());
         assertEquals(List.of(RECEIPT_ONE, RECEIPT_TWO), synthesis.receiptIds());
         assertEquals(NARRATIVE, synthesis.narrative());
         assertEquals(OBSERVED_AT, synthesis.observedAt());
@@ -124,34 +124,55 @@ class FinalSynthesisValidationTest {
     }
 
     @Test
+    void requiresWorkspaceDiffPresenceToMatchProjectProvenance() {
+        assertViolation(
+                () -> new FinalSynthesis(
+                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID,
+                        PLAN_REVISION_ID, Optional.empty(),
+                        Optional.of(WORKSPACE_DIFF), List.of(RECEIPT_ONE),
+                        NARRATIVE, OBSERVED_AT),
+                ViolationCode.INCONSISTENT_REFERENCE,
+                "finalSynthesis.workspaceDiff");
+        assertViolation(
+                () -> new FinalSynthesis(
+                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID,
+                        PLAN_REVISION_ID,
+                        Optional.of(SOURCE_PROJECT_VERSION),
+                        Optional.empty(), List.of(RECEIPT_ONE),
+                        NARRATIVE, OBSERVED_AT),
+                ViolationCode.INCONSISTENT_REFERENCE,
+                "finalSynthesis.workspaceDiff");
+    }
+
+    @Test
     void rejectsMissingComponentsAndBlankNarrativeWithExactPaths() {
         assertViolation(
                 () -> new FinalSynthesis(
-                        null, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), WORKSPACE_DIFF,
+                        null, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), Optional.empty(),
                         List.of(), NARRATIVE, OBSERVED_AT),
                 ViolationCode.REQUIRED_VALUE_MISSING,
                 "finalSynthesis.id");
         assertViolation(
                 () -> new FinalSynthesis(
-                        SYNTHESIS_ID, null, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), WORKSPACE_DIFF,
+                        SYNTHESIS_ID, null, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), Optional.empty(),
                         List.of(), NARRATIVE, OBSERVED_AT),
                 ViolationCode.REQUIRED_VALUE_MISSING,
                 "finalSynthesis.taskFrameId");
         assertViolation(
                 () -> new FinalSynthesis(
-                        SYNTHESIS_ID, TASK_FRAME_ID, null, PLAN_REVISION_ID, Optional.empty(), WORKSPACE_DIFF,
+                        SYNTHESIS_ID, TASK_FRAME_ID, null, PLAN_REVISION_ID, Optional.empty(), Optional.empty(),
                         List.of(), NARRATIVE, OBSERVED_AT),
                 ViolationCode.REQUIRED_VALUE_MISSING,
                 "finalSynthesis.planId");
         assertViolation(
                 () -> new FinalSynthesis(
-                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, null, Optional.empty(), WORKSPACE_DIFF,
+                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, null, Optional.empty(), Optional.empty(),
                         List.of(), NARRATIVE, OBSERVED_AT),
                 ViolationCode.REQUIRED_VALUE_MISSING,
                 "finalSynthesis.planRevisionId");
         assertViolation(
                 () -> new FinalSynthesis(
-                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, null, WORKSPACE_DIFF,
+                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, null, Optional.of(WORKSPACE_DIFF),
                         List.of(), NARRATIVE, OBSERVED_AT),
                 ViolationCode.REQUIRED_VALUE_MISSING,
                 "finalSynthesis.sourceProjectVersion");
@@ -163,13 +184,13 @@ class FinalSynthesisValidationTest {
                 "finalSynthesis.workspaceDiff");
         assertViolation(
                 () -> new FinalSynthesis(
-                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), WORKSPACE_DIFF,
+                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), Optional.empty(),
                         null, NARRATIVE, OBSERVED_AT),
                 ViolationCode.REQUIRED_VALUE_MISSING,
                 "finalSynthesis.receiptIds");
         assertViolation(
                 () -> new FinalSynthesis(
-                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), WORKSPACE_DIFF,
+                        SYNTHESIS_ID, TASK_FRAME_ID, PLAN_ID, PLAN_REVISION_ID, Optional.empty(), Optional.empty(),
                         Arrays.asList(RECEIPT_ONE, null), NARRATIVE, OBSERVED_AT),
                 ViolationCode.NULL_COLLECTION_ELEMENT,
                 "finalSynthesis.receiptIds");
@@ -222,7 +243,7 @@ class FinalSynthesisValidationTest {
                         PlanId.class,
                         PlanRevisionId.class,
                         Optional.class,
-                        WorkspaceDiff.class,
+                        Optional.class,
                         List.class,
                         String.class,
                         Instant.class),
@@ -282,7 +303,7 @@ class FinalSynthesisValidationTest {
                 PLAN_ID,
                 PLAN_REVISION_ID,
                 sourceProjectVersion,
-                WORKSPACE_DIFF,
+                sourceProjectVersion.isPresent() ? Optional.of(WORKSPACE_DIFF) : Optional.empty(),
                 receiptIds,
                 narrative,
                 observedAt);

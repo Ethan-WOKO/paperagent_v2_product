@@ -1,6 +1,9 @@
 package com.yanban.api.agent;
 
 import com.yanban.api.security.JwtUser;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnRequest;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnResponse;
+import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -22,11 +25,14 @@ public class AgentController {
 
     private final AgentService agentService;
     private final AgentContextSnapshotService contextSnapshotService;
+    private final V2LiteratureTurnService v2LiteratureTurns;
 
     public AgentController(AgentService agentService,
-                           AgentContextSnapshotService contextSnapshotService) {
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns) {
         this.agentService = agentService;
         this.contextSnapshotService = contextSnapshotService;
+        this.v2LiteratureTurns = v2LiteratureTurns;
     }
 
     @PostMapping
@@ -69,6 +75,15 @@ public class AgentController {
                                            @PathVariable Long sessionId,
                                            @Valid @RequestBody SendMessageRequest request) {
         return agentService.sendMessage(currentUser.id(), sessionId, request);
+    }
+
+    @PostMapping("/{sessionId}/v2/literature-turns")
+    public V2LiteratureTurnResponse sendV2LiteratureTurn(
+            @AuthenticationPrincipal JwtUser currentUser,
+            @PathVariable Long sessionId,
+            @Valid @RequestBody V2LiteratureTurnRequest request) {
+        return v2LiteratureTurns.execute(
+                currentUser.id(), sessionId, request);
     }
 
     @GetMapping("/{sessionId}/context-snapshots")

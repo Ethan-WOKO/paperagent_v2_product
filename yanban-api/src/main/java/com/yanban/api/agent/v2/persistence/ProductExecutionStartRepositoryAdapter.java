@@ -10,7 +10,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductExecutionStartRepositoryAdapter
+public class ProductExecutionStartRepositoryAdapter
         implements ExecutionStartRepository {
     private final ProductExecutionStartTransactions transactions;
 

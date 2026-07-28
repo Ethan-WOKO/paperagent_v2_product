@@ -16,7 +16,7 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 
 @Repository
-public final class ProductEffectOutcomeRepositoryAdapter
+public class ProductEffectOutcomeRepositoryAdapter
         implements EffectOutcomeRepository {
     private final ProductEffectOutcomeTransactions transactions;
     private final ProductEffectIntentRepositoryAdapter intents;

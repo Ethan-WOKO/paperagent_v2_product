@@ -11,7 +11,7 @@ import io.paperagent.v2.persistence.StepRecoverySnapshot;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class ProductEffectIntentRepositoryAdapter
+public class ProductEffectIntentRepositoryAdapter
         implements EffectIntentRepository {
     private final ProductEffectIntentTransactions transactions;
     private final ProductStepRecoveryTransactions recovery;

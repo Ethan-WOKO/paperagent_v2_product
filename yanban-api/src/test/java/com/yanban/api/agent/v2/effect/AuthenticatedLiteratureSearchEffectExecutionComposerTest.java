@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.effect;
 
 import com.yanban.api.agent.v2.AgentTurnProductContextResolutionCode;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolutionException;
+import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthority;
 import com.yanban.core.tool.ToolExecutionContext;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.EventId;
@@ -11,6 +12,8 @@ import io.paperagent.v2.persistence.PersistenceResult;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -115,6 +118,31 @@ class AuthenticatedLiteratureSearchEffectExecutionComposerTest {
                 LiteratureSearchEffectTestFixtures.ACTIVATION,
                 "other-owner", fixture.lease.fencingToken() + 1,
                 Map.of("query", new TextValue("topic"))));
+    }
+
+    @Test
+    void deliveryAuthorityMismatchFailsBeforeClaimAndExecutor() {
+        List<LiteratureSearchRequestAuthority> mismatches = List.of(
+                new LiteratureSearchRequestAuthority(
+                        "other query", 10, null, false),
+                new LiteratureSearchRequestAuthority(
+                        "graph retrieval", 11, null, false),
+                new LiteratureSearchRequestAuthority(
+                        "graph retrieval", 10, 2025, false),
+                new LiteratureSearchRequestAuthority(
+                        "graph retrieval", 10, null, true));
+        for (LiteratureSearchRequestAuthority mismatch : mismatches) {
+            var fixture = new LiteratureSearchEffectTestFixtures();
+            when(fixture.authorities.find(7L, 42L))
+                    .thenReturn(Optional.of(mismatch));
+            var failure = assertThrows(
+                    AuthenticatedLiteratureSearchEffectExecutionException.class,
+                    () -> fixture.composer.execute(
+                            7L, 42L, fixture.command()));
+            assertEquals("request.authority", failure.path());
+            verifyNoInteractions(fixture.claims);
+            verifyNoInteractions(fixture.executor);
+        }
     }
 
     private static void rejectChangedAuthority(

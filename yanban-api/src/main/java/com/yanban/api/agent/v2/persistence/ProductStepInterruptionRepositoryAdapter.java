@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
 import java.util.function.Supplier;
 
 @Repository
-public final class ProductStepInterruptionRepositoryAdapter
+public class ProductStepInterruptionRepositoryAdapter
         implements StepInterruptionRepository {
     private final ProductStepInterruptionTransactions transactions;
 
