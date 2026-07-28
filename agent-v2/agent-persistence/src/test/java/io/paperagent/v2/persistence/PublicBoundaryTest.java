@@ -791,7 +791,10 @@ class PublicBoundaryTest {
                 PlanId.class);
         assertTrue(StepRecoverySnapshot.class.isSealed());
         assertEquals(
-                Set.of(PersistedStepRecoveryActive.class),
+                Set.of(
+                        PersistedStepRecoveryReady.class,
+                        PersistedStepRecoveryActive.class,
+                        PersistedStepRecoverySucceeded.class),
                 Set.of(StepRecoverySnapshot.class.getPermittedSubclasses()));
         Map<String, Method> snapshotMethods = Arrays.stream(
                         StepRecoverySnapshot.class.getDeclaredMethods())
@@ -823,15 +826,61 @@ class PublicBoundaryTest {
                         .map(component -> component.getType())
                         .toList());
         assertEquals(
+                List.of(
+                        "taskFrame",
+                        "plan",
+                        "checkpoint",
+                        "readyStepId",
+                        "executionContext"),
+                Arrays.stream(PersistedStepRecoveryReady.class
+                                .getRecordComponents())
+                        .map(component -> component.getName())
+                        .toList());
+        assertEquals(
+                List.of(
+                        io.paperagent.v2.contracts.TaskFrame.class,
+                        io.paperagent.v2.contracts.Plan.class,
+                        VersionedCheckpoint.class,
+                        io.paperagent.v2.contracts.PlanStepId.class,
+                        java.util.Optional.class),
+                Arrays.stream(PersistedStepRecoveryReady.class
+                                .getRecordComponents())
+                        .map(component -> component.getType())
+                        .toList());
+        assertEquals(
+                List.of(
+                        "taskFrame",
+                        "plan",
+                        "checkpoint",
+                        "executionContext"),
+                Arrays.stream(PersistedStepRecoverySucceeded.class
+                                .getRecordComponents())
+                        .map(component -> component.getName())
+                        .toList());
+        assertEquals(
+                List.of(
+                        io.paperagent.v2.contracts.TaskFrame.class,
+                        io.paperagent.v2.contracts.Plan.class,
+                        VersionedCheckpoint.class,
+                        java.util.Optional.class),
+                Arrays.stream(PersistedStepRecoverySucceeded.class
+                                .getRecordComponents())
+                        .map(component -> component.getType())
+                        .toList());
+        assertEquals(
                 StepRecoveryRepository.class,
                 InMemoryPersistence.class
                         .getDeclaredMethod("stepRecovery")
                         .getReturnType());
-        assertTrue(Arrays.stream(PersistedStepRecoveryActive.class
-                        .getDeclaredFields())
-                .noneMatch(field -> field.getName().equals("leaseToken")
-                        || field.getType() == LeaseRecord.class
-                        || field.getType() == java.time.Clock.class));
+        for (Class<?> snapshot : Set.of(
+                PersistedStepRecoveryReady.class,
+                PersistedStepRecoveryActive.class,
+                PersistedStepRecoverySucceeded.class)) {
+            assertTrue(Arrays.stream(snapshot.getDeclaredFields())
+                    .noneMatch(field -> field.getName().equals("leaseToken")
+                            || field.getType() == LeaseRecord.class
+                            || field.getType() == java.time.Clock.class));
+        }
     }
 
     private static void assertMethod(
