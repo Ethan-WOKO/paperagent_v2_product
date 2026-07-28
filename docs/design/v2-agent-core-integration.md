@@ -911,3 +911,42 @@ This capability is lifecycle progression only. It does not run a Step, start
 an autonomous Agent Loop, invoke a Provider or tool, implement retry, resume,
 repair or replan policy, access Project or Workspace content, switch
 Controller/API/UI traffic, or reuse legacy Agent code.
+
+## Authenticated provider-backed single-Step turn boundary
+
+The product now composes one owner-qualified active-Step recovery into exactly
+one provider-backed V2 `StepTurnPort` decision and one
+`DefaultSingleTurnStepKernel` invocation. Authentication and Plan identity are
+resolved before recovery, and only the exact retained `RecoveredActiveStep`
+authority reaches the kernel. READY, SUCCEEDED, lease-rejected, and
+persistence-rejected cuts never reach the provider.
+
+The existing general `ChatModelProvider` is independently assessed as
+`REUSE_WITH_ADAPTER`. A credential-free product adapter maps ordered V2
+messages, allowed tool descriptors, bounded generation settings, and
+TaskFrame/Plan/revision/Step correlation into one synchronous `ChatRequest`.
+It neither accepts nor propagates caller API keys or provider URLs. Product
+responses and failures are converted into stable V2 provider results with
+bounded diagnostics; raw prompts, outputs, credentials, tokens, paths, and
+collaborator exception messages are not exposed.
+
+The deterministic Step-turn adapter owns an immutable allowlist and provider
+configuration. Assistant-only output yields `NoEffectDecision`. Exactly one
+allowlisted proposed call yields one `EffectIntentDecision`; its ToolCall ID is
+the lowercase SHA-256 of the authoritative TaskFrame/Plan/revision/Step
+binding, deterministic model request identity, fixed single-call slot zero,
+and no model-generated field. The provider's transient call ID, selected tool,
+and arguments are response content and never participate in durable identity;
+a changed replay therefore conflicts at the same ToolCall ID.
+Exact restart replay therefore proposes the same immutable intent, allowing
+the existing `EffectIntentRepository` to classify it as `REPLAYED` rather than
+creating a duplicate. Empty, malformed, multiple-call, unknown-tool,
+authority-mismatched, or provider-failure results fail closed before an intent
+write.
+
+This is a single turn and intent-recording boundary only. It executes no
+effect, tool, Sandbox, file, or network operation; creates no Receipt or
+EffectOutcome; performs no completion, next-Step activation, retry, resume,
+repair, replan, or autonomous Agent Loop; mutates no Project or Workspace;
+exposes no Controller/API/UI traffic; and reuses no legacy Agent planner,
+loop, verifier, candidate chain, or service orchestration.
