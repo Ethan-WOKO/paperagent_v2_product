@@ -118,6 +118,8 @@ class ProductEffectExecutionClaimRepositoryTest {
     @jakarta.annotation.Resource
     ProductStepActivationJpaRepository activationRows;
     @jakarta.annotation.Resource
+    ProductStepInterruptionJpaRepository interruptionRows;
+    @jakarta.annotation.Resource
     ProductExecutionStartJpaRepository startRows;
     @jakarta.annotation.Resource
     ProductLeaseJpaRepository leaseRows;
@@ -142,6 +144,7 @@ class ProductEffectExecutionClaimRepositoryTest {
         literatureTasks.deleteAll();
         intentRows.deleteAll();
         ownershipRows.deleteAll();
+        interruptionRows.deleteAll();
         activationRows.deleteAll();
         startRows.deleteAll();
         leaseRows.deleteAll();
@@ -193,10 +196,53 @@ class ProductEffectExecutionClaimRepositoryTest {
     }
 
     @Test
+    void staleActiveRecoveryCannotExecuteAfterInterruptionCommits() {
+        Scenario scenario = scenario("stale-interruption");
+        var payload = new ProductStepInterruptionCodec.EncodedPayload(
+                1, "0".repeat(64), "{}");
+        interruptionRows.saveAndFlush(new ProductStepInterruptionEntity(
+                scenario.intent().intent().planId().value(),
+                scenario.intent().intent().stepId().value(),
+                "interruption-stale", "PAUSE",
+                scenario.recovery().checkpoint().checkpoint()
+                        .revisionId().value(),
+                scenario.recovery().checkpoint().checkpoint()
+                        .revisionNumber(),
+                scenario.recovery().checkpoint().checkpoint()
+                        .revisionId().value(),
+                scenario.recovery().checkpoint().checkpoint()
+                        .revisionNumber(),
+                scenario.recovery().checkpoint().version(),
+                scenario.recovery().checkpoint().version() + 1,
+                scenario.recovery().activation().activationEvent()
+                        .sequence(),
+                scenario.recovery().activation().activationEvent()
+                        .sequence() + 1,
+                scenario.lease().ownerId(),
+                scenario.lease().fencingToken(),
+                payload, payload,
+                ProductStepActivationTestFixtures.NOW.plusSeconds(1)));
+        AtomicInteger invocations = new AtomicInteger();
+
+        ProductEffectExecutionClaimException failure = assertThrows(
+                ProductEffectExecutionClaimException.class,
+                () -> repository.execute(request(
+                        scenario,
+                        scenario.lease().expiresAt().minusSeconds(1),
+                        invocations)));
+
+        assertEquals("authority.activeStep", failure.path());
+        assertEquals(0, invocations.get());
+        assertAtomicRows(0);
+    }
+
+    @Test
     void precedingStepCompletionDoesNotBlockCurrentActiveStepReplay() {
         var bootstraps = mock(ProductPlanBootstrapJpaRepository.class);
         var activations = mock(ProductStepActivationJpaRepository.class);
         var activationCodec = mock(ProductStepActivationCodec.class);
+        var interruptions = mock(
+                ProductStepInterruptionJpaRepository.class);
         var completions = mock(ProductStepCompletionJpaRepository.class);
         var leases = mock(ProductLeaseJpaRepository.class);
         var claims = mock(ProductEffectExecutionClaimJpaRepository.class);
@@ -207,9 +253,9 @@ class ProductEffectExecutionClaimRepositoryTest {
         var outcomeCodec = mock(ProductEffectOutcomeCodec.class);
         var entityManager = mock(EntityManager.class);
         var transactions = new ProductEffectExecutionClaimTransactions(
-                bootstraps, activations, activationCodec, completions, leases,
-                claims, results, markers, receipts, receiptCodec,
-                outcomeCodec, entityManager);
+                bootstraps, activations, activationCodec, interruptions,
+                completions, leases, claims, results, markers, receipts,
+                receiptCodec, outcomeCodec, entityManager);
 
         PlanId planId = new PlanId("plan-a");
         PlanStepId stepId = new PlanStepId("step-b");
@@ -253,6 +299,8 @@ class ProductEffectExecutionClaimRepositoryTest {
         when(bootstraps.lockByPlanId("plan-a")).thenReturn(
                 Optional.of(mock(ProductPlanBootstrapEntity.class)));
         when(markers.intent("tool-b")).thenReturn(intent);
+        when(interruptions.findAllByPlanId("plan-a"))
+                .thenReturn(List.of());
         ProductStepActivationEntity activationRow =
                 mock(ProductStepActivationEntity.class);
         when(activations.findById("activation-b"))
@@ -453,6 +501,8 @@ class ProductEffectExecutionClaimRepositoryTest {
                 ProductReceiptToolCallClaimJpaRepository.class);
         value.activationRows = context.getBean(
                 ProductStepActivationJpaRepository.class);
+        value.interruptionRows = context.getBean(
+                ProductStepInterruptionJpaRepository.class);
         value.startRows = context.getBean(
                 ProductExecutionStartJpaRepository.class);
         value.leaseRows = context.getBean(

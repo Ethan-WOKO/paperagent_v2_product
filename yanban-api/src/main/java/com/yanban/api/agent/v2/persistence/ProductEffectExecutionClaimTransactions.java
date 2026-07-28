@@ -14,6 +14,7 @@ class ProductEffectExecutionClaimTransactions {
     private final ProductPlanBootstrapJpaRepository bootstraps;
     private final ProductStepActivationJpaRepository activations;
     private final ProductStepActivationCodec activationCodec;
+    private final ProductStepInterruptionJpaRepository interruptions;
     private final ProductStepCompletionJpaRepository completions;
     private final ProductLeaseJpaRepository leases;
     private final ProductEffectExecutionClaimJpaRepository claims;
@@ -28,6 +29,7 @@ class ProductEffectExecutionClaimTransactions {
             ProductPlanBootstrapJpaRepository bootstraps,
             ProductStepActivationJpaRepository activations,
             ProductStepActivationCodec activationCodec,
+            ProductStepInterruptionJpaRepository interruptions,
             ProductStepCompletionJpaRepository completions,
             ProductLeaseJpaRepository leases,
             ProductEffectExecutionClaimJpaRepository claims,
@@ -40,6 +42,7 @@ class ProductEffectExecutionClaimTransactions {
         this.bootstraps = bootstraps;
         this.activations = activations;
         this.activationCodec = activationCodec;
+        this.interruptions = interruptions;
         this.completions = completions;
         this.leases = leases;
         this.claims = claims;
@@ -125,6 +128,8 @@ class ProductEffectExecutionClaimTransactions {
         var recovery = request.recovery();
         var intent = request.intent();
         if (durable == null || !durable.equals(intent)
+                || !interruptions.findAllByPlanId(
+                        intent.intent().planId().value()).isEmpty()
                 || !recovery.planId().equals(intent.intent().planId())
                 || !recovery.activation().stepId().equals(
                         intent.intent().stepId())
