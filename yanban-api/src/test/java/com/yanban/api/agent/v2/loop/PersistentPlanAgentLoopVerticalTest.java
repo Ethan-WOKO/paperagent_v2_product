@@ -454,9 +454,14 @@ class PersistentPlanAgentLoopVerticalTest {
                 source.stepStates());
         states.put(scenario.secondStepId(),
                 io.paperagent.v2.contracts.StepExecutionState.PAUSED);
-        var event = new io.paperagent.v2.contracts.EventEnvelope(
+        String completionEventId = jdbc.queryForObject(
+                "SELECT completion_event_id FROM agent_v2_step_completions "
+                        + "WHERE plan_id = ? AND step_id = ?",
+                String.class, planId.value(),
+                scenario.firstStepId().value());
+        var collisionEvent = new io.paperagent.v2.contracts.EventEnvelope(
                 new io.paperagent.v2.contracts.EventId(
-                        "pause-current-step-b"),
+                        completionEventId),
                 source.taskFrameId(), source.planId(),
                 source.lastEventSequence() + 1,
                 source.createdAt().plusSeconds(1),
@@ -471,11 +476,35 @@ class PersistentPlanAgentLoopVerticalTest {
         var paused = new io.paperagent.v2.contracts.Checkpoint(
                 source.taskFrameId(), source.planId(),
                 source.revisionId(), source.revisionNumber(),
-                event.sequence(),
+                collisionEvent.sequence(),
                 io.paperagent.v2.contracts.PlanExecutionState.PAUSED,
                 states, source.receiptReferences(),
                 source.createdAt().plusSeconds(1));
 
+        var collision = stepInterruptionRepository.pause(
+                new StepPauseRequest(
+                        planId, scenario.lease().leaseToken(),
+                        scenario.lease().fencingToken(),
+                        source.revisionId(), source.revisionNumber(),
+                        active.checkpoint().version(),
+                        source.lastEventSequence(),
+                        scenario.secondStepId(), collisionEvent, paused));
+        assertEquals(
+                io.paperagent.v2.persistence.PersistenceOutcome.REJECTED,
+                collision.outcome());
+        assertEquals(
+                io.paperagent.v2.persistence.PersistenceErrorCode
+                        .CONFLICTING_REPLAY,
+                collision.failure().orElseThrow().code());
+        assertEquals(0, count("agent_v2_step_interruptions"));
+
+        var event = new io.paperagent.v2.contracts.EventEnvelope(
+                new io.paperagent.v2.contracts.EventId(
+                        "pause-current-step-b"),
+                collisionEvent.taskFrameId(), collisionEvent.planId(),
+                collisionEvent.sequence(), collisionEvent.occurredAt(),
+                collisionEvent.type(), collisionEvent.causationId(),
+                collisionEvent.correlationId(), collisionEvent.payload());
         var result = stepInterruptionRepository.pause(
                 new StepPauseRequest(
                         planId, scenario.lease().leaseToken(),

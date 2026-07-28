@@ -5,12 +5,14 @@ import io.paperagent.v2.contracts.PlanRevision;
 import io.paperagent.v2.contracts.PlanValidators;
 import io.paperagent.v2.contracts.Plan;
 import io.paperagent.v2.contracts.EffectIntent;
+import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.ObjectValue;
 import io.paperagent.v2.contracts.ToolCallId;
 import io.paperagent.v2.persistence.ActiveStepReplanRequest;
 import io.paperagent.v2.persistence.EffectIntentRequest;
 import io.paperagent.v2.persistence.EffectResultRequest;
 import io.paperagent.v2.persistence.PersistedActiveStepReplan;
+import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
@@ -121,6 +123,8 @@ class ProductActiveStepReplanRepositoryAdapterTest {
     private ProductEffectIntentRepositoryAdapter effectIntentAdapter;
     @jakarta.annotation.Resource
     private ProductEffectIntentJpaRepository effectIntents;
+    @jakarta.annotation.Resource
+    private ProductEffectIntentCodec effectIntentCodec;
     @jakarta.annotation.Resource
     private ProductEffectOutcomeRepositoryAdapter effectOutcomeAdapter;
     @jakarta.annotation.Resource
@@ -245,6 +249,57 @@ class ProductActiveStepReplanRepositoryAdapterTest {
                 rejected.failure().orElseThrow().code());
         assertEquals(0, replans.count());
         assertEquals(1, effectResults.count());
+    }
+
+    @Test
+    void historicalIntentForOldActivationWithSameStepIdDoesNotBlockReplan() {
+        Scenario scenario = seedActive("historical-intent");
+        var request = scenario.request();
+        var intent = new EffectIntent(
+                new ToolCallId("tool-historical-intent"),
+                request.planId(), request.activeStepId(),
+                "literature.search", new ObjectValue(java.util.Map.of()));
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectIntentAdapter.persist(new EffectIntentRequest(
+                        intent, "lease-token", 3,
+                        scenario.activation().activationEvent().id()))
+                        .outcome());
+        EventId historicalActivation =
+                new EventId("historical-activation-same-step");
+        var historicalRequest = effectIntentCodec.encodeRequest(
+                new EffectIntentRequest(
+                        intent, "lease-token", 3, historicalActivation));
+        var historicalResult = effectIntentCodec.encodeResult(
+                new PersistedEffectIntent(
+                        intent, "owner", 3, historicalActivation));
+        jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        try {
+            assertEquals(1, jdbc.update("""
+                    update agent_v2_effect_intents
+                       set activation_event_id = ?,
+                           request_format_version = ?,
+                           request_sha256 = ?,
+                           request_json = ?,
+                           result_format_version = ?,
+                           result_sha256 = ?,
+                           result_json = ?
+                     where tool_call_id = ?
+                    """, historicalActivation.value(),
+                    historicalRequest.formatVersion(),
+                    historicalRequest.sha256(), historicalRequest.json(),
+                    historicalResult.formatVersion(),
+                    historicalResult.sha256(), historicalResult.json(),
+                    intent.toolCallId().value()));
+        } finally {
+            jdbc.execute("SET REFERENTIAL_INTEGRITY TRUE");
+        }
+
+        var applied = adapter.supersedeAndReplan(request);
+
+        assertEquals(PersistenceOutcome.APPLIED, applied.outcome(),
+                applied::toString);
+        assertEquals(1, replans.count());
+        assertEquals(1, effectIntents.count());
     }
 
     @Test

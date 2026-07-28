@@ -179,6 +179,8 @@ class ProductStepInterruptionTransactions {
                         candidate.event().id().value()).isPresent()
                 || activations.findById(
                         candidate.event().id().value()).isPresent()
+                || completions.findById(
+                        candidate.event().id().value()).isPresent()
                 || replans.findBySupersessionEventId(
                         candidate.event().id().value()).isPresent()
                 || replans.findByReplanEventId(

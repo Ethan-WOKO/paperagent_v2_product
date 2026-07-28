@@ -107,7 +107,10 @@ class ProductActiveStepReplanTransactions {
         }
         if (effectIntents.findAllByPlanId(request.planId().value()).stream()
                 .anyMatch(row -> row.stepId().equals(
-                        active.activation().stepId().value()))) {
+                                active.activation().stepId().value())
+                        && row.activationEventId().equals(
+                                active.activation().activationEvent()
+                                        .id().value()))) {
             return notEligible();
         }
         ProductLeaseEntity lease = leases
