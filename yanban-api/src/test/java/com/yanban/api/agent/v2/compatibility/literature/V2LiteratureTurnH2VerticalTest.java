@@ -69,6 +69,8 @@ class V2LiteratureTurnH2VerticalTest {
     StepRecoveryRepository recovery;
     @MockBean
     DefaultFinalSynthesisComposer synthesis;
+    @MockBean
+    io.paperagent.v2.persistence.LeaseRepository leases;
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
