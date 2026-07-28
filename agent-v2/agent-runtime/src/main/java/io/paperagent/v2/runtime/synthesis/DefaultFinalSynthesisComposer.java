@@ -7,10 +7,6 @@ import io.paperagent.v2.contracts.FinalSynthesisId;
 import io.paperagent.v2.contracts.PlanRevision;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.ReceiptStatus;
-import io.paperagent.v2.persistence.EffectIntentRepository;
-import io.paperagent.v2.persistence.FinalSynthesisRepository;
-import io.paperagent.v2.persistence.PersistenceOutcome;
-import io.paperagent.v2.persistence.ReceiptRepository;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -22,15 +18,15 @@ import java.util.Map;
 
 /** Creates one replayable delivery strictly from a terminal recovered authority cut. */
 public final class DefaultFinalSynthesisComposer {
-    private final FinalSynthesisRepository syntheses;
-    private final ReceiptRepository receipts;
-    private final EffectIntentRepository intents;
+    private final FinalSynthesisStore syntheses;
+    private final FinalSynthesisReceiptSource receipts;
+    private final LiteratureIntentOwnershipSource intents;
     private final FinalSynthesisNarrator narrator;
 
     public DefaultFinalSynthesisComposer(
-            FinalSynthesisRepository syntheses,
-            ReceiptRepository receipts,
-            EffectIntentRepository intents,
+            FinalSynthesisStore syntheses,
+            FinalSynthesisReceiptSource receipts,
+            LiteratureIntentOwnershipSource intents,
             FinalSynthesisNarrator narrator) {
         this.syntheses = required(syntheses);
         this.receipts = required(receipts);
@@ -45,29 +41,22 @@ public final class DefaultFinalSynthesisComposer {
         var planId = cut.plan().id();
 
         var prior = syntheses.find(planId);
-        if (prior.outcome() == PersistenceOutcome.FOUND) {
-            FinalSynthesis value = prior.value().orElseThrow();
+        if (prior.isPresent()) {
+            FinalSynthesis value = prior.orElseThrow();
             if (!value.planRevisionId().equals(cut.plan().latestRevision().id())
                     || !value.taskFrameId().equals(cut.taskFrame().id())
                     || !value.sourceProjectVersion().equals(
                     cut.taskFrame().sourceProjectVersion())
                     || !value.workspaceDiff().equals(request.workspaceDiff())
                     || !value.receiptIds().equals(
-                    cut.checkpoint().checkpoint().receiptReferences())) {
+                    cut.checkpoint().receiptReferences())) {
                 throw failure("replay");
             }
             return new FinalSynthesisCompositionResult(
-                    value, PersistenceOutcome.REPLAYED);
+                    value, FinalSynthesisDisposition.REPLAYED);
         }
-        if (prior.outcome() != PersistenceOutcome.REJECTED
-                || prior.failure().isEmpty()
-                || prior.failure().orElseThrow().code()
-                != io.paperagent.v2.persistence.PersistenceErrorCode.NOT_FOUND) {
-            throw failure("lookup");
-        }
-
         PlanRevision revision = cut.plan().latestRevision();
-        var checkpoint = cut.checkpoint().checkpoint();
+        var checkpoint = cut.checkpoint();
         if (!cut.taskFrame().id().equals(cut.plan().taskFrameId())
                 || !checkpoint.taskFrameId().equals(cut.taskFrame().id())
                 || !checkpoint.planId().equals(planId)
@@ -101,21 +90,17 @@ public final class DefaultFinalSynthesisComposer {
         List<FinalSynthesisReceiptProjection> projections = new ArrayList<>();
         for (ReceiptId receiptId : authoritativeIds) {
             var found = receipts.find(receiptId);
-            if (found.outcome() != PersistenceOutcome.FOUND) {
+            if (found.isEmpty()) {
                 throw failure("receipt");
             }
-            ExecutionReceipt receipt = found.value().orElseThrow();
+            ExecutionReceipt receipt = found.orElseThrow();
             if (!receipt.id().equals(receiptId)
                     || receipt.status() != ReceiptStatus.SUCCESS) {
                 throw failure("receipt");
             }
-            var intent = intents.find(receipt.toolCallId());
-            if (intent.outcome() != PersistenceOutcome.FOUND
-                    || !intent.value().orElseThrow().intent().planId().equals(planId)
-                    || !intent.value().orElseThrow().intent().stepId().equals(
-                    receiptOwners.get(receiptId))
-                    || !"literature.search".equals(
-                    intent.value().orElseThrow().intent().kind())) {
+            if (!intents.owns(
+                    receipt.toolCallId(), planId,
+                    receiptOwners.get(receiptId), "literature.search")) {
                 throw failure("receiptOwnership");
             }
             String summary = receipt.standardOutput().inlineText()
@@ -136,27 +121,26 @@ public final class DefaultFinalSynthesisComposer {
         if (narrative == null || narrative.isBlank() || narrative.length() > 4_096) {
             throw failure("provider");
         }
-        FinalSynthesis candidate = new FinalSynthesis(
+        FinalSynthesis proposed = new FinalSynthesis(
                 new FinalSynthesisId("synthesis-" + hash(
                         planId.value() + "\0" + revision.id().value())),
                 cut.taskFrame().id(), planId, revision.id(),
                 cut.taskFrame().sourceProjectVersion(),
                 request.workspaceDiff(), authoritativeIds,
                 narrative.strip(), request.observedAt());
-        var appended = syntheses.append(candidate);
-        if (appended.outcome() != PersistenceOutcome.APPLIED
-                && appended.outcome() != PersistenceOutcome.REPLAYED) {
+        var appended = syntheses.append(proposed);
+        if (appended.isEmpty()) {
             // A concurrent equivalent writer may already have committed.
             var winner = syntheses.find(planId);
-            if (winner.outcome() == PersistenceOutcome.FOUND
-                    && equivalent(candidate, winner.value().orElseThrow())) {
+            if (winner.isPresent()
+                    && equivalent(proposed, winner.orElseThrow())) {
                 return new FinalSynthesisCompositionResult(
-                        winner.value().orElseThrow(), PersistenceOutcome.REPLAYED);
+                        winner.orElseThrow(),
+                        FinalSynthesisDisposition.REPLAYED);
             }
             throw failure("persist");
         }
-        return new FinalSynthesisCompositionResult(
-                appended.value().orElseThrow(), appended.outcome());
+        return appended.orElseThrow();
     }
 
     private static boolean equivalent(FinalSynthesis left, FinalSynthesis right) {

@@ -16,4 +16,11 @@ public record FinalSynthesisReceiptProjection(
             throw new IllegalArgumentException("receipt projection is invalid");
         }
     }
+
+    @Override
+    public String toString() {
+        return "FinalSynthesisReceiptProjection[receiptId=<provided>, "
+                + "toolCallId=<provided>, status=<provided>, "
+                + "resultSummary=<redacted>]";
+    }
 }

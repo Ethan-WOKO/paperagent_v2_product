@@ -316,6 +316,7 @@ class PersistentPlanAgentLoopVerticalTest {
                             "literature_search_start", output);
                 });
         AtomicInteger observed = new AtomicInteger();
+        AtomicInteger authorityCall = new AtomicInteger();
         java.time.Instant effectStart = java.time.Instant.now()
                 .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         AuthenticatedLiteratureSearchEffectExecutionComposer effects =
@@ -324,7 +325,14 @@ class PersistentPlanAgentLoopVerticalTest {
                         effectIntentRepository, claims, executor,
                         () -> effectStart.plusMillis(
                                 observed.getAndIncrement()),
-                        json);
+                        json,
+                        (userId, turnId) -> Optional.of(
+                                new com.yanban.api.agent.v2.compatibility
+                                        .literature.LiteratureSearchRequestAuthority(
+                                        "durable query step-"
+                                                + (authorityCall.getAndIncrement()
+                                                == 0 ? "a" : "b"),
+                                        10, null, false)));
         AuthenticatedEffectDrivenStepProgressionComposer progression =
                 new AuthenticatedEffectDrivenStepProgressionComposer(
                         productContexts, planIds, progressionInspector,
@@ -423,7 +431,12 @@ class PersistentPlanAgentLoopVerticalTest {
                 new AuthenticatedLiteratureSearchEffectExecutionComposer(
                         productContexts, planIds, persistedRecoverer,
                         effectIntentRepository, claims, executor,
-                        java.time.Instant::now, json);
+                        java.time.Instant::now, json,
+                        (userId, turnId) -> Optional.of(
+                                new com.yanban.api.agent.v2.compatibility
+                                        .literature.LiteratureSearchRequestAuthority(
+                                        "durable query step-a",
+                                        10, null, false)));
         AuthenticatedEffectDrivenStepProgressionComposer progression =
                 new AuthenticatedEffectDrivenStepProgressionComposer(
                         productContexts, planIds, progressionInspector,

@@ -38,6 +38,8 @@ import io.paperagent.v2.runtime.routing.RoutingDecisionReason;
 import io.paperagent.v2.runtime.routing.RoutingRequestId;
 import io.paperagent.v2.runtime.routing.RoutingRequirement;
 import io.paperagent.v2.runtime.synthesis.DefaultFinalSynthesisComposer;
+import io.paperagent.v2.runtime.synthesis.FinalSynthesisDisposition;
+import io.paperagent.v2.runtime.synthesis.FinalSynthesisTerminalCut;
 import io.paperagent.v2.runtime.synthesis.FinalSynthesisCompositionRequest;
 import io.paperagent.v2.runtime.taskframe.TaskFrameDraft;
 import java.nio.charset.StandardCharsets;
@@ -118,7 +120,8 @@ public class V2LiteratureTurnService {
                 requestHash + "\0" + now.toEpochMilli());
         LiteratureDeliveryEntity delivery = deliveries.open(
                 userId, sessionId, request.requestId(), requestHash,
-                request.query(), owner, initialToken,
+                request.query(), request.topK(), request.yearFrom(),
+                request.includeBibtex(), owner, initialToken,
                 now.plus(Duration.ofMinutes(10)));
         if ("DELIVERED".equals(delivery.status())) {
             return response(delivery, true);
@@ -131,12 +134,13 @@ public class V2LiteratureTurnService {
                     now.plus(Duration.ofMinutes(10)), now);
         }
 
+        Instant authorityTime = delivery.createdAt();
         ProductPersistentPlanBootstrapCommand bootstrap =
-                bootstrap(request, delivery.turnId(), now);
+                bootstrap(request, delivery.turnId(), authorityTime);
         var started = starts.start(userId, delivery.turnId(),
                 new AuthenticatedAgentTurnFreshExecutionStartCommand(
                         bootstrap,
-                        Optional.of(startAttempt(delivery, now))));
+                        Optional.of(startAttempt(delivery, authorityTime))));
         io.paperagent.v2.contracts.PlanId planId;
         if (started instanceof FreshExecutionStarted fresh) {
             planId = fresh.persistedStart().planId();
@@ -149,7 +153,7 @@ public class V2LiteratureTurnService {
         delivery = deliveries.bindPlan(delivery.id(), planId.value());
 
         var loopResult = loop.execute(userId, delivery.turnId(),
-                loopCommand(delivery, now));
+                loopCommand(delivery, authorityTime));
         if (loopResult.state() != PersistentPlanAgentLoopState.PLAN_SUCCEEDED) {
             throw new IllegalStateException(
                     "V2 literature execution did not reach a terminal delivery");
@@ -163,13 +167,16 @@ public class V2LiteratureTurnService {
         }
         var composed = synthesis.compose(
                 new FinalSynthesisCompositionRequest(
-                        terminal, Optional.empty(), Instant.now()));
+                        new FinalSynthesisTerminalCut(
+                                terminal.taskFrame(), terminal.plan(),
+                                terminal.checkpoint().checkpoint()),
+                        Optional.empty(), authorityTime.plusMillis(9)));
         delivery = deliveries.deliver(
                 delivery.id(), planId.value(),
                 composed.synthesis().id().value(),
                 composed.synthesis().narrative());
         return response(delivery,
-                composed.outcome() == PersistenceOutcome.REPLAYED);
+                composed.disposition() == FinalSynthesisDisposition.REPLAYED);
     }
 
     private V2LiteratureTurnResponse response(
@@ -272,7 +279,8 @@ public class V2LiteratureTurnService {
     }
 
     private static Request normalize(V2LiteratureTurnRequest input) {
-        String query = input.query() == null ? "" : input.query().strip();
+        String query = input.query() == null ? ""
+                : input.query().replaceAll("\\s+", " ").trim();
         String requestId = input.clientRequestId() == null
                 ? "" : input.clientRequestId().strip();
         int topK = input.topK() == null ? 10 : input.topK();
@@ -280,7 +288,7 @@ public class V2LiteratureTurnService {
         boolean bibtex = Boolean.TRUE.equals(input.includeBibtex());
         if (query.isEmpty() || query.length() > 1000
                 || requestId.isEmpty() || requestId.length() > 128
-                || topK < 1 || topK > 50
+                || topK < 1 || topK > 20
                 || (yearFrom != null && (yearFrom < 1900
                 || yearFrom > Year.now().getValue() + 1))) {
             throw new IllegalArgumentException(

@@ -18,4 +18,11 @@ public record FinalSynthesisNarrationRequest(
         }
         untrustedReceipts = List.copyOf(untrustedReceipts);
     }
+
+    @Override
+    public String toString() {
+        return "FinalSynthesisNarrationRequest[taskFrameId=<provided>, "
+                + "planId=<provided>, planRevisionId=<provided>, "
+                + "untrustedReceipts=<redacted>]";
+    }
 }

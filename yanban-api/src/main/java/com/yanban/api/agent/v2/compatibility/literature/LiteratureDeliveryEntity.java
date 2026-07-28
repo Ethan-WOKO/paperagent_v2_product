@@ -13,6 +13,14 @@ class LiteratureDeliveryEntity {
     private LiteratureDeliveryKey id;
     @Column(name = "request_sha256", nullable = false, length = 64)
     private String requestSha256;
+    @Column(name = "query_text", nullable = false, length = 1000)
+    private String query;
+    @Column(name = "top_k", nullable = false)
+    private Integer topK;
+    @Column(name = "year_from")
+    private Integer yearFrom;
+    @Column(name = "include_bibtex", nullable = false)
+    private Boolean includeBibtex;
     @Column(name = "user_message_id", nullable = false)
     private Long userMessageId;
     @Column(name = "turn_id", nullable = false)
@@ -41,10 +49,16 @@ class LiteratureDeliveryEntity {
 
     LiteratureDeliveryEntity(
             LiteratureDeliveryKey id, String requestSha256,
+            String query, Integer topK, Integer yearFrom,
+            Boolean includeBibtex,
             Long userMessageId, Long turnId, String leaseOwnerId,
             String leaseToken, Instant leaseExpiresAt, Instant now) {
         this.id = id;
         this.requestSha256 = requestSha256;
+        this.query = query;
+        this.topK = topK;
+        this.yearFrom = yearFrom;
+        this.includeBibtex = includeBibtex;
         this.userMessageId = userMessageId;
         this.turnId = turnId;
         this.leaseOwnerId = leaseOwnerId;
@@ -57,6 +71,10 @@ class LiteratureDeliveryEntity {
 
     LiteratureDeliveryKey id() { return id; }
     String requestSha256() { return requestSha256; }
+    String query() { return query; }
+    Integer topK() { return topK; }
+    Integer yearFrom() { return yearFrom; }
+    Boolean includeBibtex() { return includeBibtex; }
     Long userMessageId() { return userMessageId; }
     Long turnId() { return turnId; }
     String leaseOwnerId() { return leaseOwnerId; }
@@ -66,13 +84,24 @@ class LiteratureDeliveryEntity {
     String synthesisId() { return synthesisId; }
     Long assistantMessageId() { return assistantMessageId; }
     String status() { return status; }
+    Instant createdAt() { return createdAt; }
 
     void bindPlan(String value) {
+        if (planId != null && !planId.equals(value)) {
+            throw new IllegalStateException("literature plan authority conflict");
+        }
         planId = value;
         updatedAt = Instant.now();
     }
 
     void complete(String plan, String synthesis, Long message) {
+        if (planId != null && !planId.equals(plan)
+                || synthesisId != null && !synthesisId.equals(synthesis)
+                || assistantMessageId != null
+                && !assistantMessageId.equals(message)) {
+            throw new IllegalStateException(
+                    "literature delivery authority conflict");
+        }
         planId = plan;
         synthesisId = synthesis;
         assistantMessageId = message;

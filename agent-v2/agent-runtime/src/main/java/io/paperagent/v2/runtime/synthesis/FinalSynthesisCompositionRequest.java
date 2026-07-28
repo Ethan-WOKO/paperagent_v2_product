@@ -1,12 +1,11 @@
 package io.paperagent.v2.runtime.synthesis;
 
 import io.paperagent.v2.contracts.WorkspaceDiff;
-import io.paperagent.v2.persistence.PersistedStepRecoverySucceeded;
 import java.time.Instant;
 import java.util.Optional;
 
 public record FinalSynthesisCompositionRequest(
-        PersistedStepRecoverySucceeded terminalCut,
+        FinalSynthesisTerminalCut terminalCut,
         Optional<WorkspaceDiff> workspaceDiff,
         Instant observedAt) {
     public FinalSynthesisCompositionRequest {

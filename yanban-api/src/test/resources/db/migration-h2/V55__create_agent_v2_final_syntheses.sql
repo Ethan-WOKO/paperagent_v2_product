@@ -16,6 +16,10 @@ CREATE TABLE agent_v2_literature_deliveries (
     session_id BIGINT NOT NULL,
     client_request_id VARCHAR(128) NOT NULL,
     request_sha256 VARCHAR(64) NOT NULL,
+    query_text VARCHAR(1000) NOT NULL,
+    top_k INT NOT NULL,
+    year_from INT,
+    include_bibtex BOOLEAN NOT NULL,
     user_message_id BIGINT NOT NULL,
     turn_id BIGINT NOT NULL,
     lease_owner_id VARCHAR(128) NOT NULL,
@@ -27,5 +31,7 @@ CREATE TABLE agent_v2_literature_deliveries (
     status VARCHAR(32) NOT NULL,
     created_at TIMESTAMP(6) NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL,
-    PRIMARY KEY (user_id, session_id, client_request_id)
+    PRIMARY KEY (user_id, session_id, client_request_id),
+    CONSTRAINT fk_agent_v2_delivery_session FOREIGN KEY (session_id)
+        REFERENCES agent_sessions(id) ON DELETE CASCADE
 );

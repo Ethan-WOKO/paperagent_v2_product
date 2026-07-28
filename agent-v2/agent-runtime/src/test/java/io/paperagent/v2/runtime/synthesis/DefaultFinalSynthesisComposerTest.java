@@ -1,6 +1,7 @@
 package io.paperagent.v2.runtime.synthesis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.Capability;
@@ -63,8 +64,8 @@ class DefaultFinalSynthesisComposerTest {
                 repository.append(existing).outcome());
         AtomicInteger calls = new AtomicInteger();
         var composer = new DefaultFinalSynthesisComposer(
-                repository,
-                new io.paperagent.v2.persistence.ReceiptRepository() {
+                store(repository),
+                receiptSource(new io.paperagent.v2.persistence.ReceiptRepository() {
                     public PersistenceResult<io.paperagent.v2.contracts.ExecutionReceipt> append(
                             io.paperagent.v2.contracts.ExecutionReceipt value) {
                         throw new AssertionError("receipt append");
@@ -73,8 +74,8 @@ class DefaultFinalSynthesisComposerTest {
                             ReceiptId value) {
                         throw new AssertionError("receipt find");
                     }
-                },
-                new io.paperagent.v2.persistence.EffectIntentRepository() {
+                }),
+                intentSource(new io.paperagent.v2.persistence.EffectIntentRepository() {
                     public PersistenceResult<io.paperagent.v2.persistence.PersistedEffectIntent> persist(
                             io.paperagent.v2.persistence.EffectIntentRequest value) {
                         throw new AssertionError("intent persist");
@@ -83,16 +84,17 @@ class DefaultFinalSynthesisComposerTest {
                             io.paperagent.v2.contracts.ToolCallId value) {
                         throw new AssertionError("intent find");
                     }
-                },
+                }),
                 request -> {
                     calls.incrementAndGet();
                     return "unexpected";
                 });
 
         var result = composer.compose(new FinalSynthesisCompositionRequest(
-                terminal, Optional.empty(), NOW.plusSeconds(99)));
+                cut(terminal), Optional.empty(), NOW.plusSeconds(99)));
 
-        assertEquals(PersistenceOutcome.REPLAYED, result.outcome());
+        assertEquals(FinalSynthesisDisposition.REPLAYED,
+                result.disposition());
         assertEquals(existing, result.synthesis());
         assertEquals(0, calls.get());
     }
@@ -115,8 +117,8 @@ class DefaultFinalSynthesisComposerTest {
                         new ObjectValue(Map.of())),
                 "owner", 1, new EventId("activation"));
         var composer = new DefaultFinalSynthesisComposer(
-                new InMemoryFinalSynthesisRepository(),
-                new io.paperagent.v2.persistence.ReceiptRepository() {
+                store(new InMemoryFinalSynthesisRepository()),
+                receiptSource(new io.paperagent.v2.persistence.ReceiptRepository() {
                     public PersistenceResult<ExecutionReceipt> append(
                             ExecutionReceipt value) {
                         return PersistenceResult.applied(value);
@@ -125,8 +127,8 @@ class DefaultFinalSynthesisComposerTest {
                             ReceiptId value) {
                         return PersistenceResult.found(receipt);
                     }
-                },
-                new io.paperagent.v2.persistence.EffectIntentRepository() {
+                }),
+                intentSource(new io.paperagent.v2.persistence.EffectIntentRepository() {
                     public PersistenceResult<PersistedEffectIntent> persist(
                             io.paperagent.v2.persistence.EffectIntentRequest value) {
                         return PersistenceResult.found(persistedIntent);
@@ -135,15 +137,95 @@ class DefaultFinalSynthesisComposerTest {
                             io.paperagent.v2.contracts.ToolCallId value) {
                         return PersistenceResult.found(persistedIntent);
                     }
-                },
+                }),
                 request -> "Literature search task queued.");
 
         var result = composer.compose(new FinalSynthesisCompositionRequest(
-                terminal, Optional.empty(), NOW));
+                cut(terminal), Optional.empty(), NOW));
 
-        assertEquals(PersistenceOutcome.APPLIED, result.outcome());
+        assertEquals(FinalSynthesisDisposition.APPLIED,
+                result.disposition());
         assertEquals(List.of(receiptId), result.synthesis().receiptIds());
         assertEquals(Optional.empty(), result.synthesis().workspaceDiff());
+    }
+
+    @Test
+    void rejectsReceiptWhoseIntentBelongsToAnotherPlanBeforeNarration() {
+        var terminal = terminal();
+        ReceiptId receiptId = new ReceiptId("receipt-1");
+        var receipt = new ExecutionReceipt(
+                receiptId, new io.paperagent.v2.contracts.ToolCallId("call-1"),
+                ReceiptStatus.SUCCESS, NOW, NOW,
+                Optional.of(0), Optional.empty(),
+                OutputCapture.inline("task queued", false),
+                OutputCapture.empty(), List.of(), Optional.empty(),
+                List.of());
+        AtomicInteger narrationCalls = new AtomicInteger();
+        var composer = new DefaultFinalSynthesisComposer(
+                store(new InMemoryFinalSynthesisRepository()),
+                ignored -> Optional.of(receipt),
+                (toolCallId, planId, stepId, kind) -> false,
+                request -> {
+                    narrationCalls.incrementAndGet();
+                    return "unexpected";
+                });
+
+        assertThrows(FinalSynthesisCompositionException.class,
+                () -> composer.compose(new FinalSynthesisCompositionRequest(
+                        cut(terminal), Optional.empty(), NOW)));
+        assertEquals(0, narrationCalls.get());
+    }
+
+    private static FinalSynthesisStore store(
+            InMemoryFinalSynthesisRepository repository) {
+        return new FinalSynthesisStore() {
+            @Override
+            public Optional<FinalSynthesis> find(PlanId planId) {
+                var result = repository.find(planId);
+                return result.outcome() == PersistenceOutcome.FOUND
+                        ? result.value()
+                        : Optional.empty();
+            }
+
+            @Override
+            public Optional<FinalSynthesisCompositionResult> append(
+                    FinalSynthesis synthesis) {
+                var result = repository.append(synthesis);
+                if (result.outcome() != PersistenceOutcome.APPLIED
+                        && result.outcome() != PersistenceOutcome.REPLAYED) {
+                    return Optional.empty();
+                }
+                return Optional.of(new FinalSynthesisCompositionResult(
+                        result.value().orElseThrow(),
+                        result.outcome() == PersistenceOutcome.APPLIED
+                                ? FinalSynthesisDisposition.APPLIED
+                                : FinalSynthesisDisposition.REPLAYED));
+            }
+        };
+    }
+
+    private static FinalSynthesisReceiptSource receiptSource(
+            io.paperagent.v2.persistence.ReceiptRepository repository) {
+        return receiptId -> {
+            var result = repository.find(receiptId);
+            return result.outcome() == PersistenceOutcome.FOUND
+                    ? result.value()
+                    : Optional.empty();
+        };
+    }
+
+    private static LiteratureIntentOwnershipSource intentSource(
+            io.paperagent.v2.persistence.EffectIntentRepository repository) {
+        return (toolCallId, planId, stepId, kind) -> {
+            var result = repository.find(toolCallId);
+            return result.outcome() == PersistenceOutcome.FOUND
+                    && result.value().orElseThrow().intent().planId()
+                    .equals(planId)
+                    && result.value().orElseThrow().intent().stepId()
+                    .equals(stepId)
+                    && result.value().orElseThrow().intent().kind()
+                    .equals(kind);
+        };
     }
 
     private static PersistedStepRecoverySucceeded terminal() {
@@ -184,5 +266,12 @@ class DefaultFinalSynthesisComposerTest {
         return new PersistedStepRecoverySucceeded(
                 task, plan, new VersionedCheckpoint(4, checkpoint),
                 Optional.empty());
+    }
+
+    private static FinalSynthesisTerminalCut cut(
+            PersistedStepRecoverySucceeded terminal) {
+        return new FinalSynthesisTerminalCut(
+                terminal.taskFrame(), terminal.plan(),
+                terminal.checkpoint().checkpoint());
     }
 }

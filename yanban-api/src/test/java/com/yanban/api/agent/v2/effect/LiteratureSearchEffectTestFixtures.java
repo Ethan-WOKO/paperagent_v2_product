@@ -6,6 +6,8 @@ import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.LiteratureSearchStartToolExecutor;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthority;
+import com.yanban.api.agent.v2.compatibility.literature.LiteratureSearchRequestAuthoritySource;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimResult;
 import com.yanban.core.agent.AgentRunIdentity;
@@ -58,6 +60,8 @@ final class LiteratureSearchEffectTestFixtures {
     final LiteratureSearchStartToolExecutor executor =
             mock(LiteratureSearchStartToolExecutor.class);
     final ObjectMapper json = new ObjectMapper();
+    final LiteratureSearchRequestAuthoritySource authorities =
+            mock(LiteratureSearchRequestAuthoritySource.class);
     final AtomicInteger time = new AtomicInteger();
     final LiteratureSearchEffectExecutionTimeSource times =
             () -> START.plusMillis(time.getAndIncrement());
@@ -97,6 +101,9 @@ final class LiteratureSearchEffectTestFixtures {
         when(recoverer.recover(any())).thenReturn(active);
         when(intents.find(TOOL_CALL))
                 .thenReturn(PersistenceResult.found(intent));
+        when(authorities.find(7L, 42L)).thenReturn(Optional.of(
+                new LiteratureSearchRequestAuthority(
+                        "graph retrieval", 10, null, false)));
         when(claims.execute(any())).thenAnswer(invocation -> {
             var request = (com.yanban.api.agent.v2.persistence
                     .ProductEffectExecutionClaimRequest)
@@ -120,7 +127,7 @@ final class LiteratureSearchEffectTestFixtures {
                         output));
         composer = new AuthenticatedLiteratureSearchEffectExecutionComposer(
                 contexts, planIds, recoverer, intents, claims, executor,
-                times, json);
+                times, json, authorities);
     }
 
     PersistedEffectIntent intent(Map<String, io.paperagent.v2.contracts.ContractValue> args) {

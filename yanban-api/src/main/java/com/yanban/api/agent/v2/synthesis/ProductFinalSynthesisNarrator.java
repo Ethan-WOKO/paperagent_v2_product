@@ -46,8 +46,8 @@ public class ProductFinalSynthesisNarrator implements FinalSynthesisNarrator {
                 new CorrelationId("final-synthesis-" + hash(binding)),
                 List.of(
                         new ModelMessage(MessageRole.SYSTEM,
-                                "Produce a concise delivery confirmation. "
-                                        + "Never claim literature results were returned."),
+                                "Return exactly QUEUED if the receipt proves "
+                                        + "a literature task was queued; otherwise FAIL."),
                         new ModelMessage(MessageRole.USER, facts.toString())),
                 List.of(),
                 new GenerationOptions(
@@ -60,10 +60,12 @@ public class ProductFinalSynthesisNarrator implements FinalSynthesisNarrator {
         if (!(result instanceof ModelResponse response)
                 || !response.proposedToolCalls().isEmpty()
                 || response.assistantText().isEmpty()
-                || response.finishReason() == FinishReason.TOOL_CALLS) {
+                || response.finishReason() == FinishReason.TOOL_CALLS
+                || !"QUEUED".equals(response.assistantText()
+                .orElseThrow().strip())) {
             throw new IllegalStateException("final synthesis provider rejected");
         }
-        return response.assistantText().orElseThrow();
+        return "Literature search task queued.";
     }
 
     private static String hash(String value) {

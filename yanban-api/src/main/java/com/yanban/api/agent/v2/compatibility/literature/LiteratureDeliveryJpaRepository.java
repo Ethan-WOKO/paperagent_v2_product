@@ -14,4 +14,7 @@ interface LiteratureDeliveryJpaRepository
             + "where delivery.id = :id")
     Optional<LiteratureDeliveryEntity> findLocked(
             @Param("id") LiteratureDeliveryKey id);
+
+    Optional<LiteratureDeliveryEntity> findByIdUserIdAndTurnId(
+            Long userId, Long turnId);
 }

@@ -17,8 +17,12 @@ class V55FinalSynthesisMigrationTest {
              Reader script = Files.newBufferedReader(Path.of(
                      "src/test/resources/db/migration-h2/"
                              + "V55__create_agent_v2_final_syntheses.sql"))) {
-            RunScript.execute(connection, script);
             try (var statement = connection.createStatement()) {
+                statement.executeUpdate(
+                        "create table agent_sessions (id bigint primary key)");
+                statement.executeUpdate(
+                        "insert into agent_sessions(id) values (9)");
+                RunScript.execute(connection, script);
                 statement.executeUpdate("""
                         insert into agent_v2_final_syntheses
                         (plan_id,synthesis_id,task_frame_id,plan_revision_id,
@@ -32,11 +36,13 @@ class V55FinalSynthesisMigrationTest {
                 statement.executeUpdate("""
                         insert into agent_v2_literature_deliveries
                         (user_id,session_id,client_request_id,request_sha256,
+                         query_text,top_k,year_from,include_bibtex,
                          user_message_id,turn_id,lease_owner_id,lease_token,
                          lease_expires_at,plan_id,synthesis_id,
                          assistant_message_id,status,created_at,updated_at)
                         values (7,9,'request',
                                 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                                'query',10,null,false,
                                 11,12,'owner','token',current_timestamp,
                                 'plan','synthesis',13,'DELIVERED',
                                 current_timestamp,current_timestamp)
@@ -45,6 +51,13 @@ class V55FinalSynthesisMigrationTest {
                         "select count(*) from agent_v2_literature_deliveries")) {
                     result.next();
                     assertEquals(1, result.getInt(1));
+                }
+                statement.executeUpdate(
+                        "delete from agent_sessions where id=9");
+                try (var result = statement.executeQuery(
+                        "select count(*) from agent_v2_literature_deliveries")) {
+                    result.next();
+                    assertEquals(0, result.getInt(1));
                 }
             }
         }

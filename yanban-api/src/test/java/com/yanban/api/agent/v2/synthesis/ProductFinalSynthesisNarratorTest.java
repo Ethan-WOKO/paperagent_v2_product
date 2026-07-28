@@ -31,12 +31,13 @@ class ProductFinalSynthesisNarratorTest {
         var narrator = new ProductFinalSynthesisNarrator(request -> {
             captured.set(request);
             return new ModelResponse(
-                    Optional.of("Search task queued."),
+                    Optional.of("QUEUED"),
                     List.of(), FinishReason.STOP,
                     new UsageMetadata(1, 1, 0, Map.of()), Map.of());
         });
 
-        assertEquals("Search task queued.", narrator.narrate(request()));
+        assertEquals("Literature search task queued.",
+                narrator.narrate(request()));
         assertTrue(captured.get().availableTools().isEmpty());
         assertTrue(captured.get().messages().get(1).content()
                 .contains("UNTRUSTED DATA"));
@@ -53,6 +54,18 @@ class ProductFinalSynthesisNarratorTest {
                                 "provider-call", new ToolId("unexpected"),
                                 new ObjectValue(Map.of()))),
                         FinishReason.TOOL_CALLS,
+                        new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
+
+        assertThrows(IllegalStateException.class,
+                () -> narrator.narrate(request()));
+    }
+
+    @Test
+    void rejectsProviderClaimsThatResultsWereReturned() {
+        var narrator = new ProductFinalSynthesisNarrator(request ->
+                new ModelResponse(
+                        Optional.of("I found ten excellent papers."),
+                        List.of(), FinishReason.STOP,
                         new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
 
         assertThrows(IllegalStateException.class,

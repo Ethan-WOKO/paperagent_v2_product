@@ -2,50 +2,100 @@ package com.yanban.api.agent.v2.compatibility.literature;
 
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
+import com.yanban.core.agent.AgentSession;
 import com.yanban.core.agent.AgentTurn;
 import com.yanban.core.agent.AgentTurnRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Component
 class LiteratureDeliveryTransactions {
     private final LiteratureDeliveryJpaRepository deliveries;
     private final AgentMessageRepository messages;
     private final AgentTurnRepository turns;
+    private final TransactionTemplate requiresNew;
+    private final EntityManager entityManager;
 
     LiteratureDeliveryTransactions(
             LiteratureDeliveryJpaRepository deliveries,
             AgentMessageRepository messages,
-            AgentTurnRepository turns) {
+            AgentTurnRepository turns,
+            PlatformTransactionManager transactionManager,
+            EntityManager entityManager) {
         this.deliveries = deliveries;
         this.messages = messages;
         this.turns = turns;
+        this.requiresNew = new TransactionTemplate(transactionManager);
+        this.requiresNew.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.entityManager = entityManager;
     }
 
-    @Transactional
-    public synchronized LiteratureDeliveryEntity open(
+    public LiteratureDeliveryEntity open(
             Long userId, Long sessionId, String requestId,
-            String requestHash, String query, String leaseOwnerId,
+            String requestHash, String query, int topK, Integer yearFrom,
+            boolean includeBibtex, String leaseOwnerId,
             String leaseToken, Instant leaseExpiresAt) {
         LiteratureDeliveryKey key =
                 new LiteratureDeliveryKey(userId, sessionId, requestId);
         var existing = deliveries.findById(key);
         if (existing.isPresent()) {
-            if (!existing.orElseThrow().requestSha256().equals(requestHash)) {
-                throw new IllegalArgumentException(
-                        "clientRequestId was already used for another payload");
-            }
-            return existing.orElseThrow();
+            return samePayload(existing.orElseThrow(), requestHash);
         }
-        AgentMessage userMessage = messages.saveAndFlush(new AgentMessage(
-                sessionId, userId, "user",
-                "Literature search: " + query, null, null));
-        AgentTurn turn = turns.saveAndFlush(
-                new AgentTurn(sessionId, userId, userMessage.getId()));
-        return deliveries.saveAndFlush(new LiteratureDeliveryEntity(
-                key, requestHash, userMessage.getId(), turn.getId(),
-                leaseOwnerId, leaseToken, leaseExpiresAt, Instant.now()));
+        try {
+            return requiresNew.execute(status -> {
+                AgentSession session = entityManager.find(
+                        AgentSession.class, sessionId,
+                        LockModeType.PESSIMISTIC_WRITE);
+                if (session == null || !userId.equals(session.getUserId())) {
+                    throw new IllegalArgumentException(
+                            "agent session was not found");
+                }
+                var afterLock = deliveries.findById(key);
+                if (afterLock.isPresent()) {
+                    return samePayload(
+                            afterLock.orElseThrow(), requestHash);
+                }
+                AgentMessage userMessage = messages.saveAndFlush(
+                        new AgentMessage(
+                                sessionId, userId, "user",
+                                "Literature search: " + query, null, null));
+                AgentTurn turn = turns.saveAndFlush(
+                        new AgentTurn(
+                                sessionId, userId, userMessage.getId()));
+                LiteratureDeliveryEntity created =
+                        new LiteratureDeliveryEntity(
+                                key, requestHash, query, topK, yearFrom,
+                                includeBibtex, userMessage.getId(),
+                                turn.getId(), leaseOwnerId, leaseToken,
+                                leaseExpiresAt, Instant.now());
+                entityManager.persist(created);
+                entityManager.flush();
+                return created;
+            });
+        } catch (RuntimeException conflict) {
+            LiteratureDeliveryEntity winner = requiresNew.execute(status ->
+                    deliveries.findById(key).orElse(null));
+            if (winner == null) {
+                throw conflict;
+            }
+            return samePayload(winner, requestHash);
+        }
+    }
+
+    private static LiteratureDeliveryEntity samePayload(
+            LiteratureDeliveryEntity value, String requestHash) {
+        if (!value.requestSha256().equals(requestHash)) {
+            throw new IllegalArgumentException(
+                    "clientRequestId was already used for another payload");
+        }
+        return value;
     }
 
     @Transactional
