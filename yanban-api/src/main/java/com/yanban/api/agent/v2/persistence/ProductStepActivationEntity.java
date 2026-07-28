@@ -15,11 +15,16 @@ import java.time.Instant;
         indexes = @Index(
                 name = "idx_agent_v2_step_activations_plan",
                 columnList = "plan_id"),
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_agent_v2_step_activation_binding",
-                columnNames = {
-                        "activation_event_id", "plan_id", "step_id"
-                }))
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "uk_agent_v2_step_activation_binding",
+                        columnNames = {
+                                "activation_event_id", "plan_id", "step_id"
+                        }),
+                @UniqueConstraint(
+                        name = "uk_agent_v2_step_activation_step",
+                        columnNames = {"plan_id", "step_id"})
+        })
 class ProductStepActivationEntity {
     @Column(name = "plan_id", nullable = false, length = 128)
     private String planId;

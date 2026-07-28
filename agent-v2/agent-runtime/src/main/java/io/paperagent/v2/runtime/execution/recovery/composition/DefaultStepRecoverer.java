@@ -4,6 +4,7 @@ import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.persistence.LeaseRecord;
 import io.paperagent.v2.persistence.LeaseRepository;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
+import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceFailure;
 import io.paperagent.v2.persistence.PersistenceOutcome;
 import io.paperagent.v2.persistence.PersistenceResult;
@@ -128,6 +129,15 @@ public final class DefaultStepRecoverer implements StepRecoverer {
             StepRecoveryLeaseDisposition leaseDisposition,
             PersistenceResult<StepRecoverySnapshot> result) {
         Object value = result.value().orElse(null);
+        if (value instanceof StepRecoverySnapshot snapshot
+                && snapshot.planId().equals(planId)
+                && !(snapshot instanceof PersistedStepRecoveryActive)) {
+            return new Inspection(
+                    null,
+                    new PersistenceFailure(
+                            PersistenceErrorCode.STEP_RECOVERY_NOT_ELIGIBLE,
+                            "stepRecovery"));
+        }
         if (!(value instanceof PersistedStepRecoveryActive active)
                 || !active.planId().equals(planId)) {
             throw protocol(

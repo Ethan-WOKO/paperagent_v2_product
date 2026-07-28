@@ -94,6 +94,44 @@ final class ActiveStepCompletionMaterializationFixture {
         return recovered(StepExecutionState.SUCCEEDED, 1);
     }
 
+    static RecoveredActiveStep laterRecovered() {
+        RecoveredActiveStep base = recovered(
+                StepExecutionState.SUCCEEDED, 1);
+        PersistedStepRecoveryActive old = base.recovery();
+        PlanRevision first = old.plan().latestRevision();
+        PlanRevision current = new PlanRevision(
+                new PlanRevisionId("revision-current-2"),
+                first.taskFrameId(), 2, Optional.of(first.id()),
+                "after first completion", T0.plusSeconds(1),
+                first.steps(), first.completedFacts());
+        Plan currentPlan = new Plan(
+                old.plan().id(), old.plan().taskFrameId(),
+                List.of(first, current));
+        Checkpoint prior = old.checkpoint().checkpoint();
+        Checkpoint checkpoint = new Checkpoint(
+                prior.taskFrameId(), prior.planId(), current.id(),
+                current.number(), 4, prior.planState(),
+                prior.stepStates(), prior.receiptReferences(),
+                prior.createdAt());
+        EventEnvelope activationEvent = new EventEnvelope(
+                new EventId("activation-event"), prior.taskFrameId(),
+                prior.planId(), 4, T0.plusSeconds(2),
+                new EventType("step-activation"), Optional.empty(),
+                "activation-correlation",
+                new InlineEventPayload(new ObjectValue(Map.of())));
+        VersionedCheckpoint versioned =
+                new VersionedCheckpoint(5, checkpoint);
+        PersistedStepActivation activation = new PersistedStepActivation(
+                prior.planId(), TARGET, "activation-owner", 4,
+                activationEvent, versioned);
+        return new RecoveredActiveStep(
+                new PersistedStepRecoveryActive(
+                        old.taskFrame(), currentPlan, versioned, activation,
+                        old.executionContext()),
+                base.lease(),
+                StepRecoveryLeaseDisposition.RETAINED_FOR_RECOVERY);
+    }
+
     static RecoveredActiveStep recovered(
             StepExecutionState peerState,
             long revisionNumber) {

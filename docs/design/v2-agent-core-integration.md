@@ -879,3 +879,35 @@ Provider, Sandbox, or tool behavior, expose product/API/UI traffic, change a
 stable contract or schema, or depend on legacy Agent code. Authenticated
 product completion composition and later execution traffic remain separate
 Issue boundaries.
+
+## Restart-safe persisted two-Step lifecycle progression boundary
+
+The stable recovery inspection now exposes the durable lifecycle cut as
+exactly `READY`, `ACTIVE`, or terminal `SUCCEEDED`. A `READY` cut is a valid
+committed gap: the preceding completion remains authoritative while no later
+Step is implicitly active. Its selected Step is the first Plan-ordered
+`NOT_STARTED` Step whose dependencies are both checkpoint-`SUCCEEDED` and
+backed by immutable completion facts. Inspection remains read-only.
+
+Activation and completion derive revision, checkpoint, and event heads from
+that inspected authority. Each transition appends exactly one event and one
+checkpoint. Completion additionally appends one immutable Plan revision and
+completion fact; activation preserves that revision and all prior facts and
+Receipt references. The product V52 migration removes only the former
+first-Step cardinality and fixed-head constraints, leaves every V46–V51 row
+unchanged, and retains exact Plan/Step/activation ownership and event
+uniqueness.
+
+The two-Step handoff is restart safe: completion of Step A commits first,
+restart reconstructs the same `READY(B)` cut, and a separately committed
+activation makes recovery return `ACTIVE(B)`. Exact transition replay remains
+immutable after lease turnover, while new writes require the current fenced
+lease. Bootstrap-row serialization and strict alternating authority-chain
+validation prevent two concurrent contenders from creating two activations.
+After Step B completes, inspection returns terminal `SUCCEEDED` with no ready
+or active Step.
+
+This capability is lifecycle progression only. It does not run a Step, start
+an autonomous Agent Loop, invoke a Provider or tool, implement retry, resume,
+repair or replan policy, access Project or Workspace content, switch
+Controller/API/UI traffic, or reuse legacy Agent code.

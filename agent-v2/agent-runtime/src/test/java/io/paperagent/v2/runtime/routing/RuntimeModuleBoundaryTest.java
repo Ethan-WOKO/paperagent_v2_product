@@ -133,13 +133,17 @@ class RuntimeModuleBoundaryTest {
     private static final Set<String>
             ALLOWED_ACTIVATION_MATERIALIZATION_PERSISTENCE_IMPORTS = Set.of(
                     "import io.paperagent.v2.persistence"
-                            + ".PersistedExecutionStartCommitted;");
+                            + ".PersistedExecutionStartCommitted;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistedStepRecoveryReady;");
     private static final Set<String>
             ALLOWED_ACTIVATION_COMPOSITION_PERSISTENCE_IMPORTS = Set.of(
                     "import io.paperagent.v2.persistence.LeaseRecord;",
                     "import io.paperagent.v2.persistence.LeaseRepository;",
                     "import io.paperagent.v2.persistence"
                             + ".PersistedExecutionStartCommitted;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistedStepRecoveryReady;",
                     "import io.paperagent.v2.persistence"
                             + ".PersistedStepActivation;",
                     "import io.paperagent.v2.persistence"
@@ -150,6 +154,22 @@ class RuntimeModuleBoundaryTest {
                             + ".StepActivationRepository;",
                     "import io.paperagent.v2.persistence"
                             + ".StepActivationRequest;");
+    private static final Set<String>
+            ALLOWED_PROGRESSION_PERSISTENCE_IMPORTS = Set.of(
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistedStepRecoveryActive;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistedStepRecoveryReady;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistedStepRecoverySucceeded;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistenceOutcome;",
+                    "import io.paperagent.v2.persistence"
+                            + ".PersistenceResult;",
+                    "import io.paperagent.v2.persistence"
+                            + ".StepRecoveryRepository;",
+                    "import io.paperagent.v2.persistence"
+                            + ".StepRecoverySnapshot;");
     private static final Set<String>
             ALLOWED_INTERRUPTION_MATERIALIZATION_PERSISTENCE_IMPORTS = Set.of(
                     "import io.paperagent.v2.persistence.LeaseRecord;",
@@ -948,6 +968,19 @@ class RuntimeModuleBoundaryTest {
                 "composition"));
     }
 
+    private static boolean isProgressionSource(
+            Path sourceRoot,
+            Path sourcePath) {
+        Path relative = sourceRoot.relativize(sourcePath);
+        return relative.startsWith(Path.of(
+                "io",
+                "paperagent",
+                "v2",
+                "runtime",
+                "execution",
+                "progression"));
+    }
+
     private static boolean isInterruptionMaterializationSource(
             Path sourceRoot,
             Path sourcePath) {
@@ -1081,6 +1114,9 @@ class RuntimeModuleBoundaryTest {
         }
         if (isActivationCompositionSource(sourceRoot, sourcePath)) {
             return ALLOWED_ACTIVATION_COMPOSITION_PERSISTENCE_IMPORTS;
+        }
+        if (isProgressionSource(sourceRoot, sourcePath)) {
+            return ALLOWED_PROGRESSION_PERSISTENCE_IMPORTS;
         }
         if (isInterruptionCompositionSource(sourceRoot, sourcePath)) {
             return ALLOWED_INTERRUPTION_COMPOSITION_PERSISTENCE_IMPORTS;

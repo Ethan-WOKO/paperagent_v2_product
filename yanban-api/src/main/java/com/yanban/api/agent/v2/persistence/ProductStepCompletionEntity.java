@@ -18,14 +18,20 @@ import java.time.Instant;
         name = "agent_v2_step_completions",
         indexes = @Index(
                 name = "idx_agent_v2_step_completions_plan",
-                columnList = "plan_id",
-                unique = true),
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_agent_v2_step_completion_binding",
-                columnNames = {
-                        "completion_event_id", "plan_id", "step_id",
-                        "activation_event_id"
-                }))
+                columnList = "plan_id"),
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "uk_agent_v2_step_completion_binding",
+                        columnNames = {
+                                "completion_event_id", "plan_id", "step_id",
+                                "activation_event_id"
+                        }),
+                @UniqueConstraint(
+                        name = "uk_agent_v2_step_completion_activation",
+                        columnNames = {
+                                "plan_id", "step_id", "activation_event_id"
+                        })
+        })
 class ProductStepCompletionEntity {
     @Column(name = "plan_id", nullable = false, length = 128)
     private String planId;

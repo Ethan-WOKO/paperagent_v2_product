@@ -99,18 +99,6 @@ class ProductStepCompletionTransactions {
             return replay;
         }
 
-        PersistenceResult<io.paperagent.v2.persistence.StepRecoverySnapshot>
-                inspected = recovery.inspectWriterAuthority(request.planId());
-        if (inspected.outcome() != PersistenceOutcome.FOUND
-                || !(inspected.value().orElse(null)
-                instanceof PersistedStepRecoveryActive active)) {
-            return inspected.failure().isPresent()
-                    && inspected.failure().orElseThrow().code()
-                    == PersistenceErrorCode.NOT_FOUND
-                    ? rejected(PersistenceErrorCode.NOT_FOUND, "request.planId")
-                    : partial();
-        }
-
         ProductPlanBootstrapEntity locked = bootstraps
                 .lockByPlanId(request.planId().value()).orElse(null);
         if (locked == null) {
@@ -119,6 +107,17 @@ class ProductStepCompletionTransactions {
         replay = existing(request);
         if (replay != null) {
             return replay;
+        }
+        PersistenceResult<io.paperagent.v2.persistence.StepRecoverySnapshot>
+                inspected = recovery.inspectLocked(request.planId());
+        if (inspected.outcome() != PersistenceOutcome.FOUND
+                || !(inspected.value().orElse(null)
+                instanceof PersistedStepRecoveryActive active)) {
+            return inspected.failure().isPresent()
+                    && inspected.failure().orElseThrow().code()
+                    == PersistenceErrorCode.NOT_FOUND
+                    ? rejected(PersistenceErrorCode.NOT_FOUND, "request.planId")
+                    : partial();
         }
         if (!interruptions.findAllByPlanId(request.planId().value()).isEmpty()
                 || !canonicalActivation(active, request)) {
@@ -213,14 +212,17 @@ class ProductStepCompletionTransactions {
             StepCompletionRequest request) {
         ProductStepCompletionEntity byEvent = completions.findById(
                 request.completionEvent().id().value()).orElse(null);
-        List<ProductStepCompletionEntity> byPlan =
-                completions.findAllByPlanId(request.planId().value());
-        if (byEvent == null && byPlan.isEmpty()) {
+        List<ProductStepCompletionEntity> byStep =
+                completions.findAllByPlanId(request.planId().value()).stream()
+                        .filter(row -> row.stepId().equals(
+                                request.stepId().value()))
+                        .toList();
+        if (byEvent == null && byStep.isEmpty()) {
             return null;
         }
-        if (byEvent == null || byPlan.size() != 1
-                || byPlan.get(0) != byEvent
-                        && !byPlan.get(0).completionEventId()
+        if (byEvent == null || byStep.size() != 1
+                || byStep.get(0) != byEvent
+                        && !byStep.get(0).completionEventId()
                         .equals(byEvent.completionEventId())) {
             return partial();
         }
@@ -237,19 +239,21 @@ class ProductStepCompletionTransactions {
 
     private boolean canonicalActivation(
             PersistedStepRecoveryActive active, StepCompletionRequest request) {
-        List<ProductStepActivationEntity> rows =
-                activations.findAllByPlanId(request.planId().value());
-        if (rows.size() != 1) {
+        ProductStepActivationEntity row = activations.findById(
+                active.activation().activationEvent().id().value())
+                .orElse(null);
+        if (row == null) {
             return false;
         }
-        ProductStepActivationEntity row = rows.get(0);
         return row.activationEventId().equals(
                         active.activation().activationEvent().id().value())
                 && row.planId().equals(request.planId().value())
                 && row.stepId().equals(request.stepId().value())
                 && active.activation().stepId().equals(request.stepId())
-                && active.checkpoint().version() == 3
-                && active.activation().activationEvent().sequence() == 2;
+                && active.checkpoint().version()
+                        == row.resultCheckpointVersion()
+                && active.activation().activationEvent().sequence()
+                        == row.resultEventSequence();
     }
 
     private EvidenceCut evidence(

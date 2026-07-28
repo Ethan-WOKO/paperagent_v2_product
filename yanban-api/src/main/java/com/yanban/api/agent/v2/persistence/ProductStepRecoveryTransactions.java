@@ -17,6 +17,8 @@ import io.paperagent.v2.persistence.PersistedPlanExecutionContextConfirmed;
 import io.paperagent.v2.persistence.PersistedPlanExecutionContextReserved;
 import io.paperagent.v2.persistence.PersistedStepActivation;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
+import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
+import io.paperagent.v2.persistence.PersistedStepRecoverySucceeded;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.PlanExecutionContextConfirmationRequest;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -86,6 +89,16 @@ class ProductStepRecoveryTransactions {
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     PersistenceResult<StepRecoverySnapshot> inspectWriterAuthority(
             PlanId planId) {
+        PersistenceResult<StepRecoverySnapshot> inspected =
+                inspect(planId, false);
+        return inspected.outcome()
+                == io.paperagent.v2.persistence.PersistenceOutcome.FOUND
+                && !(inspected.value().orElse(null)
+                instanceof PersistedStepRecoveryActive)
+                ? notEligible() : inspected;
+    }
+
+    PersistenceResult<StepRecoverySnapshot> inspectLocked(PlanId planId) {
         return inspect(planId, false);
     }
 
@@ -117,44 +130,108 @@ class ProductStepRecoveryTransactions {
         }
 
         List<ProductStepActivationEntity> rows =
-                activations.findAllByPlanId(planId.value());
+                activations.findAllByPlanIdOrderBySourceEventSequenceAsc(
+                        planId.value());
         List<ProductStepInterruptionEntity> interruptionRows = terminalAware
                 ? interruptions.findAllByPlanId(planId.value()) : List.of();
-        List<ProductStepCompletionEntity> completionRows = terminalAware
-                ? completions.findAllByPlanId(planId.value()) : List.of();
+        List<ProductStepCompletionEntity> completionRows =
+                completions.findAllByPlanIdOrderBySourceEventSequenceAsc(
+                        planId.value());
         if (rows.isEmpty()) {
-            return interruptionRows.isEmpty() && completionRows.isEmpty()
-                    ? notEligible() : partial();
+            if (!interruptionRows.isEmpty() || !completionRows.isEmpty()) {
+                return partial();
+            }
+            PlanStepId ready = firstReady(
+                    source.bootstrap().plan(),
+                    source.started().startedCheckpoint().checkpoint());
+            return ready == null ? notEligible()
+                    : PersistenceResult.found(
+                            new PersistedStepRecoveryReady(
+                                    source.bootstrap().taskFrame(),
+                                    source.bootstrap().plan(),
+                                    source.started().startedCheckpoint(),
+                                    ready, context.confirmed()));
         }
-        if (rows.size() != 1) {
+        Fold fold = fold(source, context, rows, completionRows);
+        if (fold == null) {
             return partial();
         }
-        Marker marker = marker(rows.get(0), source);
-        if (marker == null) {
+        if (interruptionRows.isEmpty()) {
+            return PersistenceResult.found(fold.snapshot());
+        }
+        if (!terminalAware || interruptionRows.size() != 1
+                || !(fold.snapshot() instanceof PersistedStepRecoveryActive
+                active)) {
             return partial();
         }
-        if (!recoverable(source, marker)) {
-            return notEligible();
-        }
-        PersistedStepRecoveryActive active = new PersistedStepRecoveryActive(
-                source.bootstrap().taskFrame(), source.bootstrap().plan(),
-                marker.result().activatedCheckpoint(), marker.result(),
-                context.confirmed());
-        if (interruptionRows.isEmpty() && completionRows.isEmpty()) {
-            return PersistenceResult.found(active);
-        }
-        if (interruptionRows.size() > 1 || completionRows.size() > 1
-                || !interruptionRows.isEmpty()
-                && !completionRows.isEmpty()) {
-            return partial();
-        }
-        if (!interruptionRows.isEmpty()) {
-            return interruptionMarkers.read(
-                    interruptionRows.get(0), active) == null
-                    ? partial() : notEligible();
-        }
-        return completionMarkers.read(completionRows.get(0), active) == null
+        return interruptionMarkers.read(interruptionRows.get(0), active) == null
                 ? partial() : notEligible();
+    }
+
+    private Fold fold(
+            Source source, ContextCut context,
+            List<ProductStepActivationEntity> activationRows,
+            List<ProductStepCompletionEntity> completionRows) {
+        Plan plan = source.bootstrap().plan();
+        VersionedCheckpoint head = source.started().startedCheckpoint();
+        int activationIndex = 0;
+        int completionIndex = 0;
+        PersistedStepRecoveryActive active = null;
+        while (activationIndex < activationRows.size()) {
+            ProductStepActivationEntity activationRow =
+                    activationRows.get(activationIndex++);
+            Marker activation = marker(activationRow, source, plan, head);
+            if (activation == null) {
+                return null;
+            }
+            active = new PersistedStepRecoveryActive(
+                    source.bootstrap().taskFrame(), plan,
+                    activation.result().activatedCheckpoint(),
+                    activation.result(), context.confirmed());
+            head = active.checkpoint();
+
+            if (completionIndex >= completionRows.size()
+                    || completionRows.get(completionIndex)
+                    .sourceEventSequence()
+                    != active.activation().activationEvent().sequence()) {
+                if (activationIndex != activationRows.size()
+                        || completionIndex != completionRows.size()) {
+                    return null;
+                }
+                return new Fold(active);
+            }
+            ProductStepCompletionEntity completionRow =
+                    completionRows.get(completionIndex++);
+            ProductStepCompletionMarkerReader.Marker completion =
+                    completionMarkers.read(completionRow, active);
+            if (completion == null) {
+                return null;
+            }
+            List<PlanRevision> revisions =
+                    new ArrayList<>(plan.revisions());
+            revisions.add(completion.result().completedRevision());
+            try {
+                plan = new Plan(plan.id(), plan.taskFrameId(), revisions);
+            } catch (RuntimeException exception) {
+                return null;
+            }
+            head = completion.result().completedCheckpoint();
+            active = null;
+        }
+        if (completionIndex != completionRows.size() || active != null) {
+            return null;
+        }
+        if (head.checkpoint().planState() == PlanExecutionState.SUCCEEDED
+                && head.checkpoint().stepStates().values().stream()
+                .allMatch(state -> state == StepExecutionState.SUCCEEDED)) {
+            return new Fold(new PersistedStepRecoverySucceeded(
+                    source.bootstrap().taskFrame(), plan, head,
+                    context.confirmed()));
+        }
+        PlanStepId ready = firstReady(plan, head.checkpoint());
+        return ready == null ? null : new Fold(new PersistedStepRecoveryReady(
+                source.bootstrap().taskFrame(), plan, head, ready,
+                context.confirmed()));
     }
 
     private Source source(
@@ -236,7 +313,9 @@ class ProductStepRecoveryTransactions {
         }
     }
 
-    private Marker marker(ProductStepActivationEntity row, Source source) {
+    private Marker marker(
+            ProductStepActivationEntity row, Source source, Plan plan,
+            VersionedCheckpoint current) {
         try {
             StepActivationRequest request = activationCodec.decodeRequest(
                     row.requestFormatVersion(), row.requestSha256(),
@@ -245,9 +324,13 @@ class ProductStepRecoveryTransactions {
                     row.resultFormatVersion(), row.resultSha256(),
                     row.resultJson());
             VersionedCheckpoint target = result.activatedCheckpoint();
-            Checkpoint h0 = source.started().startedCheckpoint().checkpoint();
+            Checkpoint h0 = current.checkpoint();
             boolean linked = row.committedAt() != null
                     && starts.findByStartEventId(
+                            row.activationEventId()).isEmpty()
+                    && interruptions.findById(
+                            row.activationEventId()).isEmpty()
+                    && completions.findById(
                             row.activationEventId()).isEmpty()
                     && row.planId().equals(
                             source.bootstrap().plan().id().value())
@@ -269,13 +352,12 @@ class ProductStepRecoveryTransactions {
                             target.checkpoint().revisionId().value())
                     && row.resultRevisionNumber()
                             == target.checkpoint().revisionNumber()
-                    && row.sourceCheckpointVersion()
-                            == source.started().startedCheckpoint().version()
+                    && row.sourceCheckpointVersion() == current.version()
                     && row.sourceCheckpointVersion()
                             == request.expectedCheckpointVersion()
                     && row.resultCheckpointVersion() == target.version()
                     && row.sourceEventSequence()
-                            == source.started().startEvent().sequence()
+                            == h0.lastEventSequence()
                     && row.sourceEventSequence()
                             == request.expectedEventHeadSequence()
                     && row.resultEventSequence()
@@ -287,10 +369,13 @@ class ProductStepRecoveryTransactions {
                             result.activationEvent())
                     && request.activatedCheckpoint().equals(
                             target.checkpoint())
-                    && request.expectedCheckpointVersion() == 2
-                    && request.expectedEventHeadSequence() == 1
-                    && target.version() == 3
-                    && result.activationEvent().sequence() == 2
+                    && request.expectedCheckpointVersion()
+                            == current.version()
+                    && request.expectedEventHeadSequence()
+                            == h0.lastEventSequence()
+                    && target.version() == current.version() + 1
+                    && result.activationEvent().sequence()
+                            == h0.lastEventSequence() + 1
                     && result.activationEvent().planId()
                             .equals(source.bootstrap().plan().id())
                     && result.activationEvent().taskFrameId()
@@ -303,7 +388,8 @@ class ProductStepRecoveryTransactions {
                             .equals(h0.revisionId())
                     && target.checkpoint().revisionNumber()
                             == h0.revisionNumber()
-                    && target.checkpoint().lastEventSequence() == 2
+                    && target.checkpoint().lastEventSequence()
+                            == h0.lastEventSequence() + 1
                     && target.checkpoint().planState()
                             == PlanExecutionState.ACTIVE
                     && target.checkpoint().receiptReferences().equals(
@@ -317,7 +403,9 @@ class ProductStepRecoveryTransactions {
                     && CheckpointValidators.validate(
                             target.checkpoint(),
                             source.bootstrap().taskFrame(),
-                            source.bootstrap().plan(), h0).isEmpty();
+                            plan, h0).isEmpty()
+                    && firstReady(plan, h0) != null
+                    && firstReady(plan, h0).equals(request.stepId());
             return linked ? new Marker(request, result) : null;
         } catch (RuntimeException exception) {
             return null;
@@ -370,6 +458,29 @@ class ProductStepRecoveryTransactions {
                 && revision.completedFacts().entrySet().stream().allMatch(
                         fact -> checkpoint.stepStates().get(fact.getKey())
                                 == StepExecutionState.SUCCEEDED);
+    }
+
+    private static PlanStepId firstReady(Plan plan, Checkpoint checkpoint) {
+        if (checkpoint.planState() != PlanExecutionState.ACTIVE) {
+            return null;
+        }
+        for (PlanStep step : plan.latestRevision().steps()) {
+            if (checkpoint.stepStates().get(step.id())
+                    != StepExecutionState.NOT_STARTED
+                    || plan.latestRevision().completedFacts()
+                    .containsKey(step.id())) {
+                continue;
+            }
+            boolean ready = step.dependencies().stream().allMatch(
+                    dependency -> checkpoint.stepStates().get(dependency)
+                            == StepExecutionState.SUCCEEDED
+                            && plan.latestRevision().completedFacts()
+                            .containsKey(dependency));
+            if (ready) {
+                return step.id();
+            }
+        }
+        return null;
     }
 
     private static boolean canonicalReservation(
@@ -510,5 +621,8 @@ class ProductStepRecoveryTransactions {
     private record Marker(
             StepActivationRequest request,
             PersistedStepActivation result) {
+    }
+
+    private record Fold(StepRecoverySnapshot snapshot) {
     }
 }

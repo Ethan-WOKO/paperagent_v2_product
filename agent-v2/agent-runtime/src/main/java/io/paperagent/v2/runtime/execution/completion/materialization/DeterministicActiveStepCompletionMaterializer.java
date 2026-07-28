@@ -29,10 +29,6 @@ import java.util.stream.Collectors;
 
 public final class DeterministicActiveStepCompletionMaterializer
         implements ActiveStepCompletionMaterializer {
-    private static final long ACTIVE_CHECKPOINT_VERSION = 3;
-    private static final long ACTIVE_EVENT_SEQUENCE = 2;
-    private static final long COMPLETION_EVENT_SEQUENCE = 3;
-
     public DeterministicActiveStepCompletionMaterializer() {
     }
 
@@ -77,8 +73,8 @@ public final class DeterministicActiveStepCompletionMaterializer
                     lease.fencingToken(),
                     currentRevision.id(),
                     currentRevision.number(),
-                    ACTIVE_CHECKPOINT_VERSION,
-                    ACTIVE_EVENT_SEQUENCE,
+                    authority.versioned().version(),
+                    authority.current().lastEventSequence(),
                     authority.stepId(),
                     fact,
                     event,
@@ -219,7 +215,7 @@ public final class DeterministicActiveStepCompletionMaterializer
                     draft.id(),
                     authority.taskFrame().id(),
                     authority.plan().id(),
-                    COMPLETION_EVENT_SEQUENCE,
+                    nextEventSequence(authority),
                     draft.occurredAt(),
                     draft.type(),
                     draft.causationId(),
@@ -269,7 +265,7 @@ public final class DeterministicActiveStepCompletionMaterializer
                     authority.current().planId(),
                     completedRevision.id(),
                     completedRevision.number(),
-                    COMPLETION_EVENT_SEQUENCE,
+                    nextEventSequence(authority),
                     allSucceeded
                             ? PlanExecutionState.SUCCEEDED
                             : PlanExecutionState.ACTIVE,
@@ -303,25 +299,24 @@ public final class DeterministicActiveStepCompletionMaterializer
                                         .RETAINED_FOR_RECOVERY
                         && plan.id().equals(active.planId())
                         && plan.taskFrameId().equals(taskFrame.id())
-                        && versioned.version() == ACTIVE_CHECKPOINT_VERSION
+                        && versioned.version() >= 3
                         && checkpoint.taskFrameId().equals(taskFrame.id())
                         && checkpoint.planId().equals(plan.id())
                         && checkpoint.revisionId().equals(revision.id())
                         && checkpoint.revisionNumber() == revision.number()
-                        && checkpoint.lastEventSequence()
-                                == ACTIVE_EVENT_SEQUENCE
+                        && checkpoint.lastEventSequence() >= 2
                         && checkpoint.planState() == PlanExecutionState.ACTIVE
                         && lease.planId().equals(plan.id())
                         && activation.planId().equals(plan.id())
                         && activation.activatedCheckpoint().version()
-                                == ACTIVE_CHECKPOINT_VERSION
+                                == versioned.version()
                         && activation.activatedCheckpoint().equals(versioned)
                         && activation.activationEvent().planId()
                                 .equals(plan.id())
                         && activation.activationEvent().taskFrameId()
                                 .equals(taskFrame.id())
                         && activation.activationEvent().sequence()
-                                == ACTIVE_EVENT_SEQUENCE
+                                == checkpoint.lastEventSequence()
                         && revisionStepIds.contains(stepId)
                         && checkpoint.stepStates().keySet()
                                 .equals(revisionStepIds)
@@ -329,6 +324,10 @@ public final class DeterministicActiveStepCompletionMaterializer
                                         checkpoint, taskFrame, plan, null)
                                 .isEmpty();
         if (!baseConsistent) {
+            throw authorityFailure();
+        }
+        if (checkpoint.lastEventSequence() == Long.MAX_VALUE
+                || versioned.version() == Long.MAX_VALUE) {
             throw authorityFailure();
         }
 
@@ -356,10 +355,15 @@ public final class DeterministicActiveStepCompletionMaterializer
         return new Authority(
                 taskFrame,
                 plan,
+                versioned,
                 checkpoint,
                 activation,
                 stepId,
                 lease);
+    }
+
+    private static long nextEventSequence(Authority authority) {
+        return authority.current().lastEventSequence() + 1;
     }
 
     private static ActiveStepCompletionMaterializationProtocolException
@@ -394,6 +398,7 @@ public final class DeterministicActiveStepCompletionMaterializer
     private record Authority(
             TaskFrame taskFrame,
             Plan plan,
+            VersionedCheckpoint versioned,
             Checkpoint current,
             PersistedStepActivation activation,
             PlanStepId stepId,

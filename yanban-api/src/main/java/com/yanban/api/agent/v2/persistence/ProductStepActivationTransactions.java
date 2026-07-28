@@ -16,6 +16,7 @@ import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistedPlanExecutionContextConfirmed;
 import io.paperagent.v2.persistence.PersistedPlanExecutionContextReserved;
 import io.paperagent.v2.persistence.PersistedStepActivation;
+import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.persistence.PlanExecutionContextConfirmationRequest;
@@ -49,7 +50,10 @@ class ProductStepActivationTransactions {
     private final ProductLeaseJpaRepository leases;
     private final ProductLeaseTimeSource timeSource;
     private final ProductStepActivationJpaRepository activations;
+    private final ProductStepCompletionJpaRepository completions;
+    private final ProductStepInterruptionJpaRepository interruptions;
     private final ProductStepActivationCodec codec;
+    private final ProductStepRecoveryTransactions recovery;
     private final EntityManager entityManager;
 
     ProductStepActivationTransactions(
@@ -62,7 +66,10 @@ class ProductStepActivationTransactions {
             ProductLeaseJpaRepository leases,
             ProductLeaseTimeSource timeSource,
             ProductStepActivationJpaRepository activations,
+            ProductStepCompletionJpaRepository completions,
+            ProductStepInterruptionJpaRepository interruptions,
             ProductStepActivationCodec codec,
+            ProductStepRecoveryTransactions recovery,
             EntityManager entityManager) {
         this.bootstraps = bootstraps;
         this.bootstrapCodec = bootstrapCodec;
@@ -73,7 +80,10 @@ class ProductStepActivationTransactions {
         this.leases = leases;
         this.timeSource = timeSource;
         this.activations = activations;
+        this.completions = completions;
+        this.interruptions = interruptions;
         this.codec = codec;
+        this.recovery = recovery;
         this.entityManager = entityManager;
     }
 
@@ -93,12 +103,12 @@ class ProductStepActivationTransactions {
                     PersistenceErrorCode.NOT_FOUND, "request.planId");
         }
 
-        List<ProductStepActivationEntity> existing =
-                activations.findAllByPlanId(request.planId().value());
-        if (!existing.isEmpty()) {
-            return existing.size() == 1
-                    ? replay(existing.get(0), request, bootstrapRow)
-                    : partial();
+        ProductStepActivationEntity existing = activations
+                .findByPlanIdAndStepId(
+                        request.planId().value(), request.stepId().value())
+                .orElse(null);
+        if (existing != null) {
+            return replay(existing, request, bootstrapRow);
         }
 
         Source source = source(bootstrapRow);
@@ -117,6 +127,18 @@ class ProductStepActivationTransactions {
             return rejected(
                     PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
                     SOURCE);
+        }
+        var inspected = recovery.inspectLocked(request.planId());
+        if (inspected.outcome()
+                != io.paperagent.v2.persistence.PersistenceOutcome.FOUND
+                || !(inspected.value().orElse(null)
+                instanceof PersistedStepRecoveryReady ready)
+                || !ready.readyStepId().equals(request.stepId())) {
+            return inspected.failure().isPresent()
+                    ? partial()
+                    : rejected(
+                            PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
+                            SOURCE);
         }
 
         Instant now = timeSource.observe().truncatedTo(ChronoUnit.MICROS);
@@ -142,13 +164,17 @@ class ProductStepActivationTransactions {
         }
 
         PersistenceResult<PersistedStepActivation> invalid =
-                validate(request, source);
+                validate(request, ready);
         if (invalid != null) {
             return invalid;
         }
         if (starts.findByStartEventId(
                         request.activationEvent().id().value()).isPresent()
                 || activations.findById(
+                        request.activationEvent().id().value()).isPresent()
+                || completions.findById(
+                        request.activationEvent().id().value()).isPresent()
+                || interruptions.findById(
                         request.activationEvent().id().value()).isPresent()) {
             return rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
                     "request.activationEvent.id");
@@ -160,15 +186,15 @@ class ProductStepActivationTransactions {
         PersistedStepActivation result = new PersistedStepActivation(
                 request.planId(), request.stepId(), lease.ownerId(),
                 lease.fencingToken(), request.activationEvent(), activated);
-        Checkpoint head = source.started().startedCheckpoint().checkpoint();
+        Checkpoint head = ready.checkpoint().checkpoint();
         ProductStepActivationEntity row = new ProductStepActivationEntity(
                 request.planId().value(), request.stepId().value(),
                 request.activationEvent().id().value(),
                 head.revisionId().value(), head.revisionNumber(),
                 activated.checkpoint().revisionId().value(),
                 activated.checkpoint().revisionNumber(),
-                source.started().startedCheckpoint().version(),
-                activated.version(), source.started().startEvent().sequence(),
+                ready.checkpoint().version(),
+                activated.version(), head.lastEventSequence(),
                 request.activationEvent().sequence(), lease.ownerId(),
                 lease.fencingToken(), codec.encodeRequest(request),
                 codec.encodeResult(result), now);
@@ -184,7 +210,10 @@ class ProductStepActivationTransactions {
                 .lockByPlanIdForInspection(request.planId().value())
                 .orElse(null);
         List<ProductStepActivationEntity> own =
-                activations.findAllByPlanId(request.planId().value());
+                activations.findAllByPlanId(request.planId().value()).stream()
+                        .filter(row -> row.stepId().equals(
+                                request.stepId().value()))
+                        .toList();
         if (!own.isEmpty()) {
             if (own.size() != 1) {
                 return partial();
@@ -201,19 +230,13 @@ class ProductStepActivationTransactions {
         Marker marker = decodeMarker(event);
         ProductPlanBootstrapEntity winnerBootstrap = bootstraps
                 .lockByPlanIdForInspection(event.planId()).orElse(null);
-        Source winnerSource = winnerBootstrap == null
-                ? null : source(winnerBootstrap);
-        ContextStatus winnerContext = winnerSource == null
-                ? ContextStatus.PARTIAL : contextStatus(winnerSource);
-        boolean canonicalContext = winnerSource != null
-                && (winnerSource.bootstrap().taskFrame()
-                        .sourceProjectVersion().isPresent()
-                    ? winnerContext == ContextStatus.CONFIRMED
-                    : winnerContext == ContextStatus.NONE);
+        var winner = winnerBootstrap == null ? null
+                : recovery.inspectLocked(
+                        new io.paperagent.v2.contracts.PlanId(event.planId()));
         return marker == null
-                || winnerSource == null
-                || !markerMatchesSource(event, marker, winnerSource)
-                || !canonicalContext
+                || winner == null
+                || winner.outcome()
+                != io.paperagent.v2.persistence.PersistenceOutcome.FOUND
                 ? partial()
                 : rejected(PersistenceErrorCode.CONFLICTING_REPLAY,
                         "request.activationEvent.id");
@@ -223,18 +246,9 @@ class ProductStepActivationTransactions {
             ProductStepActivationEntity row, StepActivationRequest request,
             ProductPlanBootstrapEntity bootstrapRow) {
         Marker marker = decodeMarker(row);
-        Source source = source(bootstrapRow);
-        ContextStatus context = source == null
-                ? ContextStatus.PARTIAL : contextStatus(source);
-        if (marker == null || source == null
-                || !markerMatchesSource(row, marker, source)
-                || context == ContextStatus.PARTIAL
-                || source.bootstrap().taskFrame().sourceProjectVersion()
-                        .isPresent()
-                    && context != ContextStatus.CONFIRMED
-                || source.bootstrap().taskFrame().sourceProjectVersion()
-                        .isEmpty()
-                    && context != ContextStatus.NONE) {
+        var inspected = recovery.inspectLocked(request.planId());
+        if (marker == null || inspected.outcome()
+                != io.paperagent.v2.persistence.PersistenceOutcome.FOUND) {
             return partial();
         }
         if (!row.activationEventId().equals(
@@ -315,9 +329,9 @@ class ProductStepActivationTransactions {
     }
 
     private PersistenceResult<PersistedStepActivation> validate(
-            StepActivationRequest request, Source source) {
-        Checkpoint head = source.started().startedCheckpoint().checkpoint();
-        Plan plan = source.bootstrap().plan();
+            StepActivationRequest request, PersistedStepRecoveryReady ready) {
+        Checkpoint head = ready.checkpoint().checkpoint();
+        Plan plan = ready.plan();
         PlanRevision revision = plan.latestRevision();
         if (!revision.id().equals(request.expectedRevisionId())) {
             return rejected(PersistenceErrorCode.STALE_VERSION,
@@ -327,18 +341,17 @@ class ProductStepActivationTransactions {
             return rejected(PersistenceErrorCode.STALE_VERSION,
                     "request.expectedRevisionNumber");
         }
-        if (source.started().startedCheckpoint().version()
+        if (ready.checkpoint().version()
                 != request.expectedCheckpointVersion()) {
             return rejected(PersistenceErrorCode.STALE_VERSION,
                     "request.expectedCheckpointVersion");
         }
-        if (source.started().startEvent().sequence()
+        if (head.lastEventSequence()
                 != request.expectedEventHeadSequence()) {
             return rejected(PersistenceErrorCode.STALE_VERSION,
                     "request.expectedEventHeadSequence");
         }
-        if (request.expectedCheckpointVersion() != 2
-                || request.expectedEventHeadSequence() != 1
+        if (!ready.readyStepId().equals(request.stepId())
                 || !eligible(plan, head, request.stepId())) {
             return rejected(
                     PersistenceErrorCode.STEP_ACTIVATION_NOT_ELIGIBLE,
@@ -350,7 +363,7 @@ class ProductStepActivationTransactions {
                     "request.activationEvent.planId");
         }
         if (!event.taskFrameId().equals(
-                source.bootstrap().taskFrame().id())) {
+                ready.taskFrame().id())) {
             return rejected(PersistenceErrorCode.TASK_FRAME_MISMATCH,
                     "request.activationEvent.taskFrameId");
         }
@@ -377,7 +390,7 @@ class ProductStepActivationTransactions {
                 || !onlyTargetActivated(
                         head, target, request.stepId())
                 || !CheckpointValidators.validate(
-                        target, source.bootstrap().taskFrame(), plan, head)
+                        target, ready.taskFrame(), plan, head)
                         .isEmpty()) {
             return rejected(
                     PersistenceErrorCode.CHECKPOINT_VALIDATION_FAILED,

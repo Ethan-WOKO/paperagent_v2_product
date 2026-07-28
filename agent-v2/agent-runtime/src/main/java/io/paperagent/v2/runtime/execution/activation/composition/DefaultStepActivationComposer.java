@@ -17,7 +17,9 @@ import io.paperagent.v2.persistence.StepActivationRequest;
 import io.paperagent.v2.runtime.execution.activation.materialization.CommittedStepActivationMaterializationRequest;
 import io.paperagent.v2.runtime.execution.activation.materialization.CommittedStepActivationMaterializationValidationException;
 import io.paperagent.v2.runtime.execution.activation.materialization.CommittedStepActivationMaterializer;
+import io.paperagent.v2.runtime.execution.activation.materialization.DeterministicReadyStepActivationMaterializer;
 import io.paperagent.v2.runtime.execution.activation.materialization.MaterializedStepActivation;
+import io.paperagent.v2.runtime.execution.activation.materialization.ReadyStepActivationMaterializationRequest;
 import io.paperagent.v2.runtime.execution.activation.materialization.StepActivationEventDraft;
 
 /** Composes one H0-derived, lease-fenced atomic Step activation attempt. */
@@ -27,6 +29,7 @@ public final class DefaultStepActivationComposer
     private static final long ACTIVATED_CHECKPOINT_VERSION = 3;
 
     private final CommittedStepActivationMaterializer materializer;
+    private final DeterministicReadyStepActivationMaterializer readyMaterializer;
     private final LeaseRepository leaseRepository;
     private final StepActivationRepository stepActivationRepository;
 
@@ -36,11 +39,81 @@ public final class DefaultStepActivationComposer
             StepActivationRepository stepActivationRepository) {
         this.materializer = StepActivationCompositionValues.required(
                 materializer, "stepActivationComposition.materializer");
+        this.readyMaterializer =
+                new DeterministicReadyStepActivationMaterializer();
         this.leaseRepository = StepActivationCompositionValues.required(
                 leaseRepository, "stepActivationComposition.leaseRepository");
         this.stepActivationRepository = StepActivationCompositionValues.required(
                 stepActivationRepository,
                 "stepActivationComposition.stepActivationRepository");
+    }
+
+    @Override
+    public StepActivationCompositionOutcome composeReady(
+            ReadyStepActivationCompositionRequest request) {
+        ReadyStepActivationCompositionRequest required =
+                StepActivationCompositionValues.required(
+                        request, "stepActivationComposition.readyRequest");
+        var ready = required.ready();
+        PlanId planId = ready.planId();
+        PlanStepId stepId = ready.readyStepId();
+        StepActivationAttempt attempt = required.attempt();
+        MaterializedStepActivation materialized;
+        try {
+            materialized = readyMaterializer.materialize(
+                    new ReadyStepActivationMaterializationRequest(
+                            ready, attempt.eventDraft(),
+                            attempt.checkpointCreatedAt()));
+        } catch (IllegalArgumentException exception) {
+            throw protocol(
+                    planId, StepActivationCompositionStage.MATERIALIZE,
+                    StepActivationCompositionProtocolCode
+                            .INCONSISTENT_MATERIALIZATION_AUTHORITY,
+                    "stepActivationComposition.readyMaterialization",
+                    StepActivationLeaseDisposition.NO_LEASE_ACTION, null);
+        } catch (RuntimeException exception) {
+            throw protocol(
+                    planId, StepActivationCompositionStage.MATERIALIZE,
+                    StepActivationCompositionProtocolCode.COLLABORATOR_EXCEPTION,
+                    "stepActivationComposition.readyMaterialization",
+                    StepActivationLeaseDisposition.NO_LEASE_ACTION, exception);
+        }
+
+        PersistenceResult<LeaseRecord> leaseResult = acquire(planId, attempt);
+        if (leaseResult.outcome() == PersistenceOutcome.REJECTED) {
+            var failure = leaseResult.failure().orElse(null);
+            if (failure == null) {
+                throw protocol(
+                        planId, StepActivationCompositionStage.LEASE_ACQUIRE,
+                        StepActivationCompositionProtocolCode
+                                .INCONSISTENT_LEASE_AUTHORITY,
+                        "stepActivationComposition.leaseAcquireResult.failure",
+                        StepActivationLeaseDisposition.NOT_ACQUIRED, null);
+            }
+            return new StepActivationLeaseRejected(
+                    planId, failure,
+                    StepActivationLeaseDisposition.NOT_ACQUIRED);
+        }
+        LeaseRecord returnedLease = leaseResult.value().orElse(null);
+        if (returnedLease == null) {
+            throw protocol(
+                    planId, StepActivationCompositionStage.LEASE_ACQUIRE,
+                    StepActivationCompositionProtocolCode
+                            .INCONSISTENT_LEASE_AUTHORITY,
+                    "stepActivationComposition.leaseAcquireResult.value",
+                    StepActivationLeaseDisposition.RETAINED_FOR_RECOVERY, null);
+        }
+        LeaseRecord lease = validateLease(planId, attempt, returnedLease);
+        var head = ready.checkpoint();
+        StepActivationRequest activationRequest = new StepActivationRequest(
+                planId, lease.leaseToken(), lease.fencingToken(),
+                ready.plan().latestRevision().id(),
+                ready.plan().latestRevision().number(),
+                head.version(), head.checkpoint().lastEventSequence(),
+                stepId, materialized.activationEvent(),
+                materialized.activatedCheckpoint());
+        return activate(
+                planId, stepId, lease, materialized, activationRequest);
     }
 
     @Override
@@ -352,7 +425,8 @@ public final class DefaultStepActivationComposer
                     StepActivationLeaseDisposition.RETAINED_FOR_RECOVERY,
                     null);
             case APPLIED, REPLAYED -> committed(
-                    planId, stepId, lease, materialized, result);
+                    planId, stepId, lease, materialized,
+                    request.expectedCheckpointVersion() + 1, result);
         };
     }
 
@@ -361,6 +435,7 @@ public final class DefaultStepActivationComposer
             PlanStepId stepId,
             LeaseRecord lease,
             MaterializedStepActivation materialized,
+            long expectedCheckpointVersion,
             PersistenceResult<PersistedStepActivation> result) {
         PersistedStepActivation persisted = result.value().orElse(null);
         if (persisted == null) {
@@ -378,7 +453,7 @@ public final class DefaultStepActivationComposer
                 || persisted.fencingToken() != lease.fencingToken()
                 || !persisted.activationEvent().equals(materialized.activationEvent())
                 || persisted.activatedCheckpoint().version()
-                        != ACTIVATED_CHECKPOINT_VERSION
+                        != expectedCheckpointVersion
                 || !persisted.activatedCheckpoint().checkpoint()
                         .equals(materialized.activatedCheckpoint())) {
             throw protocol(

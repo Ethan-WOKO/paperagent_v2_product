@@ -51,6 +51,12 @@ final class InMemoryStepRecoveryRepository
                 return partialState();
             }
 
+            PersistenceResult<StepRecoverySnapshot> inactive =
+                    classifyInactive(source, confirmed);
+            if (inactive != null) {
+                return inactive;
+            }
+
             InMemoryState.StepActivationMarker activation =
                     activeActivation(source);
             if (activation == null) {
@@ -67,6 +73,62 @@ final class InMemoryStepRecoveryRepository
                     activation.result(),
                     confirmed));
         }
+    }
+
+    private static PersistenceResult<StepRecoverySnapshot> classifyInactive(
+            InMemoryExecutionMutationAuthority.AuthoritativeSource source,
+            Optional<PersistedPlanExecutionContextConfirmed> confirmed) {
+        Checkpoint checkpoint = source.checkpoint().checkpoint();
+        PlanRevision revision = source.plan().latestRevision();
+        boolean hasActive = checkpoint.stepStates().values().stream()
+                .anyMatch(state -> state == StepExecutionState.ACTIVE);
+        if (hasActive) {
+            return null;
+        }
+        if (checkpoint.stepStates().values().stream().anyMatch(state ->
+                state == StepExecutionState.PAUSED
+                        || state == StepExecutionState.FAILED
+                        || state == StepExecutionState.CANCELLED)) {
+            return notEligible();
+        }
+        if (!revision.completedFacts().entrySet().stream().allMatch(entry ->
+                checkpoint.stepStates().get(entry.getKey())
+                        == StepExecutionState.SUCCEEDED)
+                || !checkpoint.stepStates().entrySet().stream().allMatch(
+                        entry -> entry.getValue() != StepExecutionState.SUCCEEDED
+                                || revision.completedFacts()
+                                        .containsKey(entry.getKey()))) {
+            return partialState();
+        }
+        boolean allSucceeded = checkpoint.stepStates().values().stream()
+                .allMatch(state -> state == StepExecutionState.SUCCEEDED);
+        if (allSucceeded) {
+            return checkpoint.planState() == PlanExecutionState.SUCCEEDED
+                    ? PersistenceResult.found(
+                            new PersistedStepRecoverySucceeded(
+                                    source.taskFrame(), source.plan(),
+                                    source.checkpoint(), confirmed))
+                    : partialState();
+        }
+        if (checkpoint.planState() != PlanExecutionState.ACTIVE) {
+            return partialState();
+        }
+        PlanStepId ready = revision.steps().stream()
+                .filter(step -> checkpoint.stepStates().get(step.id())
+                        == StepExecutionState.NOT_STARTED)
+                .filter(step -> step.dependencies().stream().allMatch(
+                        dependency -> checkpoint.stepStates().get(dependency)
+                                        == StepExecutionState.SUCCEEDED
+                                && revision.completedFacts()
+                                        .containsKey(dependency)))
+                .map(step -> step.id())
+                .findFirst()
+                .orElse(null);
+        return ready == null
+                ? partialState()
+                : PersistenceResult.found(new PersistedStepRecoveryReady(
+                        source.taskFrame(), source.plan(), source.checkpoint(),
+                        ready, confirmed));
     }
 
     private static Optional<PersistedPlanExecutionContextConfirmed>
