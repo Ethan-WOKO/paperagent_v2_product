@@ -821,6 +821,8 @@ import {
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
 import {
   isCurrentV2ProjectAnalysisRequest,
+  isDefinitiveV2ProjectAnalysisStartRejection,
+  isV2ProjectAnalysisConfirmedNotCreated,
   isV2ProjectAnalysisTerminal,
   newV2ProjectAnalysisClientRequestId,
   normalizeV2ProjectAnalysisForm,
@@ -1995,6 +1997,9 @@ async function runProjectAnalysisPolling(projectId: number, sessionId: number, c
   } catch (cause) {
     if (controller.signal.aborted) return;
     if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
+      if (isV2ProjectAnalysisConfirmedNotCreated(cause)) {
+        clearStoredProjectAnalysisRequest(projectId, sessionId);
+      }
       projectAnalysisError.value = apiError(cause);
     }
   } finally {
@@ -2059,6 +2064,12 @@ async function startProjectAnalysis() {
   } catch (cause) {
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
       const sessionId = activeSessionId.value;
+      if (sessionId && (
+        isDefinitiveV2ProjectAnalysisStartRejection(cause)
+        || isV2ProjectAnalysisConfirmedNotCreated(cause)
+      )) {
+        clearStoredProjectAnalysisRequest(projectId, sessionId);
+      }
       if (sessionId && storedProjectAnalysisRequest(projectId, sessionId)
           === clientRequestId) {
         projectAnalysisError.value = apiError(cause);

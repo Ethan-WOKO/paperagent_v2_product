@@ -28,16 +28,22 @@ class ProjectControllerV2AnalysisTest {
                         "analysis", 11L, null, false);
         when(service.execute(7L, 8L, 9L, request))
                 .thenReturn(response);
+        V2ProjectAnalysisResponse failed =
+                new V2ProjectAnalysisResponse(
+                        8L, 9L, "request-1", "FAILED",
+                        true, 10L, "plan", "version",
+                        null, null, "PROJECT_ANALYSIS_FAILED", true);
         when(service.read(7L, 8L, 9L, "request-1"))
-                .thenReturn(response);
+                .thenReturn(failed);
         ProjectController controller = new ProjectController(
                 mock(ProjectService.class), null, null, null,
                 Optional.empty(), Optional.of(service));
 
         assertEquals(response, controller.startV2ProjectAnalysis(
                 7L, 8L, 9L, request));
-        assertEquals(response, controller.readV2ProjectAnalysis(
+        assertEquals(failed, controller.readV2ProjectAnalysis(
                 7L, 8L, 9L, "request-1"));
+        assertEquals(true, failed.terminal());
         verify(service).execute(7L, 8L, 9L, request);
         verify(service).read(7L, 8L, 9L, "request-1");
     }

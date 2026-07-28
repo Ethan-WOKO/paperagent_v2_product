@@ -9,6 +9,7 @@ import {
   normalizeV2ProjectAnalysisForm,
   pollV2ProjectAnalysis,
   startThenPollV2ProjectAnalysis,
+  V2ProjectAnalysisNotCreatedError,
 } from '../src/utils/v2ProjectAnalysis';
 
 function outcome(status: V2ProjectReadAnalysisTurnResponse['status']): V2ProjectReadAnalysisTurnResponse {
@@ -121,6 +122,28 @@ describe('V2 Project analysis polling and isolation', () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(2);
   });
+
+  it('does not poll after a definitive 4xx rejection', async () => {
+    const rejected = { response: { status: 400 } };
+    const start = vi.fn(async () => { throw rejected; });
+    const read = vi.fn(async () => outcome('SUCCEEDED'));
+
+    await expect(startThenPollV2ProjectAnalysis(start, read))
+      .rejects.toBe(rejected);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('marks an unknown POST as not created only after GET confirms 404', async () => {
+    const start = vi.fn(async () => { throw new Error('response-lost'); });
+    const read = vi.fn(async () => {
+      throw { response: { status: 404 } };
+    });
+
+    await expect(startThenPollV2ProjectAnalysis(start, read))
+      .rejects.toBeInstanceOf(V2ProjectAnalysisNotCreatedError);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('Project page explicit V2 analysis integration', () => {
@@ -139,6 +162,7 @@ describe('Project page explicit V2 analysis integration', () => {
 
   it('recovers by scoped storage and cleans polling on project/session switch and unmount', () => {
     expect(source).toContain('V2_PROJECT_ANALYSIS_STORAGE_KEY');
+    expect(source).toContain('clearStoredProjectAnalysisRequest(projectId, sessionId)');
     expect(source).toContain('stopProjectAnalysisPolling();');
     expect(source).toContain('async function selectProject(projectId: number)');
     expect(source).toContain('async function selectConversation(sessionId: number)');

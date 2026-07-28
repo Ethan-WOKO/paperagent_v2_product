@@ -435,7 +435,7 @@ public class V2ProjectAnalysisService {
         return new V2ProjectAnalysisResponse(
                 delivery.id().projectId(), delivery.id().sessionId(),
                 delivery.id().clientRequestId(), delivery.status(),
-                "SUCCEEDED".equals(delivery.status()),
+                isTerminal(delivery),
                 delivery.turnId(), delivery.planId(),
                 delivery.projectVersionId(),
                 "SUCCEEDED".equals(delivery.status())

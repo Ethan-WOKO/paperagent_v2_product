@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.effect.project;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.paperagent.v2.contracts.ContentHash;
+import io.paperagent.v2.contracts.OutputCapture;
 import io.paperagent.v2.contracts.ProjectPath;
 import io.paperagent.v2.contracts.ProjectVersionRef;
 import io.paperagent.v2.contracts.WorkspaceId;
@@ -60,14 +62,16 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 "path", "paper/main.md");
 
         String output = composer.read(workspace, ref, arguments);
-        assertTrue(output.contains("\"path\":\"paper/main.md\""));
-        assertTrue(output.contains("\"content\":\"evidence\""));
+        assertEquals("path: paper/main.md\ncontent:\nevidence", output);
 
         byte[] exactLimit = "x".repeat(64 * 1024)
                 .getBytes(StandardCharsets.UTF_8);
         when(workspace.read(ref, path)).thenReturn(exactLimit);
-        assertTrue(composer.read(workspace, ref, arguments)
-                .contains("\"content\":\""));
+        OutputCapture exactLimitCapture = AuthenticatedProjectEffectExecutionComposer
+                .capture(composer.read(workspace, ref, arguments));
+        assertTrue(exactLimitCapture.truncated());
+        assertEquals(OutputCapture.MAX_INLINE_CHARACTERS,
+                exactLimitCapture.inlineText().orElseThrow().length());
 
         when(workspace.read(ref, path)).thenReturn(new byte[]{1});
         assertThrows(IllegalStateException.class,
@@ -79,6 +83,27 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         assertThrows(RuntimeException.class, () -> composer.read(
                 workspace, ref,
                 json.createObjectNode().put("path", "../secret")));
+    }
+
+    @Test
+    void receiptCapturePreservesSmallOutputAndTruncatesOnUtf16Boundary() {
+        String small = "path: paper.md\ncontent:\nevidence";
+        OutputCapture complete =
+                AuthenticatedProjectEffectExecutionComposer.capture(small);
+        assertEquals(small, complete.inlineText().orElseThrow());
+        assertFalse(complete.truncated());
+
+        String prefix = "x".repeat(
+                OutputCapture.MAX_INLINE_CHARACTERS - 1);
+        OutputCapture truncated =
+                AuthenticatedProjectEffectExecutionComposer.capture(
+                        prefix + "\uD83D\uDE00" + "tail");
+        assertTrue(truncated.truncated());
+        assertEquals(OutputCapture.MAX_INLINE_CHARACTERS - 1,
+                truncated.inlineText().orElseThrow().length());
+        assertFalse(Character.isHighSurrogate(truncated.inlineText()
+                .orElseThrow().charAt(
+                        truncated.inlineText().orElseThrow().length() - 1)));
     }
 
     @Test
@@ -107,6 +132,54 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                         json.createObjectNode()
                                 .put("maxResults", 21)
                                 .put("query", "needle")));
+    }
+
+    @Test
+    void projectSearchExecutesThroughClaimAndReturnsSuccessfulReceipt() {
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        WorkspaceRef ref = ref();
+        ProjectPath path = new ProjectPath("paper.md");
+        when(workspace.list(ref)).thenReturn(List.of(stat(path)));
+        when(workspace.read(ref, path)).thenReturn(
+                "needle evidence".getBytes(StandardCharsets.UTF_8));
+        var arguments = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "query", new io.paperagent.v2.contracts.TextValue("needle"),
+                "maxResults", new io.paperagent.v2.contracts.NumberValue(
+                        java.math.BigDecimal.ONE)));
+
+        var outcome = executeSuccess(
+                "project.search", arguments,
+                "{\"maxResults\":1,\"query\":\"needle\"}", workspace);
+
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
+                outcome.result().receipt().status());
+        assertFalse(outcome.result().receipt().standardOutput().truncated());
+        assertTrue(outcome.result().receipt().standardOutput()
+                .inlineText().orElseThrow().contains("needle evidence"));
+    }
+
+    @Test
+    void exact64KiBReadExecutesSuccessfullyWithTruncatedReceipt() {
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        WorkspaceRef ref = ref();
+        ProjectPath path = new ProjectPath("paper.md");
+        when(workspace.read(ref, path)).thenReturn(
+                "x".repeat(64 * 1024).getBytes(StandardCharsets.UTF_8));
+        var arguments = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "path", new io.paperagent.v2.contracts.TextValue("paper.md")));
+
+        var outcome = executeSuccess(
+                "project.read", arguments,
+                "{\"path\":\"paper.md\"}", workspace);
+
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
+                outcome.result().receipt().status());
+        assertTrue(outcome.result().receipt().standardOutput().truncated());
+        assertEquals(OutputCapture.MAX_INLINE_CHARACTERS,
+                outcome.result().receipt().standardOutput()
+                        .inlineText().orElseThrow().length());
+        assertFalse(outcome.result().receipt().standardOutput()
+                .inlineText().orElseThrow().contains(rootPath()));
     }
 
     @Test
@@ -243,6 +316,122 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         return new WorkspaceRef(
                 new WorkspaceId("workspace"),
                 new ProjectVersionRef("8", "version"));
+    }
+
+    private AuthenticatedProjectEffectExecutionOutcome executeSuccess(
+            String kind, io.paperagent.v2.contracts.ObjectValue arguments,
+            String canonicalArguments, WorkspacePort workspace) {
+        var contexts = mock(com.yanban.api.agent.v2
+                .AgentTurnProductContextResolver.class);
+        var planIds = new com.yanban.agent.v2.adapter.bootstrap
+                .ProductPlanIdDerivation();
+        var recoverer = mock(io.paperagent.v2.runtime.execution.recovery
+                .composition.StepRecoverer.class);
+        var intents = mock(io.paperagent.v2.persistence
+                .EffectIntentRepository.class);
+        var claims = mock(com.yanban.api.agent.v2.persistence
+                .ProductEffectExecutionClaimRepository.class);
+        var executionContexts = mock(io.paperagent.v2.persistence
+                .PlanExecutionContextRepository.class);
+        var workspaces = mock(com.yanban.api.agent.v2.workspace
+                .AuthenticatedAgentTurnWorkspacePortFactory.class);
+        var authorities = mock(com.yanban.api.agent.v2.compatibility.project
+                .ProjectAnalysisAuthoritySource.class);
+        var identity = new com.yanban.core.agent.AgentRunIdentity(
+                "AGENT_TURN", "turn-42", 7L, 9L, 8L);
+        var planId = planIds.derive(identity);
+        when(contexts.resolve(7L, 42L)).thenReturn(
+                new com.yanban.api.agent.v2.VerifiedAgentTurnProductContext(
+                        identity, Optional.of("version")));
+        var recovery = mock(io.paperagent.v2.persistence
+                .PersistedStepRecoveryActive.class);
+        var activation = mock(io.paperagent.v2.persistence
+                .PersistedStepActivation.class);
+        var event = mock(io.paperagent.v2.contracts.EventEnvelope.class);
+        var stepId = new io.paperagent.v2.contracts.PlanStepId("step");
+        var activationId = new io.paperagent.v2.contracts.EventId(
+                "activation");
+        when(recovery.planId()).thenReturn(planId);
+        when(recovery.activation()).thenReturn(activation);
+        when(activation.stepId()).thenReturn(stepId);
+        when(activation.activationEvent()).thenReturn(event);
+        when(event.id()).thenReturn(activationId);
+        var lease = new io.paperagent.v2.persistence.LeaseRecord(
+                planId, "owner", "token", 1L,
+                Instant.now().minusSeconds(1),
+                Instant.now().plusSeconds(60));
+        var active = new io.paperagent.v2.runtime.execution.recovery
+                .composition.RecoveredActiveStep(
+                        recovery, lease,
+                        io.paperagent.v2.runtime.execution.recovery
+                                .composition.StepRecoveryLeaseDisposition
+                                .RETAINED_FOR_RECOVERY);
+        when(recoverer.recover(
+                org.mockito.ArgumentMatchers.any())).thenReturn(active);
+        var toolCallId = new io.paperagent.v2.contracts.ToolCallId("tool");
+        var persistedIntent = new io.paperagent.v2.persistence
+                .PersistedEffectIntent(
+                        new io.paperagent.v2.contracts.EffectIntent(
+                                toolCallId, planId, stepId, kind, arguments),
+                        "owner", 1L, activationId);
+        when(intents.find(toolCallId)).thenReturn(
+                io.paperagent.v2.persistence.PersistenceResult.found(
+                        persistedIntent));
+        when(authorities.require(planId.value(), stepId.value())).thenReturn(
+                new com.yanban.api.agent.v2.compatibility.project
+                        .ProjectAnalysisEffectAuthority(
+                                kind, canonicalArguments,
+                                sha256(canonicalArguments)));
+        var confirmed = mock(io.paperagent.v2.persistence
+                .PersistedPlanExecutionContextConfirmed.class);
+        var spec = mock(io.paperagent.v2.contracts
+                .WorkspaceMaterializationSpec.class);
+        when(confirmed.materializationSpec()).thenReturn(spec);
+        when(executionContexts.inspect(planId)).thenReturn(
+                io.paperagent.v2.persistence.PersistenceResult.found(
+                        confirmed));
+        var verified = mock(io.paperagent.v2.workspace
+                .VerifiedWorkspaceMaterialization.class);
+        when(verified.workspace()).thenReturn(ref());
+        when(workspace.inspectMaterialization(spec)).thenReturn(verified);
+        when(workspaces.create(7L, 42L)).thenReturn(workspace);
+        when(claims.execute(
+                org.mockito.ArgumentMatchers.any())).thenAnswer(call -> {
+                    var request = (com.yanban.api.agent.v2.persistence
+                            .ProductEffectExecutionClaimRequest)
+                            call.getArgument(0);
+                    var receipt = request.execution().get();
+                    return new com.yanban.api.agent.v2.persistence
+                            .ProductEffectExecutionClaimResult(
+                                    new io.paperagent.v2.persistence
+                                            .PersistedEffectResult(
+                                                    receipt, "owner", 1L),
+                                    false);
+                });
+        var target = new AuthenticatedProjectEffectExecutionComposer(
+                contexts, planIds, recoverer, intents, claims,
+                executionContexts, workspaces, authorities, json);
+        return target.execute(
+                7L, 42L, new AuthenticatedProjectEffectExecutionCommand(
+                        planId, toolCallId,
+                        new io.paperagent.v2.runtime.execution.recovery
+                                .composition.StepRecoveryLeaseAttempt(
+                                        "owner", "token",
+                                        lease.expiresAt())));
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(
+                            value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new AssertionError(exception);
+        }
+    }
+
+    private static String rootPath() {
+        return Path.of("").toAbsolutePath().toString();
     }
 
     private static WorkspaceFileStat stat(ProjectPath path) {

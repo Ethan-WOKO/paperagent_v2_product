@@ -95,6 +95,32 @@ export interface PollV2ProjectAnalysisOptions {
   onOutcome?: (outcome: V2ProjectReadAnalysisTurnResponse) => void;
 }
 
+export class V2ProjectAnalysisNotCreatedError extends Error {
+  constructor() {
+    super('project-analysis-not-created');
+    this.name = 'V2ProjectAnalysisNotCreatedError';
+  }
+}
+
+function responseStatus(cause: unknown) {
+  if (!cause || typeof cause !== 'object') return null;
+  const response = (cause as { response?: unknown }).response;
+  if (!response || typeof response !== 'object') return null;
+  const status = (response as { status?: unknown }).status;
+  return typeof status === 'number' ? status : null;
+}
+
+export function isDefinitiveV2ProjectAnalysisStartRejection(cause: unknown) {
+  const status = responseStatus(cause);
+  return status !== null && status >= 400 && status < 500
+    && status !== 408 && status !== 429;
+}
+
+export function isV2ProjectAnalysisConfirmedNotCreated(cause: unknown) {
+  return cause instanceof V2ProjectAnalysisNotCreatedError
+    || responseStatus(cause) === 404;
+}
+
 export async function pollV2ProjectAnalysis(
   read: () => Promise<V2ProjectReadAnalysisTurnResponse>,
   options: PollV2ProjectAnalysisOptions = {},
@@ -136,11 +162,15 @@ export async function startThenPollV2ProjectAnalysis(
     options.onOutcome?.(outcome);
     if (isV2ProjectAnalysisTerminal(outcome)) return outcome;
   } catch (cause) {
+    if (isDefinitiveV2ProjectAnalysisStartRejection(cause)) throw cause;
     startFailure = cause;
   }
   try {
     return await pollV2ProjectAnalysis(read, options);
   } catch (recoveryFailure) {
+    if (responseStatus(recoveryFailure) === 404) {
+      throw new V2ProjectAnalysisNotCreatedError();
+    }
     if (startFailure !== undefined) throw startFailure;
     throw recoveryFailure;
   }

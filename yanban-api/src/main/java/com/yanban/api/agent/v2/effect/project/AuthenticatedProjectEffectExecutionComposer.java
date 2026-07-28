@@ -167,7 +167,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 started, ended, java.util.Optional.of(success ? 0 : 1),
                 success ? java.util.Optional.empty()
                         : java.util.Optional.of("PROJECT_EVIDENCE_FAILED"),
-                success ? OutputCapture.inline(output, false)
+                success ? capture(output)
                         : OutputCapture.empty(),
                 success ? OutputCapture.empty()
                         : OutputCapture.inline(
@@ -182,10 +182,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
         String path = exactText(arguments, "path");
         byte[] bytes = workspace.read(ref, new ProjectPath(path));
         if (bytes.length > MAX_FILE_BYTES) throw failed();
-        ObjectNode output = json.createObjectNode();
-        output.put("path", path);
-        output.put("content", utf8(bytes));
-        return write(output);
+        return "path: " + path + "\ncontent:\n" + utf8(bytes);
     }
 
     String search(
@@ -281,6 +278,18 @@ public class AuthenticatedProjectEffectExecutionComposer {
         } catch (CharacterCodingException exception) {
             throw failed();
         }
+    }
+
+    static OutputCapture capture(String output) {
+        if (output.length() <= OutputCapture.MAX_INLINE_CHARACTERS) {
+            return OutputCapture.inline(output, false);
+        }
+        int end = OutputCapture.MAX_INLINE_CHARACTERS;
+        if (Character.isHighSurrogate(output.charAt(end - 1))
+                && Character.isLowSurrogate(output.charAt(end))) {
+            end--;
+        }
+        return OutputCapture.inline(output.substring(0, end), true);
     }
 
     private static String hash(String value) {

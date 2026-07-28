@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -53,6 +55,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -245,6 +249,31 @@ class V2ProjectAnalysisServiceH2VerticalTest {
                 new IllegalStateException("Project changed after delivery"));
         var replay = service.execute(
                 7L, 8L, session.getId(), request);
+        var pool = Executors.newFixedThreadPool(8);
+        List<V2ProjectAnalysisResponse> concurrentReads;
+        try {
+            concurrentReads = pool.invokeAll(
+                    java.util.stream.IntStream.range(0, 8)
+                            .mapToObj(ignored ->
+                                    (Callable<V2ProjectAnalysisResponse>)
+                                            () -> service.read(
+                                                    7L, 8L,
+                                                    session.getId(),
+                                                    "request-vertical"))
+                            .toList()).stream()
+                    .map(future -> {
+                        try {
+                            return future.get();
+                        } catch (Exception failure) {
+                            throw new AssertionError(failure);
+                        }
+                    }).toList();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        } finally {
+            pool.shutdownNow();
+        }
         assertThrows(IllegalArgumentException.class, () -> service.execute(
                 7L, 8L, session.getId(),
                 new V2ProjectAnalysisRequest(
@@ -255,11 +284,18 @@ class V2ProjectAnalysisServiceH2VerticalTest {
         assertEquals("Evidence from paper.md.", first.finalText());
         assertEquals(first.assistantMessageId(),
                 replay.assistantMessageId());
+        assertEquals(8, concurrentReads.size());
+        assertEquals(1L, concurrentReads.stream()
+                .map(V2ProjectAnalysisResponse::assistantMessageId)
+                .distinct().count());
+        assertEquals(true, concurrentReads.stream()
+                .allMatch(V2ProjectAnalysisResponse::replayed));
         assertEquals(true, replay.replayed());
         assertEquals(1L, jdbc.queryForObject(
                 "select count(*) from agent_messages "
                         + "where session_id = ? and role = 'assistant'",
                 Long.class, session.getId()));
+        verify(loop, times(1)).execute(any(), any(), any());
     }
 
     @TestConfiguration
