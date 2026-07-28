@@ -17,6 +17,8 @@ import com.yanban.core.agent.AgentSessionScope;
 import io.paperagent.v2.persistence.StepRecoveryRepository;
 import io.paperagent.v2.persistence.LeaseRepository;
 import io.paperagent.v2.persistence.LeaseRecord;
+import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
+import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.runtime.execution.start.FreshExecutionRecoveryRequired;
@@ -313,6 +315,79 @@ class V2LiteratureTurnServiceTest {
                         .eventDraft().id(),
                 commands.getAllValues().get(1).attempt().orElseThrow()
                         .eventDraft().id());
+    }
+
+    @Test
+    void nonTerminalOrUnavailableRecoveryNeverSynthesizesOrDelivers() {
+        AgentSessionRepository sessions = mock(AgentSessionRepository.class);
+        LiteratureDeliveryTransactions deliveries =
+                mock(LiteratureDeliveryTransactions.class);
+        var starts = mock(
+                AuthenticatedAgentTurnFreshExecutionStartComposer.class);
+        var loop = mock(AuthenticatedPersistentPlanAgentLoopComposer.class);
+        var recovery = mock(StepRecoveryRepository.class);
+        var synthesis = mock(DefaultFinalSynthesisComposer.class);
+        PlanId planId = new PlanId("non-terminal-plan");
+        LiteratureDeliveryEntity delivery =
+                runningDelivery(9L, 42L, "recovery-gate", "lease-token");
+        when(sessions.findByIdAndUserId(9L, 7L)).thenReturn(Optional.of(
+                new AgentSession(
+                        7L, "workspace", "mock", "model", 4, false)));
+        when(deliveries.open(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyBoolean(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(delivery);
+        when(starts.start(
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new FreshExecutionRecoveryRequired(planId));
+        when(deliveries.bindPlan(delivery.id(), planId.value()))
+                .thenReturn(delivery);
+        when(loop.execute(
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new com.yanban.api.agent.v2.loop
+                        .PersistentPlanAgentLoopOutcome(
+                        planId, 1, com.yanban.api.agent.v2.loop
+                        .PersistentPlanAgentLoopState.PLAN_SUCCEEDED,
+                        Optional.empty(), Optional.empty(),
+                        Optional.empty(), Optional.empty()));
+        when(recovery.inspect(planId)).thenReturn(
+                PersistenceResult.found(
+                        mock(PersistedStepRecoveryReady.class)),
+                PersistenceResult.rejected(
+                        PersistenceErrorCode.NOT_FOUND, "planId"));
+        var service = new V2LiteratureTurnService(
+                sessions, deliveries, starts, loop, recovery, synthesis,
+                mock(LeaseRepository.class));
+        var request = new V2LiteratureTurnRequest(
+                "query", 10, null, false, "recovery-gate");
+
+        assertThrows(IllegalStateException.class,
+                () -> service.execute(7L, 9L, request));
+        assertThrows(IllegalStateException.class,
+                () -> service.execute(7L, 9L, request));
+
+        org.mockito.Mockito.verify(synthesis,
+                org.mockito.Mockito.never()).compose(
+                org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(deliveries,
+                org.mockito.Mockito.never()).deliver(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
     }
 
     private static LiteratureDeliveryEntity runningDelivery(

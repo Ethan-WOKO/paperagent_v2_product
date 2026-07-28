@@ -150,6 +150,147 @@ class DefaultFinalSynthesisComposerTest {
     }
 
     @Test
+    void rejectsMissingAuthoritativeReceiptBeforeIntentNarrationOrAppend() {
+        var terminal = terminal();
+        AtomicInteger intentCalls = new AtomicInteger();
+        AtomicInteger narrationCalls = new AtomicInteger();
+        AtomicInteger appendCalls = new AtomicInteger();
+        var composer = new DefaultFinalSynthesisComposer(
+                emptyStore(appendCalls),
+                ignored -> Optional.empty(),
+                (toolCallId, planId, stepId, kind) -> {
+                    intentCalls.incrementAndGet();
+                    return true;
+                },
+                request -> {
+                    narrationCalls.incrementAndGet();
+                    return "unexpected";
+                });
+
+        assertThrows(FinalSynthesisCompositionException.class,
+                () -> composer.compose(new FinalSynthesisCompositionRequest(
+                        cut(terminal), Optional.empty(), NOW)));
+
+        assertEquals(0, intentCalls.get());
+        assertEquals(0, narrationCalls.get());
+        assertEquals(0, appendCalls.get());
+    }
+
+    @Test
+    void rejectsExtraCheckpointReceiptBeforeLookupOrSideEffects() {
+        var terminal = terminal();
+        var checkpoint = terminal.checkpoint().checkpoint();
+        var mismatchedCut = new FinalSynthesisTerminalCut(
+                terminal.taskFrame(), terminal.plan(),
+                new Checkpoint(
+                        checkpoint.taskFrameId(), checkpoint.planId(),
+                        checkpoint.revisionId(), checkpoint.revisionNumber(),
+                        checkpoint.lastEventSequence(),
+                        checkpoint.planState(), checkpoint.stepStates(),
+                        List.of(
+                                new ReceiptId("receipt-1"),
+                                new ReceiptId("receipt-extra")),
+                        checkpoint.createdAt()));
+        AtomicInteger receiptCalls = new AtomicInteger();
+        AtomicInteger intentCalls = new AtomicInteger();
+        AtomicInteger narrationCalls = new AtomicInteger();
+        AtomicInteger appendCalls = new AtomicInteger();
+        var composer = new DefaultFinalSynthesisComposer(
+                emptyStore(appendCalls),
+                ignored -> {
+                    receiptCalls.incrementAndGet();
+                    return Optional.empty();
+                },
+                (toolCallId, planId, stepId, kind) -> {
+                    intentCalls.incrementAndGet();
+                    return true;
+                },
+                request -> {
+                    narrationCalls.incrementAndGet();
+                    return "unexpected";
+                });
+
+        assertThrows(FinalSynthesisCompositionException.class,
+                () -> composer.compose(new FinalSynthesisCompositionRequest(
+                        mismatchedCut, Optional.empty(), NOW)));
+
+        assertEquals(0, receiptCalls.get());
+        assertEquals(0, intentCalls.get());
+        assertEquals(0, narrationCalls.get());
+        assertEquals(0, appendCalls.get());
+    }
+
+    @Test
+    void rejectsNonSuccessfulReceiptBeforeIntentNarrationOrAppend() {
+        var terminal = terminal();
+        var failedReceipt = new ExecutionReceipt(
+                new ReceiptId("receipt-1"),
+                new io.paperagent.v2.contracts.ToolCallId("call-1"),
+                ReceiptStatus.FAILURE, NOW, NOW,
+                Optional.of(1), Optional.of("failed"),
+                OutputCapture.empty(), OutputCapture.inline(
+                "provider failure", false),
+                List.of(), Optional.empty(), List.of());
+        AtomicInteger intentCalls = new AtomicInteger();
+        AtomicInteger narrationCalls = new AtomicInteger();
+        AtomicInteger appendCalls = new AtomicInteger();
+        var composer = new DefaultFinalSynthesisComposer(
+                emptyStore(appendCalls),
+                ignored -> Optional.of(failedReceipt),
+                (toolCallId, planId, stepId, kind) -> {
+                    intentCalls.incrementAndGet();
+                    return true;
+                },
+                request -> {
+                    narrationCalls.incrementAndGet();
+                    return "unexpected";
+                });
+
+        assertThrows(FinalSynthesisCompositionException.class,
+                () -> composer.compose(new FinalSynthesisCompositionRequest(
+                        cut(terminal), Optional.empty(), NOW)));
+
+        assertEquals(0, intentCalls.get());
+        assertEquals(0, narrationCalls.get());
+        assertEquals(0, appendCalls.get());
+    }
+
+    @Test
+    void rejectsReceiptLookupReturningDifferentIdBeforeSideEffects() {
+        var terminal = terminal();
+        var corruptedReceipt = new ExecutionReceipt(
+                new ReceiptId("receipt-other"),
+                new io.paperagent.v2.contracts.ToolCallId("call-1"),
+                ReceiptStatus.SUCCESS, NOW, NOW,
+                Optional.of(0), Optional.empty(),
+                OutputCapture.inline("task queued", false),
+                OutputCapture.empty(), List.of(), Optional.empty(),
+                List.of());
+        AtomicInteger intentCalls = new AtomicInteger();
+        AtomicInteger narrationCalls = new AtomicInteger();
+        AtomicInteger appendCalls = new AtomicInteger();
+        var composer = new DefaultFinalSynthesisComposer(
+                emptyStore(appendCalls),
+                ignored -> Optional.of(corruptedReceipt),
+                (toolCallId, planId, stepId, kind) -> {
+                    intentCalls.incrementAndGet();
+                    return true;
+                },
+                request -> {
+                    narrationCalls.incrementAndGet();
+                    return "unexpected";
+                });
+
+        assertThrows(FinalSynthesisCompositionException.class,
+                () -> composer.compose(new FinalSynthesisCompositionRequest(
+                        cut(terminal), Optional.empty(), NOW)));
+
+        assertEquals(0, intentCalls.get());
+        assertEquals(0, narrationCalls.get());
+        assertEquals(0, appendCalls.get());
+    }
+
+    @Test
     void rejectsReceiptWhoseIntentBelongsToAnotherPlanBeforeNarration() {
         var terminal = terminal();
         ReceiptId receiptId = new ReceiptId("receipt-1");
@@ -174,6 +315,23 @@ class DefaultFinalSynthesisComposerTest {
                 () -> composer.compose(new FinalSynthesisCompositionRequest(
                         cut(terminal), Optional.empty(), NOW)));
         assertEquals(0, narrationCalls.get());
+    }
+
+    private static FinalSynthesisStore emptyStore(
+            AtomicInteger appendCalls) {
+        return new FinalSynthesisStore() {
+            @Override
+            public Optional<FinalSynthesis> find(PlanId planId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<FinalSynthesisCompositionResult> append(
+                    FinalSynthesis synthesis) {
+                appendCalls.incrementAndGet();
+                return Optional.empty();
+            }
+        };
     }
 
     private static FinalSynthesisStore store(
