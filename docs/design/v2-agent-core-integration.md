@@ -972,3 +972,29 @@ as corruption, never as permission to execute again.
 This boundary does not poll the literature task, perform live retrieval,
 complete or advance the Step, run another tool, expose Controller/API/UI
 traffic, or introduce a generic effect loop.
+
+## Authenticated effect-driven Step progression boundary
+
+One authenticated product composition now advances a successful, persisted
+effect without accepting any model-authored completion or activation fact. It
+loads the exact canonical EffectIntent and final EffectOutcome by ToolCallId,
+requires their Plan, Step, activation, lease fence and successful Receipt to
+agree with the owner-qualified product Plan, and uses the complete Receipt
+semantics to derive domain-separated completion hashes and identifiers. Event
+payloads contain only bounded authority identifiers and status; captured tool
+output is never copied.
+
+The existing Runtime completion materializer/composer commits the current
+ACTIVE Step first. The composition then performs a new progression inspection:
+a single-Step Plan returns SUCCEEDED, while a multi-Step Plan exposes the
+durable READY gap before the existing Runtime activation composer activates
+the deterministic next Step. Completion and activation are intentionally two
+transactions. A restart from READY activates once; a replay after SUCCEEDED or
+after the next Step is ACTIVE proves the prior completion from the exact
+CompletionFact, checkpoint Receipt reference, deterministic completion cause
+and deterministic next-activation identity before returning without another
+write.
+
+This boundary executes no Provider or product tool, touches no
+ToolExecutionContext, implements no failed-effect retry, repair, replan or
+autonomous loop, and exposes no Controller/API/UI traffic.
