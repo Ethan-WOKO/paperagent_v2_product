@@ -1,6 +1,8 @@
 package com.yanban.api.agent;
 
 import com.yanban.api.security.JwtUser;
+import com.yanban.api.agent.v2.compatibility.V2ProductAvailability;
+import com.yanban.api.agent.v2.compatibility.V2ProductAvailabilityDocument;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnRequest;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnResponse;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
@@ -29,15 +31,28 @@ public class AgentController {
     private final AgentContextSnapshotService contextSnapshotService;
     private final V2LiteratureTurnService v2LiteratureTurns;
     private final V2LiteratureOutcomeService v2LiteratureOutcomes;
+    private final V2ProductAvailability v2Availability;
 
     public AgentController(AgentService agentService,
                            AgentContextSnapshotService contextSnapshotService,
                            V2LiteratureTurnService v2LiteratureTurns,
                            V2LiteratureOutcomeService v2LiteratureOutcomes) {
+        this(agentService, contextSnapshotService, v2LiteratureTurns,
+                v2LiteratureOutcomes,
+                V2ProductAvailability.enabledByDefault());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability) {
         this.agentService = agentService;
         this.contextSnapshotService = contextSnapshotService;
         this.v2LiteratureTurns = v2LiteratureTurns;
         this.v2LiteratureOutcomes = v2LiteratureOutcomes;
+        this.v2Availability = v2Availability;
     }
 
     @PostMapping
@@ -82,11 +97,20 @@ public class AgentController {
         return agentService.sendMessage(currentUser.id(), sessionId, request);
     }
 
+    @GetMapping("/v2/capabilities")
+    public V2ProductAvailabilityDocument v2Capabilities(
+            @AuthenticationPrincipal JwtUser currentUser) {
+        java.util.Objects.requireNonNull(currentUser, "currentUser");
+        return v2Availability.document();
+    }
+
     @PostMapping("/{sessionId}/v2/literature-turns")
     public V2LiteratureTurnResponse sendV2LiteratureTurn(
             @AuthenticationPrincipal JwtUser currentUser,
             @PathVariable Long sessionId,
             @Valid @RequestBody V2LiteratureTurnRequest request) {
+        v2Availability.requireAvailable(
+                V2ProductAvailability.LITERATURE_SEARCH);
         return v2LiteratureTurns.execute(
                 currentUser.id(), sessionId, request);
     }
@@ -96,6 +120,8 @@ public class AgentController {
             @AuthenticationPrincipal JwtUser currentUser,
             @PathVariable Long sessionId,
             @PathVariable String clientRequestId) {
+        v2Availability.requireAvailable(
+                V2ProductAvailability.LITERATURE_SEARCH);
         return v2LiteratureOutcomes.get(
                 currentUser.id(), sessionId, clientRequestId);
     }
@@ -105,6 +131,8 @@ public class AgentController {
             @AuthenticationPrincipal JwtUser currentUser,
             @PathVariable Long sessionId,
             @PathVariable String clientRequestId) {
+        v2Availability.requireAvailable(
+                V2ProductAvailability.LITERATURE_SEARCH);
         return v2LiteratureOutcomes.cancel(
                 currentUser.id(), sessionId, clientRequestId);
     }

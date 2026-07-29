@@ -607,6 +607,10 @@
             :dropped-label="t('project.context.dropped')"
             @refresh="loadContextDebug()"
           />
+          <p
+            class="v2-availability-indicator"
+            :data-status="v2ProjectAvailable ? 'available' : 'unavailable'"
+          >{{ v2ProjectAvailabilityLabel }}</p>
           <details class="v2-project-analysis" :open="projectAnalysisOpen || undefined" @toggle="syncProjectAnalysisOpen">
             <summary>
               <span>
@@ -665,7 +669,7 @@
                 <NButton
                   type="primary"
                   :loading="projectAnalysisStarting || projectAnalysisPolling"
-                  :disabled="!activeProject || !projectAnalysisForm.objective.trim() || !projectAnalysisForm.pathsText.trim()"
+                  :disabled="!v2ProjectAnalysisAvailable || !activeProject || !projectAnalysisForm.objective.trim() || !projectAnalysisForm.pathsText.trim()"
                   @click="startProjectAnalysis"
                 >
                   {{ t('project.v2Analysis.start') }}
@@ -708,7 +712,7 @@
               </section>
               <div class="v2-project-analysis__actions">
                 <NButton type="primary" :loading="projectCandidateStarting || projectCandidatePolling"
-                  :disabled="!activeProject || !projectCandidateForm.objective.trim() || !projectCandidateForm.pathsText.trim()"
+                  :disabled="!v2ProjectCandidateAvailable || !activeProject || !projectCandidateForm.objective.trim() || !projectCandidateForm.pathsText.trim()"
                   @click="startProjectCandidate">
                   Prepare Candidate
                 </NButton>
@@ -837,7 +841,7 @@ import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import ProjectContextDebugPanel from '@/components/ProjectContextDebugPanel.vue';
-import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, listMessages, listPlans, updateSession as updateAgentSession, type AgentContextSnapshotResponse, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse } from '@/api/agent';
+import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, getV2ProductAvailability, listMessages, listPlans, updateSession as updateAgentSession, type AgentContextSnapshotResponse, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse } from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectContextSnapshots, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, readV2ProjectCandidateTurn, readV2ProjectReadAnalysisTurn, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, startV2ProjectCandidateTurn, startV2ProjectReadAnalysisTurn, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse, type V2ProjectCandidateTurnResponse, type V2ProjectReadAnalysisTurnResponse } from '@/api/project';
 import { useAuthStore } from '@/stores/auth';
@@ -881,6 +885,13 @@ import {
   startThenPollV2ProjectCandidate,
   type V2ProjectCandidateRequestIdentity,
 } from '@/utils/v2ProjectCandidate';
+import {
+  V2_PRODUCT_AVAILABILITY_LOADING,
+  isV2CapabilityAvailable,
+  loadV2ProductAvailability,
+  v2AvailabilityLabel,
+  type V2ProductAvailabilityState,
+} from '@/utils/v2ProductAvailability';
 
 type ProjectChatRole = 'user' | 'assistant' | 'process';
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
@@ -1015,9 +1026,23 @@ const projectCandidatePolling = ref(false);
 const projectCandidateError = ref('');
 const projectCandidateOutcome = ref<V2ProjectCandidateTurnResponse | null>(null);
 const projectCandidateForm = reactive({ objective: '', pathsText: '' });
+const v2Availability = ref<V2ProductAvailabilityState>(V2_PRODUCT_AVAILABILITY_LOADING);
 let projectCandidateAbortController: AbortController | null = null;
 let projectCandidateSequence = 0;
 let projectCandidateClientRequestId: string | null = null;
+const v2ProjectAnalysisAvailable = computed(() => (
+  isV2CapabilityAvailable(v2Availability.value, 'project.read-analysis')
+));
+const v2ProjectCandidateAvailable = computed(() => (
+  isV2CapabilityAvailable(v2Availability.value, 'project.candidate')
+));
+const v2ProjectAvailable = computed(() => (
+  v2ProjectAnalysisAvailable.value || v2ProjectCandidateAvailable.value
+));
+const v2ProjectAvailabilityLabel = computed(() => {
+  if (v2ProjectAvailable.value) return 'V2 available';
+  return v2AvailabilityLabel(v2Availability.value, 'project.read-analysis');
+});
 
 const loading = reactive({
   projects: false,
@@ -2030,6 +2055,7 @@ function storedProjectAnalysisRequest(projectId: number, sessionId: number) {
 }
 
 async function runProjectAnalysisPolling(projectId: number, sessionId: number, clientRequestId: string) {
+  if (!v2ProjectAnalysisAvailable.value) return;
   stopProjectAnalysisPolling();
   projectAnalysisClientRequestId = clientRequestId;
   const sequence = projectAnalysisSequence;
@@ -2072,6 +2098,7 @@ async function runProjectAnalysisPolling(projectId: number, sessionId: number, c
 }
 
 async function recoverProjectAnalysis(projectId: number, sessionId: number) {
+  if (!v2ProjectAnalysisAvailable.value) return;
   const clientRequestId = storedProjectAnalysisRequest(projectId, sessionId);
   if (!clientRequestId) return;
   projectAnalysisOpen.value = true;
@@ -2080,6 +2107,10 @@ async function recoverProjectAnalysis(projectId: number, sessionId: number) {
 }
 
 async function startProjectAnalysis() {
+  if (!v2ProjectAnalysisAvailable.value) {
+    projectAnalysisError.value = v2AvailabilityLabel(v2Availability.value, 'project.read-analysis');
+    return;
+  }
   const projectId = activeProjectId.value;
   if (!projectId || projectAnalysisStarting.value || projectAnalysisPolling.value) return;
   const epoch = projectEpoch;
@@ -2193,6 +2224,7 @@ async function presentProjectCandidate(
 }
 
 async function recoverProjectCandidate(projectId: number, sessionId: number) {
+  if (!v2ProjectCandidateAvailable.value) return;
   const clientRequestId = storedProjectCandidateRequest(projectId, sessionId);
   if (!clientRequestId) return;
   projectCandidateOpen.value = true;
@@ -2239,6 +2271,10 @@ async function recoverProjectCandidate(projectId: number, sessionId: number) {
 }
 
 async function startProjectCandidate() {
+  if (!v2ProjectCandidateAvailable.value) {
+    projectCandidateError.value = v2AvailabilityLabel(v2Availability.value, 'project.candidate');
+    return;
+  }
   const projectId = activeProjectId.value;
   if (!projectId || projectCandidateStarting.value || projectCandidatePolling.value) return;
   const epoch = projectEpoch;
@@ -3054,7 +3090,29 @@ async function submitProject() {
   }
 }
 
-onMounted(loadProjects);
+async function loadProductV2Availability() {
+  v2Availability.value = await loadV2ProductAvailability(
+    async () => (await getV2ProductAvailability()).data,
+  );
+  if (!v2ProjectAnalysisAvailable.value) {
+    stopProjectAnalysisPolling();
+    projectAnalysisStarting.value = false;
+  }
+  if (!v2ProjectCandidateAvailable.value) {
+    stopProjectCandidatePolling();
+    projectCandidateStarting.value = false;
+  }
+  const projectId = activeProjectId.value;
+  const sessionId = activeSessionId.value;
+  if (!projectId || !sessionId) return;
+  if (v2ProjectAnalysisAvailable.value) void recoverProjectAnalysis(projectId, sessionId);
+  if (v2ProjectCandidateAvailable.value) void recoverProjectCandidate(projectId, sessionId);
+}
+
+onMounted(() => {
+  void loadProductV2Availability();
+  void loadProjects();
+});
 onUnmounted(() => {
   stopProjectAnalysisPolling();
   stopProjectCandidatePolling();
