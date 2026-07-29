@@ -1,5 +1,20 @@
 import http from './http';
 
+export type V2ProductCapability =
+  | 'literature.search'
+  | 'project.read-analysis'
+  | 'project.candidate';
+
+export interface V2ProductAvailabilityDocument {
+  formatVersion: number;
+  enabled: boolean;
+  capabilities: string[];
+}
+
+export function getV2ProductAvailability() {
+  return http.get<V2ProductAvailabilityDocument>('/agent/sessions/v2/capabilities');
+}
+
 export interface AgentSessionResponse {
   id: number;
   userId: number;

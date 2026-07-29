@@ -153,3 +153,25 @@
   execution, retry/repair/replan, generic message routing, legacy Agent
   orchestration, and changes to the V2 core or mature Candidate/revision
   implementations.
+
+## V2 product availability boundary
+
+- Status: `V2_AVAILABLE_WITH_ROLLBACK_GATE`.
+- Assessed product entries: the existing explicit V2 literature search,
+  Project read-analysis, and Project Candidate controllers and UI controls.
+- Authority: one server-bound `yanban.agent.v2.product.enabled` property,
+  enabled by code default. The authenticated capability document exposes only
+  format version, enabled state, and the three allowlisted capability names.
+  Client fields, headers, cookies, session state, and model output are not
+  availability authority.
+- Enforcement: every existing V2 start, read, and cancel controller checks the
+  same gate before service lookup or delegation. Disabled requests return one
+  sanitized service-unavailable response and cannot create a Plan, task,
+  Candidate, or message.
+- UI: Chat and Project pages treat a failed capability read as unavailable for
+  explicit V2 controls only. Ordinary chat, Project messages, legacy Plans,
+  RAG, paper, Candidate validation, and explicit Candidate apply remain
+  available and are never used as a silent fallback.
+- Retirement decision: all legacy Agent orchestration remains present and
+  unchanged. Removing it requires stable production evidence and a later
+  explicit user decision; it is not part of the current migration plan.

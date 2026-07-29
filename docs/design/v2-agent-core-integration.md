@@ -1178,3 +1178,30 @@ explicit confirmation, and revision creation. V2 never calls apply.
 This boundary does not add ADD/DELETE, command or network execution,
 automatic apply/repair/replan, generic natural-language routing, a real
 external Provider smoke test, or any dependency from V2 core to product code.
+
+## Rollback-safe V2 product availability boundary
+
+The three explicit product integrations now share one server-owned
+availability boundary. Its code default is enabled, preserving the behavior
+merged through the literature, Project read-analysis, and Project Candidate
+verticals. Operators may explicitly disable
+`yanban.agent.v2.product.enabled` as a rollback control.
+
+An authenticated, read-only capability document exposes format version 1, the
+global enabled state, and exactly `literature.search`,
+`project.read-analysis`, and `project.candidate`. It exposes no configuration
+source or internal value. All existing V2 start/read/cancel endpoints enforce
+the same boundary before service lookup or delegation, so disabled requests
+cannot create Plan, task, Candidate, or assistant-message facts.
+
+The existing Chat and Project pages use that document only to present and gate
+their explicit V2 controls. A failed read is fail-closed for V2 controls and
+does not block ordinary messages or other product use. There is no automatic
+legacy fallback.
+
+This stabilization boundary changes no V2 core, schema, Provider, Workspace,
+effect, or product task algorithm. Legacy Agent orchestration, ordinary
+messages, legacy Plans, WebSockets, RAG, paper flows, Candidate
+review/validation/apply, and direct Project APIs remain present and unchanged.
+Legacy retirement is deferred until V2 has demonstrated stable production
+behavior and the user makes a later explicit decision.

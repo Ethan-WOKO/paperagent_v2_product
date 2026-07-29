@@ -83,3 +83,19 @@ PR 只有满足以下任一条件才可以合并：
   requires sandbox validation plus explicit apply confirmation.
 - Do not run unrelated full product suites without a concrete dependency or
   failure that justifies expanding scope.
+
+## V2 product availability focused gate
+
+- Run the availability property/document tests and focused Agent/Project
+  controller tests for all existing V2 start/read/cancel methods.
+- Prove disabled requests fail before service delegation and enabled requests
+  delegate exactly once. Directly adjacent ordinary message, Project message,
+  and Candidate apply methods must remain callable while V2 is disabled.
+- Run only `tests/v2ProductAvailability.test.ts` plus the frontend production
+  build unless a directly affected import or state seam justifies another
+  focused test.
+- Compile `yanban-api` with dependencies. Audit owned paths and prove no
+  `agent-v2/**`, schema, legacy Agent implementation, secret, user/local data,
+  or generated artifact changed.
+- Full RAG, paper-quality, retrieval, deployment, and product suites are not
+  part of this gate without a concrete directly affected failure.

@@ -252,7 +252,16 @@
                 />
               </div>
               <div class="chat-composer__quick-actions">
-                <button type="button" :aria-expanded="literatureFormOpen" @click="openLiteratureForm">{{ t('chat.literature.open') }}</button>
+                <span
+                  class="v2-availability-indicator"
+                  :data-status="v2LiteratureAvailable ? 'available' : 'unavailable'"
+                >{{ v2LiteratureAvailabilityLabel }}</span>
+                <button
+                  type="button"
+                  :aria-expanded="literatureFormOpen"
+                  :disabled="!v2LiteratureAvailable"
+                  @click="openLiteratureForm"
+                >{{ t('chat.literature.open') }}</button>
                 <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
                 <button type="button" @click="planMode = !planMode">{{ planMode ? 'ReAct Mode' : 'Plan Mode' }}</button>
                 <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
@@ -286,7 +295,7 @@
                   type="primary"
                   size="small"
                   :loading="literatureStarting"
-                  :disabled="literaturePolling || literatureStarting"
+                  :disabled="!v2LiteratureAvailable || literaturePolling || literatureStarting"
                   @click="startLiteratureSearch"
                 >{{ t('chat.literature.start') }}</NButton>
                 <NButton
@@ -424,6 +433,7 @@ import {
   createSession,
   deleteSession as deleteAgentSession,
   executePlanAsync,
+  getV2ProductAvailability,
   getV2LiteratureTurn,
   getPlan,
   listMessages,
@@ -451,6 +461,13 @@ import {
   pollV2Literature,
   presentV2LiteratureOutcome,
 } from '@/utils/v2Literature';
+import {
+  V2_PRODUCT_AVAILABILITY_LOADING,
+  isV2CapabilityAvailable,
+  loadV2ProductAvailability,
+  v2AvailabilityLabel,
+  type V2ProductAvailabilityState,
+} from '@/utils/v2ProductAvailability';
 import { ui } from '@/ui';
 
 type MessageRole = 'user' | 'assistant' | 'system' | 'tool' | 'process';
@@ -593,6 +610,7 @@ const literaturePolling = ref(false);
 const literatureCancelling = ref(false);
 const literatureError = ref('');
 const literatureClientRequestId = ref<string | null>(null);
+const v2Availability = ref<V2ProductAvailabilityState>(V2_PRODUCT_AVAILABILITY_LOADING);
 const literaturePollTimers = new Set<number>();
 let literaturePollController: AbortController | null = null;
 let literatureRecoverySequence = 0;
@@ -691,6 +709,12 @@ const minimapPreviewStyle = computed(() => {
 
 const isDemoExperience = computed(() => route.query.demo === '1' || Boolean(authStore.currentUser?.demo));
 const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && demoQuestionPanelOpen.value);
+const v2LiteratureAvailable = computed(() => (
+  isV2CapabilityAvailable(v2Availability.value, 'literature.search')
+));
+const v2LiteratureAvailabilityLabel = computed(() => (
+  v2AvailabilityLabel(v2Availability.value, 'literature.search')
+));
 const literaturePresentation = computed(() => (
   literatureOutcome.value ? presentV2LiteratureOutcome(literatureOutcome.value) : null
 ));
@@ -712,6 +736,7 @@ const literatureStatusLabel = computed(() => {
 
 onMounted(async () => {
   applyMobileChatDefaults();
+  void loadProductV2Availability();
   await Promise.all([loadSettings(), loadSkills()]);
   await loadDemoConfigIfNeeded();
   await loadSessions();
@@ -775,6 +800,7 @@ onBeforeUnmount(() => {
 });
 
 function openLiteratureForm() {
+  if (!v2LiteratureAvailable.value) return;
   literatureFormOpen.value = true;
   if (literaturePresentation.value?.terminal) {
     literatureOutcome.value = null;
@@ -801,6 +827,10 @@ async function ensureLiteratureSession() {
 }
 
 async function startLiteratureSearch() {
+  if (!v2LiteratureAvailable.value) {
+    literatureError.value = v2LiteratureAvailabilityLabel.value;
+    return;
+  }
   if (literatureStarting.value || literaturePolling.value) return;
   literatureError.value = '';
   if (literaturePresentation.value?.terminal) {
@@ -881,6 +911,7 @@ async function runLiteraturePolling(sessionId: number, clientRequestId: string) 
 }
 
 async function recoverLiteratureSearch(sessionId: number) {
+  if (!v2LiteratureAvailable.value) return;
   const recoverySequence = ++literatureRecoverySequence;
   const clientRequestId = readLiteratureRequestId(sessionId);
   if (!clientRequestId) return;
@@ -902,6 +933,10 @@ async function recoverLiteratureSearch(sessionId: number) {
 }
 
 async function cancelLiteratureSearch() {
+  if (!v2LiteratureAvailable.value) {
+    literatureError.value = v2LiteratureAvailabilityLabel.value;
+    return;
+  }
   const sessionId = selectedSessionId.value;
   const clientRequestId = literatureClientRequestId.value;
   if (!sessionId || !clientRequestId || literatureCancelling.value) return;
@@ -918,6 +953,24 @@ async function cancelLiteratureSearch() {
   } finally {
     literatureCancelling.value = false;
   }
+}
+
+async function loadProductV2Availability() {
+  v2Availability.value = await loadV2ProductAvailability(
+    async () => (await getV2ProductAvailability()).data,
+  );
+  if (v2LiteratureAvailable.value) {
+    const sessionId = selectedSessionId.value;
+    if (sessionId && !literatureStarting.value && !literaturePolling.value) {
+      void recoverLiteratureSearch(sessionId);
+    }
+    return;
+  }
+  literatureStartSequence += 1;
+  stopLiteraturePolling();
+  literatureStarting.value = false;
+  literatureCancelling.value = false;
+  literatureFormOpen.value = false;
 }
 
 function literaturePollSleep(milliseconds: number, signal: AbortSignal) {
