@@ -48,11 +48,11 @@ public class DeepSeekModelProvider implements ChatModelProvider {
 
     @Override
     public ChatResponse chat(ChatRequest request) {
-        validateConfigured(request.apiKey());
+        validateConfigured(request.apiKey(), request.apiUrl());
         DeepSeekChatRequest payload = toDeepSeekRequest(request, false);
         try {
             DeepSeekChatResponse response = webClient.post()
-                    .uri(properties.getApiUrl())
+                    .uri(resolveApiUrl(request.apiUrl()))
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + resolveApiKey(request.apiKey()))
                     .headers(headers -> applyTraceHeader(headers, request.traceId()))
                     .contentType(MediaType.APPLICATION_JSON)
@@ -78,10 +78,10 @@ public class DeepSeekModelProvider implements ChatModelProvider {
 
     @Override
     public reactor.core.publisher.Flux<ChatChunk> streamChat(ChatRequest request) {
-        validateConfigured(request.apiKey());
+        validateConfigured(request.apiKey(), request.apiUrl());
         DeepSeekChatRequest payload = toDeepSeekRequest(request, true);
         return webClient.post()
-                .uri(properties.getApiUrl())
+                .uri(resolveApiUrl(request.apiUrl()))
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + resolveApiKey(request.apiKey()))
                 .headers(headers -> applyTraceHeader(headers, request.traceId()))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -130,8 +130,9 @@ public class DeepSeekModelProvider implements ChatModelProvider {
         return current;
     }
 
-    private void validateConfigured(String apiKeyOverride) {
-        if (!StringUtils.hasText(properties.getApiUrl())) {
+    private void validateConfigured(
+            String apiKeyOverride, String apiUrlOverride) {
+        if (!StringUtils.hasText(resolveApiUrl(apiUrlOverride))) {
             throw new ModelProviderException("DeepSeek apiUrl is not configured");
         }
         if (!StringUtils.hasText(resolveApiKey(apiKeyOverride))) {
@@ -147,6 +148,11 @@ public class DeepSeekModelProvider implements ChatModelProvider {
 
     private String resolveApiKey(String apiKeyOverride) {
         return StringUtils.hasText(apiKeyOverride) ? apiKeyOverride : properties.getApiKey();
+    }
+
+    private String resolveApiUrl(String apiUrlOverride) {
+        return StringUtils.hasText(apiUrlOverride)
+                ? apiUrlOverride : properties.getApiUrl();
     }
 
     private DeepSeekChatRequest toDeepSeekRequest(ChatRequest request, boolean stream) {

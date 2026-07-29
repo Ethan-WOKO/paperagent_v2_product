@@ -180,4 +180,80 @@ class UserSettingsServiceTest {
         assertThat(settings.getDefaultProvider()).isEqualTo(UserSettingsService.PROVIDER_GLM);
         verify(repository, never()).saveAndFlush(settings);
     }
+
+    @Test
+    void resolvesOwnedCustomDefaultProviderFromStableFirstModel() {
+        Long userId = 7L;
+        SysUserSettings settings = settings(
+                userId, "custom-default");
+        UserModel other = new UserModel(
+                userId, "custom-other", "Other", "other-model",
+                "https://other.example/v1", "other-key", false, 1);
+        UserModel first = new UserModel(
+                userId, "custom-default", "First", "first-model",
+                "https://first.example/v1", "first-key", false, 2);
+        UserModel second = new UserModel(
+                userId, "custom-default", "Second", "second-model",
+                "https://second.example/v1", "second-key", false, 3);
+        when(repository.findById(userId)).thenReturn(
+                Optional.of(settings));
+        when(userModelRepository
+                .findByUserIdOrderBySortOrderAscIdAsc(userId))
+                .thenReturn(List.of(other, first, second));
+        when(cryptoService.decrypt("first-key"))
+                .thenReturn("resolved-key");
+
+        UserSettingsService.ModelEndpoint endpoint =
+                service.resolveModelEndpoint(userId, null, null);
+
+        assertThat(endpoint.providerKey()).isEqualTo("custom-default");
+        assertThat(endpoint.modelName()).isEqualTo("first-model");
+        assertThat(endpoint.apiUrl())
+                .isEqualTo("https://first.example/v1");
+        assertThat(endpoint.apiKey()).isEqualTo("resolved-key");
+    }
+
+    @Test
+    void explicitCustomModelPrefersExactProviderAndModel() {
+        Long userId = 8L;
+        SysUserSettings settings = settings(
+                userId, UserSettingsService.DEFAULT_PROVIDER);
+        UserModel first = new UserModel(
+                userId, "Custom-Provider", "First", "first-model",
+                "https://first.example/v1", null, false, 1);
+        UserModel exact = new UserModel(
+                userId, "Custom-Provider", "Exact", "exact-model",
+                "https://exact.example/v1", null, false, 2);
+        when(repository.findById(userId)).thenReturn(
+                Optional.of(settings));
+        when(userModelRepository
+                .findByUserIdOrderBySortOrderAscIdAsc(userId))
+                .thenReturn(List.of(first, exact));
+
+        UserSettingsService.ModelEndpoint endpoint =
+                service.resolveModelEndpoint(
+                        userId, "Custom-Provider", "exact-model");
+
+        assertThat(endpoint.providerKey()).isEqualTo("Custom-Provider");
+        assertThat(endpoint.modelName()).isEqualTo("exact-model");
+        assertThat(endpoint.apiUrl())
+                .isEqualTo("https://exact.example/v1");
+    }
+
+    private static SysUserSettings settings(
+            Long userId, String defaultProvider) {
+        return new SysUserSettings(
+                userId,
+                defaultProvider,
+                null,
+                null,
+                UserSettingsService.DEFAULT_DEEPSEEK_MODEL,
+                UserSettingsService.DEFAULT_GLM_MODEL,
+                null,
+                "[]",
+                "[]",
+                UserSettingsService.DEFAULT_TEMPERATURE,
+                UserSettingsService.DEFAULT_MAX_STEPS,
+                UserSettingsService.DEFAULT_RAG_ENABLED);
+    }
 }

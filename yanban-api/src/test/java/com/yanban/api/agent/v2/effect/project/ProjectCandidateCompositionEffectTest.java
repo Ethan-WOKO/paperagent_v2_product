@@ -30,13 +30,27 @@ class ProjectCandidateCompositionEffectTest {
     void exactFrozenReplacementMutatesOnlyWorkspaceAndProducesStableModifyDiff() {
         Fixture fixture = fixture("{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
 
-        var result = fixture.effect.execute(fixture.intent, fixture.workspace,
+        var result = fixture.effect.execute(
+                fixture.intent, fixture.modelAuthority, fixture.workspace,
                 fixture.ref, 7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
 
         assertNull(result.artifactId());
         assertEquals(64, result.diffFingerprint().length());
         assertArrayEquals("new text".getBytes(StandardCharsets.UTF_8),
                 fixture.files.get("README.md"));
+        var modelRequest = org.mockito.ArgumentCaptor.forClass(
+                ModelRequest.class);
+        verify(fixture.provider).complete(modelRequest.capture());
+        assertEquals(Optional.of(
+                        fixture.modelAuthority.taskFrameId()),
+                modelRequest.getValue().taskFrameId());
+        assertEquals(Optional.of(fixture.modelAuthority.planId()),
+                modelRequest.getValue().planId());
+        assertEquals(Optional.of(
+                        fixture.modelAuthority.planRevisionId()),
+                modelRequest.getValue().planRevisionId());
+        assertEquals(Optional.of(fixture.modelAuthority.stepId()),
+                modelRequest.getValue().stepId());
         verifyNoInteractions(fixture.candidates, fixture.projects);
     }
 
@@ -50,7 +64,8 @@ class ProjectCandidateCompositionEffectTest {
                         + "x".repeat(64 * 1024 + 1) + "\"}]}")) {
             Fixture fixture = fixture(output);
             assertThrows(IllegalStateException.class, () -> fixture.effect.execute(
-                    fixture.intent, fixture.workspace, fixture.ref,
+                    fixture.intent, fixture.modelAuthority,
+                    fixture.workspace, fixture.ref,
                     7L, 42L, 8L, Instant.now()));
             assertArrayEquals("old text".getBytes(StandardCharsets.UTF_8),
                     fixture.files.get("README.md"));
@@ -61,11 +76,13 @@ class ProjectCandidateCompositionEffectTest {
     void providerFailureAndCrossBoundAuthorityFailBeforeCandidatePublication() {
         Fixture providerFailure = fixture(null);
         assertThrows(IllegalStateException.class, () -> providerFailure.effect.execute(
-                providerFailure.intent, providerFailure.workspace, providerFailure.ref,
+                providerFailure.intent, providerFailure.modelAuthority,
+                providerFailure.workspace, providerFailure.ref,
                 7L, 42L, 8L, Instant.now()));
         Fixture crossUser = fixture("{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new\"}]}");
         assertThrows(IllegalStateException.class, () -> crossUser.effect.execute(
-                crossUser.intent, crossUser.workspace, crossUser.ref,
+                crossUser.intent, crossUser.modelAuthority,
+                crossUser.workspace, crossUser.ref,
                 99L, 42L, 8L, Instant.now()));
         verifyNoInteractions(providerFailure.candidates, crossUser.candidates);
     }
@@ -74,7 +91,9 @@ class ProjectCandidateCompositionEffectTest {
     void terminalPublicationUsesExistingCandidatePipelineAndBindsExactFingerprints() {
         Fixture fixture = fixture(
                 "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        fixture.effect.execute(fixture.intent, fixture.workspace, fixture.ref,
+        fixture.effect.execute(
+                fixture.intent, fixture.modelAuthority,
+                fixture.workspace, fixture.ref,
                 7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
         when(fixture.projects.manifest(7L, 8L)).thenReturn(
                 new com.yanban.api.project.ProjectManifestResponse(
@@ -104,7 +123,8 @@ class ProjectCandidateCompositionEffectTest {
     void staleVersionAndCandidatePersistenceFailurePublishNothing() {
         Fixture stale = fixture(
                 "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        stale.effect.execute(stale.intent, stale.workspace, stale.ref,
+        stale.effect.execute(
+                stale.intent, stale.modelAuthority, stale.workspace, stale.ref,
                 7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
         when(stale.projects.manifest(7L, 8L)).thenReturn(
                 new com.yanban.api.project.ProjectManifestResponse(
@@ -117,6 +137,7 @@ class ProjectCandidateCompositionEffectTest {
         Fixture persistenceFailure = fixture(
                 "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
         persistenceFailure.effect.execute(persistenceFailure.intent,
+                persistenceFailure.modelAuthority,
                 persistenceFailure.workspace, persistenceFailure.ref,
                 7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
         when(persistenceFailure.projects.manifest(7L, 8L)).thenReturn(
@@ -186,7 +207,8 @@ class ProjectCandidateCompositionEffectTest {
                     return artifact;
                 });
 
-        realEffect.execute(fixture.intent, fixture.workspace,
+        realEffect.execute(
+                fixture.intent, fixture.modelAuthority, fixture.workspace,
                 fixture.ref, 7L, 42L, 8L, Instant.EPOCH);
         var published = realEffect.publish(
                 "plan", 7L, 42L, fixture.workspace,
@@ -221,7 +243,8 @@ class ProjectCandidateCompositionEffectTest {
                 binary.ref, new ProjectPath("README.md")))
                 .thenReturn(new byte[]{1});
         assertThrows(IllegalStateException.class, () -> binary.effect.execute(
-                binary.intent, binary.workspace, binary.ref,
+                binary.intent, binary.modelAuthority,
+                binary.workspace, binary.ref,
                 7L, 42L, 8L, Instant.now()));
         verifyNoInteractions(binary.candidates, binary.projects);
 
@@ -231,7 +254,8 @@ class ProjectCandidateCompositionEffectTest {
                 missing.ref, new ProjectPath("README.md")))
                 .thenThrow(new IllegalArgumentException("missing"));
         assertThrows(IllegalArgumentException.class, () -> missing.effect.execute(
-                missing.intent, missing.workspace, missing.ref,
+                missing.intent, missing.modelAuthority,
+                missing.workspace, missing.ref,
                 7L, 42L, 8L, Instant.now()));
         verifyNoInteractions(missing.candidates, missing.projects);
     }
@@ -289,8 +313,14 @@ class ProjectCandidateCompositionEffectTest {
                 ProjectCandidateCompositionEffect.KIND,
                 new ObjectValue(Map.of("operation", new TextValue("compose")))),
                 "owner", 1L, new EventId("activation"));
+        var modelAuthority =
+                new ProjectCandidateCompositionEffect.ModelAuthority(
+                        new TaskFrameId("task-frame"),
+                        new PlanId("plan"),
+                        new PlanRevisionId("revision"),
+                        new PlanStepId("project-candidate-compose"));
         return new Fixture(effect, gateway, candidates, provider, projects,
-                workspace, ref, files, intent);
+                workspace, ref, files, intent, modelAuthority);
     }
 
     private static String sha(String value) {
@@ -307,5 +337,6 @@ class ProjectCandidateCompositionEffectTest {
             CandidateChangeArtifactService candidates, ModelProvider provider,
             ProjectService projects,
             WorkspacePort workspace, WorkspaceRef ref, Map<String, byte[]> files,
-            PersistedEffectIntent intent) {}
+            PersistedEffectIntent intent,
+            ProjectCandidateCompositionEffect.ModelAuthority modelAuthority) {}
 }

@@ -33,6 +33,10 @@ final class ProductProviderAdapterTestFixtures {
     }
 
     static StepTurnInput input(String suffix) {
+        return input(suffix, "Call literature.search exactly once");
+    }
+
+    static StepTurnInput input(String suffix, String stepIntent) {
         TaskFrameId taskId = new TaskFrameId("task-" + suffix);
         PlanId planId = new PlanId("plan-" + suffix);
         PlanStepId stepId = new PlanStepId("step-" + suffix);
@@ -58,7 +62,7 @@ final class ProductProviderAdapterTestFixtures {
                 T0);
         PlanStep step = new PlanStep(
                 stepId,
-                "search literature",
+                stepIntent,
                 "candidate papers",
                 Set.of(),
                 List.of("results are relevant"),

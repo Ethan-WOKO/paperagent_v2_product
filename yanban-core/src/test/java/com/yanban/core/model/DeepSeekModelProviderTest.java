@@ -165,6 +165,69 @@ class DeepSeekModelProviderTest {
                 .hasMessageContaining("apiKey");
     }
 
+    @Test
+    void chatUsesRequestApiUrlOverride() throws Exception {
+        startServer(exchange -> {
+            byte[] bytes = """
+                    {"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add(
+                    "Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+        });
+        DeepSeekProperties properties = properties();
+        properties.setApiUrl("http://localhost:1/not-used");
+        DeepSeekModelProvider provider = new DeepSeekModelProvider(properties);
+        String override = "http://localhost:"
+                + server.getAddress().getPort()
+                + "/v1/chat/completions";
+
+        ChatResponse response = provider.chat(new ChatRequest(
+                "deepseek", "deepseek-chat",
+                List.of(ChatMessage.user("test")),
+                0.2, 128, null, "test-key", override,
+                null, ChatRequest.Thinking.disabled(), "trace-test"));
+
+        assertThat(response.assistantText()).isEqualTo("ok");
+    }
+
+    @Test
+    void streamChatUsesRequestApiUrlOverride() throws Exception {
+        startServer(exchange -> {
+            byte[] bytes = """
+                    data: {"choices":[{"delta":{"content":"ok"}}]}
+
+                    data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add(
+                    "Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+        });
+        DeepSeekProperties properties = properties();
+        properties.setApiUrl("http://localhost:1/not-used");
+        DeepSeekModelProvider provider = new DeepSeekModelProvider(properties);
+        String override = "http://localhost:"
+                + server.getAddress().getPort()
+                + "/v1/chat/completions";
+        ChatRequest request = new ChatRequest(
+                "deepseek", "deepseek-chat",
+                List.of(ChatMessage.user("test")),
+                0.2, 128, null, "test-key", override,
+                null, ChatRequest.Thinking.disabled(), "trace-test");
+
+        List<ChatChunk> chunks = provider.streamChat(request)
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        assertThat(chunks).isNotNull();
+        assertThat(chunks).anyMatch(
+                chunk -> "ok".equals(chunk.content()));
+        assertThat(chunks).anyMatch(ChatChunk::done);
+    }
+
     private DeepSeekProperties properties() {
         DeepSeekProperties properties = new DeepSeekProperties();
         properties.setApiUrl("http://localhost:" + server.getAddress().getPort() + "/v1/chat/completions");

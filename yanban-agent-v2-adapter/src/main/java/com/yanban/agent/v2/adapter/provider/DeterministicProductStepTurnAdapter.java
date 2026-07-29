@@ -121,7 +121,11 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
                 new CorrelationId("product-turn." + sha256("correlation\0" + binding)),
                 List.of(
                         new ModelMessage(MessageRole.SYSTEM, systemMessage()),
-                        new ModelMessage(MessageRole.USER, userMessage(authority))),
+                        new ModelMessage(
+                                MessageRole.USER,
+                                userMessage(
+                                        authority,
+                                        selectedTools.get(0).id()))),
                 selectedTools,
                 configuration.generationOptions(),
                 Optional.of(authority.input().taskFrame().id()),
@@ -182,20 +186,38 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
 
     private static String systemMessage() {
         return "Complete exactly one persisted plan step. "
-                + "Use at most one allowed tool and do not invent authority.";
+                + "You must call exactly the one provided tool and must not "
+                + "invent authority.";
     }
 
-    private static String userMessage(Authority authority) {
+    private static String userMessage(
+            Authority authority, ToolId selectedToolId) {
         var task = authority.input().taskFrame();
         var step = authority.input().activeStep();
+        String callableAlias = ProductProviderToolAlias.from(selectedToolId);
+        String internalDirective = "Call " + selectedToolId.value()
+                + " exactly once";
+        int directiveAt = step.intent().indexOf(internalDirective);
+        boolean uniqueDirective = directiveAt >= 0
+                && step.intent().indexOf(
+                        internalDirective,
+                        directiveAt + internalDirective.length()) < 0;
+        String providerIntent = uniqueDirective
+                ? step.intent().substring(0, directiveAt)
+                        + "Call " + callableAlias + " exactly once"
+                        + step.intent().substring(
+                                directiveAt + internalDirective.length())
+                : step.intent();
         return "Objective: " + task.objective()
                 + "\nTargets: " + String.join("; ", task.targets())
                 + "\nDeliverables: " + String.join("; ", task.deliverables())
                 + "\nConstraints: " + String.join("; ", task.constraints())
-                + "\nStep intent: " + step.intent()
+                + "\nStep intent: " + providerIntent
                 + "\nExpected outcome: " + step.expectedOutcome()
                 + "\nCompletion criteria: "
-                + String.join("; ", step.completionCriteria());
+                + String.join("; ", step.completionCriteria())
+                + "\nProvider callable function: " + callableAlias
+                + "\nCall exactly the provider callable function above once.";
     }
 
     private static ToolCallId toolCallId(

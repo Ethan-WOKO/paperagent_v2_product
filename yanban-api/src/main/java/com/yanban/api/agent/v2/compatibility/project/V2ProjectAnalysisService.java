@@ -82,7 +82,9 @@ import java.util.OptionalLong;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class V2ProjectAnalysisService {
@@ -150,10 +152,17 @@ public class V2ProjectAnalysisService {
     public V2ProjectAnalysisResponse read(
             Long userId, Long projectId, Long sessionId,
             String clientRequestId) {
-        ProjectAnalysisDeliveryEntity delivery = deliveries.find(
-                new ProjectAnalysisDeliveryKey(
-                        userId, projectId, sessionId,
-                        normalizeRequestId(clientRequestId)));
+        ProjectAnalysisDeliveryEntity delivery;
+        try {
+            delivery = deliveries.find(
+                    new ProjectAnalysisDeliveryKey(
+                            userId, projectId, sessionId,
+                            normalizeRequestId(clientRequestId)));
+        } catch (IllegalArgumentException missing) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "V2 Project analysis turn was not found");
+        }
         if ("SUCCEEDED".equals(delivery.status())) {
             return response(delivery, true);
         }
@@ -201,15 +210,13 @@ public class V2ProjectAnalysisService {
             if (manifest == null || !projectId.equals(manifest.projectId())
                     || manifest.version() == null
                     || manifest.version().isBlank()) {
-                throw new IllegalArgumentException(
-                        "Project version is unavailable");
+                throw invalid();
             }
             Set<String> manifestPaths = manifest.files().stream()
                     .map(value -> value.path()).collect(
                             java.util.stream.Collectors.toSet());
             if (!manifestPaths.containsAll(request.paths())) {
-                throw new IllegalArgumentException(
-                        "Project analysis path is unavailable");
+                throw invalid();
             }
             delivery = deliveries.open(
                     userId, projectId, sessionId, request.requestId(),
@@ -642,8 +649,9 @@ public class V2ProjectAnalysisService {
         return true;
     }
 
-    private static IllegalArgumentException invalid() {
-        return new IllegalArgumentException(
+    private static ResponseStatusException invalid() {
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
                 "V2 Project analysis request is invalid");
     }
 
@@ -662,7 +670,9 @@ public class V2ProjectAnalysisService {
             stage = "fresh_start";
             failureType = startFailure.failureType;
         } else if (failure instanceof PersistentPlanAgentLoopException loopFailure) {
-            stage = loopStage(loopFailure.stage());
+            String diagnosticStage = loopFailure.diagnosticStage();
+            stage = loopStage(diagnosticStage == null
+                    ? loopFailure.stage() : diagnosticStage);
         }
         return new FailureDiagnostic(stage, failureType);
     }

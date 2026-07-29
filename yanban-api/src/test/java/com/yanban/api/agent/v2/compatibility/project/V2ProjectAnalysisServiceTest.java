@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 class V2ProjectAnalysisServiceTest {
     @Test
@@ -55,16 +57,48 @@ class V2ProjectAnalysisServiceTest {
                 8L, "version", List.of(new ProjectFileEntry(
                         "paper.md", 10, Instant.EPOCH, "a".repeat(64)))));
 
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, request(List.of("../paper.md"))));
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, request(
-                        List.of("paper.md", "paper.md"))));
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, new V2ProjectAnalysisRequest(
-                        "objective", List.of("paper.md"),
-                        "x".repeat(257), 21, "request")));
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ResponseStatusException.class,
+                        () -> service.execute(
+                                7L, 8L, 9L,
+                                request(List.of("../paper.md"))))
+                        .getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ResponseStatusException.class,
+                        () -> service.execute(
+                                7L, 8L, 9L,
+                                request(List.of(
+                                        "paper.md", "paper.md"))))
+                        .getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ResponseStatusException.class,
+                        () -> service.execute(
+                                7L, 8L, 9L,
+                                new V2ProjectAnalysisRequest(
+                                        "objective", List.of("paper.md"),
+                                        "x".repeat(257), 21, "request")))
+                        .getStatusCode());
         verifyNoInteractions(deliveries);
+    }
+
+    @Test
+    void missingRecoveryIdentityIsDefinitiveNotFound() {
+        ProjectAnalysisDeliveryTransactions deliveries =
+                mock(ProjectAnalysisDeliveryTransactions.class);
+        ProjectAnalysisDeliveryKey key =
+                new ProjectAnalysisDeliveryKey(
+                        7L, 8L, 9L, "missing");
+        when(deliveries.find(key)).thenThrow(
+                new IllegalArgumentException("delivery was not found"));
+        V2ProjectAnalysisService service = service(
+                mock(AgentSessionRepository.class),
+                mock(ProjectService.class), deliveries);
+
+        ResponseStatusException missing = assertThrows(
+                ResponseStatusException.class,
+                () -> service.read(7L, 8L, 9L, "missing"));
+
+        assertEquals(HttpStatus.NOT_FOUND, missing.getStatusCode());
     }
 
     @Test

@@ -36,11 +36,17 @@ public class ProjectCandidateCompositionEffect {
         this.provider = provider; this.projects = projects; this.json = json;
     }
 
-    CandidateResult execute(PersistedEffectIntent intent, WorkspacePort workspace,
+    CandidateResult execute(
+            PersistedEffectIntent intent,
+            ModelAuthority modelAuthority,
+            WorkspacePort workspace,
             WorkspaceRef ref, Long userId, Long turnId, Long projectId, Instant now) {
         var authority = gateway.require(intent.intent().planId().value(),
                 intent.intent().stepId().value());
-        if (!KIND.equals(authority.kind()) || !userId.equals(authority.userId())
+        if (modelAuthority == null
+                || !modelAuthority.planId().equals(intent.intent().planId())
+                || !modelAuthority.stepId().equals(intent.intent().stepId())
+                || !KIND.equals(authority.kind()) || !userId.equals(authority.userId())
                 || !turnId.equals(authority.turnId()) || !projectId.equals(authority.projectId())
                 || !hash(authority.authorityJson()).equals(authority.authoritySha256())) throw failed();
         Map<String, byte[]> originals = new LinkedHashMap<>();
@@ -50,7 +56,8 @@ public class ProjectCandidateCompositionEffect {
                 requireText(original);
                 originals.put(path, original);
             }
-            Map<String, String> replacements = replacements(intent, authority, originals);
+            Map<String, String> replacements = replacements(
+                    intent, modelAuthority, authority, originals);
             for (String path : authority.paths()) {
                 byte[] original = originals.get(path);
                 byte[] replacement = replacements.get(path).getBytes(StandardCharsets.UTF_8);
@@ -101,7 +108,9 @@ public class ProjectCandidateCompositionEffect {
                 candidate.fingerprint().sha256(), diffFingerprint);
     }
 
-    private Map<String, String> replacements(PersistedEffectIntent intent,
+    private Map<String, String> replacements(
+            PersistedEffectIntent intent,
+            ModelAuthority modelAuthority,
             ProjectCandidateEffectAuthority authority, Map<String, byte[]> originals) {
         try {
             JsonNode arguments = json.readTree(canonical(intent.intent().arguments()));
@@ -127,8 +136,10 @@ public class ProjectCandidateCompositionEffect {
                             new ModelMessage(MessageRole.USER, source.toString())),
                     List.of(), new GenerationOptions(16384, 0, 0.0d,
                             OptionalLong.of(0), Map.of()),
-                    Optional.empty(), Optional.empty(),
-                    Optional.empty(), Optional.empty(), false));
+                    Optional.of(modelAuthority.taskFrameId()),
+                    Optional.of(modelAuthority.planId()),
+                    Optional.of(modelAuthority.planRevisionId()),
+                    Optional.of(modelAuthority.stepId()), false));
             if (!(result instanceof ModelResponse response)
                     || response.assistantText().isEmpty()
                     || !response.proposedToolCalls().isEmpty()) throw failed();
@@ -251,4 +262,17 @@ public class ProjectCandidateCompositionEffect {
     }
     public record CandidateResult(Long artifactId, String candidateFingerprint,
                                   String diffFingerprint) {}
+
+    record ModelAuthority(
+            TaskFrameId taskFrameId,
+            PlanId planId,
+            PlanRevisionId planRevisionId,
+            PlanStepId stepId) {
+        ModelAuthority {
+            Objects.requireNonNull(taskFrameId, "taskFrameId");
+            Objects.requireNonNull(planId, "planId");
+            Objects.requireNonNull(planRevisionId, "planRevisionId");
+            Objects.requireNonNull(stepId, "stepId");
+        }
+    }
 }

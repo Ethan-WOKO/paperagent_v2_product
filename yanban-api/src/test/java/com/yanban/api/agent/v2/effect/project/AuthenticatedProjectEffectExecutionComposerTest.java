@@ -334,6 +334,20 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 .contains("\"diffFingerprint\":\"" + "d".repeat(64) + "\""));
         verify(fixture.composition).execute(
                 org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.argThat(authority ->
+                        authority.taskFrameId().equals(
+                                new io.paperagent.v2.contracts.TaskFrameId(
+                                        "candidate-task-frame"))
+                                && authority.planId().equals(
+                                        fixture.command.planId())
+                                && authority.planRevisionId().equals(
+                                        new io.paperagent.v2.contracts
+                                                .PlanRevisionId(
+                                                        "candidate-revision"))
+                                && authority.stepId().equals(
+                                        new io.paperagent.v2.contracts
+                                                .PlanStepId(
+                                                        "project-candidate-compose"))),
                 org.mockito.ArgumentMatchers.eq(fixture.workspace),
                 org.mockito.ArgumentMatchers.eq(ref()),
                 org.mockito.ArgumentMatchers.eq(7L),
@@ -411,6 +425,20 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 "candidate-activation");
         when(recovery.planId()).thenReturn(planId);
         when(recovery.activation()).thenReturn(activation);
+        var taskFrame = mock(io.paperagent.v2.contracts.TaskFrame.class);
+        when(taskFrame.id()).thenReturn(
+                new io.paperagent.v2.contracts.TaskFrameId(
+                        "candidate-task-frame"));
+        when(recovery.taskFrame()).thenReturn(taskFrame);
+        var checkpoint = mock(
+                io.paperagent.v2.persistence.VersionedCheckpoint.class);
+        var checkpointValue = mock(
+                io.paperagent.v2.contracts.Checkpoint.class);
+        when(checkpointValue.revisionId()).thenReturn(
+                new io.paperagent.v2.contracts.PlanRevisionId(
+                        "candidate-revision"));
+        when(checkpoint.checkpoint()).thenReturn(checkpointValue);
+        when(recovery.checkpoint()).thenReturn(checkpoint);
         when(activation.stepId()).thenReturn(stepId);
         when(activation.activationEvent()).thenReturn(event);
         when(event.id()).thenReturn(activationId);
@@ -458,6 +486,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         when(workspace.inspectMaterialization(spec)).thenReturn(verified);
         when(workspaces.create(7L, 42L)).thenReturn(workspace);
         when(composition.execute(
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.eq(workspace),
                 org.mockito.ArgumentMatchers.eq(ref()),
