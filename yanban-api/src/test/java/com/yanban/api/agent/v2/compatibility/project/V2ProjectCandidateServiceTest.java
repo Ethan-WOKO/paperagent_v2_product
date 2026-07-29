@@ -135,6 +135,11 @@ class V2ProjectCandidateServiceTest {
 
     @Test
     void happyPathRequiresTerminalCutThenPublishesAndDeliversOneCandidate() {
+        Instant subMicrosecond =
+                Instant.parse("2026-07-29T01:02:03.123456789Z");
+        assertEquals(
+                Instant.parse("2026-07-29T01:02:03.123456Z"),
+                ProjectLeaseAuthorityTime.canonical(subMicrosecond));
         String version = "a".repeat(64);
         var request = new V2ProjectCandidateRequest(
                 "improve", List.of("README.md"), "request");
@@ -148,12 +153,19 @@ class V2ProjectCandidateServiceTest {
         when(projects.manifest(7L, 8L)).thenReturn(manifest);
         when(deliveries.findMatching(any(), anyString())).thenReturn(Optional.empty());
         var key = new ProjectCandidateDeliveryKey(7L, 8L, 9L, "request");
-        var opened = new ProjectCandidateDeliveryEntity(key, "c".repeat(64),
-                "improve", "[\"README.md\"]", version, 1L, 2L,
-                "owner", "token", Instant.now().plusSeconds(60), Instant.now());
+        java.util.concurrent.atomic.AtomicReference<Instant> openedExpiry =
+                new java.util.concurrent.atomic.AtomicReference<>();
         when(deliveries.open(eq(7L), eq(8L), eq(9L), eq("request"), anyString(),
                 eq("improve"), eq(List.of("README.md")), eq(version),
-                anyString(), anyString(), any())).thenReturn(opened);
+                anyString(), anyString(), any())).thenAnswer(invocation -> {
+                    Instant expiry = invocation.getArgument(10);
+                    openedExpiry.set(expiry);
+                    return new ProjectCandidateDeliveryEntity(
+                            key, "c".repeat(64), "improve",
+                            "[\"README.md\"]", version, 1L, 2L,
+                            "owner", "token", expiry,
+                            expiry.minusSeconds(300));
+                });
         var identity = new AgentRunIdentity("AGENT_TURN", "turn-2", 7L, 2L, 8L);
         when(turnContexts.resolve(7L, 2L)).thenReturn(
                 new com.yanban.api.agent.v2.VerifiedAgentTurnProductContext(
@@ -165,8 +177,17 @@ class V2ProjectCandidateServiceTest {
                 new io.paperagent.v2.runtime.execution.start.FreshExecutionStarted(
                         io.paperagent.v2.persistence.PersistenceOutcome.APPLIED,
                         persistedStart));
-        opened.bindPlan("plan");
-        when(deliveries.bindPlanAndSteps(eq(key), eq("plan"), any())).thenReturn(opened);
+        when(deliveries.bindPlanAndSteps(eq(key), eq("plan"), any()))
+                .thenAnswer(invocation -> {
+                    Instant expiry = openedExpiry.get();
+                    var bound = new ProjectCandidateDeliveryEntity(
+                            key, "c".repeat(64), "improve",
+                            "[\"README.md\"]", version, 1L, 2L,
+                            "owner", "token", expiry,
+                            expiry.minusSeconds(300));
+                    bound.bindPlan("plan");
+                    return bound;
+                });
         var ready = mock(io.paperagent.v2.runtime.execution.context.composition
                 .PlanExecutionContextReady.class);
         when(ready.planId()).thenReturn(planId);
@@ -182,8 +203,18 @@ class V2ProjectCandidateServiceTest {
         when(persistedContext.materializationSpec()).thenReturn(spec);
         when(ready.persistedContext()).thenReturn(persistedContext);
         when(contexts.compose(eq(7L), eq(2L), any())).thenReturn(ready);
-        opened.bindWorkspace("workspace");
-        when(deliveries.bindWorkspace(key, "workspace")).thenReturn(opened);
+        when(deliveries.bindWorkspace(key, "workspace"))
+                .thenAnswer(invocation -> {
+                    Instant expiry = openedExpiry.get();
+                    var bound = new ProjectCandidateDeliveryEntity(
+                            key, "c".repeat(64), "improve",
+                            "[\"README.md\"]", version, 1L, 2L,
+                            "owner", "token", expiry,
+                            expiry.minusSeconds(300));
+                    bound.bindPlan("plan");
+                    bound.bindWorkspace("workspace");
+                    return bound;
+                });
         when(loop.execute(eq(7L), eq(2L), any())).thenReturn(
                 new com.yanban.api.agent.v2.loop.PersistentPlanAgentLoopOutcome(
                         planId, 2,
@@ -212,6 +243,30 @@ class V2ProjectCandidateServiceTest {
 
         assertEquals("SUCCEEDED", response.status());
         assertEquals(42L, response.candidateArtifactId());
+        Instant expiry = openedExpiry.get();
+        assertNotNull(expiry);
+        assertEquals(0, expiry.getNano() % 1_000);
+        var startCommand = org.mockito.ArgumentCaptor.forClass(
+                com.yanban.api.agent.v2.bootstrap
+                        .AuthenticatedAgentTurnFreshExecutionStartCommand.class);
+        verify(starts).start(eq(7L), eq(2L), startCommand.capture());
+        assertEquals(expiry, startCommand.getValue().attempt()
+                .orElseThrow().leaseExpiresAt());
+        var contextCommand = org.mockito.ArgumentCaptor.forClass(
+                AuthenticatedAgentTurnPlanExecutionContextCommand.class);
+        verify(contexts).compose(eq(7L), eq(2L), contextCommand.capture());
+        assertEquals(expiry, contextCommand.getValue().attempt()
+                .orElseThrow().leaseExpiresAt());
+        var loopCommand = org.mockito.ArgumentCaptor.forClass(
+                com.yanban.api.agent.v2.loop
+                        .PersistentPlanAgentLoopCommand.class);
+        verify(loop).execute(eq(7L), eq(2L), loopCommand.capture());
+        assertEquals(expiry, loopCommand.getValue()
+                .currentRecoveryAttempt().leaseExpiresAt());
+        assertEquals(expiry, loopCommand.getValue()
+                .readyActivationAttempt().leaseExpiresAt());
+        assertEquals(expiry, loopCommand.getValue()
+                .nextStepActivationAttempt().leaseExpiresAt());
         verify(composition).publish(eq("plan"), eq(7L), eq(2L), eq(workspace),
                 eq(ref), any());
         verify(deliveries).deliver(key);

@@ -26,12 +26,16 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.*;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class V2ProjectCandidateService {
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(V2ProjectCandidateService.class);
     private final Object[] locks = java.util.stream.IntStream.range(0, 64)
             .mapToObj(ignored -> new Object()).toArray();
     private final AgentSessionRepository sessions;
@@ -102,7 +106,7 @@ public class V2ProjectCandidateService {
             return response(existing.orElseThrow(), true);
         }
         String owner = "v2-project-candidate-" + hash(keyBinding(key)).substring(0, 24);
-        Instant now = Instant.now();
+        Instant now = ProjectLeaseAuthorityTime.canonical(Instant.now());
         String token = "lease-" + hash(owner + "\0" + requestHash);
         ProjectCandidateDeliveryEntity delivery;
         if (existing.isPresent()) {
@@ -133,6 +137,7 @@ public class V2ProjectCandidateService {
         try {
             return run(request, delivery, userId, projectId, now);
         } catch (RuntimeException failure) {
+            logFailure(failure);
             var failed = deliveries.fail(key, "PROJECT_CANDIDATE_FAILED");
             if (failed.artifactId() != null) throw failure;
             return response(failed, false);
@@ -145,17 +150,22 @@ public class V2ProjectCandidateService {
         if (!projectId.equals(verified.identity().projectId())
                 || verified.projectVersionId().filter(
                 delivery.projectVersionId()::equals).isEmpty()) throw failed();
-        var started = starts.start(userId, delivery.turnId(),
-                new AuthenticatedAgentTurnFreshExecutionStartCommand(
-                        bootstrap(request, delivery.turnId(), now),
-                        Optional.of(startAttempt(delivery, now))));
+        FreshExecutionStartOutcome started;
+        try {
+            started = starts.start(userId, delivery.turnId(),
+                    new AuthenticatedAgentTurnFreshExecutionStartCommand(
+                            bootstrap(request, delivery.turnId(), now),
+                            Optional.of(startAttempt(delivery, now))));
+        } catch (RuntimeException failure) {
+            throw StartFailure.thrown(failure);
+        }
         PlanId planId;
         if (started instanceof FreshExecutionStarted value) {
             planId = value.persistedStart().planId();
         } else if (started instanceof FreshExecutionRecoveryRequired value) {
             planId = value.planId();
         } else {
-            throw failed();
+            throw StartFailure.rejected(started);
         }
         delivery = deliveries.bindPlanAndSteps(delivery.id(), planId.value(),
                 authorities(request));
@@ -331,6 +341,35 @@ public class V2ProjectCandidateService {
     }
     private static IllegalArgumentException invalid() {
         return new IllegalArgumentException("V2 Project Candidate request is invalid");
+    }
+
+    private static void logFailure(RuntimeException failure) {
+        String stage = "execution";
+        String failureType = failure.getClass().getName();
+        if (failure instanceof StartFailure startFailure) {
+            stage = "fresh_start";
+            failureType = startFailure.failureType;
+        }
+        LOGGER.warn(
+                "v2ProjectCandidateFailure stage={} errorCode={} failureType={}",
+                stage, "PROJECT_CANDIDATE_FAILED", failureType);
+    }
+
+    private static final class StartFailure extends IllegalStateException {
+        private final String failureType;
+
+        private StartFailure(String failureType, RuntimeException cause) {
+            super("V2 Project Candidate fresh start failed", cause);
+            this.failureType = failureType;
+        }
+
+        private static StartFailure thrown(RuntimeException failure) {
+            return new StartFailure(failure.getClass().getName(), failure);
+        }
+
+        private static StartFailure rejected(Object outcome) {
+            return new StartFailure(outcome.getClass().getName(), null);
+        }
     }
     private static IllegalStateException failed() {
         return new IllegalStateException("V2 Project Candidate execution failed");
