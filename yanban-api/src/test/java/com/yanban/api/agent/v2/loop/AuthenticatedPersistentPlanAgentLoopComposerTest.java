@@ -18,6 +18,9 @@ import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionState;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationCommitted;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnNoEffect;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnPersistenceRejected;
+import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolCode;
+import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolException;
+import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelStage;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLeaseRejected;
 import io.paperagent.v2.runtime.execution.replan.composition.BoundedStepReplanApplied;
@@ -144,6 +147,45 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
                         PersistentPlanAgentLoopTestSupport.command(2)));
 
         assertEquals("kernel", failure.stage());
+        assertFalse(failure.toString().contains(
+                "provider-secret-payload"));
+        verifyNoInteractions(
+                fixture.effects(), fixture.progression());
+    }
+
+    @Test
+    void kernelProtocolFailureRetainsOnlyStableClassification() {
+        var fixture = PersistentPlanAgentLoopTestSupport.fixture();
+        activeFixture(fixture, "step-a");
+        SingleTurnStepKernelProtocolException kernelFailure =
+                mock(SingleTurnStepKernelProtocolException.class);
+        when(kernelFailure.stage()).thenReturn(
+                SingleTurnStepKernelStage.TURN_DECISION);
+        when(kernelFailure.code()).thenReturn(
+                SingleTurnStepKernelProtocolCode.COLLABORATOR_EXCEPTION);
+        when(kernelFailure.path()).thenReturn(
+                "singleTurnStepKernel.turnDecision");
+        when(fixture.kernel().run(any())).thenThrow(kernelFailure);
+
+        PersistentPlanAgentLoopException failure = assertThrows(
+                PersistentPlanAgentLoopException.class,
+                () -> fixture.composer().execute(
+                        USER_ID, TURN_ID,
+                        PersistentPlanAgentLoopTestSupport.command(2)));
+
+        assertEquals("kernel", failure.stage());
+        assertEquals(
+                "kernel.turn_decision.collaborator_exception",
+                failure.diagnosticStage());
+        assertEquals(
+                SingleTurnStepKernelStage.TURN_DECISION,
+                failure.kernelStage().orElseThrow());
+        assertEquals(
+                SingleTurnStepKernelProtocolCode.COLLABORATOR_EXCEPTION,
+                failure.kernelCode().orElseThrow());
+        assertEquals(
+                "singleTurnStepKernel.turnDecision",
+                failure.kernelPath().orElseThrow());
         assertFalse(failure.toString().contains(
                 "provider-secret-payload"));
         verifyNoInteractions(

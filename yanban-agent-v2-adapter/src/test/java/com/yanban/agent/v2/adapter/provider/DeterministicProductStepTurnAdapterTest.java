@@ -27,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DeterministicProductStepTurnAdapterTest {
     private static final ToolDescriptor TOOL = new ToolDescriptor(
@@ -61,6 +62,12 @@ class DeterministicProductStepTurnAdapterTest {
                 request.planRevisionId());
         assertEquals(Optional.of(input.activeStep().id()), request.stepId());
         assertEquals(1, request.generationOptions().maxProposedToolCalls());
+        assertTrue(request.messages().get(0).content().contains(
+                "must call exactly the one provided tool"));
+        assertTrue(request.messages().get(1).content().contains(
+                "Call literature_search exactly once"));
+        assertFalse(request.messages().get(1).content().contains(
+                "Call literature.search exactly once"));
     }
 
     @Test
@@ -94,6 +101,29 @@ class DeterministicProductStepTurnAdapterTest {
                 ProductStepTurnException.class, () -> adapter.decide(input));
         assertEquals(ProductStepTurnError.UNKNOWN_TOOL, changed.code());
         assertEquals("literature.search", first.intent().kind());
+    }
+
+    @Test
+    void arbitraryPersistedIntentDoesNotBecomeProviderProtocol() {
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        ModelProvider provider = request -> {
+            captured.set(request);
+            return toolResponse("transient-arbitrary-intent", TOOL.id());
+        };
+        var adapter = adapter(provider);
+        var input = ProductProviderAdapterTestFixtures.input(
+                "arbitrary-intent",
+                "Search the available literature and retain relevant results");
+
+        assertInstanceOf(EffectIntentDecision.class, adapter.decide(input));
+
+        String prompt = captured.get().messages().get(1).content();
+        assertTrue(prompt.contains(
+                "Search the available literature and retain relevant results"));
+        assertTrue(prompt.contains(
+                "Provider callable function: literature_search"));
+        assertTrue(prompt.contains(
+                "Internal authoritative ToolId: literature.search"));
     }
 
     @Test

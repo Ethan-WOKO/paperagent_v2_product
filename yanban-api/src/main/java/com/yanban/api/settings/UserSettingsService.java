@@ -245,18 +245,20 @@ public class UserSettingsService {
     public ModelEndpoint resolveModelEndpoint(Long userId, String provider, String model) {
         SysUserSettings settings = getOrCreate(userId);
         String resolvedProvider = (provider == null || provider.isBlank())
-                ? settings.getDefaultProvider() : provider.trim().toLowerCase();
+                ? settings.getDefaultProvider() : provider.trim();
+        String builtinProvider = resolvedProvider.toLowerCase(
+                java.util.Locale.ROOT);
 
-        if (DEFAULT_PROVIDER.equals(resolvedProvider)) {
-            return new ModelEndpoint(resolvedProvider,
+        if (DEFAULT_PROVIDER.equals(builtinProvider)) {
+            return new ModelEndpoint(builtinProvider,
                     resolveDeepseekModel(model, settings.getDeepseekModel()),
                     null,
                     decryptDeepseekApiKey(settings),
                     "builtin",
                     "DeepSeek");
         }
-        if (PROVIDER_GLM.equals(resolvedProvider)) {
-            return new ModelEndpoint(resolvedProvider,
+        if (PROVIDER_GLM.equals(builtinProvider)) {
+            return new ModelEndpoint(builtinProvider,
                     StringUtils.hasText(model) ? model : settings.getGlmModel(),
                     null,
                     decryptGlmApiKey(settings),
@@ -265,22 +267,33 @@ public class UserSettingsService {
         }
         // Custom provider: providerKey stored as-is (case-sensitive match by providerKey)
         List<UserModel> userModels = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
-        Optional<UserModel> match = userModels.stream()
-                .filter(m -> m.getProviderKey().equals(provider) && m.getModelName().equals(model))
-                .findFirst();
-        if (match.isEmpty()) {
-            match = userModels.stream()
-                .filter(m -> m.getProviderKey().equals(provider))
-                .findFirst();
+        List<UserModel> providerMatches = userModels.stream()
+                .filter(value -> value.getProviderKey().equals(
+                        resolvedProvider))
+                .toList();
+        String requestedModel = StringUtils.hasText(model)
+                ? model.trim() : null;
+        Optional<UserModel> match = requestedModel == null
+                ? Optional.empty()
+                : providerMatches.stream()
+                        .filter(value -> value.getModelName().equals(
+                                requestedModel))
+                        .findFirst();
+        if (match.isEmpty() && !providerMatches.isEmpty()) {
+            match = providerMatches.stream().findFirst();
         }
-        if (match.isEmpty()) {
-            // Fallback: match by model name
+        if (match.isEmpty() && requestedModel != null) {
+            // Explicit-model fallback remains owner-qualified.
             match = userModels.stream()
-                    .filter(m -> m.getModelName().equals(model))
+                    .filter(value -> value.getModelName().equals(
+                            requestedModel))
                     .findFirst();
         }
         if (match.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "未找到模型配置: " + provider);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Model provider is not configured: "
+                            + resolvedProvider);
         }
         UserModel um = match.get();
         return new ModelEndpoint(um.getProviderKey(),

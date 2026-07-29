@@ -339,8 +339,10 @@ public class V2ProjectCandidateService {
     private static boolean terminal(ProjectCandidateDeliveryEntity value) {
         return "SUCCEEDED".equals(value.status()) || "FAILED".equals(value.status());
     }
-    private static IllegalArgumentException invalid() {
-        return new IllegalArgumentException("V2 Project Candidate request is invalid");
+    private static ResponseStatusException invalid() {
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "V2 Project Candidate request is invalid");
     }
 
     private static void logFailure(RuntimeException failure) {
@@ -358,7 +360,9 @@ public class V2ProjectCandidateService {
             stage = "fresh_start";
             failureType = startFailure.failureType;
         } else if (failure instanceof PersistentPlanAgentLoopException loopFailure) {
-            stage = loopStage(loopFailure.stage());
+            String diagnosticStage = loopFailure.diagnosticStage();
+            stage = loopStage(diagnosticStage == null
+                    ? loopFailure.stage() : diagnosticStage);
         }
         return new FailureDiagnostic(stage, failureType);
     }

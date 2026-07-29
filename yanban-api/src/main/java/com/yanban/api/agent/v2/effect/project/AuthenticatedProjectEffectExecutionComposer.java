@@ -192,19 +192,29 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 active.recovery(), active.lease(), intent,
                 command.recoveryAttempt().leaseToken(),
                 active.lease().fencingToken(), started,
-                () -> receipt(intent, workspace, verified.workspace(),
-                        context.identity().projectId(), userId, turnId, started)));
+                () -> receipt(
+                        active, intent, workspace, verified.workspace(),
+                        context.identity().projectId(),
+                        userId, turnId, started)));
         return new AuthenticatedProjectEffectExecutionOutcome(
                 claimed.result(), claimed.replayed());
     }
 
     private ExecutionReceipt receipt(
+            RecoveredActiveStep active,
             PersistedEffectIntent intent, WorkspacePort workspace,
             io.paperagent.v2.contracts.WorkspaceRef ref, Long projectId,
             Long userId, Long turnId, Instant started) {
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
-            var candidate = candidateComposition.execute(intent, workspace, ref,
-                    userId, turnId, projectId, started);
+            var candidate = candidateComposition.execute(
+                    intent,
+                    new ProjectCandidateCompositionEffect.ModelAuthority(
+                            active.recovery().taskFrame().id(),
+                            active.planId(),
+                            active.recovery().checkpoint().checkpoint()
+                                    .revisionId(),
+                            active.recovery().activation().stepId()),
+                    workspace, ref, userId, turnId, projectId, started);
             ObjectNode output = json.createObjectNode();
             output.put("diffFingerprint", candidate.diffFingerprint());
             Instant ended = Instant.now();

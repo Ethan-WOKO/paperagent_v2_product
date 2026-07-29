@@ -35,6 +35,7 @@ import io.paperagent.v2.runtime.execution.kernel.SingleTurnNoEffect;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnPersistenceRejected;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernel;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelOutcome;
+import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolException;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelRequest;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
@@ -154,6 +155,9 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             try {
                 kernelOutcome = kernel.run(
                         new SingleTurnStepKernelRequest(active));
+            } catch (SingleTurnStepKernelProtocolException exception) {
+                throw new PersistentPlanAgentLoopException(
+                        "kernel", exception);
             } catch (RuntimeException exception) {
                 throw protocol("kernel");
             }

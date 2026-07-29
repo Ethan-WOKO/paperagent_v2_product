@@ -48,7 +48,7 @@ class ProductChatModelProviderAdapterTest {
                                             "provider-call-1",
                                             "function",
                                             new ToolCall.FunctionCall(
-                                                    "literature.search",
+                                                    "literature_search",
                                                     "{\"query\":\"agents\"}"))),
                                     null),
                             "tool_calls",
@@ -70,7 +70,7 @@ class ProductChatModelProviderAdapterTest {
                 mapped.messages().stream().map(ChatMessage::content).toList());
         assertEquals(0.25d, mapped.temperature());
         assertEquals(512, mapped.maxTokens());
-        assertEquals("literature.search",
+        assertEquals("literature_search",
                 mapped.tools().get(0).function().name());
         assertEquals("correlation-1", mapped.traceId());
         assertEquals("owner-api-key", mapped.apiKey());
@@ -79,6 +79,8 @@ class ProductChatModelProviderAdapterTest {
                 ((io.paperagent.v2.contracts.TextValue)
                         result.proposedToolCalls().get(0)
                                 .arguments().values().get("query")).value());
+        assertEquals("literature.search",
+                result.proposedToolCalls().get(0).toolId().value());
     }
 
     @Test
@@ -102,7 +104,7 @@ class ProductChatModelProviderAdapterTest {
                         List.of(new ToolCall(
                                 "call", "function",
                                 new ToolCall.FunctionCall(
-                                        "literature.search", "{secret"))),
+                                        "literature_search", "{secret"))),
                         null),
                 "tool_calls", null));
         ProviderFailure malformedFailure = assertInstanceOf(
@@ -133,6 +135,24 @@ class ProductChatModelProviderAdapterTest {
         assertFalse(resolverFailure.toString().contains("owner-api-key"));
         assertFalse(resolverFailure.toString().contains("owner.example"));
         assertEquals("ProductModelEndpoint[redacted]", endpoint().toString());
+    }
+
+    @Test
+    void rejectsProviderToolNameThatWasNotOffered() {
+        var adapter = adapter(request -> new ChatResponse(
+                new ChatMessage(
+                        "assistant", null,
+                        List.of(new ToolCall(
+                                "call", "function",
+                                new ToolCall.FunctionCall(
+                                        "project_read", "{}"))),
+                        null),
+                "tool_calls", null));
+
+        ProviderFailure failure = assertInstanceOf(
+                ProviderFailure.class, adapter.complete(request()));
+
+        assertEquals(ProviderFailureCode.PROTOCOL_VIOLATION, failure.code());
     }
 
     @Test

@@ -44,18 +44,21 @@ class V2ProjectCandidateServiceTest {
 
     @Test
     void invalidObjectivePathsAndRequestIdentityFailBeforeProductLookup() {
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, new V2ProjectCandidateRequest(
-                        " ", List.of("README.md"), "id")));
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, new V2ProjectCandidateRequest(
-                        "edit", List.of("../secret"), "id")));
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, new V2ProjectCandidateRequest(
-                        "edit", List.of("a", "a"), "id")));
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, new V2ProjectCandidateRequest(
-                        "edit", List.of("a"), " ")));
+        for (V2ProjectCandidateRequest request : List.of(
+                new V2ProjectCandidateRequest(
+                        " ", List.of("README.md"), "id"),
+                new V2ProjectCandidateRequest(
+                        "edit", List.of("../secret"), "id"),
+                new V2ProjectCandidateRequest(
+                        "edit", List.of("a", "a"), "id"),
+                new V2ProjectCandidateRequest(
+                        "edit", List.of("a"), " "))) {
+            assertEquals(HttpStatus.BAD_REQUEST,
+                    assertThrows(ResponseStatusException.class,
+                            () -> service.execute(
+                                    7L, 8L, 9L, request))
+                            .getStatusCode());
+        }
         verifyNoInteractions(sessions, projects, deliveries);
     }
 
@@ -65,9 +68,14 @@ class V2ProjectCandidateServiceTest {
         when(session.getScope()).thenReturn(AgentSessionScope.PROJECT);
         when(session.getProjectId()).thenReturn(99L);
         when(sessions.findByIdAndUserId(9L, 7L)).thenReturn(Optional.of(session));
-        assertThrows(IllegalArgumentException.class, () -> service.execute(
-                7L, 8L, 9L, new V2ProjectCandidateRequest(
-                        "edit", List.of("README.md"), "id")));
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ResponseStatusException.class,
+                        () -> service.execute(
+                                7L, 8L, 9L,
+                                new V2ProjectCandidateRequest(
+                                        "edit",
+                                        List.of("README.md"), "id")))
+                        .getStatusCode());
         verifyNoInteractions(projects, deliveries);
     }
 

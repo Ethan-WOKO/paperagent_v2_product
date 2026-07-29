@@ -69,32 +69,45 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
             return failure(ProviderFailureCode.CANCELLED);
         }
         ChatResponse response;
+        MappedRequest mapped;
         try {
             if (request.planId().isEmpty()) {
                 return failure(ProviderFailureCode.INVALID_REQUEST);
             }
             ProductModelEndpoint endpoint =
                     endpoints.resolve(request.planId().orElseThrow());
-            response = delegate.chat(mapRequest(request, endpoint));
+            mapped = mapRequest(request, endpoint);
+            response = delegate.chat(mapped.request());
         } catch (RuntimeException exception) {
             return failure(ProviderFailureCode.UNAVAILABLE);
         }
         try {
-            return mapResponse(response);
+            return mapResponse(response, mapped.toolIdsByProviderName());
         } catch (RuntimeException exception) {
             return failure(ProviderFailureCode.PROTOCOL_VIOLATION);
         }
     }
 
-    private ChatRequest mapRequest(
+    private MappedRequest mapRequest(
             ModelRequest request, ProductModelEndpoint endpoint) {
         List<ChatMessage> messages = request.messages().stream()
                 .map(this::message)
                 .toList();
-        List<ToolSpec> tools = request.availableTools().stream()
-                .map(this::tool)
-                .toList();
-        return new ChatRequest(
+        Map<String, ToolId> toolIdsByProviderName = new LinkedHashMap<>();
+        List<ToolSpec> tools = new ArrayList<>();
+        for (ToolDescriptor descriptor : request.availableTools()) {
+            String providerName = ProductProviderToolAlias.from(
+                    descriptor.id());
+            ToolId previous = toolIdsByProviderName.putIfAbsent(
+                    providerName, descriptor.id());
+            if (previous != null) {
+                throw new ProductStepTurnException(
+                        ProductStepTurnError.INVALID_CONFIGURATION,
+                        "productModelProvider.tools");
+            }
+            tools.add(tool(descriptor, providerName));
+        }
+        ChatRequest mapped = new ChatRequest(
                 endpoint.provider(),
                 endpoint.model(),
                 messages,
@@ -106,6 +119,8 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
                 null,
                 ChatRequest.Thinking.disabled(),
                 request.correlationId().value());
+        return new MappedRequest(
+                mapped, Map.copyOf(toolIdsByProviderName));
     }
 
     private ChatMessage message(ModelMessage message) {
@@ -117,15 +132,18 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
         };
     }
 
-    private ToolSpec tool(ToolDescriptor descriptor) {
+    private ToolSpec tool(
+            ToolDescriptor descriptor, String providerName) {
         ObjectNode schema = json.createObjectNode();
         schema.put("type", "object");
         schema.put("additionalProperties", true);
         return ToolSpec.function(
-                descriptor.id().value(), descriptor.description(), schema);
+                providerName, descriptor.description(), schema);
     }
 
-    private ModelResponse mapResponse(ChatResponse response) {
+    private ModelResponse mapResponse(
+            ChatResponse response,
+            Map<String, ToolId> toolIdsByProviderName) {
         if (response == null || response.message() == null) {
             throw malformed();
         }
@@ -139,9 +157,14 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
                     || call.function() == null) {
                 throw malformed();
             }
+            ToolId toolId = toolIdsByProviderName.get(
+                    required(call.function().name()));
+            if (toolId == null) {
+                throw malformed();
+            }
             proposed.add(new ProposedToolCall(
                     required(call.id()),
-                    new ToolId(required(call.function().name())),
+                    toolId,
                     arguments(call.function().arguments())));
         }
         FinishReason finishReason = finishReason(response.finishReason());
@@ -242,5 +265,10 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
         return new ProductStepTurnException(
                 ProductStepTurnError.MALFORMED_RESPONSE,
                 "productModelProvider.response");
+    }
+
+    private record MappedRequest(
+            ChatRequest request,
+            Map<String, ToolId> toolIdsByProviderName) {
     }
 }
