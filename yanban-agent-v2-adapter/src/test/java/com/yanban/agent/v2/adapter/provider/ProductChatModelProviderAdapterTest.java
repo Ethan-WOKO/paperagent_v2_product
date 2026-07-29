@@ -31,34 +31,39 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProductChatModelProviderAdapterTest {
     @Test
-    void mapsOrderedMessagesToolsBoundsCorrelationAndNoCredentials() {
+    void mapsOrderedMessagesToolsBoundsCorrelationAndTransientOwnerEndpoint() {
         AtomicReference<ChatRequest> captured = new AtomicReference<>();
-        var adapter = adapter(request -> {
-            captured.set(request);
-            return new ChatResponse(
-                    new ChatMessage(
-                            "assistant",
-                            null,
-                            List.of(new ToolCall(
-                                    "provider-call-1",
-                                    "function",
-                                    new ToolCall.FunctionCall(
-                                            "literature.search",
-                                            "{\"query\":\"agents\"}"))),
-                            null),
-                    "tool_calls",
-                    new ChatResponse.Usage(11, 7, 18));
-        });
+        var adapter = adapter(
+                request -> {
+                    captured.set(request);
+                    return new ChatResponse(
+                            new ChatMessage(
+                                    "assistant",
+                                    null,
+                                    List.of(new ToolCall(
+                                            "provider-call-1",
+                                            "function",
+                                            new ToolCall.FunctionCall(
+                                                    "literature.search",
+                                                    "{\"query\":\"agents\"}"))),
+                                    null),
+                            "tool_calls",
+                            new ChatResponse.Usage(11, 7, 18));
+                },
+                planId -> {
+                    assertEquals("plan-provider", planId.value());
+                    return endpoint();
+                });
 
         ModelResponse result = assertInstanceOf(
                 ModelResponse.class, adapter.complete(request()));
         ChatRequest mapped = captured.get();
-        assertEquals("deepseek", mapped.provider());
-        assertEquals("model-a", mapped.model());
+        assertEquals("custom-provider", mapped.provider());
+        assertEquals("custom-model", mapped.model());
         assertEquals(List.of("system", "user"),
                 mapped.messages().stream().map(ChatMessage::role).toList());
         assertEquals(List.of("first", "second"),
@@ -68,8 +73,8 @@ class ProductChatModelProviderAdapterTest {
         assertEquals("literature.search",
                 mapped.tools().get(0).function().name());
         assertEquals("correlation-1", mapped.traceId());
-        assertNull(mapped.apiKey());
-        assertNull(mapped.apiUrl());
+        assertEquals("owner-api-key", mapped.apiKey());
+        assertEquals("https://owner.example/v1", mapped.apiUrl());
         assertEquals("agents",
                 ((io.paperagent.v2.contracts.TextValue)
                         result.proposedToolCalls().get(0)
@@ -113,9 +118,49 @@ class ProductChatModelProviderAdapterTest {
                 ProviderFailure.class, throwing.complete(request()));
         assertEquals(ProviderFailureCode.UNAVAILABLE, failure.code());
         assertFalse(failure.toString().contains("credential-should-not-leak"));
+
+        var resolving = adapter(
+                request -> {
+                    throw new AssertionError("delegate must not be called");
+                },
+                plan -> {
+                    throw new IllegalStateException(
+                            "owner-api-key https://owner.example/v1");
+                });
+        ProviderFailure resolverFailure = assertInstanceOf(
+                ProviderFailure.class, resolving.complete(request()));
+        assertEquals(ProviderFailureCode.UNAVAILABLE, resolverFailure.code());
+        assertFalse(resolverFailure.toString().contains("owner-api-key"));
+        assertFalse(resolverFailure.toString().contains("owner.example"));
+        assertEquals("ProductModelEndpoint[redacted]", endpoint().toString());
+    }
+
+    @Test
+    void missingPlanFailsBeforeEndpointResolutionAndProviderInvocation() {
+        AtomicReference<String> called = new AtomicReference<>();
+        var adapter = adapter(
+                request -> {
+                    called.set("provider");
+                    throw new AssertionError("provider must not be called");
+                },
+                plan -> {
+                    called.set("resolver");
+                    throw new AssertionError("resolver must not be called");
+                });
+
+        ProviderFailure failure = assertInstanceOf(
+                ProviderFailure.class, adapter.complete(requestWithoutPlan()));
+
+        assertEquals(ProviderFailureCode.INVALID_REQUEST, failure.code());
+        assertTrue(called.compareAndSet(null, "not-called"));
     }
 
     private static ProductChatModelProviderAdapter adapter(Chat call) {
+        return adapter(call, planId -> endpoint());
+    }
+
+    private static ProductChatModelProviderAdapter adapter(
+            Chat call, ProductModelEndpointResolver endpoints) {
         ChatModelProvider provider = new ChatModelProvider() {
             @Override
             public String providerName() {
@@ -135,8 +180,7 @@ class ProductChatModelProviderAdapterTest {
         return new ProductChatModelProviderAdapter(
                 provider,
                 new ObjectMapper(),
-                new ProductModelProviderConfiguration(
-                        "deepseek", "model-a"));
+                endpoints);
     }
 
     private static ModelRequest request() {
@@ -158,6 +202,29 @@ class ProductChatModelProviderAdapterTest {
                 Optional.of(input.plan().latestRevision().id()),
                 Optional.of(input.activeStep().id()),
                 false);
+    }
+
+    private static ModelRequest requestWithoutPlan() {
+        ModelRequest source = request();
+        return new ModelRequest(
+                source.requestId(),
+                source.correlationId(),
+                source.messages(),
+                source.availableTools(),
+                source.generationOptions(),
+                source.taskFrameId(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                false);
+    }
+
+    private static ProductModelEndpoint endpoint() {
+        return new ProductModelEndpoint(
+                "custom-provider",
+                "custom-model",
+                "owner-api-key",
+                "https://owner.example/v1");
     }
 
     @FunctionalInterface

@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.execution;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.agent.v2.adapter.provider.ProductModelEndpoint;
 import com.yanban.core.model.ChatChunk;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
@@ -40,8 +41,13 @@ class ProductStepTurnConfigurationTest {
                 throw new AssertionError("no streaming");
             }
         };
+        var endpoints = (com.yanban.agent.v2.adapter.provider
+                .ProductModelEndpointResolver) planId ->
+                new ProductModelEndpoint(
+                        "default-provider", "default-model",
+                        "transient-key", null);
         var provider = configuration.agentV2ModelProvider(
-                fake, new ObjectMapper(), "deepseek", "test-model");
+                fake, new ObjectMapper(), endpoints);
         var tools = configuration.agentV2AllowedTools();
         var turn = configuration.agentV2StepTurnPort(
                 provider, input -> List.of(tools.get(0)), 512, 0.1d);

@@ -38,29 +38,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * Credential-free bridge from the stable V2 model port to the product's
- * general synchronous chat provider.
- */
+/** Bridge from the stable V2 model port to one owner-resolved product call. */
 public final class ProductChatModelProviderAdapter implements ModelProvider {
     private static final String FAILURE_MESSAGE = "product model turn failed";
 
     private final ChatModelProvider delegate;
     private final ObjectMapper json;
-    private final ProductModelProviderConfiguration configuration;
+    private final ProductModelEndpointResolver endpoints;
 
     public ProductChatModelProviderAdapter(
             ChatModelProvider delegate,
             ObjectMapper json,
-            ProductModelProviderConfiguration configuration) {
-        if (delegate == null || json == null || configuration == null) {
+            ProductModelEndpointResolver endpoints) {
+        if (delegate == null || json == null || endpoints == null) {
             throw new ProductStepTurnException(
                     ProductStepTurnError.INVALID_CONFIGURATION,
                     "productModelProvider");
         }
         this.delegate = delegate;
         this.json = json.copy();
-        this.configuration = configuration;
+        this.endpoints = endpoints;
     }
 
     @Override
@@ -73,7 +70,12 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
         }
         ChatResponse response;
         try {
-            response = delegate.chat(mapRequest(request));
+            if (request.planId().isEmpty()) {
+                return failure(ProviderFailureCode.INVALID_REQUEST);
+            }
+            ProductModelEndpoint endpoint =
+                    endpoints.resolve(request.planId().orElseThrow());
+            response = delegate.chat(mapRequest(request, endpoint));
         } catch (RuntimeException exception) {
             return failure(ProviderFailureCode.UNAVAILABLE);
         }
@@ -84,7 +86,8 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
         }
     }
 
-    private ChatRequest mapRequest(ModelRequest request) {
+    private ChatRequest mapRequest(
+            ModelRequest request, ProductModelEndpoint endpoint) {
         List<ChatMessage> messages = request.messages().stream()
                 .map(this::message)
                 .toList();
@@ -92,14 +95,14 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
                 .map(this::tool)
                 .toList();
         return new ChatRequest(
-                configuration.provider(),
-                configuration.model(),
+                endpoint.provider(),
+                endpoint.model(),
                 messages,
                 request.generationOptions().temperature(),
                 request.generationOptions().maxOutputTokens(),
                 tools,
-                null,
-                null,
+                endpoint.apiKey(),
+                endpoint.apiUrl(),
                 null,
                 ChatRequest.Thinking.disabled(),
                 request.correlationId().value());

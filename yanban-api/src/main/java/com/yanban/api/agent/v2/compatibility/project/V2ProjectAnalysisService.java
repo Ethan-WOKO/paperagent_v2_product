@@ -7,6 +7,7 @@ import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnFreshExecutionStartCommand;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnFreshExecutionStartComposer;
 import com.yanban.api.agent.v2.loop.AuthenticatedPersistentPlanAgentLoopComposer;
+import com.yanban.api.agent.v2.loop.PersistentPlanAgentLoopException;
 import com.yanban.api.agent.v2.loop.PersistentPlanAgentLoopCommand;
 import com.yanban.api.agent.v2.loop.PersistentPlanAgentLoopState;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionActivationLeaseAttempt;
@@ -647,16 +648,31 @@ public class V2ProjectAnalysisService {
     }
 
     private static void logFailure(RuntimeException failure) {
+        FailureDiagnostic diagnostic = failureDiagnostic(failure);
+        LOGGER.warn(
+                "v2ProjectAnalysisFailure stage={} errorCode={} failureType={}",
+                diagnostic.stage(), "PROJECT_ANALYSIS_FAILED",
+                diagnostic.failureType());
+    }
+
+    static FailureDiagnostic failureDiagnostic(RuntimeException failure) {
         String stage = "execution";
         String failureType = failure.getClass().getName();
         if (failure instanceof StartFailure startFailure) {
             stage = "fresh_start";
             failureType = startFailure.failureType;
+        } else if (failure instanceof PersistentPlanAgentLoopException loopFailure) {
+            stage = loopStage(loopFailure.stage());
         }
-        LOGGER.warn(
-                "v2ProjectAnalysisFailure stage={} errorCode={} failureType={}",
-                stage, "PROJECT_ANALYSIS_FAILED", failureType);
+        return new FailureDiagnostic(stage, failureType);
     }
+
+    private static String loopStage(String stage) {
+        return stage != null && stage.matches("[a-z0-9._-]{1,64}")
+                ? "loop." + stage : "loop.unknown";
+    }
+
+    record FailureDiagnostic(String stage, String failureType) {}
 
     private static final class StartFailure extends IllegalStateException {
         private final String failureType;
