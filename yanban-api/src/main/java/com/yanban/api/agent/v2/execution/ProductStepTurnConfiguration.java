@@ -3,8 +3,9 @@ package com.yanban.api.agent.v2.execution;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.agent.v2.adapter.provider.DeterministicProductStepTurnAdapter;
 import com.yanban.agent.v2.adapter.provider.ProductChatModelProviderAdapter;
-import com.yanban.agent.v2.adapter.provider.ProductModelProviderConfiguration;
+import com.yanban.agent.v2.adapter.provider.ProductModelEndpointResolver;
 import com.yanban.agent.v2.adapter.provider.ProductStepToolSelector;
+import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.model.ChatModelProvider;
 import io.paperagent.v2.contracts.ToolDescriptor;
 import io.paperagent.v2.contracts.ToolId;
@@ -23,19 +24,24 @@ import java.util.List;
 import java.util.Set;
 import java.util.Map;
 
-/** Product wiring for one credential-free provider-backed V2 Step turn. */
+/** Product wiring for one owner-resolved provider-backed V2 Step turn. */
 @Configuration
 public class ProductStepTurnConfiguration {
     @Bean
     ModelProvider agentV2ModelProvider(
             @Qualifier("chatModelProvider") ChatModelProvider provider,
             ObjectMapper objectMapper,
-            @Value("${yanban.agent.v2.provider:deepseek}") String providerName,
-            @Value("${yanban.agent.v2.model:deepseek-chat}") String model) {
+            ProductModelEndpointResolver endpoints) {
         return new ProductChatModelProviderAdapter(
                 provider,
                 objectMapper,
-                new ProductModelProviderConfiguration(providerName, model));
+                endpoints);
+    }
+
+    @Bean
+    ProductModelEndpointResolver agentV2ProductModelEndpointResolver(
+            JdbcTemplate jdbc, UserSettingsService settings) {
+        return new PlanOwnerModelEndpointResolver(jdbc, settings);
     }
 
     @Bean("agentV2AllowedTools")

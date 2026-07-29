@@ -271,4 +271,22 @@ class V2ProjectCandidateServiceTest {
                 eq(ref), any());
         verify(deliveries).deliver(key);
     }
+
+    @Test
+    void loopFailureDiagnosticContainsOnlyStableStageAndFailureType() {
+        var failure = mock(com.yanban.api.agent.v2.loop
+                .PersistentPlanAgentLoopException.class);
+        when(failure.stage()).thenReturn("kernel");
+        when(failure.getMessage()).thenReturn("owner-api-key");
+
+        var diagnostic =
+                V2ProjectCandidateService.failureDiagnostic(failure);
+
+        assertEquals("loop.kernel", diagnostic.stage());
+        assertEquals(
+                com.yanban.api.agent.v2.loop
+                        .PersistentPlanAgentLoopException.class.getName(),
+                diagnostic.failureType());
+        assertFalse(diagnostic.toString().contains("owner-api-key"));
+    }
 }

@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.compatibility.project;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
@@ -428,6 +429,24 @@ class V2ProjectAnalysisServiceTest {
                 expiry,
                 loopCommand.getValue().nextStepActivationAttempt()
                         .leaseExpiresAt());
+    }
+
+    @Test
+    void loopFailureDiagnosticContainsOnlyStableStageAndFailureType() {
+        var failure = mock(com.yanban.api.agent.v2.loop
+                .PersistentPlanAgentLoopException.class);
+        when(failure.stage()).thenReturn("kernel");
+        when(failure.getMessage()).thenReturn("owner-api-key");
+
+        var diagnostic =
+                V2ProjectAnalysisService.failureDiagnostic(failure);
+
+        assertEquals("loop.kernel", diagnostic.stage());
+        assertEquals(
+                com.yanban.api.agent.v2.loop
+                        .PersistentPlanAgentLoopException.class.getName(),
+                diagnostic.failureType());
+        assertFalse(diagnostic.toString().contains("owner-api-key"));
     }
 
     private static V2ProjectAnalysisRequest request(List<String> paths) {

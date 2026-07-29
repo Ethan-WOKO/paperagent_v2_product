@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.agent.v2.adapter.provider.DeterministicProductStepTurnAdapter;
 import com.yanban.agent.v2.adapter.provider.ProductChatModelProviderAdapter;
-import com.yanban.agent.v2.adapter.provider.ProductModelProviderConfiguration;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.core.agent.AgentRunIdentity;
@@ -69,7 +68,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -130,8 +128,12 @@ class AuthenticatedAgentTurnStepTurnVerticalTest {
         var model = new ProductChatModelProviderAdapter(
                 chat,
                 new ObjectMapper(),
-                new ProductModelProviderConfiguration(
-                        "deepseek", "test-model"));
+                resolvedPlanId ->
+                        new com.yanban.agent.v2.adapter.provider
+                                .ProductModelEndpoint(
+                                        "default-provider", "default-model",
+                                        "transient-test-key",
+                                        "https://default.example/v1"));
         var turn = new DeterministicProductStepTurnAdapter(
                 model,
                 List.of(new ToolDescriptor(
@@ -178,8 +180,10 @@ class AuthenticatedAgentTurnStepTurnVerticalTest {
         assertEquals(intents.requests.get(0).intent().toolCallId(),
                 intents.requests.get(2).intent().toolCallId());
         verify(recoverer, times(3)).recover(any());
-        assertNull(mapped.get().apiKey());
-        assertNull(mapped.get().apiUrl());
+        assertEquals("default-provider", mapped.get().provider());
+        assertEquals("default-model", mapped.get().model());
+        assertEquals("transient-test-key", mapped.get().apiKey());
+        assertEquals("https://default.example/v1", mapped.get().apiUrl());
         assertEquals(active.recovery().activation().activationEvent().id(),
                 intents.requests.get(0).expectedActivationEventId());
         assertEquals(active.lease().fencingToken(),

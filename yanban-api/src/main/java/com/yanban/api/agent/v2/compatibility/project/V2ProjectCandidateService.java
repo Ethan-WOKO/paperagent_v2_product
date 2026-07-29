@@ -344,16 +344,31 @@ public class V2ProjectCandidateService {
     }
 
     private static void logFailure(RuntimeException failure) {
+        FailureDiagnostic diagnostic = failureDiagnostic(failure);
+        LOGGER.warn(
+                "v2ProjectCandidateFailure stage={} errorCode={} failureType={}",
+                diagnostic.stage(), "PROJECT_CANDIDATE_FAILED",
+                diagnostic.failureType());
+    }
+
+    static FailureDiagnostic failureDiagnostic(RuntimeException failure) {
         String stage = "execution";
         String failureType = failure.getClass().getName();
         if (failure instanceof StartFailure startFailure) {
             stage = "fresh_start";
             failureType = startFailure.failureType;
+        } else if (failure instanceof PersistentPlanAgentLoopException loopFailure) {
+            stage = loopStage(loopFailure.stage());
         }
-        LOGGER.warn(
-                "v2ProjectCandidateFailure stage={} errorCode={} failureType={}",
-                stage, "PROJECT_CANDIDATE_FAILED", failureType);
+        return new FailureDiagnostic(stage, failureType);
     }
+
+    private static String loopStage(String stage) {
+        return stage != null && stage.matches("[a-z0-9._-]{1,64}")
+                ? "loop." + stage : "loop.unknown";
+    }
+
+    record FailureDiagnostic(String stage, String failureType) {}
 
     private static final class StartFailure extends IllegalStateException {
         private final String failureType;
