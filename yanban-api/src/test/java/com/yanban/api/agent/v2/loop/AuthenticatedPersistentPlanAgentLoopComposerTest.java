@@ -282,13 +282,13 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
                 org.mockito.ArgumentMatchers.eq(TURN_ID), any()))
                 .thenReturn(null);
 
-        PersistentPlanAgentLoopOutcome outcome =
-                fixture.composer().execute(
+        PersistentPlanAgentLoopException failure = assertThrows(
+                PersistentPlanAgentLoopException.class,
+                () -> fixture.composer().execute(
                         USER_ID, TURN_ID,
-                        PersistentPlanAgentLoopTestSupport.command(2));
+                        PersistentPlanAgentLoopTestSupport.command(2)));
 
-        assertEquals(PersistentPlanAgentLoopState.EFFECT_REJECTED,
-                outcome.state());
+        assertEquals("effect", failure.stage());
         verifyNoInteractions(fixture.progression());
     }
 

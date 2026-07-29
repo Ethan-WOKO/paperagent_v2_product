@@ -122,8 +122,8 @@ class DeterministicProductStepTurnAdapterTest {
                 "Search the available literature and retain relevant results"));
         assertTrue(prompt.contains(
                 "Provider callable function: literature_search"));
-        assertTrue(prompt.contains(
-                "Internal authoritative ToolId: literature.search"));
+        assertFalse(prompt.contains(
+                "Internal authoritative ToolId"));
     }
 
     @Test

@@ -208,9 +208,9 @@ handled as a minimal repair in this stabilization change:
    Only the provider-facing copy of the exact selected-tool directive is
    translated when that fixed directive occurs exactly once. Arbitrary,
    missing, or repeated natural-language intent remains valid and unchanged;
-   a separate provider-facing field always names the sole callable alias and
-   marks the dotted ToolId as internal identity only. The TaskFrame, Plan,
-   ToolId, and EffectIntent remain unchanged.
+   a separate provider-facing field always names the sole callable alias.
+   The internal dotted ToolId is not exposed to the model. The TaskFrame,
+   Plan, ToolId, and EffectIntent remain unchanged.
 2. Project Candidate composition created a `ModelRequest` without recovered
    TaskFrame, Plan revision, or Step authority. The authenticated effect
    composer now passes the exact recovered ACTIVE authority into Candidate
@@ -231,12 +231,17 @@ At the requested static-review checkpoint, tests were added or adjusted for
 these boundaries but no tests, compilation, formatter checks, or real product
 retest had run.
 
-After the static review completed, the focused verification command ran only
-the nine directly affected test classes. It exercised 68 tests: 67 passed and
-one pre-existing adjacent null-effect test errored at `loop.effect`. That known
-test-path mismatch was recorded before these four edits and was not widened
-into this repair. The newly added kernel diagnostic test was then run alone and
-passed. No full product suite was run.
+After the static review completed, the focused verification command initially
+exercised the directly affected test classes and reproduced one pre-existing
+adjacent null-effect assertion mismatch at `loop.effect`. The same single test
+was reproduced on the unchanged `main` checkout. Its expectation was aligned
+with the existing fail-closed production behavior so the focused class can
+serve as a valid merge gate.
+
+The final focused gate ran the nine directly affected test classes: 68 tests
+passed, with 0 failures, 0 errors, and 0 skipped. `git diff --check` also
+passed. No full product, RAG, paper, frontend, deployment, or real-provider
+suite was run.
 
 ## Stale-request recovery defect
 

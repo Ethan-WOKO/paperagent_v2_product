@@ -217,9 +217,6 @@ public final class DeterministicProductStepTurnAdapter implements StepTurnPort {
                 + "\nCompletion criteria: "
                 + String.join("; ", step.completionCriteria())
                 + "\nProvider callable function: " + callableAlias
-                + "\nInternal authoritative ToolId: "
-                + selectedToolId.value()
-                + " (identity only; never use it as a function name)"
                 + "\nCall exactly the provider callable function above once.";
     }
 
