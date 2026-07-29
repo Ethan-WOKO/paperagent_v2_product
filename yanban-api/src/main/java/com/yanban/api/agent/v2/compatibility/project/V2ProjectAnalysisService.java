@@ -79,10 +79,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class V2ProjectAnalysisService {
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(V2ProjectAnalysisService.class);
     private final Object[] locks = java.util.stream.IntStream.range(0, 64)
             .mapToObj(ignored -> new Object()).toArray();
     private final AgentSessionRepository sessions;
@@ -186,7 +190,7 @@ public class V2ProjectAnalysisService {
         String owner = "v2-project-analysis-" + hash(
                 userId + "\0" + projectId + "\0" + sessionId + "\0"
                         + request.requestId()).substring(0, 24);
-        Instant now = Instant.now();
+        Instant now = ProjectLeaseAuthorityTime.canonical(Instant.now());
         String token = "lease-" + hash(owner + "\0" + requestHash);
         ProjectAnalysisDeliveryEntity delivery;
         if (existing.isPresent()) {
@@ -240,6 +244,7 @@ public class V2ProjectAnalysisService {
         try {
             return executeRunning(userId, projectId, request, delivery);
         } catch (RuntimeException failure) {
+            logFailure(failure);
             return response(deliveries.fail(
                     delivery.id(), "PROJECT_ANALYSIS_FAILED"), false);
         }
@@ -257,18 +262,22 @@ public class V2ProjectAnalysisService {
                     "Project version changed before V2 execution");
         }
         Instant authorityTime = delivery.createdAt();
-        var started = starts.start(userId, delivery.turnId(),
-                new AuthenticatedAgentTurnFreshExecutionStartCommand(
-                        bootstrap(request, delivery.turnId(), authorityTime),
-                        Optional.of(startAttempt(delivery, authorityTime))));
+        io.paperagent.v2.runtime.execution.start.FreshExecutionStartOutcome started;
+        try {
+            started = starts.start(userId, delivery.turnId(),
+                    new AuthenticatedAgentTurnFreshExecutionStartCommand(
+                            bootstrap(request, delivery.turnId(), authorityTime),
+                            Optional.of(startAttempt(delivery, authorityTime))));
+        } catch (RuntimeException failure) {
+            throw StartFailure.thrown(failure);
+        }
         io.paperagent.v2.contracts.PlanId planId;
         if (started instanceof FreshExecutionStarted value) {
             planId = value.persistedStart().planId();
         } else if (started instanceof FreshExecutionRecoveryRequired value) {
             planId = value.planId();
         } else {
-            throw new IllegalStateException(
-                    "V2 Project analysis start is unavailable");
+            throw StartFailure.rejected(started);
         }
         List<ProjectAnalysisDeliveryTransactions.StepAuthority> authorities =
                 authorities(planId.value(), request);
@@ -635,6 +644,35 @@ public class V2ProjectAnalysisService {
     private static IllegalArgumentException invalid() {
         return new IllegalArgumentException(
                 "V2 Project analysis request is invalid");
+    }
+
+    private static void logFailure(RuntimeException failure) {
+        String stage = "execution";
+        String failureType = failure.getClass().getName();
+        if (failure instanceof StartFailure startFailure) {
+            stage = "fresh_start";
+            failureType = startFailure.failureType;
+        }
+        LOGGER.warn(
+                "v2ProjectAnalysisFailure stage={} errorCode={} failureType={}",
+                stage, "PROJECT_ANALYSIS_FAILED", failureType);
+    }
+
+    private static final class StartFailure extends IllegalStateException {
+        private final String failureType;
+
+        private StartFailure(String failureType, RuntimeException cause) {
+            super("V2 Project analysis fresh start failed", cause);
+            this.failureType = failureType;
+        }
+
+        private static StartFailure thrown(RuntimeException failure) {
+            return new StartFailure(failure.getClass().getName(), failure);
+        }
+
+        private static StartFailure rejected(Object outcome) {
+            return new StartFailure(outcome.getClass().getName(), null);
+        }
     }
 
     private static String hash(String value) {
