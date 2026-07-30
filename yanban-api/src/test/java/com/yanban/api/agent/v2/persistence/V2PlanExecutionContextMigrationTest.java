@@ -47,6 +47,7 @@ class V2PlanExecutionContextMigrationTest {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion("44")
+                .target("45")
                 .load().migrate();
 
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

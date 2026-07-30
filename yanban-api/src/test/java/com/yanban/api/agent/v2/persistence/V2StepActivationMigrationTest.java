@@ -38,6 +38,7 @@ class V2StepActivationMigrationTest {
         Flyway.configure().dataSource(url, "sa", "")
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true).baselineVersion("45")
+                .target("46")
                 .load().migrate();
 
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

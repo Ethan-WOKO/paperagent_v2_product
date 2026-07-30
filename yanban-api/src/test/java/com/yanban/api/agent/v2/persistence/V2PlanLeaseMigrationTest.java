@@ -44,6 +44,7 @@ class V2PlanLeaseMigrationTest {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion("42")
+                .target("43")
                 .load()
                 .migrate();
 

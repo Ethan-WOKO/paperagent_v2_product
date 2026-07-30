@@ -27,6 +27,7 @@ class V2PlanBootstrapMigrationTest {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion("41")
+                .target("42")
                 .load()
                 .migrate();
 

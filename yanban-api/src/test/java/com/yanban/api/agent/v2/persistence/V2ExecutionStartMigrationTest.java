@@ -45,6 +45,7 @@ class V2ExecutionStartMigrationTest {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion("43")
+                .target("44")
                 .load()
                 .migrate();
 
