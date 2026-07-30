@@ -24,7 +24,6 @@ public class V2AdaptiveExecutionService {
     private final AuthenticatedAgentTurnExecutionStartRecoveryComposer starts;
     private final AuthenticatedAgentTurnPlanExecutionContextComposer contexts;
     private final V2AdaptiveRuntimeCycleFactory cycles;
-    private final ReflectionProvider reflections;
     private final ObjectMapper json;
     private final ProjectCandidateCompositionEffect candidates;
     private final NaturalLanguageCandidateAuthorityStore candidateAuthorities;
@@ -34,9 +33,8 @@ public class V2AdaptiveExecutionService {
             AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
             AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
             V2AdaptiveRuntimeCycleFactory cycles,
-            ReflectionProvider reflections,
             ObjectMapper json) {
-        this(store, starts, contexts, cycles, reflections, json,
+        this(store, starts, contexts, cycles, json,
                 null, null);
     }
 
@@ -46,7 +44,6 @@ public class V2AdaptiveExecutionService {
             AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
             AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
             V2AdaptiveRuntimeCycleFactory cycles,
-            ReflectionProvider reflections,
             ObjectMapper json,
             ProjectCandidateCompositionEffect candidates,
             NaturalLanguageCandidateAuthorityStore candidateAuthorities) {
@@ -54,7 +51,6 @@ public class V2AdaptiveExecutionService {
         this.starts = starts;
         this.contexts = contexts;
         this.cycles = cycles;
-        this.reflections = reflections;
         this.json = json;
         this.candidates = candidates;
         this.candidateAuthorities = candidateAuthorities;
@@ -164,21 +160,17 @@ public class V2AdaptiveExecutionService {
                 return failed(initial, "WORKSPACE_CONTEXT_REJECTED");
             }
         }
-        V2AdaptiveCyclePort cyclePort = command.modelProvider() == null
-                ? cycles.create(command.bindings(), owner, token, expires,
-                        suffix, base)
-                : cycles.create(command.bindings(), owner, token, expires,
-                        suffix, base, command.modelProvider());
+        V2AdaptiveCyclePort cyclePort = cycles.create(
+                command.bindings(), owner, token, expires,
+                suffix, base, command.modelProvider());
         var coordinator = new V2AdaptiveExecutionCoordinator(
                 cyclePort,
-                command.modelProvider() == null
-                        ? reflections
-                        : new V2ModelReflectionProvider(
-                                command.modelProvider(), json,
-                                command.bootstrap().taskFrame().id(),
-                                command.bootstrap().plan().id(),
-                                command.bootstrap().plan()
-                                        .latestRevision().id()),
+                new V2ModelReflectionProvider(
+                        command.modelProvider(), json,
+                        command.bootstrap().taskFrame().id(),
+                        command.bootstrap().plan().id(),
+                        command.bootstrap().plan()
+                                .latestRevision().id()),
                 new StrictReflectionDecisionParser(json));
         return coordinator.execute(
                 new V2AdaptiveExecutionCoordinator.Command(
@@ -290,16 +282,7 @@ public class V2AdaptiveExecutionService {
         public Command {
             bindings = Map.copyOf(bindings);
             conversationContext = List.copyOf(conversationContext);
-        }
-
-        public Command(
-                Long intakeId, Long userId, Long sessionId, Long turnId,
-                String clientRequestId, String projectVersion,
-                PersistedPlanBootstrap bootstrap, Map<String, String> bindings,
-                List<String> conversationContext, Instant authorityTime) {
-            this(intakeId, userId, sessionId, turnId, clientRequestId,
-                    projectVersion, bootstrap, bindings, conversationContext,
-                    authorityTime, null);
+            Objects.requireNonNull(modelProvider, "modelProvider");
         }
     }
 }

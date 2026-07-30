@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.yanban.api.agent.v2.adaptive.reflection.ReflectionProvider;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnExecutionStartRecoveryComposer;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnPlanExecutionContextComposer;
 import com.yanban.api.agent.v2.effect.project.NaturalLanguageCandidateAuthorityStore;
@@ -12,6 +11,7 @@ import com.yanban.api.agent.v2.effect.project.ProjectCandidateCompositionEffect;
 import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectAuthority;
 import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
+import io.paperagent.v2.providers.*;
 import io.paperagent.v2.runtime.execution.context.composition.PlanExecutionContextReady;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredExecutionStart;
 import java.time.Instant;
@@ -39,15 +39,12 @@ class V2AdaptiveExecutionServiceTest {
                         true, false));
         when(fixture.cycles.create(
                 anyMap(), anyString(), anyString(), any(),
-                anyString(), any())).thenReturn(port);
-        when(fixture.reflections.reflect(any())).thenReturn(
-                "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
-                        + "\"finalText\":\"任务完成\","
-                        + "\"replacementSteps\":[]}");
-
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
         V2AdaptiveExecutionResult result = fixture.service.execute(
                 command(fixture.bootstrap, "version-1",
-                        Map.of("step-1", "project.read")));
+                        Map.of("step-1", "project.read"),
+                        fixture.modelProvider));
 
         assertEquals("SUCCEEDED", result.status(), result.errorCode());
         assertEquals("任务完成", result.finalText());
@@ -66,11 +63,12 @@ class V2AdaptiveExecutionServiceTest {
         var fixture = fixture();
         V2AdaptiveExecutionResult result = fixture.service.execute(
                 command(fixture.bootstrap, "version-1",
-                        Map.of("step-1", "sandbox.execute")));
+                        Map.of("step-1", "sandbox.execute"),
+                        fixture.modelProvider));
         assertEquals("SANDBOX_EXECUTION_UNAVAILABLE", result.errorCode());
         verifyNoInteractions(
                 fixture.starts, fixture.contexts,
-                fixture.cycles, fixture.reflections);
+                fixture.cycles, fixture.modelProvider);
         verify(fixture.store).finish(
                 eq(7L), eq(9L), eq("request-1"), eq("FAILED"),
                 anyList(), isNull(), isNull(), eq(List.of()),
@@ -81,6 +79,8 @@ class V2AdaptiveExecutionServiceTest {
     @Test
     void durableTerminalNaturalCandidatePublishesAndWaitsForConfirmation() {
         var fixture = fixture();
+        when(fixture.modelProvider.complete(any()))
+                .thenReturn(complete("candidate ready"));
         var recovered = mock(RecoveredExecutionStart.class);
         when(recovered.planId()).thenReturn(new PlanId("plan-1"));
         when(fixture.starts.recover(eq(7L), eq(11L), any()))
@@ -98,11 +98,8 @@ class V2AdaptiveExecutionServiceTest {
                         true, false));
         when(fixture.cycles.create(
                 anyMap(), anyString(), anyString(), any(),
-                anyString(), any())).thenReturn(port);
-        when(fixture.reflections.reflect(any())).thenReturn(
-                "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
-                        + "\"finalText\":\"candidate ready\","
-                        + "\"replacementSteps\":[]}");
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
         var authorities = mock(
                 NaturalLanguageCandidateAuthorityStore.class);
         var authority = mock(ProjectCandidateEffectAuthority.class);
@@ -118,13 +115,14 @@ class V2AdaptiveExecutionServiceTest {
                                 77L, "c".repeat(64), "d".repeat(64)));
         var service = new V2AdaptiveExecutionService(
                 fixture.store, fixture.starts, fixture.contexts,
-                fixture.cycles, fixture.reflections, new ObjectMapper(),
+                fixture.cycles, new ObjectMapper(),
                 candidates, authorities);
 
         V2AdaptiveExecutionResult result = service.execute(
                 command(fixture.bootstrap, "version-1",
                         Map.of("step-1",
-                                "project.candidate.compose")));
+                                "project.candidate.compose"),
+                        fixture.modelProvider));
 
         assertEquals("WAITING_CONFIRMATION", result.status());
         assertEquals(77L, result.candidateArtifactId());
@@ -142,6 +140,8 @@ class V2AdaptiveExecutionServiceTest {
     @Test
     void candidateBindingAuthorityFailureCannotBecomeSucceeded() {
         var fixture = fixture();
+        when(fixture.modelProvider.complete(any()))
+                .thenReturn(complete("candidate ready"));
         var recovered = mock(RecoveredExecutionStart.class);
         when(recovered.planId()).thenReturn(new PlanId("plan-1"));
         when(fixture.starts.recover(eq(7L), eq(11L), any()))
@@ -159,11 +159,8 @@ class V2AdaptiveExecutionServiceTest {
                         true, false));
         when(fixture.cycles.create(
                 anyMap(), anyString(), anyString(), any(),
-                anyString(), any())).thenReturn(port);
-        when(fixture.reflections.reflect(any())).thenReturn(
-                "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
-                        + "\"finalText\":\"candidate ready\","
-                        + "\"replacementSteps\":[]}");
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
         var authorities = mock(
                 NaturalLanguageCandidateAuthorityStore.class);
         when(authorities.require("plan-1"))
@@ -171,13 +168,14 @@ class V2AdaptiveExecutionServiceTest {
         var candidates = mock(ProjectCandidateCompositionEffect.class);
         var service = new V2AdaptiveExecutionService(
                 fixture.store, fixture.starts, fixture.contexts,
-                fixture.cycles, fixture.reflections, new ObjectMapper(),
+                fixture.cycles, new ObjectMapper(),
                 candidates, authorities);
 
         V2AdaptiveExecutionResult result = service.execute(
                 command(fixture.bootstrap, "version-1",
                         Map.of("step-1",
-                                "project.candidate.compose")));
+                                "project.candidate.compose"),
+                        fixture.modelProvider));
 
         assertEquals("FAILED", result.status());
         assertEquals("CANDIDATE_PUBLISH_FAILED", result.errorCode());
@@ -198,7 +196,9 @@ class V2AdaptiveExecutionServiceTest {
         var contexts = mock(
                 AuthenticatedAgentTurnPlanExecutionContextComposer.class);
         var cycles = mock(V2AdaptiveRuntimeCycleFactory.class);
-        var reflections = mock(ReflectionProvider.class);
+        var modelProvider = mock(ModelProvider.class);
+        when(modelProvider.complete(any()))
+                .thenReturn(complete("任务完成"));
         PlanStep step = new PlanStep(
                 new PlanStepId("step-1"), "读取文件", "取得内容",
                 Set.of(), List.of("receipt"),
@@ -228,19 +228,29 @@ class V2AdaptiveExecutionServiceTest {
                         Set.of()),
                 Instant.EPOCH));
         var service = new V2AdaptiveExecutionService(
-                store, starts, contexts, cycles, reflections,
-                new ObjectMapper());
+                store, starts, contexts, cycles, new ObjectMapper());
         return new Fixture(
                 service, store, starts, contexts, cycles,
-                reflections, bootstrap);
+                modelProvider, bootstrap);
     }
 
     private static V2AdaptiveExecutionService.Command command(
             PersistedPlanBootstrap bootstrap, String version,
-            Map<String, String> bindings) {
+            Map<String, String> bindings, ModelProvider modelProvider) {
         return new V2AdaptiveExecutionService.Command(
                 5L, 7L, 9L, 11L, "request-1", version,
-                bootstrap, bindings, List.of("user: 上一轮"), Instant.EPOCH);
+                bootstrap, bindings, List.of("user: 上一轮"), Instant.EPOCH,
+                modelProvider);
+    }
+
+    private static ModelResponse complete(String finalText) {
+        return new ModelResponse(
+                Optional.of(
+                        "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
+                                + "\"finalText\":\"" + finalText + "\","
+                                + "\"replacementSteps\":[]}"),
+                List.of(), FinishReason.STOP,
+                new UsageMetadata(1, 1, 0, Map.of()), Map.of());
     }
 
     private record Fixture(
@@ -249,7 +259,7 @@ class V2AdaptiveExecutionServiceTest {
             AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
             AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
             V2AdaptiveRuntimeCycleFactory cycles,
-            ReflectionProvider reflections,
+            ModelProvider modelProvider,
             PersistedPlanBootstrap bootstrap) {
     }
 }

@@ -10,9 +10,7 @@ import io.paperagent.v2.providers.*;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
-import org.springframework.stereotype.Component;
 
-@Component
 public class V2ModelReflectionProvider implements ReflectionProvider {
     private static final String PROMPT = """
             Reflect on authoritative V2 execution facts. Return one strict JSON
@@ -29,11 +27,6 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
     private final Optional<TaskFrameId> taskFrameId;
     private final Optional<PlanId> planId;
     private final Optional<PlanRevisionId> revisionId;
-
-    public V2ModelReflectionProvider(
-            ModelProvider provider, ObjectMapper json) {
-        this(provider, json, null, null, null);
-    }
 
     public V2ModelReflectionProvider(
             ModelProvider provider, ObjectMapper json,
