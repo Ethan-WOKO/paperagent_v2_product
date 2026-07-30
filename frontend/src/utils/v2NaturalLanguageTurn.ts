@@ -2,6 +2,7 @@ import type {
   V2NaturalLanguageStepStatus,
   V2NaturalLanguageTurnRequest,
   V2NaturalLanguageTurnResponse,
+  V2NaturalLanguageTurnStartResponse,
   V2NaturalLanguageTurnStatus,
 } from '@/api/agent';
 
@@ -124,12 +125,13 @@ export async function pollV2NaturalLanguageTurn(
 }
 
 export async function startThenPollV2NaturalLanguageTurn(
-  start: () => Promise<unknown>,
+  start: () => Promise<V2NaturalLanguageTurnStartResponse>,
   read: () => Promise<V2NaturalLanguageTurnResponse>,
   options: PollOptions = {},
-) {
+): Promise<V2NaturalLanguageTurnResponse> {
+  let acknowledgement: V2NaturalLanguageTurnStartResponse;
   try {
-    await start();
+    acknowledgement = await start();
   } catch (cause) {
     if (isDefinitiveV2NaturalLanguageStartRejection(cause)) throw cause;
     try {
@@ -140,6 +142,24 @@ export async function startThenPollV2NaturalLanguageTurn(
       if (status(readCause) === 404) throw new V2NaturalLanguageTurnNotCreatedError();
       throw readCause;
     }
+    return pollV2NaturalLanguageTurn(read, options);
+  }
+  if (acknowledgement.route === 'DIRECT') {
+    if (!acknowledgement.answer?.trim()) throw new Error('v2-direct-answer-required');
+    return {
+      status: 'SUCCEEDED',
+      route: 'DIRECT',
+      planId: null,
+      projectVersion: null,
+      steps: [],
+      finalText: acknowledgement.answer,
+      candidateArtifactId: null,
+      outputPaths: [],
+      errorCode: null,
+    };
+  }
+  if (acknowledgement.route !== 'PERSISTENT_PLAN_EXECUTE') {
+    throw new Error('v2-intake-route-invalid');
   }
   return pollV2NaturalLanguageTurn(read, options);
 }

@@ -90,6 +90,44 @@ describe('V2 自然语言请求', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it('DIRECT ack 直接显示答案且不会调用 GET', async () => {
+    const start = vi.fn(async () => ({
+      ...intakeAck,
+      route: 'DIRECT' as const,
+      answer: '这是直接回答。',
+      planId: null,
+      assistantMessageId: 22,
+    }));
+    const read = vi.fn(async () => outcome('FAILED'));
+    const result = await startThenPollV2NaturalLanguageTurn(start, read);
+    expect(result).toEqual({
+      status: 'SUCCEEDED',
+      route: 'DIRECT',
+      planId: null,
+      projectVersion: null,
+      steps: [],
+      finalText: '这是直接回答。',
+      candidateArtifactId: null,
+      outputPaths: [],
+      errorCode: null,
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('DIRECT ack 没有答案时 fail-closed 且不会调用 GET', async () => {
+    const start = vi.fn(async () => ({
+      ...intakeAck,
+      route: 'DIRECT' as const,
+      answer: ' ',
+      planId: null,
+    }));
+    const read = vi.fn(async () => outcome('SUCCEEDED'));
+    await expect(startThenPollV2NaturalLanguageTurn(start, read))
+      .rejects.toThrow('v2-direct-answer-required');
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('POST 响应丢失后使用同一请求编号恢复，GET 确认不存在才结束', async () => {
     const start = vi.fn(async () => {
       throw new Error('response-lost');

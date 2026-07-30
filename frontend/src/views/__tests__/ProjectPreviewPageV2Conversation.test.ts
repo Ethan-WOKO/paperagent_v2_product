@@ -36,6 +36,8 @@ describe('ProjectPreviewPage V2 中文会话界面', () => {
     expect(source).toContain('原项目尚未修改');
     expect(source).toContain('打开修改与验证');
     expect(source).toContain('@click="openV2CandidateReview"');
+    expect(source).toContain("v2TurnOutcome.route === 'DIRECT'");
+    expect(source).toContain('此问题无需执行项目步骤，已直接回答。');
   });
 
   it('切换范围和卸载会中止轮询，刷新可恢复同一请求', () => {

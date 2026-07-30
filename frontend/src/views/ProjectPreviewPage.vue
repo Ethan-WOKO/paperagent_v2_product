@@ -664,7 +664,11 @@
                 </li>
               </ol>
               <p v-else class="v2-conversation__empty-process">
-                {{ v2TurnOutcome.status === 'PLANNING' ? '正在制定执行步骤，请稍候。' : '正在准备执行信息。' }}
+                {{ v2TurnOutcome.route === 'DIRECT'
+                  ? '此问题无需执行项目步骤，已直接回答。'
+                  : v2TurnOutcome.status === 'PLANNING'
+                    ? '正在制定执行步骤，请稍候。'
+                    : '正在准备执行信息。' }}
               </p>
             </section>
 
@@ -2295,6 +2299,9 @@ function v2NaturalLanguageFailureText(cause: unknown) {
   if (cause instanceof V2NaturalLanguageTurnNotCreatedError) {
     return '没有找到这次请求，请重新发送。';
   }
+  if (cause instanceof Error && cause.message === 'v2-direct-answer-required') {
+    return '直接回答没有返回有效内容，请重新发送。';
+  }
   if (cause instanceof Error && cause.message === 'v2-natural-language-poll-timeout') {
     return '任务执行时间较长，请稍后刷新页面查看最新结果。';
   }
@@ -2416,7 +2423,11 @@ async function sendV2NaturalLanguageTurn() {
     const sessionId = activeSessionId.value;
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
       if (sessionId && (isDefinitiveV2NaturalLanguageStartRejection(cause)
-          || cause instanceof V2NaturalLanguageTurnNotCreatedError)) {
+          || cause instanceof V2NaturalLanguageTurnNotCreatedError
+          || (cause instanceof Error && [
+            'v2-direct-answer-required',
+            'v2-intake-route-invalid',
+          ].includes(cause.message)))) {
         clearStoredV2NaturalLanguageRequest(projectId, sessionId);
       }
       v2TurnError.value = v2NaturalLanguageFailureText(cause);
