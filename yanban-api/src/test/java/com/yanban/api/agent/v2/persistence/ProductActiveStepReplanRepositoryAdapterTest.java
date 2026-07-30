@@ -217,7 +217,7 @@ class ProductActiveStepReplanRepositoryAdapterTest {
     }
 
     @Test
-    void durableOutcomeStillNeedsProgressionBeforeReplan() {
+    void completeDurableOutcomeAllowsActiveStepReplan() {
         Scenario scenario = seedActive("durable-outcome");
         var request = scenario.request();
         String toolCallId = "tool-durable-outcome";
@@ -241,14 +241,84 @@ class ProductActiveStepReplanRepositoryAdapterTest {
                                 "lease-token", 3))
                         .outcome());
 
+        var applied = adapter.supersedeAndReplan(request);
+
+        assertEquals(PersistenceOutcome.APPLIED, applied.outcome(),
+                applied::toString);
+        assertEquals(1, replans.count());
+        assertEquals(1, effectResults.count());
+    }
+
+    @Test
+    void completeFailedOutcomeAllowsActiveStepReplan() {
+        Scenario scenario = seedActive("failed-outcome");
+        var request = scenario.request();
+        String toolCallId = "tool-failed-outcome";
+        var intent = new EffectIntent(
+                new ToolCallId(toolCallId),
+                request.planId(), request.activeStepId(),
+                "literature.search", new ObjectValue(java.util.Map.of()));
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectIntentAdapter.persist(new EffectIntentRequest(
+                        intent, "lease-token", 3,
+                        scenario.activation().activationEvent().id()))
+                        .outcome());
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectOutcomeAdapter.recordResult(
+                        new EffectResultRequest(
+                                ProductEffectOutcomeCodecTest.receipt(
+                                        io.paperagent.v2.contracts
+                                                .ReceiptStatus.FAILURE,
+                                        "receipt-failed-outcome",
+                                        toolCallId),
+                                "lease-token", 3))
+                        .outcome());
+
+        var applied = adapter.supersedeAndReplan(request);
+
+        assertEquals(PersistenceOutcome.APPLIED, applied.outcome(),
+                applied::toString);
+        assertEquals(1, replans.count());
+        assertEquals(1, effectResults.count());
+    }
+
+    @Test
+    void corruptDurableOutcomeMakesReplanPartial() {
+        Scenario scenario = seedActive("corrupt-outcome");
+        var request = scenario.request();
+        String toolCallId = "tool-corrupt-outcome";
+        var intent = new EffectIntent(
+                new ToolCallId(toolCallId),
+                request.planId(), request.activeStepId(),
+                "literature.search", new ObjectValue(java.util.Map.of()));
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectIntentAdapter.persist(new EffectIntentRequest(
+                        intent, "lease-token", 3,
+                        scenario.activation().activationEvent().id()))
+                        .outcome());
+        assertEquals(PersistenceOutcome.APPLIED,
+                effectOutcomeAdapter.recordResult(
+                        new EffectResultRequest(
+                                ProductEffectOutcomeCodecTest.receipt(
+                                        io.paperagent.v2.contracts
+                                                .ReceiptStatus.FAILURE,
+                                        "receipt-corrupt-outcome",
+                                        toolCallId),
+                                "lease-token", 3))
+                        .outcome());
+        assertEquals(1, jdbc.update("""
+                update agent_v2_effect_results
+                   set result_sha256 = ?
+                 where tool_call_id = ?
+                """, "0".repeat(64), toolCallId));
+
         var rejected = adapter.supersedeAndReplan(request);
 
         assertEquals(PersistenceOutcome.REJECTED, rejected.outcome());
         assertEquals(
-                PersistenceErrorCode.ACTIVE_STEP_REPLAN_NOT_ELIGIBLE,
+                PersistenceErrorCode.ACTIVE_STEP_REPLAN_PARTIAL_STATE,
                 rejected.failure().orElseThrow().code());
         assertEquals(0, replans.count());
-        assertEquals(1, effectResults.count());
     }
 
     @Test

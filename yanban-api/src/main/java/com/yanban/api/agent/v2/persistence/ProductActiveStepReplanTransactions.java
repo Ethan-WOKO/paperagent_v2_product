@@ -43,6 +43,8 @@ class ProductActiveStepReplanTransactions {
     private final ProductStepInterruptionJpaRepository interruptions;
     private final ProductStepCompletionJpaRepository completions;
     private final ProductEffectIntentJpaRepository effectIntents;
+    private final ProductEffectOutcomeResultJpaRepository effectResults;
+    private final ProductEffectOutcomeMarkerReader effectOutcomeMarkers;
     private final ProductActiveStepReplanTimeSource time;
 
     ProductActiveStepReplanTransactions(
@@ -57,6 +59,8 @@ class ProductActiveStepReplanTransactions {
             ProductStepInterruptionJpaRepository interruptions,
             ProductStepCompletionJpaRepository completions,
             ProductEffectIntentJpaRepository effectIntents,
+            ProductEffectOutcomeResultJpaRepository effectResults,
+            ProductEffectOutcomeMarkerReader effectOutcomeMarkers,
             ProductActiveStepReplanTimeSource time) {
         this.bootstraps = bootstraps;
         this.replans = replans;
@@ -69,6 +73,8 @@ class ProductActiveStepReplanTransactions {
         this.interruptions = interruptions;
         this.completions = completions;
         this.effectIntents = effectIntents;
+        this.effectResults = effectResults;
+        this.effectOutcomeMarkers = effectOutcomeMarkers;
         this.time = time;
     }
 
@@ -105,13 +111,13 @@ class ProductActiveStepReplanTransactions {
                     && inspected.failure().isPresent()
                     ? notEligible() : partial();
         }
-        if (effectIntents.findAllByPlanId(request.planId().value()).stream()
-                .anyMatch(row -> row.stepId().equals(
-                                active.activation().stepId().value())
-                        && row.activationEventId().equals(
-                                active.activation().activationEvent()
-                                        .id().value()))) {
+        SelectedStepEffects selectedStepEffects =
+                selectedStepEffects(request, active);
+        if (selectedStepEffects == SelectedStepEffects.IN_FLIGHT) {
             return notEligible();
+        }
+        if (selectedStepEffects == SelectedStepEffects.PARTIAL) {
+            return partial();
         }
         ProductLeaseEntity lease = leases
                 .findFirstByPlanIdOrderByFencingTokenDesc(
@@ -422,6 +428,41 @@ class ProductActiveStepReplanTransactions {
                 || replans.findByReplanEventId(eventId).isPresent();
     }
 
+    private SelectedStepEffects selectedStepEffects(
+            ActiveStepReplanRequest request,
+            PersistedStepRecoveryActive active) {
+        var rows = effectIntents
+                .findAllByPlanId(request.planId().value()).stream()
+                .filter(row -> row.stepId().equals(
+                                active.activation().stepId().value())
+                        && row.activationEventId().equals(
+                                active.activation().activationEvent()
+                                        .id().value()))
+                .toList();
+        boolean inFlight = false;
+        for (ProductEffectIntentEntity row : rows) {
+            var intent = effectOutcomeMarkers.intent(row.toolCallId());
+            if (intent == null
+                    || !intent.intent().planId().equals(request.planId())
+                    || !intent.intent().stepId().equals(
+                            active.activation().stepId())
+                    || !intent.activationEventId().equals(
+                            active.activation().activationEvent().id())) {
+                return SelectedStepEffects.PARTIAL;
+            }
+            ProductEffectOutcomeResultEntity result =
+                    effectResults.findById(row.toolCallId()).orElse(null);
+            if (result == null) {
+                inFlight = true;
+            } else if (effectOutcomeMarkers.result(result) == null) {
+                return SelectedStepEffects.PARTIAL;
+            }
+        }
+        return inFlight
+                ? SelectedStepEffects.IN_FLIGHT
+                : SelectedStepEffects.COMPLETE;
+    }
+
     private boolean occupied(ActiveStepReplanRequest request) {
         return starts.existsById(request.planId().value())
                 || !activations.findAllByPlanId(
@@ -469,5 +510,11 @@ class ProductActiveStepReplanTransactions {
         return rejected(
                 PersistenceErrorCode.ACTIVE_STEP_REPLAN_PARTIAL_STATE,
                 ROOT);
+    }
+
+    private enum SelectedStepEffects {
+        COMPLETE,
+        IN_FLIGHT,
+        PARTIAL
     }
 }

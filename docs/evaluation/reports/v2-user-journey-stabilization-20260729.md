@@ -730,3 +730,35 @@ Focused verification:
 Browser visual inspection was attempted but the in-app browser rejected the
 localhost navigation. No browser-level acceptance is claimed. A real signed-in
 V1/V2 switch and V2 task run remain for user testing.
+
+### Active-Step replan after a finished effect
+
+The real adaptive chain exposed a product persistence mismatch: the V2 core
+allows an ACTIVE Step to be superseded after every effect intent has a
+complete final result, but the product adapter rejected the replan whenever
+any intent existed. As a result, a failed tool call could be reflected into a
+valid replacement Plan and still be rejected repeatedly by persistence.
+
+The minimum repair changes only the product replan eligibility check. For the
+current Step activation:
+
+- an intent without a final result remains ineligible because it may still be
+  executing;
+- a corrupt intent, final result, or owned receipt fails closed as partial
+  state;
+- complete final results permit replan, whether their receipt status is
+  success or failure.
+
+The existing per-Plan database lock, fencing-token checks, immutable replan
+marker, exact replay, and event ordering are unchanged.
+
+Focused verification:
+
+- `mvn -pl yanban-api "-Dtest=ProductActiveStepReplanRepositoryAdapterTest,ProductActiveStepReplanRepositoryConcurrencyTest" test`
+  (23 tests, 0 failures, 0 errors, 0 skipped);
+- `mvn -pl yanban-api "-Dtest=V2AdaptiveExecutionCoordinatorTest,V2ModelReflectionProviderTest,V2ReplanRequestMaterializerTest" test`
+  (12 tests, 0 failures, 0 errors, 0 skipped);
+- `git diff --check` passed.
+
+No broad legacy Agent, RAG, literature, frontend, or full-suite test was run.
+A signed-in real-provider replay remains for user acceptance.
