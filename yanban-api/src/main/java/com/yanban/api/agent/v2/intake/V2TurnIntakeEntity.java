@@ -92,6 +92,7 @@ class V2TurnIntakeEntity {
     }
 
     Long userId() { return userId; }
+    Long id() { return id; }
     Long sessionId() { return sessionId; }
     String clientRequestId() { return clientRequestId; }
     String requestSha256() { return requestSha256; }
@@ -104,6 +105,7 @@ class V2TurnIntakeEntity {
     Long assistantMessageId() { return assistantMessageId; }
     String planId() { return planId; }
     String plannerOutputJson() { return plannerOutputJson; }
+    String capabilityBindingsJson() { return capabilityBindingsJson; }
     String status() { return status; }
 
     void completeDirect(Long messageId, String outputJson, Instant now) {
@@ -128,6 +130,20 @@ class V2TurnIntakeEntity {
         requireRunning();
         failureCode = code;
         status = FAILED;
+        updatedAt = now;
+    }
+
+    void bindPersistentAssistant(Long messageId, Instant now) {
+        if (!PERSISTENT.equals(status)) {
+            throw new IllegalStateException(
+                    "V2 persistent intake is not ready");
+        }
+        if (assistantMessageId != null
+                && !assistantMessageId.equals(messageId)) {
+            throw new IllegalStateException(
+                    "V2 assistant message authority conflict");
+        }
+        assistantMessageId = messageId;
         updatedAt = now;
     }
 

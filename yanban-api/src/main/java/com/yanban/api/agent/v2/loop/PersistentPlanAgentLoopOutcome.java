@@ -15,7 +15,8 @@ public record PersistentPlanAgentLoopOutcome(
         Optional<PlanStepId> stepId,
         Optional<PersistentPlanAgentLoopCut> cut,
         Optional<PersistentPlanAgentLoopReplanEvidence> replan,
-        Optional<PersistenceFailure> failure) {
+        Optional<PersistenceFailure> failure,
+        Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts) {
 
     public PersistentPlanAgentLoopOutcome {
         Objects.requireNonNull(planId, "planId");
@@ -28,6 +29,20 @@ public record PersistentPlanAgentLoopOutcome(
         cut = Objects.requireNonNull(cut, "cut");
         replan = Objects.requireNonNull(replan, "replan");
         failure = Objects.requireNonNull(failure, "failure");
+        receiptFacts = Objects.requireNonNull(
+                receiptFacts, "receiptFacts");
+    }
+
+    public PersistentPlanAgentLoopOutcome(
+            PlanId planId,
+            int cyclesAttempted,
+            PersistentPlanAgentLoopState state,
+            Optional<PlanStepId> stepId,
+            Optional<PersistentPlanAgentLoopCut> cut,
+            Optional<PersistentPlanAgentLoopReplanEvidence> replan,
+            Optional<PersistenceFailure> failure) {
+        this(planId, cyclesAttempted, state, stepId, cut, replan, failure,
+                Optional.empty());
     }
 
     @Override

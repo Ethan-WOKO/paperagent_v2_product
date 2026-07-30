@@ -88,4 +88,41 @@ class V2TurnIntakeTransactionsH2Test {
         assertThat(turns.findBySessionIdAndUserIdOrderByStartedAtDescIdDesc(
                 session.getId(), 7L)).hasSize(2);
     }
+
+    @Test
+    void concurrentTerminalDeliveryCreatesOneAssistantMessage()
+            throws Exception {
+        AgentSession session = sessions.saveAndFlush(new AgentSession(
+                8L, "project", "deepseek", "model", 20, false,
+                AgentSessionScope.PROJECT, 91L));
+        V2TurnIntakeEntity intake = transactions.open(
+                8L, session.getId(), "request-final", "c".repeat(64),
+                "question", false, null, null);
+        transactions.locked(intake, locked -> {
+            transactions.savePersistent(
+                    locked, "plan-final", "{}", "[]");
+            return null;
+        });
+        int contenders = 8;
+        var pool = Executors.newFixedThreadPool(contenders);
+        try {
+            List<java.util.concurrent.Future<Long>> futures =
+                    new ArrayList<>();
+            for (int index = 0; index < contenders; index++) {
+                futures.add(pool.submit(() ->
+                        transactions.savePersistentAssistant(
+                                8L, session.getId(), "request-final",
+                                "完成").getId()));
+            }
+            List<Long> ids = new ArrayList<>();
+            for (var future : futures) {
+                ids.add(future.get(10, TimeUnit.SECONDS));
+            }
+            assertThat(ids).containsOnly(ids.get(0));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(messages.findBySessionIdOrderByCreatedAtAsc(
+                session.getId())).hasSize(2);
+    }
 }

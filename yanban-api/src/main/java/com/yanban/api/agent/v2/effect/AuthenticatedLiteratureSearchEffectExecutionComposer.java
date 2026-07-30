@@ -63,6 +63,22 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
     private final ObjectMapper json;
     private final LiteratureSearchRequestAuthoritySource authorities;
     private final LiteratureDeliveryTaskBindingService taskBindings;
+    private final NaturalLanguageEffectAuthoritySource naturalAuthorities;
+
+    public AuthenticatedLiteratureSearchEffectExecutionComposer(
+            AgentTurnProductContextResolver contexts,
+            ProductPlanIdDerivation planIds,
+            StepRecoverer recoverer,
+            EffectIntentRepository intents,
+            ProductEffectExecutionClaimRepository claims,
+            LiteratureSearchStartToolExecutor executor,
+            LiteratureSearchEffectExecutionTimeSource timeSource,
+            ObjectMapper json,
+            LiteratureSearchRequestAuthoritySource authorities,
+            LiteratureDeliveryTaskBindingService taskBindings) {
+        this(contexts, planIds, recoverer, intents, claims, executor,
+                timeSource, json, authorities, taskBindings, null);
+    }
 
     @Autowired
     public AuthenticatedLiteratureSearchEffectExecutionComposer(
@@ -75,7 +91,8 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             LiteratureSearchEffectExecutionTimeSource timeSource,
             ObjectMapper json,
             LiteratureSearchRequestAuthoritySource authorities,
-            LiteratureDeliveryTaskBindingService taskBindings) {
+            LiteratureDeliveryTaskBindingService taskBindings,
+            NaturalLanguageEffectAuthoritySource naturalAuthorities) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.recoverer = recoverer;
@@ -86,6 +103,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
         this.json = json;
         this.authorities = authorities;
         this.taskBindings = taskBindings;
+        this.naturalAuthorities = naturalAuthorities;
     }
 
     public AuthenticatedLiteratureSearchEffectExecutionOutcome execute(
@@ -112,10 +130,18 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             validateIntent(active, intent, command);
             ObjectNode arguments = arguments(intent.intent().arguments(),
                     context, active, command);
-            requireAuthority(
-                    authorities.find(userId, turnId).orElseThrow(
-                            () -> failed("request.authority")),
-                    arguments);
+            Optional<LiteratureSearchRequestAuthority> explicit =
+                    authorities.find(userId, turnId);
+            boolean natural = explicit.isEmpty()
+                    && naturalAuthorities != null
+                    && naturalAuthorities.authorizes(
+                            userId, turnId, authoritativePlan.value(),
+                            intent.intent().stepId().value(), V2_TOOL);
+            if (explicit.isPresent()) {
+                requireAuthority(explicit.orElseThrow(), arguments);
+            } else if (!natural) {
+                throw failed("request.authority");
+            }
             Instant observedAt = requiredTime(timeSource.now(), "time.start");
             var result = claims.execute(
                     new ProductEffectExecutionClaimRequest(
@@ -123,7 +149,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                             command.recoveryAttempt().leaseToken(),
                             active.lease().fencingToken(), observedAt,
                             () -> invoke(context, turnId, command, arguments,
-                                    observedAt)));
+                                    observedAt, natural)));
             return new AuthenticatedLiteratureSearchEffectExecutionOutcome(
                     result.result(), result.replayed());
         } finally {
@@ -255,7 +281,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             Long turnId,
             AuthenticatedLiteratureSearchEffectExecutionCommand command,
             ObjectNode arguments,
-            Instant startedAt) {
+            Instant startedAt, boolean natural) {
         ToolExecutionContext.clear();
         ToolExecutionContext.setCurrentUserId(context.identity().userId());
         if (context.identity().projectId() != null) {
@@ -295,7 +321,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                 success ? Optional.empty()
                         : Optional.of("LITERATURE_START_FAILED"),
                 stdout, stderr, List.of(), Optional.empty(), List.of());
-        if (receipt.status() == ReceiptStatus.SUCCESS) {
+        if (receipt.status() == ReceiptStatus.SUCCESS && !natural) {
             taskBindings.bindSuccessfulReceipt(
                     context.identity().userId(), turnId, receipt);
         }

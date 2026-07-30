@@ -1,6 +1,8 @@
 package com.yanban.api.agent.v2.intake;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.agent.v2.adapter.provider.ProductChatModelProviderAdapter;
+import com.yanban.agent.v2.adapter.provider.ProductModelEndpoint;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
 import com.yanban.api.agent.AgentContextBuildRequest;
 import com.yanban.api.agent.AgentContextBuilder;
@@ -13,6 +15,7 @@ import com.yanban.api.agent.AgentLongTermMemoryContext;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
+import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
@@ -30,6 +33,7 @@ import io.paperagent.v2.contracts.NetworkPolicy;
 import io.paperagent.v2.contracts.ResourceLimits;
 import io.paperagent.v2.contracts.Route;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
+import io.paperagent.v2.providers.ModelProvider;
 import io.paperagent.v2.runtime.routing.RoutingDecision;
 import io.paperagent.v2.runtime.routing.RoutingDecisionReason;
 import io.paperagent.v2.runtime.routing.RoutingRequestId;
@@ -43,6 +47,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
@@ -67,6 +72,8 @@ public class V2NaturalLanguageTurnService {
     private final AuthenticatedAgentTurnPlanBootstrapComposer bootstraps;
     private final ObjectMapper json;
     private final V2TurnPlanner planner;
+    private final V2AdaptiveExecutionService adaptive;
+    private final ChatModelProvider modelProvider;
 
     public V2NaturalLanguageTurnService(
             AgentSessionRepository sessions,
@@ -81,6 +88,26 @@ public class V2NaturalLanguageTurnService {
             AuthenticatedAgentTurnPlanBootstrapComposer bootstraps,
             ObjectMapper json,
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider) {
+        this(sessions, transactions, contexts, contextBuilder, summaries,
+                memories, experiments, skills, settings, bootstraps, json,
+                modelProvider, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public V2NaturalLanguageTurnService(
+            AgentSessionRepository sessions,
+            V2TurnIntakeTransactions transactions,
+            AgentTurnProductContextResolver contexts,
+            AgentContextBuilder contextBuilder,
+            AgentSessionSummaryService summaries,
+            LongTermMemoryRetrievalService memories,
+            AgentExperimentService experiments,
+            SkillsService skills,
+            UserSettingsService settings,
+            AuthenticatedAgentTurnPlanBootstrapComposer bootstraps,
+            ObjectMapper json,
+            @Qualifier("chatModelProvider") ChatModelProvider modelProvider,
+            V2AdaptiveExecutionService adaptive) {
         this.sessions = sessions;
         this.transactions = transactions;
         this.contexts = contexts;
@@ -93,6 +120,8 @@ public class V2NaturalLanguageTurnService {
         this.bootstraps = bootstraps;
         this.json = json;
         this.planner = new V2TurnPlanner(modelProvider, json);
+        this.adaptive = adaptive;
+        this.modelProvider = modelProvider;
     }
 
     public V2NaturalLanguageTurnResponse execute(
@@ -116,6 +145,18 @@ public class V2NaturalLanguageTurnService {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY, FAILURE_MESSAGE);
         }
+        if (result.pending() != null) {
+            if (adaptive == null) {
+                return response(result.intake(), result.replayed());
+            }
+            var execution = adaptive.execute(result.pending());
+            if ("SUCCEEDED".equals(execution.status())
+                    && execution.finalText() != null) {
+                transactions.savePersistentAssistant(
+                        userId, sessionId, request.clientRequestId(),
+                        execution.finalText());
+            }
+        }
         return response(result.intake(), result.replayed());
     }
 
@@ -125,10 +166,10 @@ public class V2NaturalLanguageTurnService {
             NormalizedRequest request) {
         if (V2TurnIntakeEntity.DIRECT.equals(intake.status())
                 || V2TurnIntakeEntity.PERSISTENT.equals(intake.status())) {
-            return new ProcessResult(intake, true, false);
+            return new ProcessResult(intake, true, false, null);
         }
         if (V2TurnIntakeEntity.FAILED.equals(intake.status())) {
-            return new ProcessResult(intake, true, true);
+            return new ProcessResult(intake, true, true, null);
         }
         try {
             VerifiedAgentTurnProductContext verified =
@@ -182,7 +223,7 @@ public class V2NaturalLanguageTurnService {
                     throw new IllegalStateException(
                             "V2 direct message authority mismatch");
                 }
-                return new ProcessResult(intake, false, false);
+                return new ProcessResult(intake, false, false, null);
             }
             Instant now = Instant.now();
             var persisted = bootstraps.bootstrap(
@@ -199,15 +240,34 @@ public class V2NaturalLanguageTurnService {
                         "persistent bootstrap was rejected");
             }
             PersistedPlanBootstrap value = persisted.value().orElseThrow();
+            String capabilityJson = bindings(planned.capabilities());
             transactions.savePersistent(
                     intake,
                     value.plan().id().value(),
                     planned.rawOutput(),
-                    bindings(planned.capabilities()));
-            return new ProcessResult(intake, false, false);
+                    capabilityJson);
+            Map<String, String> toolBindings =
+                    planned.capabilities().stream().collect(
+                            java.util.stream.Collectors.toUnmodifiableMap(
+                                    capability -> capability.stepId().value(),
+                                    capability -> capability.internalToolId()
+                                            .value()));
+            List<String> conversation = context.messages().stream()
+                    .map(message -> message.role() + ": "
+                            + boundedContext(message.content()))
+                    .limit(32)
+                    .toList();
+            return new ProcessResult(
+                    intake, false, false,
+                    new V2AdaptiveExecutionService.Command(
+                            intake.id(), intake.userId(), intake.sessionId(),
+                            intake.turnId(), intake.clientRequestId(),
+                            verified.projectVersionId().orElse(null),
+                            value, toolBindings, conversation, now,
+                            requestScopedProvider(endpoint)));
         } catch (RuntimeException failure) {
             transactions.saveFailure(intake, failureCode(failure));
-            return new ProcessResult(intake, false, true);
+            return new ProcessResult(intake, false, true, null);
         }
     }
 
@@ -418,6 +478,15 @@ public class V2NaturalLanguageTurnService {
         return write(values);
     }
 
+    private ModelProvider requestScopedProvider(
+            UserSettingsService.ModelEndpoint endpoint) {
+        ProductModelEndpoint transientEndpoint = new ProductModelEndpoint(
+                endpoint.providerKey(), endpoint.modelName(),
+                endpoint.apiKey(), endpoint.apiUrl());
+        return new ProductChatModelProviderAdapter(
+                modelProvider, json, ignored -> transientEndpoint);
+    }
+
     private String write(Object value) {
         try {
             return json.writeValueAsString(value);
@@ -432,6 +501,13 @@ public class V2NaturalLanguageTurnService {
             throw new IllegalArgumentException(field + " is invalid");
         }
         return value.trim();
+    }
+
+    private static String boundedContext(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= 2_000 ? value : value.substring(0, 2_000);
     }
 
     private static String failureCode(RuntimeException failure) {
@@ -468,6 +544,7 @@ public class V2NaturalLanguageTurnService {
     }
 
     private record ProcessResult(
-            V2TurnIntakeEntity intake, boolean replayed, boolean failed) {
+            V2TurnIntakeEntity intake, boolean replayed, boolean failed,
+            V2AdaptiveExecutionService.Command pending) {
     }
 }

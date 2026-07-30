@@ -25,6 +25,8 @@ import com.yanban.api.agent.AgentRagExperimentResult;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
+import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
+import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionResult;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
@@ -44,6 +46,7 @@ import io.paperagent.v2.contracts.Plan;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistenceResult;
+import io.paperagent.v2.providers.*;
 import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.List;
@@ -246,6 +249,76 @@ class V2NaturalLanguageTurnServiceTest {
     }
 
     @Test
+    void persistentTurnStartsAdaptiveExecutionAndDeliversFinalMessage() {
+        stubPersistentPlanning();
+        V2AdaptiveExecutionService adaptive =
+                mock(V2AdaptiveExecutionService.class);
+        when(adaptive.execute(any())).thenReturn(
+                new V2AdaptiveExecutionResult(
+                        "SUCCEEDED", List.of(), "最终结论",
+                        null, 1, 0, 0));
+        when(transactions.savePersistentAssistant(
+                7L, 9L, "request-1", "最终结论"))
+                .thenReturn(mock(AgentMessage.class));
+
+        var response = service(adaptive).execute(7L, 9L, request());
+
+        assertThat(response.route())
+                .isEqualTo("PERSISTENT_PLAN_EXECUTE");
+        ArgumentCaptor<V2AdaptiveExecutionService.Command> command =
+                ArgumentCaptor.forClass(
+                        V2AdaptiveExecutionService.Command.class);
+        verify(adaptive).execute(command.capture());
+        assertThat(command.getValue().bindings())
+                .containsEntry("read-1", "project.read");
+        verify(transactions).savePersistentAssistant(
+                7L, 9L, "request-1", "最终结论");
+    }
+
+    @Test
+    void persistentRuntimeUsesRequestScopedSettingsEndpoint() {
+        stubPersistentPlanning();
+        V2AdaptiveExecutionService adaptive =
+                mock(V2AdaptiveExecutionService.class);
+        when(adaptive.execute(any())).thenAnswer(invocation -> {
+            V2AdaptiveExecutionService.Command command =
+                    invocation.getArgument(0);
+            command.modelProvider().complete(new ModelRequest(
+                    new ModelRequestId("runtime-request"),
+                    new CorrelationId("runtime-trace"),
+                    List.of(new ModelMessage(
+                            MessageRole.USER, "runtime turn")),
+                    List.of(),
+                    new GenerationOptions(
+                            128, 0, 0.1d,
+                            java.util.OptionalLong.empty(), java.util.Map.of()),
+                    Optional.of(new io.paperagent.v2.contracts.TaskFrameId(
+                            "frame-1")),
+                    Optional.of(new PlanId("product-plan.test")),
+                    Optional.of(new io.paperagent.v2.contracts.PlanRevisionId(
+                            "revision-1")),
+                    Optional.of(new io.paperagent.v2.contracts.PlanStepId(
+                            "read-1")),
+                    false));
+            return new V2AdaptiveExecutionResult(
+                    "FAILED", List.of(), null, "EXPECTED", 1, 0, 0);
+        });
+
+        service(adaptive).execute(7L, 9L, request());
+
+        ArgumentCaptor<ChatRequest> calls =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model, times(2)).chat(calls.capture());
+        ChatRequest runtime = calls.getAllValues().get(1);
+        assertThat(runtime.provider()).isEqualTo("deepseek");
+        assertThat(runtime.model()).isEqualTo("model");
+        assertThat(runtime.apiKey()).isEqualTo("SECRET-KEY");
+        assertThat(runtime.messages())
+                .extracting(ChatMessage::content)
+                .noneMatch(value -> value.contains("SECRET-KEY"));
+    }
+
+    @Test
     void changedPayloadConflictStopsBeforePlanning() {
         when(transactions.open(
                 eq(7L), eq(9L), eq("request-1"), any(), eq("question"),
@@ -378,6 +451,14 @@ class V2NaturalLanguageTurnServiceTest {
                 sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
                 model);
+    }
+
+    private V2NaturalLanguageTurnService service(
+            V2AdaptiveExecutionService adaptive) {
+        return new V2NaturalLanguageTurnService(
+                sessions, transactions, contexts, contextBuilder, summaries,
+                memories, experiments, skills, settings, bootstraps, json,
+                model, adaptive);
     }
 
     private V2NaturalLanguageTurnRequest request() {

@@ -1205,3 +1205,50 @@ messages, legacy Plans, WebSockets, RAG, paper flows, Candidate
 review/validation/apply, and direct Project APIs remain present and unchanged.
 Legacy retirement is deferred until V2 has demonstrated stable production
 behavior and the user makes a later explicit decision.
+
+## Adaptive natural-language execution boundary
+
+The natural-language intake now continues, after its bootstrap transaction,
+through a bounded product-side execution composition. POST retains the #95
+acknowledgement schema; owner-qualified GET returns the V62 outcome projection
+and performs no execution, retry, Provider, tool, or persistence mutation.
+
+Each iteration invokes one existing persistent loop cycle with a Step-specific
+tool selected from the frozen public-alias binding, then asks a no-tools
+reflection Provider for strict `CONTINUE`, `REPLAN`, `COMPLETE`, or `FAIL`
+JSON. Eight cycles and three replans are hard limits. Model COMPLETE is
+rejected unless the durable recovery cut is already terminal successful and
+every executed tool Step has bounded authoritative Receipt facts. The intake
+resolves the settings-page provider, model, URL, and user key once and passes
+a request-scoped Provider through the kernel and reflection calls in memory;
+the key is never persisted or included in facts.
+
+REPLAN materialization uses the exact recovered lease, revision, checkpoint,
+event head, and active Step. Completed Steps, completion facts, and Receipt
+references are retained; the active Step becomes
+`SUPERSEDED_BY_REPLAN`; replacement Steps begin `NOT_STARTED`. No prior fact
+is rewritten. Project execution confirms the existing isolated Workspace
+context before a Step runs, and original Project bytes remain outside this
+boundary.
+
+The product has no synchronous V2-to-E2B SandboxPort suitable for this
+composition. `sandbox_execute` therefore returns the stable
+`SANDBOX_EXECUTION_UNAVAILABLE` failure before any Provider, Sandbox, or host
+process call. Adding a real adapter is a later independently frozen boundary,
+not permission to use the host.
+
+Natural-language `project_candidate` uses strict
+`{"operation":"compose","paths":[...]}` arguments with one to four normalized,
+existing text paths. V62 durably binds that natural authority separately from
+the unchanged explicit Candidate delivery. Replacements are prepared only in
+the isolated Workspace. After the Plan has a durable successful terminal cut,
+the existing Candidate artifact service rereads and attests the original
+ProjectVersion, publishes a numeric Candidate ID, and returns
+`WAITING_CONFIRMATION`. It never applies the Candidate or changes the original
+ProjectVersion.
+
+Only durable terminal success plus an accepted COMPLETE reflection may append
+the one assistant message. Failure leaves the already-persisted #95 intake
+facts intact and records a machine-readable adaptive outcome. Legacy Agent
+orchestration, automatic Candidate apply, UI, scheduler, and V2 core contracts
+remain unchanged.
