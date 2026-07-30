@@ -92,6 +92,7 @@ class V2TurnIntakeEntity {
     }
 
     Long userId() { return userId; }
+    Long id() { return id; }
     Long sessionId() { return sessionId; }
     String clientRequestId() { return clientRequestId; }
     String requestSha256() { return requestSha256; }
@@ -104,6 +105,7 @@ class V2TurnIntakeEntity {
     Long assistantMessageId() { return assistantMessageId; }
     String planId() { return planId; }
     String plannerOutputJson() { return plannerOutputJson; }
+    String capabilityBindingsJson() { return capabilityBindingsJson; }
     String status() { return status; }
 
     void completeDirect(Long messageId, String outputJson, Instant now) {

@@ -100,6 +100,13 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
     public PersistentPlanAgentLoopOutcome execute(
             Long userId, Long agentTurnId,
             PersistentPlanAgentLoopCommand command) {
+        return executeWithKernel(userId, agentTurnId, command, kernel);
+    }
+
+    public PersistentPlanAgentLoopOutcome executeWithKernel(
+            Long userId, Long agentTurnId,
+            PersistentPlanAgentLoopCommand command,
+            SingleTurnStepKernel turnKernel) {
         VerifiedAgentTurnProductContext context =
                 contexts.resolve(userId, agentTurnId);
         PlanId planId = planIds.derive(context.identity());
@@ -153,7 +160,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
 
             SingleTurnStepKernelOutcome kernelOutcome;
             try {
-                kernelOutcome = kernel.run(
+                kernelOutcome = turnKernel.run(
                         new SingleTurnStepKernelRequest(active));
             } catch (SingleTurnStepKernelProtocolException exception) {
                 throw new PersistentPlanAgentLoopException(
