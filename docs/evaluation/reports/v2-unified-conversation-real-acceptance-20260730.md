@@ -79,12 +79,28 @@ context、step activation 和 effect intent 均未创建。因此失败发生在
 `ADAPTIVE_EXECUTION_FAILED`，且不记录安全失败阶段。静态证据不足以确定是 execution
 start 恢复、租约、事件材料还是数据库适配错误，不能猜测修改。
 
+### 已完成的诊断与最小修复
+
+提交 `7d2678ef67d5e2dca822c16564bbc597c732da61` 已推送到 `main`：
+
+1. 为 execution start、workspace context、cycle setup、Agent Loop 和 coordination
+   边界增加安全阶段码；不保存异常消息、模型原文、项目文件或 Key。
+2. 第一次复现定位为
+   `EXEC_START_LEASE_ACQUIRE_INCONSISTENT_LEASE_AUTHORITY`。
+3. 根因是请求时间含纳秒，而持久化层按微秒保存租约到期时间；Runtime 使用截断前时间
+   与数据库返回值严格比较，因此把自己的有效租约误判为不一致。
+4. 最小修复是在创建租约和事件前，将 authority time 统一截断到微秒；没有修改租约
+   状态机或放宽一致性校验。
+5. 修复租约精度后再次复现，execution start、workspace context 和 kernel setup
+   均已通过，当前精确失败码为 `CYCLE_AGENT_LOOP_EXCEPTION`。
+6. 两个 Plan Step 仍为 `PENDING`，说明异常发生在持久化 Agent Loop 内部、首个步骤
+   推进之前；工具映射和沙箱尚未被调用。
+
 ### 下一步最小建议（尚未实施）
 
-1. 仅为 adaptive 执行的 `start / context / cycle / reflection` 四个边界记录安全阶段码。
-2. 不保存模型原文、项目文件或 Key，也不改变 Runtime 状态机。
-3. 复现一次相同项目读取，根据精确阶段做最小修复。
-4. 只运行对应 adaptive 定向测试和一次真实项目读取，不扩大测试范围。
+只检查持久化 Agent Loop 内的 recovery、step activation 和 progression/persistence
+边界，先补充同等级的安全诊断并复现一次，再根据精确事实决定最小行为修复。当前证据
+不支持修改工具映射、沙箱、Planner 或扩大测试范围。
 
 ## 冻结场景执行结果
 
@@ -92,7 +108,7 @@ start 恢复、租约、事件材料还是数据库适配错误，不能猜测�
 | --- | --- | --- |
 | V1/V2 切换及中文单输入框 | 部分执行 | 前后端均启动；Codex 浏览器策略阻止自动接管本地页面，需人工确认 UI |
 | DIRECT 请求且不额外 GET | 后端通过 | 全新工作区会话 `204` 返回 `DIRECT` 且包含回答；前端零 GET 未在本轮重复自动化 |
-| 项目读取进入持久化 Plan | **部分通过后失败** | Planner 已创建正确的持久化 Plan；执行启动以 `ADAPTIVE_EXECUTION_FAILED` 结束 |
+| 项目读取进入持久化 Plan | **部分通过后失败** | Planner、execution start、workspace context 和 kernel setup 已通过；持久化 Agent Loop 在首个步骤推进前以 `CYCLE_AGENT_LOOP_EXCEPTION` 结束 |
 | 自然语言生成 Candidate | 未执行 | Planner 阻断后按停止条件终止 |
 | 确认 Candidate 创建一个新版本 | 未执行 | 上一场景未生成 Candidate |
 | 沙箱不可用时禁止宿主机回退 | 部分通过 | 旧测试会话返回 `SANDBOX_EXECUTION_UNAVAILABLE`，未观察到宿主机回退 |
@@ -108,6 +124,10 @@ start 恢复、租约、事件材料还是数据库适配错误，不能猜测�
 - `mvn -q -o -pl yanban-api -Dtest=V2AdaptiveExecutionServiceTest,YanbanApiApplicationTests test`
   - `V2AdaptiveExecutionServiceTest`：4 项，0 failures，0 errors，0 skipped。
   - `YanbanApiApplicationTests`：1 项，0 failures，0 errors，0 skipped。
+- `mvn -q -o -pl yanban-api '-Dtest=V2AdaptiveExecutionServiceTest,V2AdaptiveExecutionCoordinatorTest' test`
+  - `V2AdaptiveExecutionServiceTest`：8 项，0 failures，0 errors，0 skipped。
+  - `V2AdaptiveExecutionCoordinatorTest`：5 项，0 failures，0 errors，0 skipped。
+  - 说明：仅运行本次 adaptive 诊断与租约精度修复对应的 13 项测试。
 - `mvn -q -o -pl yanban-api -Dtest=V2TurnPlannerTest,V2NaturalLanguageTurnServiceTest test`
   - `V2TurnPlannerTest`：13 项，0 failures，0 errors，0 skipped。
   - `V2NaturalLanguageTurnServiceTest`：9 项，0 failures，0 errors，0 skipped。
@@ -116,6 +136,9 @@ start 恢复、租约、事件材料还是数据库适配错误，不能猜测�
   - 诊断增强前，全新项目会话只读请求：2 次失败，均为 `PLANNER_REJECTED`。
   - 诊断增强后：精确确认为 `PLANNER_PROJECT_DIRECT`。
   - Project Planner 提示修复后：成功创建两步持久化 Plan，随后执行启动失败。
+  - adaptive 阶段诊断后：定位为租约 authority 精度不一致。
+  - 租约精度修复后：执行推进至 cycle，最终定位为
+    `CYCLE_AGENT_LOOP_EXCEPTION`。
   - 旧项目会话只读请求：创建 Plan 后因包含 sandbox 能力而失败。
 - 使用的会话快照与设置页当前默认值一致：提供商 `deepseek`，模型
   `deepseek-v4-pro`；未读取、输出或记录 Key。
@@ -123,7 +146,8 @@ start 恢复、租约、事件材料还是数据库适配错误，不能猜测�
 
 ## 结论
 
-本轮不能判定统一 V2 项目会话通过真实链路验收。当前唯一已确认的产品缺陷是
-adaptive 执行启动异常缺少可诊断阶段事实，项目读取尚未真正执行。反思 Provider 装配
-错误、Planner 安全诊断和 Project 持久化路由均已修复并推送。下一步应先增加最小
-adaptive 阶段诊断，再依据一次真实复现做最小执行启动修复。
+本轮不能判定统一 V2 项目会话通过真实链路验收。反思 Provider 装配错误、Planner
+安全诊断、Project 持久化路由、adaptive 阶段诊断和租约时间精度错误均已修复并推送。
+当前剩余阻断已精确收敛为：持久化 Agent Loop 在首个 Plan Step 推进前抛出运行时
+异常。项目读取工具与沙箱尚未被调用，因此不能把失败归因于工具映射或沙箱。下一步应
+只在 Agent Loop 内增加最小分段诊断并复现，不应猜测修改其他链路。
