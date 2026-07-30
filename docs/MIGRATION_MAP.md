@@ -215,14 +215,23 @@
   its intake transaction commits; the read-only GET is the outcome authority.
 - Execution: every coordination iteration invokes exactly one existing
   durable loop cycle, then reflects only over bounded conversation and
-  authoritative execution facts. Reflection is strict JSON and cannot make a
-  nonterminal Plan complete.
+  authoritative execution facts, including capped Receipt status/result/exit
+  output, artifact/diff references, and completion/replan cut. Reflection is
+  strict JSON and cannot make a nonterminal or unreceipted tool Plan complete.
+- Provider: the natural intake's settings-page provider/model/key endpoint is
+  adapted per request and carried only in memory through kernel, Candidate,
+  and reflection calls. It does not use the explicit-delivery plan resolver
+  and does not persist or log the key.
 - Replan: replacement revisions retain completed Steps and facts, mark the
   obsolete active Step `SUPERSEDED_BY_REPLAN`, and append only new
   `NOT_STARTED` Steps under the existing fenced persistence boundary.
 - Delivery: only a durable terminal-success cut plus accepted COMPLETE
-  reflection creates the single replayable assistant message. Project writes
-  remain isolated and Candidate application remains an explicit later action.
+  reflection creates the single replayable assistant message. A natural
+  Candidate instead uses a V62 natural authority/prepared binding, publishes
+  the mature numeric Candidate artifact only after terminal success, and
+  returns `WAITING_CONFIRMATION`; Project writes remain isolated and Candidate
+  application remains an explicit later action. POST remains the #95
+  acknowledgement and GET remains the read-only outcome.
 - Sandbox: no synchronous product `SandboxPort` is currently available for
   this composition. `sandbox_execute` therefore fails with
   `SANDBOX_EXECUTION_UNAVAILABLE` before Provider, Sandbox, or host-process

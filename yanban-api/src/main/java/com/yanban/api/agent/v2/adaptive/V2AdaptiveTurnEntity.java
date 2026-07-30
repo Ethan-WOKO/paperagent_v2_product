@@ -21,8 +21,8 @@ class V2AdaptiveTurnEntity {
     private String stepsJson;
     @Lob @Column(name = "final_text", columnDefinition = "LONGTEXT")
     private String finalText;
-    @Column(name = "candidate_artifact_id", length = 128)
-    private String candidateArtifactId;
+    @Column(name = "candidate_artifact_id")
+    private Long candidateArtifactId;
     @Lob @Column(name = "output_paths_json", nullable = false, columnDefinition = "LONGTEXT")
     private String outputPathsJson;
     @Column(name = "error_code", length = 64) private String errorCode;
@@ -37,7 +37,7 @@ class V2AdaptiveTurnEntity {
             Long intakeId, Long userId, Long sessionId,
             String clientRequestId, String route, String planId,
             String projectVersion, String status, String stepsJson,
-            String finalText, String candidateArtifactId,
+            String finalText, Long candidateArtifactId,
             String outputPathsJson, String errorCode, Instant now) {
         this.intakeId = intakeId;
         this.userId = userId;
@@ -64,7 +64,7 @@ class V2AdaptiveTurnEntity {
     String status() { return status; }
     String stepsJson() { return stepsJson; }
     String finalText() { return finalText; }
-    String candidateArtifactId() { return candidateArtifactId; }
+    Long candidateArtifactId() { return candidateArtifactId; }
     String outputPathsJson() { return outputPathsJson; }
     String errorCode() { return errorCode; }
 
@@ -80,7 +80,7 @@ class V2AdaptiveTurnEntity {
 
     void finish(
             String newStatus, String newStepsJson, String text,
-            String artifactId, String pathsJson, String code,
+            Long artifactId, String pathsJson, String code,
             int reflections, int replans, int repairs, Instant now) {
         if (!"RUNNING".equals(status)) {
             throw new IllegalStateException("adaptive turn is terminal");

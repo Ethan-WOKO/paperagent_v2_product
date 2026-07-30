@@ -1,6 +1,8 @@
 package com.yanban.api.agent.v2.intake;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.agent.v2.adapter.provider.ProductChatModelProviderAdapter;
+import com.yanban.agent.v2.adapter.provider.ProductModelEndpoint;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
 import com.yanban.api.agent.AgentContextBuildRequest;
 import com.yanban.api.agent.AgentContextBuilder;
@@ -31,6 +33,7 @@ import io.paperagent.v2.contracts.NetworkPolicy;
 import io.paperagent.v2.contracts.ResourceLimits;
 import io.paperagent.v2.contracts.Route;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
+import io.paperagent.v2.providers.ModelProvider;
 import io.paperagent.v2.runtime.routing.RoutingDecision;
 import io.paperagent.v2.runtime.routing.RoutingDecisionReason;
 import io.paperagent.v2.runtime.routing.RoutingRequestId;
@@ -70,6 +73,7 @@ public class V2NaturalLanguageTurnService {
     private final ObjectMapper json;
     private final V2TurnPlanner planner;
     private final V2AdaptiveExecutionService adaptive;
+    private final ChatModelProvider modelProvider;
 
     public V2NaturalLanguageTurnService(
             AgentSessionRepository sessions,
@@ -117,6 +121,7 @@ public class V2NaturalLanguageTurnService {
         this.json = json;
         this.planner = new V2TurnPlanner(modelProvider, json);
         this.adaptive = adaptive;
+        this.modelProvider = modelProvider;
     }
 
     public V2NaturalLanguageTurnResponse execute(
@@ -258,7 +263,8 @@ public class V2NaturalLanguageTurnService {
                             intake.id(), intake.userId(), intake.sessionId(),
                             intake.turnId(), intake.clientRequestId(),
                             verified.projectVersionId().orElse(null),
-                            value, toolBindings, conversation, now));
+                            value, toolBindings, conversation, now,
+                            requestScopedProvider(endpoint)));
         } catch (RuntimeException failure) {
             transactions.saveFailure(intake, failureCode(failure));
             return new ProcessResult(intake, false, true, null);
@@ -470,6 +476,15 @@ public class V2NaturalLanguageTurnService {
                         value.internalToolId().value()))
                 .toList();
         return write(values);
+    }
+
+    private ModelProvider requestScopedProvider(
+            UserSettingsService.ModelEndpoint endpoint) {
+        ProductModelEndpoint transientEndpoint = new ProductModelEndpoint(
+                endpoint.providerKey(), endpoint.modelName(),
+                endpoint.apiKey(), endpoint.apiUrl());
+        return new ProductChatModelProviderAdapter(
+                modelProvider, json, ignored -> transientEndpoint);
     }
 
     private String write(Object value) {

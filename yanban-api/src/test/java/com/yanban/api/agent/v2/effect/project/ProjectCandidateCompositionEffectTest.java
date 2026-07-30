@@ -229,6 +229,81 @@ class ProjectCandidateCompositionEffectTest {
     }
 
     @Test
+    void naturalCandidatePreparesInWorkspaceThenPublishesWithoutApplyingProject() {
+        Fixture fixture = fixture(
+                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
+        var store = mock(NaturalLanguageCandidateAuthorityStore.class);
+        String authorityJson =
+                "{\"operation\":\"compose\",\"paths\":[\"README.md\"]}";
+        var authority = new ProjectCandidateEffectAuthority(
+                ProjectCandidateCompositionEffect.KIND,
+                authorityJson, sha(authorityJson),
+                7L, 8L, 9L, 42L, "a".repeat(64),
+                "improve", List.of("README.md"));
+        when(store.require("plan", "project-candidate-compose"))
+                .thenReturn(authority);
+        when(store.require("plan")).thenReturn(authority);
+        AtomicReference<NaturalLanguageCandidateAuthorityStore.Prepared>
+                prepared = new AtomicReference<>();
+        doAnswer(call -> {
+            prepared.set(
+                    new NaturalLanguageCandidateAuthorityStore.Prepared(
+                            call.getArgument(1), call.getArgument(2)));
+            return null;
+        }).when(store).bindPrepared(
+                eq("plan"), anyMap(), anyString());
+        when(store.requirePrepared("plan"))
+                .thenAnswer(ignored -> prepared.get());
+        var intent = new PersistedEffectIntent(new EffectIntent(
+                new ToolCallId("tool"), new PlanId("plan"),
+                new PlanStepId("project-candidate-compose"),
+                ProjectCandidateCompositionEffect.KIND,
+                new ObjectValue(Map.of(
+                        "operation", new TextValue("compose"),
+                        "paths", new ListValue(List.of(
+                                new TextValue("README.md")))))),
+                "owner", 1L, new EventId("activation"));
+
+        fixture.effect.executeNatural(
+                intent, fixture.modelAuthority,
+                fixture.workspace, fixture.ref,
+                7L, 42L, 8L, Instant.EPOCH,
+                store, fixture.provider);
+        assertEquals("new text", new String(
+                fixture.files.get("README.md"), StandardCharsets.UTF_8));
+
+        when(fixture.projects.manifest(7L, 8L)).thenReturn(
+                new com.yanban.api.project.ProjectManifestResponse(
+                        8L, "a".repeat(64), List.of(
+                        new com.yanban.api.project.ProjectFileEntry(
+                                "README.md", 8, Instant.now(),
+                                sha("old text")))));
+        when(fixture.projects.readFile(7L, 8L, "README.md")).thenReturn(
+                new com.yanban.api.project.ProjectFileResponse(
+                        "README.md", "old text", 8, Instant.now(),
+                        sha("old text")));
+        var artifact = mock(
+                com.yanban.api.agent.sandbox.CandidateArtifactResponse.class);
+        when(artifact.artifactId()).thenReturn(77L);
+        when(artifact.fingerprint()).thenReturn(
+                new com.yanban.core.agent.sandbox.CandidateFingerprint(
+                        "c".repeat(64)));
+        when(fixture.candidates.store(
+                anyLong(), anyLong(), any(), any(), any()))
+                .thenReturn(artifact);
+
+        var published = fixture.effect.publishNatural(
+                "plan", 7L, 42L, store);
+
+        assertEquals(77L, published.artifactId());
+        verify(store).bindCandidate(
+                eq("plan"), eq(77L), eq("c".repeat(64)),
+                eq(published.diffFingerprint()));
+        verify(fixture.projects).readFile(7L, 8L, "README.md");
+        verify(fixture.projects, never()).delete(anyLong(), anyLong());
+    }
+
+    @Test
     void staleVersionAndCandidatePersistenceFailurePublishNothing() {
         Fixture stale = fixture(
                 "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");

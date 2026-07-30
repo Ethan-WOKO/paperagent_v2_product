@@ -25,6 +25,12 @@ public class NaturalLanguageStepKernelFactory {
     }
 
     public SingleTurnStepKernel create(Map<PlanStepId, ToolId> bindings) {
+        return create(provider, bindings);
+    }
+
+    public SingleTurnStepKernel create(
+            ModelProvider requestProvider,
+            Map<PlanStepId, ToolId> bindings) {
         Map<PlanStepId, ToolId> frozen = Map.copyOf(bindings);
         var selector = (com.yanban.agent.v2.adapter.provider.ProductStepToolSelector)
                 input -> {
@@ -34,7 +40,7 @@ public class NaturalLanguageStepKernelFactory {
                             : List.of(descriptor(selected));
                 };
         var turn = new DeterministicProductStepTurnAdapter(
-                provider, selector,
+                requestProvider, selector,
                 new com.yanban.agent.v2.adapter.provider
                         .ProductStepTurnConfiguration(2048, 0.2d));
         return new DefaultSingleTurnStepKernel(turn, intents);
@@ -46,8 +52,12 @@ public class NaturalLanguageStepKernelFactory {
             throw new IllegalArgumentException(
                     "NATURAL_LANGUAGE_CAPABILITY_UNAVAILABLE");
         }
-        return new ToolDescriptor(id,
-                "Execute the exact frozen V2 capability for this Step.",
-                Set.of());
+        String description = "project.candidate.compose".equals(id.value())
+                ? "Prepare reviewed Project changes in the isolated "
+                        + "Workspace. Arguments must be exactly "
+                        + "{\"operation\":\"compose\",\"paths\":["
+                        + "\"normalized/existing/path\"]}; include 1-4 paths."
+                : "Execute the exact frozen V2 capability for this Step.";
+        return new ToolDescriptor(id, description, Set.of());
     }
 }

@@ -7,6 +7,7 @@ import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.runtime.execution.activation.materialization.StepActivationEventDraft;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationAttempt;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLeaseAttempt;
+import io.paperagent.v2.providers.ModelProvider;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.stereotype.Component;
@@ -28,11 +29,29 @@ public class V2AdaptiveRuntimeCycleFactory {
     public V2AdaptiveCyclePort create(
             Map<String, String> bindings, String owner, String token,
             Instant expiresAt, String authoritySuffix, Instant authorityTime) {
+        return create(bindings, owner, token, expiresAt, authoritySuffix,
+                authorityTime, null);
+    }
+
+    public V2AdaptiveCyclePort create(
+            Map<String, String> bindings, String owner, String token,
+            Instant expiresAt, String authoritySuffix, Instant authorityTime,
+            ModelProvider requestProvider) {
         Map<PlanStepId, ToolId> tools = new LinkedHashMap<>();
         bindings.forEach((step, tool) ->
                 tools.put(new PlanStepId(step), new ToolId(tool)));
-        var kernel = kernels.create(tools);
         return command -> {
+            Map<PlanStepId, ToolId> currentTools =
+                    new LinkedHashMap<>(tools);
+            if (command.replanRequest()
+                    instanceof ReflectionOutcome pendingBindings) {
+                pendingBindings.replacementSteps().forEach(value ->
+                        currentTools.put(value.step().id(),
+                                value.internalToolId()));
+            }
+            var kernel = requestProvider == null
+                    ? kernels.create(currentTools)
+                    : kernels.create(requestProvider, currentTools);
             Instant eventTime = authorityTime.plusMillis(
                     10L + command.cycle() * 4L);
             var loopCommand = new PersistentPlanAgentLoopCommand(
@@ -62,7 +81,8 @@ public class V2AdaptiveRuntimeCycleFactory {
                             command.userId(), command.turnId(), loopCommand,
                             kernel, active -> pending == null
                                     ? null : replans.materialize(
-                                            active, pending));
+                                            active, pending),
+                            requestProvider);
             boolean succeeded =
                     result.state() == PersistentPlanAgentLoopState.PLAN_SUCCEEDED;
             V2AdaptiveCyclePort.CycleResult.State state;
@@ -82,7 +102,25 @@ public class V2AdaptiveRuntimeCycleFactory {
                     state,
                     result.stepId().map(PlanStepId::value).orElse(null),
                     result.state().name(), succeeded,
-                    result.replan().orElse(null));
+                    result.replan().orElse(null),
+                    authoritativeFacts(result),
+                    result.receiptFacts().isPresent(),
+                    result.receiptFacts()
+                            .map(value -> !"SUCCESS".equals(value.status()))
+                            .orElse(false));
         };
+    }
+
+    private static List<String> authoritativeFacts(
+            PersistentPlanAgentLoopOutcome result) {
+        List<String> facts = new ArrayList<>();
+        facts.add("loopState=" + result.state().name());
+        result.cut().ifPresent(value ->
+                facts.add("completionCut=" + value));
+        result.replan().ifPresent(value ->
+                facts.add("persistedReplan=" + value));
+        result.receiptFacts().ifPresent(value ->
+                facts.add("executionReceipt=" + value));
+        return List.copyOf(facts);
     }
 }

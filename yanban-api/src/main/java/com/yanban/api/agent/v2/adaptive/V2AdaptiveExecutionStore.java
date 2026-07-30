@@ -40,7 +40,7 @@ public class V2AdaptiveExecutionStore {
     public void finish(
             Long userId, Long sessionId, String requestId,
             String status, List<V2AdaptiveTurnResponse.Step> steps,
-            String finalText, String artifactId, List<String> paths,
+            String finalText, Long artifactId, List<String> paths,
             String errorCode, int reflections, int replans, int repairs) {
         var value = turns.findByUserIdAndSessionIdAndClientRequestId(
                         userId, sessionId, requestId)

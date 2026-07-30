@@ -9,7 +9,7 @@ public record V2AdaptiveTurnResponse(
         String projectVersion,
         List<Step> steps,
         String finalText,
-        String candidateArtifactId,
+        Long candidateArtifactId,
         List<String> outputPaths,
         String errorCode) {
     public V2AdaptiveTurnResponse {

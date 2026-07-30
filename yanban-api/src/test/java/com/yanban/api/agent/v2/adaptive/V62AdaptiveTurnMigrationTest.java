@@ -20,6 +20,9 @@ class V62AdaptiveTurnMigrationTest {
                 "'PLANNING','RUNNING','WAITING_CONFIRMATION','SUCCEEDED','FAILED'"));
         assertTrue(sql.contains(
                 "REFERENCES agent_v2_turn_intakes(id)"));
+        assertTrue(sql.contains(
+                "CREATE TABLE agent_v2_natural_candidate_authorities"));
+        assertTrue(sql.contains("candidate_artifact_id BIGINT"));
     }
 
     @Test

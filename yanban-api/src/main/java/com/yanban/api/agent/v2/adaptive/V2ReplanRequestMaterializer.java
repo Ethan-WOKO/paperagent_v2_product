@@ -113,8 +113,7 @@ public final class V2ReplanRequestMaterializer {
     }
 
     private static Instant after(Instant source) {
-        Instant now = Instant.now();
-        return now.isAfter(source) ? now : source.plusMillis(1);
+        return source.plusMillis(1);
     }
 
     private static String hash(String value) {

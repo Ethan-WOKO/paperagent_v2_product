@@ -60,7 +60,11 @@ class V2ReplanRequestMaterializerTest {
         ActiveStepReplanRequest result =
                 new V2ReplanRequestMaterializer()
                         .materialize(recovered, reflection);
+        ActiveStepReplanRequest replay =
+                new V2ReplanRequestMaterializer()
+                        .materialize(recovered, reflection);
 
+        assertEquals(result, replay);
         assertEquals(StepExecutionState.SUPERSEDED_BY_REPLAN,
                 result.supersededCheckpoint().stepStates().get(oldId));
         assertEquals(List.of(new ReceiptId("receipt-1")),

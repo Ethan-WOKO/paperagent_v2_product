@@ -3,6 +3,9 @@ package com.yanban.api.agent.v2.adaptive;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionContext;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionProvider;
+import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.PlanRevisionId;
+import io.paperagent.v2.contracts.TaskFrameId;
 import io.paperagent.v2.providers.*;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -23,11 +26,24 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             """;
     private final ModelProvider provider;
     private final ObjectMapper json;
+    private final Optional<TaskFrameId> taskFrameId;
+    private final Optional<PlanId> planId;
+    private final Optional<PlanRevisionId> revisionId;
 
     public V2ModelReflectionProvider(
             ModelProvider provider, ObjectMapper json) {
+        this(provider, json, null, null, null);
+    }
+
+    public V2ModelReflectionProvider(
+            ModelProvider provider, ObjectMapper json,
+            TaskFrameId taskFrameId, PlanId planId,
+            PlanRevisionId revisionId) {
         this.provider = provider;
         this.json = json;
+        this.taskFrameId = Optional.ofNullable(taskFrameId);
+        this.planId = Optional.ofNullable(planId);
+        this.revisionId = Optional.ofNullable(revisionId);
     }
 
     @Override
@@ -50,7 +66,7 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                 List.of(),
                 new GenerationOptions(
                         4096, 0, 0.1d, OptionalLong.empty(), Map.of()),
-                Optional.empty(), Optional.empty(), Optional.empty(),
+                taskFrameId, planId, revisionId,
                 Optional.empty(), false);
         ModelProviderResult result = provider.complete(request);
         if (!(result instanceof ModelResponse response)

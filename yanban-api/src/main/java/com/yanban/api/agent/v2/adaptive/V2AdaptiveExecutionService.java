@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.adaptive.reflection.*;
 import com.yanban.api.agent.v2.bootstrap.*;
 import com.yanban.api.agent.v2.workspace.*;
+import com.yanban.api.agent.v2.effect.project.NaturalLanguageCandidateAuthorityStore;
+import com.yanban.api.agent.v2.effect.project.ProjectCandidateCompositionEffect;
 import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
+import io.paperagent.v2.providers.ModelProvider;
 import io.paperagent.v2.runtime.execution.ExecutionStartEventDraft;
 import io.paperagent.v2.runtime.execution.context.composition.*;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredExecutionStart;
@@ -23,6 +26,8 @@ public class V2AdaptiveExecutionService {
     private final V2AdaptiveRuntimeCycleFactory cycles;
     private final ReflectionProvider reflections;
     private final ObjectMapper json;
+    private final ProjectCandidateCompositionEffect candidates;
+    private final NaturalLanguageCandidateAuthorityStore candidateAuthorities;
 
     public V2AdaptiveExecutionService(
             V2AdaptiveExecutionStore store,
@@ -31,12 +36,28 @@ public class V2AdaptiveExecutionService {
             V2AdaptiveRuntimeCycleFactory cycles,
             ReflectionProvider reflections,
             ObjectMapper json) {
+        this(store, starts, contexts, cycles, reflections, json,
+                null, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public V2AdaptiveExecutionService(
+            V2AdaptiveExecutionStore store,
+            AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
+            AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
+            V2AdaptiveRuntimeCycleFactory cycles,
+            ReflectionProvider reflections,
+            ObjectMapper json,
+            ProjectCandidateCompositionEffect candidates,
+            NaturalLanguageCandidateAuthorityStore candidateAuthorities) {
         this.store = store;
         this.starts = starts;
         this.contexts = contexts;
         this.cycles = cycles;
         this.reflections = reflections;
         this.json = json;
+        this.candidates = candidates;
+        this.candidateAuthorities = candidateAuthorities;
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
@@ -58,11 +79,47 @@ public class V2AdaptiveExecutionService {
                 result = failed(initial, "ADAPTIVE_EXECUTION_FAILED");
             }
         }
+        result = publishCandidateIfNeeded(command, result);
         store.finish(command.userId(), command.sessionId(),
                 command.clientRequestId(), result.status(), result.steps(),
-                result.finalText(), null, List.of(), result.errorCode(),
+                result.finalText(), result.candidateArtifactId(),
+                List.of(), result.errorCode(),
                 result.reflections(), result.replans(), result.repairs());
         return result;
+    }
+
+    private V2AdaptiveExecutionResult publishCandidateIfNeeded(
+            Command command, V2AdaptiveExecutionResult result) {
+        if (!"SUCCEEDED".equals(result.status())
+                || candidateAuthorities == null || candidates == null) {
+            return result;
+        }
+        if (candidateAuthorities.candidateArtifactId(
+                command.bootstrap().plan().id().value()).isEmpty()) {
+            try {
+                candidateAuthorities.require(
+                        command.bootstrap().plan().id().value());
+            } catch (RuntimeException noNaturalCandidate) {
+                return result;
+            }
+        }
+        try {
+            var published = candidates.publishNatural(
+                    command.bootstrap().plan().id().value(),
+                    command.userId(), command.turnId(),
+                    candidateAuthorities);
+            if (published.artifactId() == null) {
+                return failed(result.steps(),
+                        "CANDIDATE_PUBLISH_FAILED");
+            }
+            return new V2AdaptiveExecutionResult(
+                    "WAITING_CONFIRMATION", result.steps(),
+                    result.finalText(), null, result.reflections(),
+                    result.replans(), result.repairs(),
+                    published.artifactId());
+        } catch (RuntimeException failure) {
+            return failed(result.steps(), "CANDIDATE_PUBLISH_FAILED");
+        }
     }
 
     private V2AdaptiveExecutionResult executeStarted(
@@ -100,16 +157,29 @@ public class V2AdaptiveExecutionService {
                 return failed(initial, "WORKSPACE_CONTEXT_REJECTED");
             }
         }
+        V2AdaptiveCyclePort cyclePort = command.modelProvider() == null
+                ? cycles.create(command.bindings(), owner, token, expires,
+                        suffix, base)
+                : cycles.create(command.bindings(), owner, token, expires,
+                        suffix, base, command.modelProvider());
         var coordinator = new V2AdaptiveExecutionCoordinator(
-                cycles.create(command.bindings(), owner, token, expires,
-                        suffix, base),
-                reflections,
+                cyclePort,
+                command.modelProvider() == null
+                        ? reflections
+                        : new V2ModelReflectionProvider(
+                                command.modelProvider(), json,
+                                command.bootstrap().taskFrame().id(),
+                                command.bootstrap().plan().id(),
+                                command.bootstrap().plan()
+                                        .latestRevision().id()),
                 new StrictReflectionDecisionParser(json));
         return coordinator.execute(
                 new V2AdaptiveExecutionCoordinator.Command(
                         command.userId(), command.turnId(),
                         recovered.planId().value(), initial,
                         command.bindings(),
+                        stepIndexes(command.bootstrap().plan()
+                                .latestRevision()),
                         new ReflectionContext(
                                 taskFrameFacts(
                                         command.bootstrap().taskFrame()),
@@ -133,6 +203,14 @@ public class V2AdaptiveExecutionService {
                     index++, step.intent(), "PENDING", ""));
         }
         return List.copyOf(result);
+    }
+
+    private static Map<String, Integer> stepIndexes(PlanRevision revision) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (int index = 0; index < revision.steps().size(); index++) {
+            result.put(revision.steps().get(index).id().value(), index);
+        }
+        return Map.copyOf(result);
     }
 
     private static List<String> unfinished(
@@ -200,10 +278,21 @@ public class V2AdaptiveExecutionService {
             Long intakeId, Long userId, Long sessionId, Long turnId,
             String clientRequestId, String projectVersion,
             PersistedPlanBootstrap bootstrap, Map<String, String> bindings,
-            List<String> conversationContext, Instant authorityTime) {
+            List<String> conversationContext, Instant authorityTime,
+            ModelProvider modelProvider) {
         public Command {
             bindings = Map.copyOf(bindings);
             conversationContext = List.copyOf(conversationContext);
+        }
+
+        public Command(
+                Long intakeId, Long userId, Long sessionId, Long turnId,
+                String clientRequestId, String projectVersion,
+                PersistedPlanBootstrap bootstrap, Map<String, String> bindings,
+                List<String> conversationContext, Instant authorityTime) {
+            this(intakeId, userId, sessionId, turnId, clientRequestId,
+                    projectVersion, bootstrap, bindings, conversationContext,
+                    authorityTime, null);
         }
     }
 }

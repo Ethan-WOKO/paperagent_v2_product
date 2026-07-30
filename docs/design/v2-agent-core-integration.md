@@ -1217,7 +1217,11 @@ Each iteration invokes one existing persistent loop cycle with a Step-specific
 tool selected from the frozen public-alias binding, then asks a no-tools
 reflection Provider for strict `CONTINUE`, `REPLAN`, `COMPLETE`, or `FAIL`
 JSON. Eight cycles and three replans are hard limits. Model COMPLETE is
-rejected unless the durable recovery cut is already terminal successful.
+rejected unless the durable recovery cut is already terminal successful and
+every executed tool Step has bounded authoritative Receipt facts. The intake
+resolves the settings-page provider, model, URL, and user key once and passes
+a request-scoped Provider through the kernel and reflection calls in memory;
+the key is never persisted or included in facts.
 
 REPLAN materialization uses the exact recovered lease, revision, checkpoint,
 event head, and active Step. Completed Steps, completion facts, and Receipt
@@ -1232,6 +1236,16 @@ composition. `sandbox_execute` therefore returns the stable
 `SANDBOX_EXECUTION_UNAVAILABLE` failure before any Provider, Sandbox, or host
 process call. Adding a real adapter is a later independently frozen boundary,
 not permission to use the host.
+
+Natural-language `project_candidate` uses strict
+`{"operation":"compose","paths":[...]}` arguments with one to four normalized,
+existing text paths. V62 durably binds that natural authority separately from
+the unchanged explicit Candidate delivery. Replacements are prepared only in
+the isolated Workspace. After the Plan has a durable successful terminal cut,
+the existing Candidate artifact service rereads and attests the original
+ProjectVersion, publishes a numeric Candidate ID, and returns
+`WAITING_CONFIRMATION`. It never applies the Candidate or changes the original
+ProjectVersion.
 
 Only durable terminal success plus an accepted COMPLETE reflection may append
 the one assistant message. Failure leaves the already-persisted #95 intake

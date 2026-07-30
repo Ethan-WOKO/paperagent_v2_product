@@ -45,6 +45,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.LinkedHashSet;
+import io.paperagent.v2.providers.ModelProvider;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -66,6 +68,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final ProjectCandidateCompositionEffect candidateComposition;
     private final ObjectMapper json;
     private final NaturalLanguageEffectAuthoritySource naturalAuthorities;
+    private final NaturalLanguageCandidateAuthorityStore naturalCandidates;
 
     public AuthenticatedProjectEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
@@ -78,7 +81,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ProjectAnalysisAuthoritySource authorities,
             ObjectMapper json) {
         this(contexts, planIds, recoverer, intents, claims, executionContexts,
-                workspaces, authorities, null, null, json, null);
+                workspaces, authorities, null, null, json, null, null);
     }
 
     public AuthenticatedProjectEffectExecutionComposer(
@@ -95,7 +98,26 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ObjectMapper json) {
         this(contexts, planIds, recoverer, intents, claims,
                 executionContexts, workspaces, authorities,
-                candidateAuthorities, candidateComposition, json, null);
+                candidateAuthorities, candidateComposition, json, null, null);
+    }
+
+    public AuthenticatedProjectEffectExecutionComposer(
+            AgentTurnProductContextResolver contexts,
+            ProductPlanIdDerivation planIds,
+            StepRecoverer recoverer,
+            EffectIntentRepository intents,
+            ProductEffectExecutionClaimRepository claims,
+            PlanExecutionContextRepository executionContexts,
+            AuthenticatedAgentTurnWorkspacePortFactory workspaces,
+            ProjectAnalysisAuthoritySource authorities,
+            ProjectCandidateEffectGateway candidateAuthorities,
+            ProjectCandidateCompositionEffect candidateComposition,
+            ObjectMapper json,
+            NaturalLanguageEffectAuthoritySource naturalAuthorities) {
+        this(contexts, planIds, recoverer, intents, claims,
+                executionContexts, workspaces, authorities,
+                candidateAuthorities, candidateComposition, json,
+                naturalAuthorities, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -111,7 +133,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ProjectCandidateEffectGateway candidateAuthorities,
             ProjectCandidateCompositionEffect candidateComposition,
             ObjectMapper json,
-            NaturalLanguageEffectAuthoritySource naturalAuthorities) {
+            NaturalLanguageEffectAuthoritySource naturalAuthorities,
+            NaturalLanguageCandidateAuthorityStore naturalCandidates) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.recoverer = recoverer;
@@ -124,6 +147,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
         this.candidateComposition = candidateComposition;
         this.json = json;
         this.naturalAuthorities = naturalAuthorities;
+        this.naturalCandidates = naturalCandidates;
     }
 
     public AuthenticatedProjectEffectExecutionOutcome execute(
@@ -161,13 +185,32 @@ public class AuthenticatedProjectEffectExecutionComposer {
                                 intent.intent().kind())) {
             throw failed();
         }
+        boolean naturalCandidate =
+                ProjectCandidateCompositionEffect.KIND.equals(
+                        intent.intent().kind())
+                && naturalAuthorities != null
+                && naturalCandidates != null
+                && naturalAuthorities.authorizes(
+                        userId, turnId, planId.value(),
+                        intent.intent().stepId().value(),
+                        intent.intent().kind());
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
             if (candidateAuthorities == null || candidateComposition == null) {
                 throw failed();
             }
-            var candidate = candidateAuthorities.require(planId.value(),
-                    intent.intent().stepId().value());
             String arguments = canonical(intent.intent().arguments());
+            var candidate = naturalCandidate
+                    ? naturalCandidates.bind(
+                            userId, context.identity().sessionId(), turnId,
+                            planId.value(),
+                            intent.intent().stepId().value(),
+                            context.identity().projectId(),
+                            context.projectVersionId().orElseThrow(
+                                    AuthenticatedProjectEffectExecutionComposer::failed),
+                            active.recovery().taskFrame().objective(),
+                            arguments, strictCandidatePaths(arguments))
+                    : candidateAuthorities.require(planId.value(),
+                            intent.intent().stepId().value());
             if (!candidate.kind().equals(intent.intent().kind())
                     || !candidate.authorityJson().equals(arguments)
                     || !candidate.authoritySha256().equals(hash(arguments))
@@ -228,7 +271,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 () -> receipt(
                         active, intent, workspace, verified.workspace(),
                         context.identity().projectId(),
-                        userId, turnId, started)));
+                        userId, turnId, started, naturalCandidate,
+                        command.requestProvider())));
         return new AuthenticatedProjectEffectExecutionOutcome(
                 claimed.result(), claimed.replayed());
     }
@@ -238,16 +282,32 @@ public class AuthenticatedProjectEffectExecutionComposer {
             PersistedEffectIntent intent, WorkspacePort workspace,
             io.paperagent.v2.contracts.WorkspaceRef ref, Long projectId,
             Long userId, Long turnId, Instant started) {
+        return receipt(active, intent, workspace, ref, projectId,
+                userId, turnId, started, false, null);
+    }
+
+    private ExecutionReceipt receipt(
+            RecoveredActiveStep active,
+            PersistedEffectIntent intent, WorkspacePort workspace,
+            io.paperagent.v2.contracts.WorkspaceRef ref, Long projectId,
+            Long userId, Long turnId, Instant started,
+            boolean naturalCandidate, ModelProvider requestProvider) {
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
-            var candidate = candidateComposition.execute(
-                    intent,
+            var authority =
                     new ProjectCandidateCompositionEffect.ModelAuthority(
                             active.recovery().taskFrame().id(),
                             active.planId(),
                             active.recovery().checkpoint().checkpoint()
                                     .revisionId(),
-                            active.recovery().activation().stepId()),
-                    workspace, ref, userId, turnId, projectId, started);
+                            active.recovery().activation().stepId());
+            var candidate = naturalCandidate
+                    ? candidateComposition.executeNatural(
+                            intent, authority, workspace, ref, userId,
+                            turnId, projectId, started,
+                            naturalCandidates, requestProvider)
+                    : candidateComposition.execute(
+                            intent, authority, workspace, ref, userId,
+                            turnId, projectId, started);
             ObjectNode output = json.createObjectNode();
             output.put("diffFingerprint", candidate.diffFingerprint());
             Instant ended = Instant.now();
@@ -336,6 +396,33 @@ public class AuthenticatedProjectEffectExecutionComposer {
 
     private String canonical(ObjectValue value) {
         return write((ObjectNode) node(value));
+    }
+
+    private List<String> strictCandidatePaths(String canonicalArguments) {
+        try {
+            var root = json.readTree(canonicalArguments);
+            if (!root.isObject() || root.size() != 2
+                    || !"compose".equals(
+                            root.path("operation").asText())
+                    || !root.path("paths").isArray()
+                    || root.path("paths").size() < 1
+                    || root.path("paths").size() > 4) {
+                throw failed();
+            }
+            LinkedHashSet<String> paths = new LinkedHashSet<>();
+            for (var item : root.path("paths")) {
+                if (!item.isTextual()) throw failed();
+                String path = new ProjectPath(
+                        item.textValue()).value();
+                if (!path.equals(item.textValue())
+                        || !paths.add(path)) {
+                    throw failed();
+                }
+            }
+            return List.copyOf(paths);
+        } catch (java.io.IOException | IllegalArgumentException invalid) {
+            throw failed();
+        }
     }
 
     private com.fasterxml.jackson.databind.JsonNode node(ContractValue value) {

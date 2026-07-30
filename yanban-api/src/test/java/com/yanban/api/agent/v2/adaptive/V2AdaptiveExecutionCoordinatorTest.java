@@ -39,6 +39,60 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void failedReceiptReplansWithoutDuplicateRowsAndCountsRepairOnlyAfterCommit() {
+        AtomicInteger cycle = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = ignored -> switch (
+                cycle.incrementAndGet()) {
+            case 1 -> new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.FAILED,
+                    "step-1", "compile failed", false, null,
+                    List.of("executionReceipt=status=FAILURE stderr=bad import"),
+                    true, true);
+            case 2 -> new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.REPLAN_REQUIRED,
+                    "step-1", "REPLAN_APPLIED", false, new Object(),
+                    List.of("persistedReplan=revision-2"),
+                    false, false);
+            default -> new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                    "repair-1", "compiled", true, null,
+                    List.of("executionReceipt=status=SUCCESS exitCode=0"),
+                    true, false);
+        };
+        AtomicInteger reflection = new AtomicInteger();
+        ReflectionProvider provider = ignored -> switch (
+                reflection.incrementAndGet()) {
+            case 1 -> """
+                    {"decision":"REPLAN","reason":"repair failed import",
+                     "finalText":null,"replacementSteps":[{
+                       "id":"repair-1","intent":"Repair source",
+                       "expectedOutcome":"Compilation succeeds",
+                       "dependencies":[],
+                       "completionCriteria":["exit code is zero"],
+                       "maxAttempts":1,"maxDurationSeconds":120,
+                       "capability":"project_read"}]}
+                    """;
+            case 2 -> """
+                    {"decision":"CONTINUE","reason":"run replacement",
+                     "finalText":null,"replacementSteps":[]}
+                    """;
+            default -> complete();
+        };
+        var result = coordinator(cycles, provider).execute(command(
+                Map.of("step-1", "project.read")));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals(1, result.replans());
+        assertEquals(1, result.repairs());
+        assertEquals(2, result.steps().size());
+        assertEquals("SUPERSEDED_BY_REPLAN",
+                result.steps().get(0).status());
+        assertEquals("SUCCEEDED", result.steps().get(1).status());
+        assertEquals(1, result.steps().stream()
+                .filter(value -> "step-1".equals(value.title())).count());
+    }
+
+    @Test
     void sandboxFailsBeforeProviderOrRuntime() {
         AtomicInteger cycles = new AtomicInteger();
         AtomicInteger provider = new AtomicInteger();

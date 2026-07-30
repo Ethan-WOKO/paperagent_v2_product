@@ -83,6 +83,70 @@ public class ProjectCandidateCompositionEffect {
         }
     }
 
+    CandidateResult executeNatural(
+            PersistedEffectIntent intent,
+            ModelAuthority modelAuthority,
+            WorkspacePort workspace,
+            WorkspaceRef ref, Long userId, Long turnId, Long projectId,
+            Instant now, NaturalLanguageCandidateAuthorityStore store,
+            ModelProvider requestProvider) {
+        if (store == null || requestProvider == null) throw failed();
+        var authority = store.require(
+                intent.intent().planId().value(),
+                intent.intent().stepId().value());
+        if (modelAuthority == null
+                || !modelAuthority.planId().equals(intent.intent().planId())
+                || !modelAuthority.stepId().equals(intent.intent().stepId())
+                || !KIND.equals(authority.kind())
+                || !userId.equals(authority.userId())
+                || !turnId.equals(authority.turnId())
+                || !projectId.equals(authority.projectId())
+                || !hash(authority.authorityJson())
+                        .equals(authority.authoritySha256())) {
+            throw failed();
+        }
+        Map<String, byte[]> originals = new LinkedHashMap<>();
+        try {
+            for (String path : authority.paths()) {
+                byte[] original = workspace.read(
+                        ref, new ProjectPath(path));
+                requireText(original);
+                originals.put(path, original);
+            }
+            CompositionProposal proposal = replacements(
+                    intent, modelAuthority, authority, originals,
+                    requestProvider, true);
+            Map<String, String> replacements = proposal.replacements();
+            for (String path : authority.paths()) {
+                byte[] original = originals.get(path);
+                byte[] replacement = replacements.get(path)
+                        .getBytes(StandardCharsets.UTF_8);
+                if (replacement.length > MAX_FILE_BYTES
+                        || Arrays.equals(original, replacement)) {
+                    throw failed();
+                }
+                workspace.replace(ref, new ProjectPath(path), replacement);
+            }
+            WorkspaceDiff diff = workspace.diff(ref,
+                    new DiffId("project-candidate-diff."
+                            + hash(intent.intent().planId().value())), now);
+            validateDiff(diff, authority.paths());
+            String diffFingerprint = diffFingerprint(diff);
+            store.bindPrepared(intent.intent().planId().value(),
+                    replacements, diffFingerprint);
+            return new CandidateResult(null, null, diffFingerprint);
+        } catch (RuntimeException failure) {
+            originals.forEach((path, bytes) -> {
+                try {
+                    workspace.replace(ref, new ProjectPath(path), bytes);
+                } catch (RuntimeException ignored) {
+                    // The isolated Workspace remains unusable.
+                }
+            });
+            throw failure;
+        }
+    }
+
     @Transactional
     public CandidateResult publish(String planId, Long userId, Long turnId) {
         var authority = gateway.require(planId, "project-candidate-compose");
@@ -119,18 +183,101 @@ public class ProjectCandidateCompositionEffect {
                 candidate.fingerprint().sha256(), diffFingerprint);
     }
 
+    @Transactional
+    public CandidateResult publishNatural(
+            String planId, Long userId, Long turnId,
+            NaturalLanguageCandidateAuthorityStore store) {
+        Optional<Long> replay = store.candidateArtifactId(planId);
+        if (replay.isPresent()) {
+            return new CandidateResult(replay.orElseThrow(), null,
+                    store.requirePrepared(planId).diffFingerprint());
+        }
+        var authority = store.require(planId);
+        if (!userId.equals(authority.userId())
+                || !turnId.equals(authority.turnId())) throw failed();
+        var manifest = projects.manifest(userId, authority.projectId());
+        if (!authority.projectVersion().equals(manifest.version())) {
+            throw failed();
+        }
+        var prepared = store.requirePrepared(planId);
+        if (!prepared.replacements().keySet().equals(
+                new LinkedHashSet<>(authority.paths()))) throw failed();
+        Map<String, byte[]> originals = new LinkedHashMap<>();
+        Map<String, String> replacements = new LinkedHashMap<>();
+        for (String path : authority.paths()) {
+            var original = projects.readFile(
+                    userId, authority.projectId(), path);
+            byte[] bytes = original.content()
+                    .getBytes(StandardCharsets.UTF_8);
+            if (!hash(bytes).equals(original.sha256())) throw failed();
+            String replacement = prepared.replacements().get(path);
+            if (replacement == null) throw failed();
+            byte[] replacementBytes =
+                    replacement.getBytes(StandardCharsets.UTF_8);
+            requireText(replacementBytes);
+            if (replacementBytes.length > MAX_FILE_BYTES
+                    || Arrays.equals(bytes, replacementBytes)) {
+                throw failed();
+            }
+            originals.put(path, bytes);
+            replacements.put(path, replacement);
+        }
+        String diffFingerprint = diffFingerprint(
+                authority.projectVersion(), originals, replacements);
+        if (!diffFingerprint.equals(prepared.diffFingerprint())) {
+            throw failed();
+        }
+        CandidateArtifactResponse candidate = candidates.store(
+                userId, authority.sessionId(),
+                new ProjectRuntimeContext(
+                        userId, authority.projectId(),
+                        authority.projectVersion()),
+                candidateIntent(authority, originals, replacements),
+                evidence(authority, originals));
+        store.bindCandidate(planId, candidate.artifactId(),
+                candidate.fingerprint().sha256(), diffFingerprint);
+        return new CandidateResult(
+                candidate.artifactId(),
+                candidate.fingerprint().sha256(), diffFingerprint);
+    }
+
     private CompositionProposal replacements(
             PersistedEffectIntent intent,
             ModelAuthority modelAuthority,
             ProjectCandidateEffectAuthority authority, Map<String, byte[]> originals) {
+        return replacements(intent, modelAuthority, authority, originals,
+                provider, false);
+    }
+
+    private CompositionProposal replacements(
+            PersistedEffectIntent intent,
+            ModelAuthority modelAuthority,
+            ProjectCandidateEffectAuthority authority,
+            Map<String, byte[]> originals,
+            ModelProvider modelProvider,
+            boolean natural) {
         try {
             JsonNode arguments = json.readTree(canonical(intent.intent().arguments()));
             if (!arguments.isObject()) throw failed();
             if (authority.repair() != null) {
                 return repairReplacement(intent, modelAuthority, authority, arguments);
             }
-            if (arguments.size() != 1
-                    || !"compose".equals(arguments.path("operation").asText())) throw failed();
+            if (!"compose".equals(
+                    arguments.path("operation").asText())) throw failed();
+            if (natural) {
+                if (arguments.size() != 2
+                        || !arguments.path("paths").isArray()
+                        || !authority.paths().equals(
+                                json.convertValue(
+                                        arguments.path("paths"),
+                                        new com.fasterxml.jackson.core
+                                                .type.TypeReference<
+                                                List<String>>() {}))) {
+                    throw failed();
+                }
+            } else if (arguments.size() != 1) {
+                throw failed();
+            }
             StringBuilder source = new StringBuilder("Objective: ")
                     .append(authority.objective()).append("\nReturn JSON only as ")
                     .append("{\"replacements\":[{\"path\":\"...\",\"text\":\"...\"}]}. ")
@@ -140,7 +287,7 @@ public class ProjectCandidateCompositionEffect {
                     .append(path).append("\">\n")
                     .append(requireText(originals.get(path)))
                     .append("\n</file>\n"));
-            ModelProviderResult result = provider.complete(new ModelRequest(
+            ModelProviderResult result = modelProvider.complete(new ModelRequest(
                     new ModelRequestId("project-candidate-compose."
                             + hash(intent.intent().planId().value())),
                     new CorrelationId("project-candidate-compose."
