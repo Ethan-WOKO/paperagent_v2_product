@@ -345,6 +345,11 @@ class V2NaturalLanguageTurnServiceTest {
         assertThrows(org.springframework.web.server.ResponseStatusException.class,
                 () -> service().execute(7L, 9L, request()));
 
+        ArgumentCaptor<String> failureCode =
+                ArgumentCaptor.forClass(String.class);
+        verify(transactions).saveFailure(eq(intake), failureCode.capture());
+        assertThat(failureCode.getValue()).matches(
+                "PLANNER_JSON_SYNTAX_[0-9a-f]{12}");
         verify(transactions, never()).saveAssistant(any(), any(), any());
         verify(transactions, never()).savePersistent(any(), any(), any(), any());
         verify(bootstraps, never()).bootstrap(any(), any(), any());

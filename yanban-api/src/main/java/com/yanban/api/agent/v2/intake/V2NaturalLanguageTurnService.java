@@ -511,8 +511,8 @@ public class V2NaturalLanguageTurnService {
     }
 
     private static String failureCode(RuntimeException failure) {
-        return failure instanceof V2TurnPlanningException
-                ? "PLANNER_REJECTED" : "INTAKE_FAILED";
+        return failure instanceof V2TurnPlanningException planning
+                ? planning.failureCode() : "INTAKE_FAILED";
     }
 
     private static String shortHash(String value) {

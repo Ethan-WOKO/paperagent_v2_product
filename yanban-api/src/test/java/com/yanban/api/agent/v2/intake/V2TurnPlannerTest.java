@@ -10,12 +10,14 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
+import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ToolCall;
 import io.paperagent.v2.contracts.Route;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.DynamicTest;
+import org.mockito.ArgumentCaptor;
 
 class V2TurnPlannerTest {
     private final ObjectMapper json = new ObjectMapper();
@@ -119,7 +121,7 @@ class V2TurnPlannerTest {
 
     @Test
     void projectSessionCannotBecomeDirect() {
-        assertThrows(V2TurnPlanningException.class,
+        var failure = assertThrows(V2TurnPlanningException.class,
                 () -> planner(answer(
                         "{\"route\":\"DIRECT\",\"answer\":\"x\"}"))
                         .plan(
@@ -135,6 +137,44 @@ class V2TurnPlannerTest {
                                 null,
                                 true,
                                 "trace"));
+        assertTrue(failure.failureCode().matches(
+                "PLANNER_PROJECT_DIRECT_[0-9a-f]{12}"));
+    }
+
+    @Test
+    void rejectedOutputReportsSafeFieldAndDigest() {
+        String dotted = answerText().replace(
+                "\"project_read\"", "\"project.read\"");
+
+        var failure = assertThrows(V2TurnPlanningException.class,
+                () -> planner(answer(dotted)).plan(
+                        context("question"),
+                        endpoint(),
+                        null,
+                        true,
+                        "trace"));
+
+        assertTrue(failure.failureCode().matches(
+                "PLANNER_CAPABILITY_DOTTED_[0-9a-f]{12}"));
+    }
+
+    @Test
+    void projectTurnExplicitlyTellsModelToCreatePersistentPlan() {
+        ChatModelProvider provider = answer(answerText());
+
+        planner(provider).plan(
+                context("read the project"),
+                endpoint(),
+                null,
+                true,
+                "trace");
+
+        ArgumentCaptor<ChatRequest> request =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        org.mockito.Mockito.verify(provider).chat(request.capture());
+        assertTrue(request.getValue().messages().stream()
+                .anyMatch(message -> message.content().contains(
+                        "authenticated turn is bound to a Project")));
     }
 
     @TestFactory
