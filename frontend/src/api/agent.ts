@@ -3,7 +3,8 @@ import http from './http';
 export type V2ProductCapability =
   | 'literature.search'
   | 'project.read-analysis'
-  | 'project.candidate';
+  | 'project.candidate'
+  | 'agent.turn';
 
 export interface V2ProductAvailabilityDocument {
   formatVersion: number;
@@ -295,6 +296,70 @@ export interface FinalSynthesisInput {
 
 export function sendMessage(sessionId: number, payload: SendMessageRequestPayload) {
   return http.post<SendMessageResponse>(`/agent/sessions/${sessionId}/messages`, payload);
+}
+
+export type V2NaturalLanguageTurnStatus =
+  | 'PLANNING'
+  | 'RUNNING'
+  | 'WAITING_CONFIRMATION'
+  | 'SUCCEEDED'
+  | 'FAILED';
+
+export type V2NaturalLanguageStepStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'SUPERSEDED_BY_REPLAN';
+
+export interface V2NaturalLanguageTurnRequest {
+  content: string;
+  ragDisabled?: boolean;
+  skillId?: string | null;
+  experiment?: AgentExperimentRequestPayload;
+  clientRequestId: string;
+}
+
+export interface V2NaturalLanguageTurnStep {
+  index: number;
+  title: string;
+  status: V2NaturalLanguageStepStatus;
+  detail: string | null;
+}
+
+export interface V2NaturalLanguageTurnResponse {
+  status: V2NaturalLanguageTurnStatus;
+  route: 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE';
+  planId: string | null;
+  projectVersion: string | null;
+  steps: V2NaturalLanguageTurnStep[];
+  finalText: string | null;
+  candidateArtifactId: number | null;
+  outputPaths: string[];
+  errorCode: string | null;
+}
+
+export function startV2NaturalLanguageTurn(
+  sessionId: number,
+  payload: V2NaturalLanguageTurnRequest,
+  signal?: AbortSignal,
+) {
+  return http.post<V2NaturalLanguageTurnResponse>(
+    `/agent/sessions/${sessionId}/v2/turns`,
+    payload,
+    { signal },
+  );
+}
+
+export function getV2NaturalLanguageTurn(
+  sessionId: number,
+  clientRequestId: string,
+  signal?: AbortSignal,
+) {
+  return http.get<V2NaturalLanguageTurnResponse>(
+    `/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(clientRequestId)}`,
+    { signal },
+  );
 }
 
 export interface V2LiteratureTurnRequest {

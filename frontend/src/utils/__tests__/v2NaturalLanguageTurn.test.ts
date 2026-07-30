@@ -1,0 +1,150 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { V2NaturalLanguageTurnResponse } from '@/api/agent';
+import {
+  isCurrentV2NaturalLanguageRequest,
+  isV2NaturalLanguageTerminal,
+  newV2NaturalLanguageClientRequestId,
+  normalizeV2NaturalLanguageRequest,
+  pollV2NaturalLanguageTurn,
+  startThenPollV2NaturalLanguageTurn,
+  v2NaturalLanguageStatusLabel,
+  v2NaturalLanguageStepStatusLabel,
+  V2NaturalLanguageTurnNotCreatedError,
+} from '../v2NaturalLanguageTurn';
+
+function outcome(
+  status: V2NaturalLanguageTurnResponse['status'],
+  overrides: Partial<V2NaturalLanguageTurnResponse> = {},
+): V2NaturalLanguageTurnResponse {
+  return {
+    status,
+    route: 'PERSISTENT_PLAN_EXECUTE',
+    planId: 'plan-1',
+    projectVersion: 'version-1',
+    steps: [],
+    finalText: null,
+    candidateArtifactId: null,
+    outputPaths: [],
+    errorCode: null,
+    ...overrides,
+  };
+}
+
+describe('V2 自然语言请求', () => {
+  it('生成稳定请求编号并规范化单一自然语言输入', () => {
+    const clientRequestId = newV2NaturalLanguageClientRequestId(() => 'fixed');
+    expect(clientRequestId).toBe('v2-turn-fixed');
+    expect(normalizeV2NaturalLanguageRequest('  读取   README 并总结  ', clientRequestId)).toEqual({
+      content: '读取   README 并总结',
+      clientRequestId,
+    });
+    expect(() => normalizeV2NaturalLanguageRequest(' ', clientRequestId)).toThrow('content-required');
+  });
+
+  it('只调用一次 POST，之后只读轮询到终态', async () => {
+    const start = vi.fn(async () => outcome('PLANNING'));
+    const states = [outcome('RUNNING'), outcome('SUCCEEDED', { finalText: '完成' })];
+    const read = vi.fn(async () => states.shift()!);
+    const result = await startThenPollV2NaturalLanguageTurn(start, read, {
+      intervalMs: 1_000,
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+    expect(result.status).toBe('SUCCEEDED');
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('POST 响应丢失后使用同一请求编号恢复，GET 确认不存在才结束', async () => {
+    const start = vi.fn(async () => {
+      throw new Error('response-lost');
+    });
+    const read = vi.fn(async () => {
+      throw { response: { status: 404 } };
+    });
+    await expect(startThenPollV2NaturalLanguageTurn(start, read))
+      .rejects.toBeInstanceOf(V2NaturalLanguageTurnNotCreatedError);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('会话或项目变化会使旧响应失效，Abort 会停止轮询', async () => {
+    const identity = { projectId: 3, sessionId: 7, clientRequestId: 'id', sequence: 1 };
+    expect(isCurrentV2NaturalLanguageRequest(identity, { ...identity, sessionId: 8 })).toBe(false);
+    expect(isCurrentV2NaturalLanguageRequest(identity, { ...identity, projectId: 4 })).toBe(false);
+    const controller = new AbortController();
+    const read = vi.fn(async () => outcome('RUNNING'));
+    await expect(pollV2NaturalLanguageTurn(read, {
+      intervalMs: 1_000,
+      signal: controller.signal,
+      sleep: async () => controller.abort(),
+      now: () => 0,
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('完整映射五种步骤状态和三种终态', () => {
+    expect([
+      'PENDING',
+      'RUNNING',
+      'SUCCEEDED',
+      'FAILED',
+      'SUPERSEDED_BY_REPLAN',
+    ].map((status) => v2NaturalLanguageStepStatusLabel(
+      status as Parameters<typeof v2NaturalLanguageStepStatusLabel>[0],
+    ))).toEqual([
+      '等待执行',
+      '正在执行',
+      '已完成',
+      '执行失败',
+      '已被新计划替代',
+    ]);
+    expect(v2NaturalLanguageStatusLabel('SUCCEEDED')).toBe('已完成');
+    expect(v2NaturalLanguageStatusLabel('FAILED')).toBe('执行失败');
+    expect(v2NaturalLanguageStatusLabel('WAITING_CONFIRMATION')).toBe('等待你的确认');
+    expect(isV2NaturalLanguageTerminal(outcome('WAITING_CONFIRMATION'))).toBe(true);
+    expect(isV2NaturalLanguageTerminal(outcome('RUNNING'))).toBe(false);
+  });
+});
+
+describe('V2 自然语言 API 与页面接入', () => {
+  const api = readFileSync(new URL('../../api/agent.ts', import.meta.url), 'utf8');
+  const page = readFileSync(new URL('../../views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
+
+  it('POST 和 GET 使用同一个 session 与 clientRequestId 契约', () => {
+    expect(api).toContain('`/agent/sessions/${sessionId}/v2/turns`');
+    expect(api).toContain('`/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(clientRequestId)}`');
+    expect(page).toContain('await startV2NaturalLanguageTurn(sessionId, request, controller.signal)');
+    expect(page).toContain('await getV2NaturalLanguageTurn(sessionId, clientRequestId, controller.signal)');
+  });
+
+  it('V2 是中文单输入流程，V1 发送方法保持独立', () => {
+    expect(page).toContain('class="v2-conversation__composer"');
+    expect(page).toContain('@click="sendV2NaturalLanguageTurn"');
+    expect(page).toContain('async function sendChat()');
+    expect(page).toContain('await sendProjectWithFallback(projectId, sessionId, content, requestId)');
+    expect(page).not.toContain('aria-label="选择 V2 任务类型"');
+    expect(page).not.toContain('@click="startProjectAnalysis"');
+    expect(page).not.toContain('@click="startProjectCandidate"');
+  });
+
+  it('展示执行过程、最终结果、输出位置并复用 Candidate 检查入口', () => {
+    expect(page).toContain('执行过程');
+    expect(page).toContain('最终结果');
+    expect(page).toContain('生成内容位置');
+    expect(page).toContain('原项目尚未修改');
+    expect(page).toContain('打开修改与验证');
+    expect(page).toContain('@click="openV2CandidateReview"');
+  });
+
+  it('持久化待处理请求并在切换和卸载时中止旧轮询', () => {
+    expect(page).toContain('V2_NATURAL_LANGUAGE_STORAGE_KEY');
+    expect(page).toContain('storeV2NaturalLanguageRequest(projectId, sessionId, clientRequestId, question)');
+    expect(page).toContain('recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId)');
+    expect(page).toContain('resetV2NaturalLanguageView();');
+    expect(page).toContain('onUnmounted(() =>');
+    expect(page).toContain('stopV2NaturalLanguagePolling();');
+  });
+});
