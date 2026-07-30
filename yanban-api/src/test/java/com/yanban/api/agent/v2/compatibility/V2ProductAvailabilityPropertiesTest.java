@@ -27,7 +27,8 @@ class V2ProductAvailabilityPropertiesTest {
                             1, true, List.of(
                                     "literature.search",
                                     "project.read-analysis",
-                                    "project.candidate")));
+                                    "project.candidate",
+                                    "agent.turn")));
             assertThatThrownBy(() -> availability.document()
                     .capabilities().add("client.override"))
                     .isInstanceOf(UnsupportedOperationException.class);

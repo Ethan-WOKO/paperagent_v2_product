@@ -8,6 +8,9 @@ import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnResponse
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeResponse;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeService;
+import com.yanban.api.agent.v2.intake.V2NaturalLanguageTurnRequest;
+import com.yanban.api.agent.v2.intake.V2NaturalLanguageTurnResponse;
+import com.yanban.api.agent.v2.intake.V2NaturalLanguageTurnService;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -32,6 +35,7 @@ public class AgentController {
     private final V2LiteratureTurnService v2LiteratureTurns;
     private final V2LiteratureOutcomeService v2LiteratureOutcomes;
     private final V2ProductAvailability v2Availability;
+    private final V2NaturalLanguageTurnService v2NaturalLanguageTurns;
 
     public AgentController(AgentService agentService,
                            AgentContextSnapshotService contextSnapshotService,
@@ -39,7 +43,16 @@ public class AgentController {
                            V2LiteratureOutcomeService v2LiteratureOutcomes) {
         this(agentService, contextSnapshotService, v2LiteratureTurns,
                 v2LiteratureOutcomes,
-                V2ProductAvailability.enabledByDefault());
+                V2ProductAvailability.enabledByDefault(), null);
+    }
+
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability) {
+        this(agentService, contextSnapshotService, v2LiteratureTurns,
+                v2LiteratureOutcomes, v2Availability, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -47,12 +60,14 @@ public class AgentController {
                            AgentContextSnapshotService contextSnapshotService,
                            V2LiteratureTurnService v2LiteratureTurns,
                            V2LiteratureOutcomeService v2LiteratureOutcomes,
-                           V2ProductAvailability v2Availability) {
+                           V2ProductAvailability v2Availability,
+                           V2NaturalLanguageTurnService v2NaturalLanguageTurns) {
         this.agentService = agentService;
         this.contextSnapshotService = contextSnapshotService;
         this.v2LiteratureTurns = v2LiteratureTurns;
         this.v2LiteratureOutcomes = v2LiteratureOutcomes;
         this.v2Availability = v2Availability;
+        this.v2NaturalLanguageTurns = v2NaturalLanguageTurns;
     }
 
     @PostMapping
@@ -95,6 +110,21 @@ public class AgentController {
                                            @PathVariable Long sessionId,
                                            @Valid @RequestBody SendMessageRequest request) {
         return agentService.sendMessage(currentUser.id(), sessionId, request);
+    }
+
+    @PostMapping("/{sessionId}/v2/turns")
+    public V2NaturalLanguageTurnResponse sendV2NaturalLanguageTurn(
+            @AuthenticationPrincipal JwtUser currentUser,
+            @PathVariable Long sessionId,
+            @Valid @RequestBody V2NaturalLanguageTurnRequest request) {
+        v2Availability.requireAvailable(
+                V2ProductAvailability.NATURAL_LANGUAGE_TURN);
+        if (v2NaturalLanguageTurns == null) {
+            throw new IllegalStateException(
+                    "V2 natural-language intake is unavailable");
+        }
+        return v2NaturalLanguageTurns.execute(
+                currentUser.id(), sessionId, request);
     }
 
     @GetMapping("/v2/capabilities")

@@ -9,6 +9,7 @@ public final class V2ProductAvailability {
     public static final String LITERATURE_SEARCH = "literature.search";
     public static final String PROJECT_READ_ANALYSIS = "project.read-analysis";
     public static final String PROJECT_CANDIDATE = "project.candidate";
+    public static final String NATURAL_LANGUAGE_TURN = "agent.turn";
 
     private static final int FORMAT_VERSION = 1;
     private static final String UNAVAILABLE_MESSAGE =
@@ -16,7 +17,8 @@ public final class V2ProductAvailability {
     private static final List<String> CAPABILITIES = List.of(
             LITERATURE_SEARCH,
             PROJECT_READ_ANALYSIS,
-            PROJECT_CANDIDATE);
+            PROJECT_CANDIDATE,
+            NATURAL_LANGUAGE_TURN);
 
     private final boolean enabled;
 

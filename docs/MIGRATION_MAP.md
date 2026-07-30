@@ -1,5 +1,33 @@
 # V2 Capability Migration Map
 
+## Natural-language V2 turn intake and initial Plan
+
+- Status: `V2_COMPOSE_WITH_PRODUCT_ADAPTERS`.
+- Product entry:
+  `POST /api/v1/agent/sessions/{sessionId}/v2/turns`.
+- Context reuse: the intake reuses the bounded product conversation context,
+  rolling summary, governed user memory, applicable experiment RAG context,
+  selected Skill prompt, authenticated Project/version state, and the owner's
+  saved model endpoint. Credentials are used only by the product model call
+  and are never included in the planner prompt or durable evidence.
+- Planning: one no-tools model call returns strict bounded JSON choosing only
+  `DIRECT` or `PERSISTENT_PLAN_EXECUTE`. Public underscore aliases map through
+  one product table to dotted internal ToolIds; dotted or unknown model
+  aliases fail closed.
+- Authority: V61 owns idempotency by authenticated owner/session/client
+  request plus a canonical request digest. The server creates the canonical
+  user message and RUNNING Agent turn. For persistent work, only the existing
+  authenticated bootstrap composer supplies TaskFrame, Plan, ProjectVersion,
+  and durable identity authority; the model supplies draft content only.
+- Delivery: DIRECT creates exactly one canonical assistant message and
+  completes the turn. Persistent intake stores an initial NOT_STARTED Plan and
+  leaves the turn RUNNING for the later adaptive execution Issue. Exact replay
+  returns the same result; changed-payload reuse and malformed, oversized, or
+  tool-calling planner responses fail closed.
+- Excluded: Step execution, reflection, retry, automatic replan, final
+  synthesis, UI changes, Project mutation, Sandbox effects, and legacy Agent
+  planner, loop, verifier, or Candidate-chain reuse.
+
 ## Literature search task start
 
 - Status: `REUSE_WITH_ADAPTER`

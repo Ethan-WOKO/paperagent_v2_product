@@ -36,7 +36,8 @@ class AgentControllerV2AvailabilityTest {
         assertThat(document.capabilities()).containsExactly(
                 "literature.search",
                 "project.read-analysis",
-                "project.candidate");
+                "project.candidate",
+                "agent.turn");
         verifyNoInteractions(legacy, turns, outcomes);
     }
 
