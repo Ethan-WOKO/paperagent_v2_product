@@ -320,6 +320,18 @@ export interface V2NaturalLanguageTurnRequest {
   clientRequestId: string;
 }
 
+export interface V2NaturalLanguageTurnStartResponse {
+  sessionId: number;
+  turnId: number;
+  userMessageId: number;
+  assistantMessageId: number | null;
+  clientRequestId: string;
+  route: 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE';
+  answer: string | null;
+  planId: string | null;
+  replayed: boolean;
+}
+
 export interface V2NaturalLanguageTurnStep {
   index: number;
   title: string;
@@ -344,7 +356,7 @@ export function startV2NaturalLanguageTurn(
   payload: V2NaturalLanguageTurnRequest,
   signal?: AbortSignal,
 ) {
-  return http.post<V2NaturalLanguageTurnResponse>(
+  return http.post<V2NaturalLanguageTurnStartResponse>(
     `/agent/sessions/${sessionId}/v2/turns`,
     payload,
     { signal },

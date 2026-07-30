@@ -32,6 +32,18 @@ function outcome(
   };
 }
 
+const intakeAck = {
+  sessionId: 7,
+  turnId: 11,
+  userMessageId: 21,
+  assistantMessageId: null,
+  clientRequestId: 'v2-turn-fixed',
+  route: 'PERSISTENT_PLAN_EXECUTE' as const,
+  answer: null,
+  planId: 'plan-1',
+  replayed: false,
+};
+
 describe('V2 自然语言请求', () => {
   it('生成稳定请求编号并规范化单一自然语言输入', () => {
     const clientRequestId = newV2NaturalLanguageClientRequestId(() => 'fixed');
@@ -44,7 +56,7 @@ describe('V2 自然语言请求', () => {
   });
 
   it('只调用一次 POST，之后只读轮询到终态', async () => {
-    const start = vi.fn(async () => outcome('PLANNING'));
+    const start = vi.fn(async () => intakeAck);
     const states = [outcome('RUNNING'), outcome('SUCCEEDED', { finalText: '完成' })];
     const read = vi.fn(async () => states.shift()!);
     const result = await startThenPollV2NaturalLanguageTurn(start, read, {
@@ -55,6 +67,27 @@ describe('V2 自然语言请求', () => {
     expect(result.status).toBe('SUCCEEDED');
     expect(start).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('不会把 POST intake ack 当作执行结果', async () => {
+    const start = vi.fn(async () => ({ ...intakeAck, answer: 'ack 不是最终答案' }));
+    const read = vi.fn(async () => outcome('WAITING_CONFIRMATION', {
+      candidateArtifactId: 9_223,
+      outputPaths: ['src/main/java/Sort.java'],
+      steps: [{
+        index: 1,
+        title: '修复并验证',
+        status: 'SUPERSEDED_BY_REPLAN',
+        detail: '已改用新的修复步骤',
+      }],
+    }));
+    const result = await startThenPollV2NaturalLanguageTurn(start, read);
+    expect(result.status).toBe('WAITING_CONFIRMATION');
+    expect(result.candidateArtifactId).toBe(9_223);
+    expect(result.outputPaths).toEqual(['src/main/java/Sort.java']);
+    expect(result.steps[0]?.status).toBe('SUPERSEDED_BY_REPLAN');
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
   });
 
   it('POST 响应丢失后使用同一请求编号恢复，GET 确认不存在才结束', async () => {
@@ -103,6 +136,7 @@ describe('V2 自然语言请求', () => {
     ]);
     expect(v2NaturalLanguageStatusLabel('SUCCEEDED')).toBe('已完成');
     expect(v2NaturalLanguageStatusLabel('FAILED')).toBe('执行失败');
+    expect(v2NaturalLanguageStatusLabel('RUNNING')).toBe('正在执行');
     expect(v2NaturalLanguageStatusLabel('WAITING_CONFIRMATION')).toBe('等待你的确认');
     expect(isV2NaturalLanguageTerminal(outcome('WAITING_CONFIRMATION'))).toBe(true);
     expect(isV2NaturalLanguageTerminal(outcome('RUNNING'))).toBe(false);
@@ -114,10 +148,14 @@ describe('V2 自然语言 API 与页面接入', () => {
   const page = readFileSync(new URL('../../views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
 
   it('POST 和 GET 使用同一个 session 与 clientRequestId 契约', () => {
+    expect(api).toContain('export interface V2NaturalLanguageTurnStartResponse');
+    expect(api).toContain('http.post<V2NaturalLanguageTurnStartResponse>');
+    expect(api).toContain('http.get<V2NaturalLanguageTurnResponse>');
     expect(api).toContain('`/agent/sessions/${sessionId}/v2/turns`');
     expect(api).toContain('`/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(clientRequestId)}`');
     expect(page).toContain('await startV2NaturalLanguageTurn(sessionId, request, controller.signal)');
     expect(page).toContain('await getV2NaturalLanguageTurn(sessionId, clientRequestId, controller.signal)');
+    expect(page).toContain('<span>{{ step.index }}</span>');
   });
 
   it('V2 是中文单输入流程，V1 发送方法保持独立', () => {

@@ -647,13 +647,13 @@
             <section v-if="v2TurnOutcome" class="v2-conversation__process">
               <header>
                 <strong>执行过程</strong>
-                <NTag size="tiny" :type="v2TurnOutcome.status === 'FAILED' ? 'error' : v2NaturalTurnBusy ? 'info' : 'success'">
+                <NTag size="tiny" :type="v2TurnOutcome.status === 'FAILED' ? 'error' : v2TurnOutcome.status === 'WAITING_CONFIRMATION' ? 'warning' : v2NaturalTurnBusy ? 'info' : 'success'">
                   {{ v2NaturalLanguageStatusLabel(v2TurnOutcome.status) }}
                 </NTag>
               </header>
               <ol v-if="v2TurnOutcome.steps.length">
                 <li v-for="step in v2TurnOutcome.steps" :key="`${step.index}:${step.title}`" :data-status="step.status">
-                  <span>{{ step.index + 1 }}</span>
+                  <span>{{ step.index }}</span>
                   <div>
                     <strong>{{ step.title }}</strong>
                     <small v-if="step.detail">{{ step.detail }}</small>

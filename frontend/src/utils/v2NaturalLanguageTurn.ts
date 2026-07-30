@@ -124,14 +124,12 @@ export async function pollV2NaturalLanguageTurn(
 }
 
 export async function startThenPollV2NaturalLanguageTurn(
-  start: () => Promise<V2NaturalLanguageTurnResponse>,
+  start: () => Promise<unknown>,
   read: () => Promise<V2NaturalLanguageTurnResponse>,
   options: PollOptions = {},
 ) {
   try {
-    const outcome = await start();
-    options.onOutcome?.(outcome);
-    if (isV2NaturalLanguageTerminal(outcome)) return outcome;
+    await start();
   } catch (cause) {
     if (isDefinitiveV2NaturalLanguageStartRejection(cause)) throw cause;
     try {

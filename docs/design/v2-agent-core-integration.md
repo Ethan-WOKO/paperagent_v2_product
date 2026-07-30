@@ -1261,10 +1261,11 @@ delegates planning and tool selection to the unified V2 turn endpoint instead
 of asking the user to choose a read-analysis or Candidate form.
 
 The V2 surface persists the client request identity per Project and session,
-starts the request once, and uses only the owner-qualified read endpoint for
-polling and refresh recovery. Project/session changes and unmount abort the
-old poll, and stale responses cannot update the current view. Availability
-failure disables only the V2 input.
+starts the request once, treats POST only as the intake acknowledgement, and
+uses the owner-qualified read endpoint as the sole execution-outcome source
+for polling and refresh recovery. Project/session changes and unmount abort
+the old poll, and stale responses cannot update the current view.
+Availability failure disables only the V2 input.
 
 The page renders the server-owned ordered Step projection, including
 `SUPERSEDED_BY_REPLAN`, followed by one final result. Output paths are shown
