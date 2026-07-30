@@ -53,15 +53,38 @@ Plan 字段。这使真实问题无法继续定位，也无法给出有证据的
 `project_candidate` 和 `sandbox_execute`，导致已知的
 `SANDBOX_EXECUTION_UNAVAILABLE`。该结果不作为纯项目读取通过证据。
 
-### 最小修复建议（尚未实施）
+### 已完成修复
 
-仅增强 Planner 失败事实，不改变权限规则或计划决策：
+提交 `3423813` 已推送到 `main`：
 
 1. 将 Planner 失败分成“模型调用失败、JSON 解析失败、字段校验失败”。
-2. 保存安全的失败阶段、字段名和模型输出 SHA-256；不保存或打印 Key。
-3. 对模型原始输出仅保存有长度上限且完成脱敏的诊断片段，或只在本地开发日志记录。
-4. 增加一个定向测试，证明项目读取计划被拒绝时能看到具体失败原因。
-5. 取得真实失败原因后，再决定是否只调整 Planner 提示词或解析兼容；本轮不猜测修复。
+2. 失败事实保存安全的失败字段和模型输出 SHA-256 前 12 位；不保存模型原文或 Key。
+3. 真实复现得到 `PLANNER_PROJECT_DIRECT_b8db6e5db445`：模型错误地将项目读取
+   判断成 DIRECT。
+4. 仅向 Project 会话的 Planner 增加明确上下文，要求返回
+   `PERSISTENT_PLAN_EXECUTE`；未增加权限规则，未放宽服务端既有校验。
+5. 修复后同一请求成功创建持久化 Plan。
+
+## 第三个阻断缺陷
+
+修复 Planner 后，同一个全新项目会话的只读请求创建了包含
+`project_search` 和 `project_read` 的两步 Plan，但执行立即以
+`ADAPTIVE_EXECUTION_FAILED` 结束；两个步骤仍为 `PENDING`。
+
+持久化事实显示 Plan bootstrap 和 Plan lease 已创建，但 execution start、workspace
+context、step activation 和 effect intent 均未创建。因此失败发生在执行启动阶段，
+尚未进入 `project_search → project.search` 或 `project_read → project.read` 工具映射。
+
+`V2AdaptiveExecutionService` 当前将该阶段的所有运行时异常统一折叠为
+`ADAPTIVE_EXECUTION_FAILED`，且不记录安全失败阶段。静态证据不足以确定是 execution
+start 恢复、租约、事件材料还是数据库适配错误，不能猜测修改。
+
+### 下一步最小建议（尚未实施）
+
+1. 仅为 adaptive 执行的 `start / context / cycle / reflection` 四个边界记录安全阶段码。
+2. 不保存模型原文、项目文件或 Key，也不改变 Runtime 状态机。
+3. 复现一次相同项目读取，根据精确阶段做最小修复。
+4. 只运行对应 adaptive 定向测试和一次真实项目读取，不扩大测试范围。
 
 ## 冻结场景执行结果
 
@@ -69,7 +92,7 @@ Plan 字段。这使真实问题无法继续定位，也无法给出有证据的
 | --- | --- | --- |
 | V1/V2 切换及中文单输入框 | 部分执行 | 前后端均启动；Codex 浏览器策略阻止自动接管本地页面，需人工确认 UI |
 | DIRECT 请求且不额外 GET | 后端通过 | 全新工作区会话 `204` 返回 `DIRECT` 且包含回答；前端零 GET 未在本轮重复自动化 |
-| 项目读取进入持久化 Plan | **失败** | 全新项目会话两次均为 HTTP `502` / `PLANNER_REJECTED` |
+| 项目读取进入持久化 Plan | **部分通过后失败** | Planner 已创建正确的持久化 Plan；执行启动以 `ADAPTIVE_EXECUTION_FAILED` 结束 |
 | 自然语言生成 Candidate | 未执行 | Planner 阻断后按停止条件终止 |
 | 确认 Candidate 创建一个新版本 | 未执行 | 上一场景未生成 Candidate |
 | 沙箱不可用时禁止宿主机回退 | 部分通过 | 旧测试会话返回 `SANDBOX_EXECUTION_UNAVAILABLE`，未观察到宿主机回退 |
@@ -85,9 +108,14 @@ Plan 字段。这使真实问题无法继续定位，也无法给出有证据的
 - `mvn -q -o -pl yanban-api -Dtest=V2AdaptiveExecutionServiceTest,YanbanApiApplicationTests test`
   - `V2AdaptiveExecutionServiceTest`：4 项，0 failures，0 errors，0 skipped。
   - `YanbanApiApplicationTests`：1 项，0 failures，0 errors，0 skipped。
+- `mvn -q -o -pl yanban-api -Dtest=V2TurnPlannerTest,V2NaturalLanguageTurnServiceTest test`
+  - `V2TurnPlannerTest`：13 项，0 failures，0 errors，0 skipped。
+  - `V2NaturalLanguageTurnServiceTest`：9 项，0 failures，0 errors，0 skipped。
 - 真实 HTTP：
   - 工作区 DIRECT：1 次成功。
-  - 全新项目会话只读请求：2 次失败，均为 `PLANNER_REJECTED`。
+  - 诊断增强前，全新项目会话只读请求：2 次失败，均为 `PLANNER_REJECTED`。
+  - 诊断增强后：精确确认为 `PLANNER_PROJECT_DIRECT`。
+  - Project Planner 提示修复后：成功创建两步持久化 Plan，随后执行启动失败。
   - 旧项目会话只读请求：创建 Plan 后因包含 sandbox 能力而失败。
 - 使用的会话快照与设置页当前默认值一致：提供商 `deepseek`，模型
   `deepseek-v4-pro`；未读取、输出或记录 Key。
@@ -96,6 +124,6 @@ Plan 字段。这使真实问题无法继续定位，也无法给出有证据的
 ## 结论
 
 本轮不能判定统一 V2 项目会话通过真实链路验收。当前唯一已确认的产品缺陷是
-Planner 拒绝真实项目读取计划时缺少可诊断失败事实，且项目读取场景实际无法完成。
-反思 Provider 装配错误已经修复并推送。应先获得用户批准完成最小诊断增强，再复现一次
-项目读取；取得明确失败字段后才能提出最小行为修复。
+adaptive 执行启动异常缺少可诊断阶段事实，项目读取尚未真正执行。反思 Provider 装配
+错误、Planner 安全诊断和 Project 持久化路由均已修复并推送。下一步应先增加最小
+adaptive 阶段诊断，再依据一次真实复现做最小执行启动修复。
