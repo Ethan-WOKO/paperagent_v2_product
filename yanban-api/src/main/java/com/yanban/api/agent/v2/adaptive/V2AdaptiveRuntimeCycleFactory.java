@@ -49,9 +49,15 @@ public class V2AdaptiveRuntimeCycleFactory {
                         currentTools.put(value.step().id(),
                                 value.internalToolId()));
             }
-            var kernel = requestProvider == null
-                    ? kernels.create(currentTools)
-                    : kernels.create(requestProvider, currentTools);
+            io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernel
+                    kernel;
+            try {
+                kernel = requestProvider == null
+                        ? kernels.create(currentTools)
+                        : kernels.create(requestProvider, currentTools);
+            } catch (RuntimeException failure) {
+                throw new CycleStageException("KERNEL_SETUP");
+            }
             Instant eventTime = authorityTime.plusMillis(
                     10L + command.cycle() * 4L);
             var loopCommand = new PersistentPlanAgentLoopCommand(
@@ -76,13 +82,17 @@ public class V2AdaptiveRuntimeCycleFactory {
             ReflectionOutcome pending =
                     command.replanRequest() instanceof ReflectionOutcome value
                             ? value : null;
-            PersistentPlanAgentLoopOutcome result =
-                    loop.executeWithKernelAndReplanFactory(
-                            command.userId(), command.turnId(), loopCommand,
-                            kernel, active -> pending == null
-                                    ? null : replans.materialize(
-                                            active, pending),
-                            requestProvider);
+            PersistentPlanAgentLoopOutcome result;
+            try {
+                result = loop.executeWithKernelAndReplanFactory(
+                        command.userId(), command.turnId(), loopCommand,
+                        kernel, active -> pending == null
+                                ? null : replans.materialize(
+                                        active, pending),
+                        requestProvider);
+            } catch (RuntimeException failure) {
+                throw new CycleStageException("AGENT_LOOP");
+            }
             boolean succeeded =
                     result.state() == PersistentPlanAgentLoopState.PLAN_SUCCEEDED;
             V2AdaptiveCyclePort.CycleResult.State state;
@@ -122,5 +132,18 @@ public class V2AdaptiveRuntimeCycleFactory {
         result.receiptFacts().ifPresent(value ->
                 facts.add("executionReceipt=" + value));
         return List.copyOf(facts);
+    }
+
+    static final class CycleStageException extends RuntimeException {
+        private final String stage;
+
+        CycleStageException(String stage) {
+            super("adaptive cycle stage failed");
+            this.stage = stage;
+        }
+
+        String stage() {
+            return stage;
+        }
     }
 }

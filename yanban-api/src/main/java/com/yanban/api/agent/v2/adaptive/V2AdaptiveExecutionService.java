@@ -11,7 +11,7 @@ import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.providers.ModelProvider;
 import io.paperagent.v2.runtime.execution.ExecutionStartEventDraft;
 import io.paperagent.v2.runtime.execution.context.composition.*;
-import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredExecutionStart;
+import io.paperagent.v2.runtime.execution.recovery.composition.*;
 import io.paperagent.v2.runtime.execution.start.FreshExecutionStartAttempt;
 import java.time.Duration;
 import java.time.Instant;
@@ -127,7 +127,8 @@ public class V2AdaptiveExecutionService {
 
     private V2AdaptiveExecutionResult executeStarted(
             Command command, List<V2AdaptiveTurnResponse.Step> initial) {
-        Instant base = command.authorityTime();
+        Instant base = command.authorityTime().truncatedTo(
+                java.time.temporal.ChronoUnit.MICROS);
         String suffix = shortHash(command.bootstrap().plan().id().value());
         String owner = "adaptive-owner-" + suffix;
         String token = "adaptive-token-" + suffix;
@@ -141,28 +142,52 @@ public class V2AdaptiveExecutionService {
                         Optional.empty(), "adaptive-" + suffix,
                         new InlineEventPayload(new ObjectValue(Map.of()))),
                 base.plusMillis(4));
-        var started = starts.recover(
-                command.userId(), command.turnId(),
-                new AuthenticatedAgentTurnExecutionStartRecoveryCommand(
-                        Optional.of(attempt)));
-        if (!(started instanceof RecoveredExecutionStart recovered)
-                || !recovered.planId().equals(command.bootstrap().plan().id())) {
-            return failed(initial, "EXECUTION_START_REJECTED");
+        RecoveredExecutionStart recovered;
+        try {
+            var started = starts.recover(
+                    command.userId(), command.turnId(),
+                    new AuthenticatedAgentTurnExecutionStartRecoveryCommand(
+                            Optional.of(attempt)));
+            if (!(started instanceof RecoveredExecutionStart value)
+                    || !value.planId().equals(
+                            command.bootstrap().plan().id())) {
+                return failed(initial, "EXECUTION_START_REJECTED");
+            }
+            recovered = value;
+        } catch (ExecutionStartRecoveryProtocolException failure) {
+            return failed(initial, boundedCode(
+                    "EXEC_START_" + failure.stage().name()
+                            + "_" + failure.code().name()));
+        } catch (ExecutionStartRecoveryValidationException failure) {
+            return failed(initial, boundedCode(
+                    "EXEC_START_VALIDATION_" + failure.code().name()));
+        } catch (RuntimeException failure) {
+            return failed(initial, "EXECUTION_START_EXCEPTION");
         }
         if (command.projectVersion() != null) {
-            var context = contexts.compose(
-                    command.userId(), command.turnId(),
-                    new AuthenticatedAgentTurnPlanExecutionContextCommand(
-                            Optional.of(new PlanExecutionContextLeaseAttempt(
-                                    owner, token, expires))));
-            if (!(context instanceof PlanExecutionContextReady ready)
-                    || !ready.planId().equals(recovered.planId())) {
-                return failed(initial, "WORKSPACE_CONTEXT_REJECTED");
+            try {
+                var context = contexts.compose(
+                        command.userId(), command.turnId(),
+                        new AuthenticatedAgentTurnPlanExecutionContextCommand(
+                                Optional.of(
+                                        new PlanExecutionContextLeaseAttempt(
+                                                owner, token, expires))));
+                if (!(context instanceof PlanExecutionContextReady ready)
+                        || !ready.planId().equals(recovered.planId())) {
+                    return failed(initial, "WORKSPACE_CONTEXT_REJECTED");
+                }
+            } catch (RuntimeException failure) {
+                return failed(initial, "WORKSPACE_CONTEXT_EXCEPTION");
             }
         }
-        V2AdaptiveCyclePort cyclePort = cycles.create(
-                command.bindings(), owner, token, expires,
-                suffix, base, command.modelProvider());
+        V2AdaptiveCyclePort cyclePort;
+        try {
+            cyclePort = cycles.create(
+                    command.bindings(), owner, token, expires,
+                    suffix, base, command.modelProvider());
+        } catch (RuntimeException failure) {
+            return failed(initial, "CYCLE_SETUP_EXCEPTION");
+        }
         var coordinator = new V2AdaptiveExecutionCoordinator(
                 cyclePort,
                 new V2ModelReflectionProvider(
@@ -172,25 +197,34 @@ public class V2AdaptiveExecutionService {
                         command.bootstrap().plan()
                                 .latestRevision().id()),
                 new StrictReflectionDecisionParser(json));
-        return coordinator.execute(
-                new V2AdaptiveExecutionCoordinator.Command(
-                        command.userId(), command.turnId(),
-                        recovered.planId().value(), initial,
-                        command.bindings(),
-                        stepIndexes(command.bootstrap().plan()
-                                .latestRevision()),
-                        new ReflectionContext(
-                                taskFrameFacts(
-                                        command.bootstrap().taskFrame()),
-                                planFacts(command.bootstrap().plan()),
-                                command.conversationContext(),
-                                List.of(), List.of(), unfinished(initial))));
+        try {
+            return coordinator.execute(
+                    new V2AdaptiveExecutionCoordinator.Command(
+                            command.userId(), command.turnId(),
+                            recovered.planId().value(), initial,
+                            command.bindings(),
+                            stepIndexes(command.bootstrap().plan()
+                                    .latestRevision()),
+                            new ReflectionContext(
+                                    taskFrameFacts(
+                                            command.bootstrap().taskFrame()),
+                                    planFacts(command.bootstrap().plan()),
+                                    command.conversationContext(),
+                                    List.of(), List.of(),
+                                    unfinished(initial))));
+        } catch (RuntimeException failure) {
+            return failed(initial, "COORDINATION_EXCEPTION");
+        }
     }
 
     private static V2AdaptiveExecutionResult failed(
             List<V2AdaptiveTurnResponse.Step> steps, String code) {
         return new V2AdaptiveExecutionResult(
                 "FAILED", steps, null, code, 0, 0, 0);
+    }
+
+    private static String boundedCode(String value) {
+        return value.length() <= 64 ? value : value.substring(0, 64);
     }
 
     private static List<V2AdaptiveTurnResponse.Step> initialSteps(

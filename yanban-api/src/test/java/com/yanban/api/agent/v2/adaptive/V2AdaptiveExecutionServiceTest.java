@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnExecutionStartRecoveryCommand;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnExecutionStartRecoveryComposer;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnPlanExecutionContextComposer;
 import com.yanban.api.agent.v2.effect.project.NaturalLanguageCandidateAuthorityStore;
@@ -17,6 +18,7 @@ import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredExecutio
 import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class V2AdaptiveExecutionServiceTest {
     @Test
@@ -49,6 +51,13 @@ class V2AdaptiveExecutionServiceTest {
         assertEquals("SUCCEEDED", result.status(), result.errorCode());
         assertEquals("任务完成", result.finalText());
         verify(port, times(1)).executeOne(any());
+        ArgumentCaptor<AuthenticatedAgentTurnExecutionStartRecoveryCommand>
+                start = ArgumentCaptor.forClass(
+                        AuthenticatedAgentTurnExecutionStartRecoveryCommand
+                                .class);
+        verify(fixture.starts).recover(eq(7L), eq(11L), start.capture());
+        assertEquals(0, start.getValue().attempt().orElseThrow()
+                .leaseExpiresAt().getNano() % 1_000);
         verify(fixture.store).open(
                 eq(5L), eq(7L), eq(9L), eq("request-1"),
                 eq("plan-1"), eq("version-1"), anyList());
@@ -74,6 +83,77 @@ class V2AdaptiveExecutionServiceTest {
                 anyList(), isNull(), isNull(), eq(List.of()),
                 eq("SANDBOX_EXECUTION_UNAVAILABLE"),
                 eq(0), eq(0), eq(0));
+    }
+
+    @Test
+    void executionStartExceptionHasExplicitStageCode() {
+        var fixture = fixture();
+        when(fixture.starts.recover(eq(7L), eq(11L), any()))
+                .thenThrow(new IllegalStateException("start failed"));
+
+        V2AdaptiveExecutionResult result = fixture.service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.read"),
+                        fixture.modelProvider));
+
+        assertEquals("EXECUTION_START_EXCEPTION", result.errorCode());
+        verifyNoInteractions(
+                fixture.contexts, fixture.cycles, fixture.modelProvider);
+    }
+
+    @Test
+    void workspaceContextExceptionHasExplicitStageCode() {
+        var fixture = fixture();
+        recoverPlan(fixture);
+        when(fixture.contexts.compose(eq(7L), eq(11L), any()))
+                .thenThrow(new IllegalStateException("context failed"));
+
+        V2AdaptiveExecutionResult result = fixture.service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.read"),
+                        fixture.modelProvider));
+
+        assertEquals("WORKSPACE_CONTEXT_EXCEPTION", result.errorCode());
+        verifyNoInteractions(fixture.cycles, fixture.modelProvider);
+    }
+
+    @Test
+    void cycleSetupExceptionHasExplicitStageCode() {
+        var fixture = fixture();
+        recoverPlanAndContext(fixture);
+        when(fixture.cycles.create(
+                anyMap(), anyString(), anyString(), any(),
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenThrow(new IllegalStateException("cycle setup failed"));
+
+        V2AdaptiveExecutionResult result = fixture.service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.read"),
+                        fixture.modelProvider));
+
+        assertEquals("CYCLE_SETUP_EXCEPTION", result.errorCode());
+        verifyNoInteractions(fixture.modelProvider);
+    }
+
+    @Test
+    void cycleExecutionExceptionHasExplicitStageCode() {
+        var fixture = fixture();
+        recoverPlanAndContext(fixture);
+        V2AdaptiveCyclePort port = mock(V2AdaptiveCyclePort.class);
+        when(port.executeOne(any()))
+                .thenThrow(new IllegalStateException("cycle failed"));
+        when(fixture.cycles.create(
+                anyMap(), anyString(), anyString(), any(),
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
+
+        V2AdaptiveExecutionResult result = fixture.service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.read"),
+                        fixture.modelProvider));
+
+        assertEquals("CYCLE_EXECUTION_EXCEPTION", result.errorCode());
+        verifyNoInteractions(fixture.modelProvider);
     }
 
     @Test
@@ -234,12 +314,28 @@ class V2AdaptiveExecutionServiceTest {
                 modelProvider, bootstrap);
     }
 
+    private static void recoverPlan(Fixture fixture) {
+        var recovered = mock(RecoveredExecutionStart.class);
+        when(recovered.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.starts.recover(eq(7L), eq(11L), any()))
+                .thenReturn(recovered);
+    }
+
+    private static void recoverPlanAndContext(Fixture fixture) {
+        recoverPlan(fixture);
+        var context = mock(PlanExecutionContextReady.class);
+        when(context.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.contexts.compose(eq(7L), eq(11L), any()))
+                .thenReturn(context);
+    }
+
     private static V2AdaptiveExecutionService.Command command(
             PersistedPlanBootstrap bootstrap, String version,
             Map<String, String> bindings, ModelProvider modelProvider) {
         return new V2AdaptiveExecutionService.Command(
                 5L, 7L, 9L, 11L, "request-1", version,
-                bootstrap, bindings, List.of("user: 上一轮"), Instant.EPOCH,
+                bootstrap, bindings, List.of("user: 上一轮"),
+                Instant.ofEpochSecond(0, 123_456_789),
                 modelProvider);
     }
 

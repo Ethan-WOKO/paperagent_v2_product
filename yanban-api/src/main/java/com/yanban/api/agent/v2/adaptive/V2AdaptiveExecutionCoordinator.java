@@ -37,10 +37,21 @@ public final class V2AdaptiveExecutionCoordinator {
         int replanCount = 0;
         int repairCount = 0;
         for (int index = 1; index <= MAX_CYCLES; index++) {
-            V2AdaptiveCyclePort.CycleResult cycle = cycles.executeOne(
-                    new V2AdaptiveCyclePort.CycleCommand(
-                            command.userId(), command.turnId(),
-                            command.planId(), index, pendingReplan));
+            V2AdaptiveCyclePort.CycleResult cycle;
+            try {
+                cycle = cycles.executeOne(
+                        new V2AdaptiveCyclePort.CycleCommand(
+                                command.userId(), command.turnId(),
+                                command.planId(), index, pendingReplan));
+            } catch (V2AdaptiveRuntimeCycleFactory.CycleStageException
+                    failure) {
+                return failed(timeline,
+                        "CYCLE_" + failure.stage() + "_EXCEPTION",
+                        index, replanCount, repairCount);
+            } catch (RuntimeException failure) {
+                return failed(timeline, "CYCLE_EXECUTION_EXCEPTION",
+                        index, replanCount, repairCount);
+            }
             pendingReplan = null;
             updateExisting(timeline, stepIndexes, cycle);
             if (cycle.receiptBacked() && cycle.stepId() != null) {

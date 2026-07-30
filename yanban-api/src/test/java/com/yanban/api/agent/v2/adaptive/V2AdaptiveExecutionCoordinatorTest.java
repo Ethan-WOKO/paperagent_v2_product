@@ -110,6 +110,21 @@ class V2AdaptiveExecutionCoordinatorTest {
         assertEquals(0, provider.get());
     }
 
+    @Test
+    void agentLoopExceptionHasExplicitCycleStageCode() {
+        var coordinator = coordinator(command -> {
+            throw new V2AdaptiveRuntimeCycleFactory.CycleStageException(
+                    "AGENT_LOOP");
+        }, ignored -> {
+            throw new AssertionError();
+        });
+
+        var result = coordinator.execute(command(
+                Map.of("step-1", "project.read")));
+
+        assertEquals("CYCLE_AGENT_LOOP_EXCEPTION", result.errorCode());
+    }
+
     private static V2AdaptiveExecutionCoordinator coordinator(
             V2AdaptiveCyclePort cycles, ReflectionProvider provider) {
         return new V2AdaptiveExecutionCoordinator(
