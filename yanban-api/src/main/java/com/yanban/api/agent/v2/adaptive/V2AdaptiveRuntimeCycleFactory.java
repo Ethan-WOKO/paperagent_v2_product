@@ -41,14 +41,8 @@ public class V2AdaptiveRuntimeCycleFactory {
         bindings.forEach((step, tool) ->
                 tools.put(new PlanStepId(step), new ToolId(tool)));
         return command -> {
-            Map<PlanStepId, ToolId> currentTools =
-                    new LinkedHashMap<>(tools);
-            if (command.replanRequest()
-                    instanceof ReflectionOutcome pendingBindings) {
-                pendingBindings.replacementSteps().forEach(value ->
-                        currentTools.put(value.step().id(),
-                                value.internalToolId()));
-            }
+            Map<PlanStepId, ToolId> currentTools = bindingsForCycle(
+                    tools, command.replanRequest());
             io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernel
                     kernel;
             try {
@@ -90,6 +84,9 @@ public class V2AdaptiveRuntimeCycleFactory {
                                 ? null : replans.materialize(
                                         active, pending),
                         requestProvider);
+            } catch (PersistentPlanAgentLoopException failure) {
+                throw new CycleStageException(
+                        agentLoopStage(failure.diagnosticStage()));
             } catch (RuntimeException failure) {
                 throw new CycleStageException("AGENT_LOOP");
             }
@@ -121,6 +118,20 @@ public class V2AdaptiveRuntimeCycleFactory {
         };
     }
 
+    static Map<PlanStepId, ToolId> bindingsForCycle(
+            Map<PlanStepId, ToolId> base, Object replanRequest) {
+        Map<PlanStepId, ToolId> current = new LinkedHashMap<>(base);
+        if (replanRequest instanceof ReflectionOutcome pendingBindings) {
+            pendingBindings.replacementSteps().forEach(value -> {
+                if (value.internalToolId() != null) {
+                    current.put(
+                            value.step().id(), value.internalToolId());
+                }
+            });
+        }
+        return current;
+    }
+
     private static List<String> authoritativeFacts(
             PersistentPlanAgentLoopOutcome result) {
         List<String> facts = new ArrayList<>();
@@ -132,6 +143,28 @@ public class V2AdaptiveRuntimeCycleFactory {
         result.receiptFacts().ifPresent(value ->
                 facts.add("executionReceipt=" + value));
         return List.copyOf(facts);
+    }
+
+    static String agentLoopStage(String diagnosticStage) {
+        if (diagnosticStage == null || diagnosticStage.isBlank()) {
+            return "AGENT_LOOP";
+        }
+        String normalized = diagnosticStage.toUpperCase(Locale.ROOT)
+                .replace('.', '_');
+        if (!normalized.matches("[A-Z0-9_]+")) {
+            return "AGENT_LOOP";
+        }
+        if (normalized.endsWith("_EXCEPTION")) {
+            normalized = normalized.substring(
+                    0, normalized.length() - "_EXCEPTION".length());
+        }
+        String stage = "LOOP_" + normalized;
+        if (stage.length() <= 48) {
+            return stage;
+        }
+        return stage.substring(0, 39)
+                + "_" + String.format(
+                        Locale.ROOT, "%08X", diagnosticStage.hashCode());
     }
 
     static final class CycleStageException extends RuntimeException {

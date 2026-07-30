@@ -17,6 +17,18 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             object with exactly decision, reason, finalText, replacementSteps.
             decision is CONTINUE, REPLAN, COMPLETE, or FAIL.
             COMPLETE is allowed only when the supplied durable cut is terminal.
+            CONTINUE, FAIL, and REPLAN require finalText:null. COMPLETE
+            requires a nonblank finalText. Only REPLAN may have nonempty
+            replacementSteps.
+            Each REPLAN replacement Step must contain exactly:
+            id, intent, expectedOutcome, dependencies, completionCriteria,
+            maxAttempts, maxDurationSeconds, capability.
+            dependencies is an array containing only earlier replacement Step
+            ids. completionCriteria is a nonempty string array. maxAttempts is
+            an integer from 1 to 5. maxDurationSeconds is an integer from 1 to
+            3600. capability is a public alias string or null.
+            When a failed Receipt can be corrected, return REPLAN with a
+            complete replacement Step instead of CONTINUE unchanged.
             REPLAN appends 1-8 replacement Steps and never rewrites facts.
             Use only public aliases: literature_search, project_read,
             project_search, project_candidate, sandbox_execute.

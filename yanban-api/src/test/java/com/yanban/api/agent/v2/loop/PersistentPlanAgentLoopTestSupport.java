@@ -209,6 +209,8 @@ final class PersistentPlanAgentLoopTestSupport {
             successfulEffect(ToolCallId toolCallId) {
         var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
         when(receipt.toolCallId()).thenReturn(toolCallId);
+        when(receipt.status()).thenReturn(
+                io.paperagent.v2.contracts.ReceiptStatus.SUCCESS);
         PersistedEffectResult result = mock(PersistedEffectResult.class);
         when(result.receipt()).thenReturn(receipt);
         return new AuthenticatedLiteratureSearchEffectExecutionOutcome(
@@ -220,6 +222,8 @@ final class PersistentPlanAgentLoopTestSupport {
             successfulProjectEffect(ToolCallId toolCallId) {
         var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
         when(receipt.toolCallId()).thenReturn(toolCallId);
+        when(receipt.status()).thenReturn(
+                io.paperagent.v2.contracts.ReceiptStatus.SUCCESS);
         PersistedEffectResult result = mock(PersistedEffectResult.class);
         when(result.receipt()).thenReturn(receipt);
         return new com.yanban.api.agent.v2.effect.project

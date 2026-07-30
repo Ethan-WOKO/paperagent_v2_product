@@ -205,14 +205,24 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
             PersistedEffectIntent intent,
             PersistedEffectResult result) {
         ExecutionReceipt receipt = result.receipt();
-        if (!intent.intent().toolCallId().equals(command.toolCallId())
-                || !receipt.toolCallId().equals(command.toolCallId())
-                || !intent.intent().planId().equals(planId)
-                || !intent.intent().planId().equals(command.planId())
-                || !intent.leaseOwnerId().equals(result.leaseOwnerId())
-                || intent.fencingToken() != result.fencingToken()
-                || receipt.status() != ReceiptStatus.SUCCESS) {
-            throw rejected("effectEvidence.authority");
+        if (!intent.intent().toolCallId().equals(command.toolCallId())) {
+            throw rejected("effect.intent_call");
+        }
+        if (!receipt.toolCallId().equals(command.toolCallId())) {
+            throw rejected("effect.receipt_call");
+        }
+        if (!intent.intent().planId().equals(planId)
+                || !intent.intent().planId().equals(command.planId())) {
+            throw rejected("effect.plan");
+        }
+        if (!intent.leaseOwnerId().equals(result.leaseOwnerId())) {
+            throw rejected("effect.lease_owner");
+        }
+        if (intent.fencingToken() != result.fencingToken()) {
+            throw rejected("effect.fence");
+        }
+        if (receipt.status() != ReceiptStatus.SUCCESS) {
+            throw rejected("effect.receipt_status");
         }
         return receipt;
     }

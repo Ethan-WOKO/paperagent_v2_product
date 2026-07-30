@@ -10,6 +10,7 @@ import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisEffectAuthor
 import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectGateway;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
+import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimResult;
 import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnWorkspacePortFactory;
 import io.paperagent.v2.contracts.BooleanValue;
@@ -33,6 +34,8 @@ import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveSt
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLeaseDisposition;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryRequest;
+import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryCompositionOutcome;
+import io.paperagent.v2.workspace.VerifiedWorkspaceMaterialization;
 import io.paperagent.v2.workspace.WorkspacePort;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -153,25 +156,35 @@ public class AuthenticatedProjectEffectExecutionComposer {
     public AuthenticatedProjectEffectExecutionOutcome execute(
             Long userId, Long turnId,
             AuthenticatedProjectEffectExecutionCommand command) {
-        var context = contexts.resolve(userId, turnId);
+        com.yanban.api.agent.v2.VerifiedAgentTurnProductContext context;
+        try {
+            context = contexts.resolve(userId, turnId);
+        } catch (RuntimeException exception) {
+            throw failed("context");
+        }
         if (command == null || command.planId() == null
                 || command.toolCallId() == null
                 || command.recoveryAttempt() == null
                 || context.identity().projectId() == null) {
-            throw failed();
+            throw failed("command");
         }
         var planId = planIds.derive(context.identity());
-        if (!planId.equals(command.planId())) throw failed();
-        var recovered = recoverer.recover(new StepRecoveryRequest(
-                planId, command.recoveryAttempt()));
+        if (!planId.equals(command.planId())) throw failed("plan");
+        StepRecoveryCompositionOutcome recovered;
+        try {
+            recovered = recoverer.recover(new StepRecoveryRequest(
+                    planId, command.recoveryAttempt()));
+        } catch (RuntimeException exception) {
+            throw failed("recovery");
+        }
         if (!(recovered instanceof RecoveredActiveStep active)
                 || active.leaseDisposition()
                 != StepRecoveryLeaseDisposition.RETAINED_FOR_RECOVERY) {
-            throw failed();
+            throw failed("recovery");
         }
         PersistedEffectIntent intent = intents.find(command.toolCallId())
                 .value().orElseThrow(
-                        AuthenticatedProjectEffectExecutionComposer::failed);
+                        () -> failed("intent"));
         if (!intent.intent().planId().equals(planId)
                 || !intent.intent().stepId().equals(
                         active.recovery().activation().stepId())
@@ -183,7 +196,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 || !KINDS.contains(intent.intent().kind())
                         && !ProjectCandidateCompositionEffect.KIND.equals(
                                 intent.intent().kind())) {
-            throw failed();
+            throw failed("intent_authority");
         }
         boolean naturalCandidate =
                 ProjectCandidateCompositionEffect.KIND.equals(
@@ -196,7 +209,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                         intent.intent().kind());
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
             if (candidateAuthorities == null || candidateComposition == null) {
-                throw failed();
+                throw failed("candidate_composition");
             }
             String arguments = canonical(intent.intent().arguments());
             var candidate = naturalCandidate
@@ -241,7 +254,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                                     userId, turnId, planId.value(),
                                     intent.intent().stepId().value(),
                                     intent.intent().kind())) {
-                        throw failed();
+                        throw failed("authority");
                     }
                     authority = null;
                 }
@@ -251,28 +264,42 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     && (!authority.kind().equals(intent.intent().kind())
                     || !authority.argumentJson().equals(arguments)
                     || !authority.argumentSha256().equals(hash(arguments)))) {
-                throw failed();
+                throw failed("authority");
             }
         }
         var contextResult = executionContexts.inspect(planId);
         if (contextResult.outcome() != PersistenceOutcome.FOUND
                 || !(contextResult.value().orElse(null)
                 instanceof PersistedPlanExecutionContextConfirmed confirmed)) {
-            throw failed();
+            throw failed("execution_context");
         }
-        WorkspacePort workspace = workspaces.create(userId, turnId);
-        var verified = workspace.inspectMaterialization(
-                confirmed.materializationSpec());
+        WorkspacePort workspace;
+        VerifiedWorkspaceMaterialization verified;
+        try {
+            workspace = workspaces.create(userId, turnId);
+            verified = workspace.inspectMaterialization(
+                    confirmed.materializationSpec());
+        } catch (RuntimeException exception) {
+            throw failed("workspace");
+        }
         Instant started = Instant.now();
-        var claimed = claims.execute(new ProductEffectExecutionClaimRequest(
-                active.recovery(), active.lease(), intent,
-                command.recoveryAttempt().leaseToken(),
-                active.lease().fencingToken(), started,
-                () -> receipt(
-                        active, intent, workspace, verified.workspace(),
-                        context.identity().projectId(),
-                        userId, turnId, started, naturalCandidate,
-                        command.requestProvider())));
+        ProductEffectExecutionClaimResult claimed;
+        try {
+            claimed = claims.execute(
+                    new ProductEffectExecutionClaimRequest(
+                            active.recovery(), active.lease(), intent,
+                            command.recoveryAttempt().leaseToken(),
+                            active.lease().fencingToken(), started,
+                            () -> receipt(
+                                    active, intent, workspace,
+                                    verified.workspace(),
+                                    context.identity().projectId(),
+                                    userId, turnId, started,
+                                    naturalCandidate,
+                                    command.requestProvider())));
+        } catch (RuntimeException exception) {
+            throw failed("claim");
+        }
         return new AuthenticatedProjectEffectExecutionOutcome(
                 claimed.result(), claimed.replayed());
     }
@@ -503,7 +530,10 @@ public class AuthenticatedProjectEffectExecutionComposer {
     }
 
     private static IllegalStateException failed() {
-        return new IllegalStateException(
-                "V2 Project evidence execution failed");
+        return failed("operation");
+    }
+
+    private static ProjectEffectExecutionException failed(String stage) {
+        return new ProjectEffectExecutionException(stage);
     }
 }

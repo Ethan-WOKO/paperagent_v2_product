@@ -111,6 +111,27 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void reflectionProviderAndParseFailuresAreDistinct() {
+        V2AdaptiveCyclePort cycle = ignored ->
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.FAILED,
+                        "step-1", "EFFECT_REJECTED", false, null,
+                        List.of("failed receipt"), true, true);
+
+        var providerFailure = coordinator(cycle, ignored -> {
+            throw new IllegalStateException("provider failed");
+        }).execute(command(Map.of("step-1", "project.search")));
+        var parseFailure = coordinator(cycle, ignored -> "not-json")
+                .execute(command(Map.of(
+                        "step-1", "project.search")));
+
+        assertEquals("REFLECTION_PROVIDER_EXCEPTION",
+                providerFailure.errorCode());
+        assertEquals("REFLECTION_PARSE_INVALID",
+                parseFailure.errorCode());
+    }
+
+    @Test
     void agentLoopExceptionHasExplicitCycleStageCode() {
         var coordinator = coordinator(command -> {
             throw new V2AdaptiveRuntimeCycleFactory.CycleStageException(
@@ -123,6 +144,73 @@ class V2AdaptiveExecutionCoordinatorTest {
                 Map.of("step-1", "project.read")));
 
         assertEquals("CYCLE_AGENT_LOOP_EXCEPTION", result.errorCode());
+    }
+
+    @Test
+    void agentLoopDiagnosticRetainsItsSanitizedSubstage() {
+        var coordinator = coordinator(command -> {
+            throw new V2AdaptiveRuntimeCycleFactory.CycleStageException(
+                    V2AdaptiveRuntimeCycleFactory.agentLoopStage(
+                            "kernel.turn_decision.collaborator_exception"));
+        }, ignored -> {
+            throw new AssertionError();
+        });
+
+        var result = coordinator.execute(command(
+                Map.of("step-1", "project.read")));
+
+        assertEquals(
+                "CYCLE_LOOP_KERNEL_TURN_DECISION_"
+                        + "COLLABORATOR_EXCEPTION",
+                result.errorCode());
+    }
+
+    @Test
+    void unsafeAgentLoopDiagnosticFallsBackWithoutLeakingIt() {
+        assertEquals("AGENT_LOOP",
+                V2AdaptiveRuntimeCycleFactory.agentLoopStage(
+                        "kernel.secret/path"));
+    }
+
+    @Test
+    void agentLoopDiagnosticAlwaysFitsPersistentErrorCode() {
+        String stage = V2AdaptiveRuntimeCycleFactory.agentLoopStage(
+                "progression.effectEvidence."
+                        + "anExtremelyLongInternalDiagnosticBoundary");
+
+        assertTrue(stage.length() <= 48);
+        assertTrue(("CYCLE_" + stage + "_EXCEPTION").length() <= 64);
+    }
+
+    @Test
+    void reasoningOnlyReplanStepDoesNotCreateNullToolBinding() {
+        ReflectionOutcome replan = new StrictReflectionDecisionParser(
+                new ObjectMapper()).parse("""
+                {"decision":"REPLAN","reason":"repair",
+                 "finalText":null,"replacementSteps":[
+                  {"id":"repair-read","intent":"Read",
+                   "expectedOutcome":"content","dependencies":[],
+                   "completionCriteria":["read"],"maxAttempts":1,
+                   "maxDurationSeconds":30,"capability":"project_read"},
+                  {"id":"repair-analyze","intent":"Analyze",
+                   "expectedOutcome":"answer",
+                   "dependencies":["repair-read"],
+                   "completionCriteria":["answer"],"maxAttempts":1,
+                   "maxDurationSeconds":30,"capability":null}]}
+                """);
+
+        Map<io.paperagent.v2.contracts.PlanStepId,
+                io.paperagent.v2.contracts.ToolId> bindings =
+                V2AdaptiveRuntimeCycleFactory.bindingsForCycle(
+                        Map.of(), replan);
+
+        assertEquals(1, bindings.size());
+        assertEquals("project.read", bindings.get(
+                new io.paperagent.v2.contracts.PlanStepId(
+                        "repair-read")).value());
+        assertFalse(bindings.containsKey(
+                new io.paperagent.v2.contracts.PlanStepId(
+                        "repair-analyze")));
     }
 
     private static V2AdaptiveExecutionCoordinator coordinator(

@@ -70,12 +70,24 @@ public final class V2AdaptiveExecutionCoordinator {
             }
 
             ReflectionOutcome decision;
+            String rawReflection;
             try {
-                decision = parser.parse(reflections.reflect(
-                        command.reflectionContext(cycle, timeline)));
-            } catch (RuntimeException invalid) {
+                rawReflection = reflections.reflect(
+                        command.reflectionContext(cycle, timeline));
+            } catch (RuntimeException providerFailure) {
                 return failed(timeline,
-                        "REFLECTION_INVALID", index, replanCount,
+                        "REFLECTION_PROVIDER_EXCEPTION", index, replanCount,
+                        repairCount);
+            }
+            try {
+                decision = parser.parse(rawReflection);
+            } catch (ReflectionParseException invalid) {
+                return failed(timeline,
+                        "REFLECTION_PARSE_INVALID", index, replanCount,
+                        repairCount);
+            } catch (RuntimeException parserFailure) {
+                return failed(timeline,
+                        "REFLECTION_PARSER_EXCEPTION", index, replanCount,
                         repairCount);
             }
             if (decision.decision() == ReflectionAction.COMPLETE) {

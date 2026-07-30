@@ -8,12 +8,15 @@ import com.yanban.api.agent.v2.effect.AuthenticatedLiteratureSearchEffectExecuti
 import com.yanban.api.agent.v2.effect.AuthenticatedLiteratureSearchEffectExecutionOutcome;
 import com.yanban.api.agent.v2.effect.project.AuthenticatedProjectEffectExecutionCommand;
 import com.yanban.api.agent.v2.effect.project.AuthenticatedProjectEffectExecutionComposer;
+import com.yanban.api.agent.v2.effect.project.ProjectEffectExecutionException;
 import com.yanban.api.agent.v2.progression.AuthenticatedEffectDrivenStepProgressionComposer;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionCommand;
+import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionException;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionOutcome;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionState;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.ReceiptStatus;
 import io.paperagent.v2.persistence.PersistedActiveStepReplan;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
@@ -135,9 +138,14 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                     io.paperagent.v2.persistence.ActiveStepReplanRequest>
                     replanFactory,
             ModelProvider requestProvider) {
-        VerifiedAgentTurnProductContext context =
-                contexts.resolve(userId, agentTurnId);
-        PlanId planId = planIds.derive(context.identity());
+        VerifiedAgentTurnProductContext context;
+        PlanId planId;
+        try {
+            context = contexts.resolve(userId, agentTurnId);
+            planId = planIds.derive(context.identity());
+        } catch (RuntimeException exception) {
+            throw protocol("context");
+        }
         requireCommand(command);
         var recoveryAttempt = command.currentRecoveryAttempt();
         Optional<PersistentPlanAgentLoopReceiptFacts> latestReceipt =
@@ -202,8 +210,13 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             PlanStepId stepId =
                     active.recovery().activation().stepId();
             if (kernelOutcome instanceof SingleTurnNoEffect) {
-                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal =
-                        replanFactory == null ? null : replanFactory.apply(active);
+                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal;
+                try {
+                    proposal = replanFactory == null
+                            ? null : replanFactory.apply(active);
+                } catch (RuntimeException exception) {
+                    throw protocol("replanFactory");
+                }
                 if (proposal != null) {
                     return replanNoEffect(
                             planId, cycle, active, proposal);
@@ -263,6 +276,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                                     recoveryAttempt, requestProvider));
                     effectResult = effect.result();
                 }
+            } catch (ProjectEffectExecutionException exception) {
+                throw protocol("effect." + exception.stage());
             } catch (RuntimeException exception) {
                 throw protocol("effect");
             }
@@ -277,9 +292,21 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                         Optional.of(active.recovery()),
                         Optional.empty(), Optional.empty());
             }
-            latestReceipt = Optional.of(
-                    PersistentPlanAgentLoopReceiptFacts.from(
-                            effectResult.receipt()));
+            try {
+                latestReceipt = Optional.of(
+                        PersistentPlanAgentLoopReceiptFacts.from(
+                                effectResult.receipt()));
+            } catch (RuntimeException exception) {
+                throw protocol("effectReceipt");
+            }
+            if (effectResult.receipt().status()
+                    != ReceiptStatus.SUCCESS) {
+                return outcome(planId, cycle,
+                        PersistentPlanAgentLoopState.EFFECT_REJECTED,
+                        Optional.of(stepId),
+                        Optional.of(active.recovery()),
+                        Optional.empty(), Optional.empty(), latestReceipt);
+            }
 
             EffectDrivenStepProgressionOutcome progressed;
             try {
@@ -291,6 +318,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                                         .toolCallId(),
                                 recoveryAttempt,
                                 command.nextStepActivationAttempt()));
+            } catch (EffectDrivenStepProgressionException exception) {
+                throw protocol("progression." + exception.path());
             } catch (RuntimeException exception) {
                 throw protocol("progression");
             }

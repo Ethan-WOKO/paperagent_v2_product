@@ -46,18 +46,30 @@ public class NaturalLanguageStepKernelFactory {
         return new DefaultSingleTurnStepKernel(turn, intents);
     }
 
-    private static ToolDescriptor descriptor(ToolId id) {
+    static ToolDescriptor descriptor(ToolId id) {
         if (!Set.of("literature.search", "project.read", "project.search",
                 "project.candidate.compose").contains(id.value())) {
             throw new IllegalArgumentException(
                     "NATURAL_LANGUAGE_CAPABILITY_UNAVAILABLE");
         }
-        String description = "project.candidate.compose".equals(id.value())
-                ? "Prepare reviewed Project changes in the isolated "
-                        + "Workspace. Arguments must be exactly "
-                        + "{\"operation\":\"compose\",\"paths\":["
-                        + "\"normalized/existing/path\"]}; include 1-4 paths."
-                : "Execute the exact frozen V2 capability for this Step.";
+        String description = switch (id.value()) {
+            case "project.read" ->
+                    "Read one UTF-8 Project file. Arguments must be exactly "
+                            + "{\"path\":\"normalized/existing/path\"}.";
+            case "project.search" ->
+                    "Search all Project text files for one literal string. "
+                            + "Arguments must be exactly "
+                            + "{\"query\":\"literal text up to 256 chars\","
+                            + "\"maxResults\":10}; maxResults is 1-20.";
+            case "project.candidate.compose" ->
+                    "Prepare reviewed Project changes in the isolated "
+                            + "Workspace. Arguments must be exactly "
+                            + "{\"operation\":\"compose\",\"paths\":["
+                            + "\"normalized/existing/path\"]}; "
+                            + "include 1-4 paths.";
+            default ->
+                    "Execute the exact frozen V2 capability for this Step.";
+        };
         return new ToolDescriptor(id, description, Set.of());
     }
 }

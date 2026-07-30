@@ -95,7 +95,7 @@ class AuthenticatedEffectDrivenStepProgressionComposerTest {
                 () -> fixture.composer.progress(
                         7L, 42L, fixture.command()));
 
-        assertEquals("effectEvidence.authority", failure.path());
+        assertEquals("effect.receipt_status", failure.path());
         verify(fixture.inspector, never()).inspect(any());
         verify(fixture.completion, never()).compose(any());
     }
@@ -110,10 +110,11 @@ class AuthenticatedEffectDrivenStepProgressionComposerTest {
                                 fixture.intent.leaseOwnerId(),
                                 fixture.intent.fencingToken() + 1)));
 
-        assertThrows(
+        var failure = assertThrows(
                 EffectDrivenStepProgressionException.class,
                 () -> fixture.composer.progress(
                         7L, 42L, fixture.command()));
+        assertEquals("effect.fence", failure.path());
         verify(fixture.inspector, never()).inspect(any());
     }
 

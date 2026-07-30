@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.loop;
 
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionState;
+import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionException;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.EventEnvelope;
@@ -323,6 +324,76 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
     }
 
     @Test
+    void failedReceiptIsReturnedForReflectionWithoutProgression() {
+        var fixture = PersistentPlanAgentLoopTestSupport.fixture();
+        var active = activeFixture(fixture, "step-a");
+        var intent = PersistentPlanAgentLoopTestSupport.intent(
+                fixture.planId(), active.stepId(), "a",
+                "literature.search");
+        when(fixture.kernel().run(any())).thenReturn(intent.outcome());
+        var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
+        when(receipt.toolCallId()).thenReturn(intent.toolCallId());
+        when(receipt.status()).thenReturn(
+                io.paperagent.v2.contracts.ReceiptStatus.FAILURE);
+        when(receipt.resultCode()).thenReturn(
+                java.util.Optional.of("TOOL_FAILED"));
+        var persisted = mock(io.paperagent.v2.persistence
+                .PersistedEffectResult.class);
+        when(persisted.receipt()).thenReturn(receipt);
+        when(fixture.effects().execute(
+                org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.eq(TURN_ID), any()))
+                .thenReturn(new com.yanban.api.agent.v2.effect
+                        .AuthenticatedLiteratureSearchEffectExecutionOutcome(
+                                persisted, false));
+
+        PersistentPlanAgentLoopOutcome outcome =
+                fixture.composer().execute(
+                        USER_ID, TURN_ID,
+                        PersistentPlanAgentLoopTestSupport.command(2));
+
+        assertEquals(PersistentPlanAgentLoopState.EFFECT_REJECTED,
+                outcome.state());
+        assertEquals("FAILURE",
+                outcome.receiptFacts().orElseThrow().status());
+        assertEquals(java.util.Optional.of("TOOL_FAILED"),
+                outcome.receiptFacts().orElseThrow().resultCode());
+        verifyNoInteractions(fixture.progression());
+    }
+
+    @Test
+    void progressionFailureRetainsOnlyItsStablePath() {
+        var fixture = PersistentPlanAgentLoopTestSupport.fixture();
+        var active = activeFixture(fixture, "step-a");
+        var intent = PersistentPlanAgentLoopTestSupport.intent(
+                fixture.planId(), active.stepId(), "a",
+                "literature.search");
+        when(fixture.kernel().run(any())).thenReturn(intent.outcome());
+        var effect = PersistentPlanAgentLoopTestSupport
+                .successfulEffect(intent.toolCallId());
+        when(fixture.effects().execute(
+                org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.eq(TURN_ID), any()))
+                .thenReturn(effect);
+        EffectDrivenStepProgressionException rejection =
+                mock(EffectDrivenStepProgressionException.class);
+        when(rejection.path()).thenReturn("effect.fence");
+        when(fixture.progression().progress(
+                org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.eq(TURN_ID), any()))
+                .thenThrow(rejection);
+
+        PersistentPlanAgentLoopException failure = assertThrows(
+                PersistentPlanAgentLoopException.class,
+                () -> fixture.composer().execute(
+                        USER_ID, TURN_ID,
+                        PersistentPlanAgentLoopTestSupport.command(2)));
+
+        assertEquals("progression.effect.fence",
+                failure.diagnosticStage());
+    }
+
+    @Test
     void hardCycleLimitWithProposalExecutesCurrentEffectButNeverReplans() {
         var fixture = PersistentPlanAgentLoopTestSupport.fixture();
         var active = activeFixture(fixture, "step-a");
@@ -443,6 +514,30 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
         assertEquals(1, stall.getValue().turnsExecuted());
         assertTrue(stall.getValue().persistedIntents().isEmpty());
         verifyNoInteractions(fixture.effects(), fixture.progression());
+    }
+
+    @Test
+    void replanFactoryExceptionHasStableStage() {
+        var fixture = PersistentPlanAgentLoopTestSupport.fixture();
+        activeFixture(fixture, "step-a");
+        when(fixture.kernel().run(any())).thenReturn(
+                new SingleTurnNoEffect(
+                        fixture.planId(), new PlanStepId("step-a")));
+
+        PersistentPlanAgentLoopException failure = assertThrows(
+                PersistentPlanAgentLoopException.class,
+                () -> fixture.composer()
+                        .executeWithKernelAndReplanFactory(
+                                USER_ID, TURN_ID,
+                                PersistentPlanAgentLoopTestSupport.command(1),
+                                fixture.kernel(),
+                                ignored -> {
+                                    throw new IllegalArgumentException(
+                                            "untrusted detail");
+                                }));
+
+        assertEquals("replanFactory", failure.diagnosticStage());
+        assertFalse(failure.toString().contains("untrusted detail"));
     }
 
     private static PersistentPlanAgentLoopTestSupport.ActiveCut
