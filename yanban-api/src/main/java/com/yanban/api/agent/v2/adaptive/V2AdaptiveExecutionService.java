@@ -83,43 +83,50 @@ public class V2AdaptiveExecutionService {
         store.finish(command.userId(), command.sessionId(),
                 command.clientRequestId(), result.status(), result.steps(),
                 result.finalText(), result.candidateArtifactId(),
-                List.of(), result.errorCode(),
+                result.outputPaths(), result.errorCode(),
                 result.reflections(), result.replans(), result.repairs());
         return result;
     }
 
     private V2AdaptiveExecutionResult publishCandidateIfNeeded(
             Command command, V2AdaptiveExecutionResult result) {
-        if (!"SUCCEEDED".equals(result.status())
-                || candidateAuthorities == null || candidates == null) {
+        if (!"SUCCEEDED".equals(result.status())) {
             return result;
         }
-        if (candidateAuthorities.candidateArtifactId(
-                command.bootstrap().plan().id().value()).isEmpty()) {
-            try {
-                candidateAuthorities.require(
-                        command.bootstrap().plan().id().value());
-            } catch (RuntimeException noNaturalCandidate) {
-                return result;
-            }
+        if (!command.bindings().containsValue(
+                "project.candidate.compose")) {
+            return result;
+        }
+        if (candidateAuthorities == null || candidates == null) {
+            return candidateFailed(result);
         }
         try {
+            var authority = candidateAuthorities.require(
+                    command.bootstrap().plan().id().value());
             var published = candidates.publishNatural(
                     command.bootstrap().plan().id().value(),
                     command.userId(), command.turnId(),
                     candidateAuthorities);
             if (published.artifactId() == null) {
-                return failed(result.steps(),
-                        "CANDIDATE_PUBLISH_FAILED");
+                return candidateFailed(result);
             }
             return new V2AdaptiveExecutionResult(
                     "WAITING_CONFIRMATION", result.steps(),
                     result.finalText(), null, result.reflections(),
                     result.replans(), result.repairs(),
-                    published.artifactId());
+                    published.artifactId(), authority.paths());
         } catch (RuntimeException failure) {
-            return failed(result.steps(), "CANDIDATE_PUBLISH_FAILED");
+            return candidateFailed(result);
         }
+    }
+
+    private static V2AdaptiveExecutionResult candidateFailed(
+            V2AdaptiveExecutionResult source) {
+        return new V2AdaptiveExecutionResult(
+                "FAILED", source.steps(), null,
+                "CANDIDATE_PUBLISH_FAILED",
+                source.reflections(), source.replans(),
+                source.repairs());
     }
 
     private V2AdaptiveExecutionResult executeStarted(

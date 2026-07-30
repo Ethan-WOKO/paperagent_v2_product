@@ -105,10 +105,11 @@ class V2AdaptiveExecutionServiceTest {
                         + "\"replacementSteps\":[]}");
         var authorities = mock(
                 NaturalLanguageCandidateAuthorityStore.class);
-        when(authorities.candidateArtifactId("plan-1"))
-                .thenReturn(Optional.empty());
+        var authority = mock(ProjectCandidateEffectAuthority.class);
+        when(authority.paths()).thenReturn(
+                List.of("src/Main.java", "README.md"));
         when(authorities.require("plan-1"))
-                .thenReturn(mock(ProjectCandidateEffectAuthority.class));
+                .thenReturn(authority);
         var candidates = mock(ProjectCandidateCompositionEffect.class);
         when(candidates.publishNatural(
                 "plan-1", 7L, 11L, authorities))
@@ -127,11 +128,67 @@ class V2AdaptiveExecutionServiceTest {
 
         assertEquals("WAITING_CONFIRMATION", result.status());
         assertEquals(77L, result.candidateArtifactId());
+        assertEquals(
+                List.of("src/Main.java", "README.md"),
+                result.outputPaths());
         verify(fixture.store).finish(
                 eq(7L), eq(9L), eq("request-1"),
                 eq("WAITING_CONFIRMATION"), anyList(),
-                eq("candidate ready"), eq(77L), eq(List.of()),
+                eq("candidate ready"), eq(77L),
+                eq(List.of("src/Main.java", "README.md")),
                 isNull(), eq(1), eq(0), eq(0));
+    }
+
+    @Test
+    void candidateBindingAuthorityFailureCannotBecomeSucceeded() {
+        var fixture = fixture();
+        var recovered = mock(RecoveredExecutionStart.class);
+        when(recovered.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.starts.recover(eq(7L), eq(11L), any()))
+                .thenReturn(recovered);
+        var context = mock(PlanExecutionContextReady.class);
+        when(context.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.contexts.compose(eq(7L), eq(11L), any()))
+                .thenReturn(context);
+        V2AdaptiveCyclePort port = mock(V2AdaptiveCyclePort.class);
+        when(port.executeOne(any())).thenReturn(
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                        "step-1", "candidate prepared", true, null,
+                        List.of("executionReceipt=status=SUCCESS"),
+                        true, false));
+        when(fixture.cycles.create(
+                anyMap(), anyString(), anyString(), any(),
+                anyString(), any())).thenReturn(port);
+        when(fixture.reflections.reflect(any())).thenReturn(
+                "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
+                        + "\"finalText\":\"candidate ready\","
+                        + "\"replacementSteps\":[]}");
+        var authorities = mock(
+                NaturalLanguageCandidateAuthorityStore.class);
+        when(authorities.require("plan-1"))
+                .thenThrow(new IllegalStateException("missing authority"));
+        var candidates = mock(ProjectCandidateCompositionEffect.class);
+        var service = new V2AdaptiveExecutionService(
+                fixture.store, fixture.starts, fixture.contexts,
+                fixture.cycles, fixture.reflections, new ObjectMapper(),
+                candidates, authorities);
+
+        V2AdaptiveExecutionResult result = service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1",
+                                "project.candidate.compose")));
+
+        assertEquals("FAILED", result.status());
+        assertEquals("CANDIDATE_PUBLISH_FAILED", result.errorCode());
+        assertNull(result.candidateArtifactId());
+        assertEquals(List.of(), result.outputPaths());
+        verifyNoInteractions(candidates);
+        verify(fixture.store).finish(
+                eq(7L), eq(9L), eq("request-1"), eq("FAILED"),
+                anyList(), isNull(), isNull(), eq(List.of()),
+                eq("CANDIDATE_PUBLISH_FAILED"),
+                eq(1), eq(0), eq(0));
     }
 
     private static Fixture fixture() {
