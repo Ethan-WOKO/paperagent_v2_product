@@ -144,6 +144,56 @@ start 恢复、租约、事件材料还是数据库适配错误，不能猜测�
   `deepseek-v4-pro`；未读取、输出或记录 Key。
 - 创建了两个验收专用会话；没有修改项目文件，也没有创建新项目版本。
 
+## Agent Loop 深入诊断与修复
+
+提交 `c18b913` 已推送到 `main`。本轮只运行直接相关的 adaptive、Agent Loop、
+progression 和 Project effect 定向测试，没有扩大到其他产品功能。
+
+已确认并修复：
+
+1. Agent Loop 已有 `inspection / activation / recovery / kernel / effect /
+   progression` 分类，但 adaptive 外层曾全部折叠成同一个错误码；现已保留安全子阶段。
+2. 诊断码曾超过 `error_code VARCHAR(64)`，导致记录失败原因本身返回 HTTP 500；现已
+   强制阶段码不超过可持久化长度，超长分类使用稳定摘要。
+3. 失败 Receipt 曾被错误送入“成功步骤推进器”；现改为保持 ACTIVE 状态，并把失败
+   Receipt 作为权威事实交给 Reflection，不伪装成功。
+4. Reflection Provider 和严格 JSON 解析失败现已分开记录；Reflection 提示补全
+   replacement Step 的 8 个必填字段、数值范围、依赖和 capability 规则。
+5. replan 中 `capability:null` 的纯分析 Step 曾被写入工具绑定表并触发
+   `Map.copyOf` 异常；现仅把非空 capability 写入工具表。
+6. `project.read` 和 `project.search` 原工具描述未告诉模型严格参数结构；现明确为
+   `{"path":"..."}` 与 `{"query":"...","maxResults":10}`，服务端严格校验不放宽。
+7. Project effect 的 context、Plan、recovery、intent、authority、execution
+   context、Workspace 和 claim 边界现有独立安全阶段码。
+
+定向命令：
+
+- `mvn -q -o -pl yanban-api
+  '-Dtest=V2AdaptiveExecutionServiceTest,V2AdaptiveExecutionCoordinatorTest,V2ModelReflectionProviderTest,NaturalLanguageStepKernelFactoryTest,AuthenticatedPersistentPlanAgentLoopComposerTest,AuthenticatedEffectDrivenStepProgressionComposerTest,AuthenticatedProjectEffectExecutionComposerTest'
+  test`
+  - 57 项，0 failures，0 errors，0 skipped。
+
+真实复现事实：
+
+- 租约修复后，执行已能进入 Agent Loop。
+- 工具参数描述修复后，至少一次真实请求成功执行 `project.search` 并推进到
+  `project.read`。
+- 失败 Receipt 已能显示为 `FAILED / EFFECT_REJECTED` 并进入 Reflection。
+- Reflection 契约修复后，模型至少一次成功返回可解析 REPLAN。
+- 原 ProjectVersion 未修改，未创建 Candidate 或新版本。
+
+### 尚未修改的高风险边界
+
+产品 `ProductActiveStepReplanTransactions` 当前只要 ACTIVE Step 存在任何
+EffectIntent 就拒绝 replan；V2 核心参考持久化实现则在 EffectIntent 已有完整最终结果
+时允许 replan，只拒绝尚无最终结果的悬空 effect。真实测试因此可能连续重复一个已经
+失败的工具步骤，最终得到 `REPLAN_LIMIT_EXCEEDED`。
+
+修正该差异需要同时核对 EffectOutcome、Receipt 完整性、Plan 锁和并发重放语义，属于
+持久化权威边界，不应在本次诊断小修复中用绕过条件处理。另一次模型输出产生
+`KERNEL_PERSISTENCE_REJECTED` 后，Reflection 仍可能返回不合规 JSON，说明真实模型输出
+仍有随机性；不能据一次成功复现宣称统一 V2 链路已稳定通过。
+
 ## 结论
 
 本轮不能判定统一 V2 项目会话通过真实链路验收。反思 Provider 装配错误、Planner
