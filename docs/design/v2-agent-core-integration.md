@@ -1252,3 +1252,26 @@ the one assistant message. Failure leaves the already-persisted #95 intake
 facts intact and records a machine-readable adaptive outcome. Legacy Agent
 orchestration, automatic Candidate apply, UI, scheduler, and V2 core contracts
 remain unchanged.
+
+## V2 Project conversational UI boundary
+
+The Project page keeps an explicit V1/V2 switch. V1 remains the existing
+conversation surface. V2 presents one Chinese natural-language input and
+delegates planning and tool selection to the unified V2 turn endpoint instead
+of asking the user to choose a read-analysis or Candidate form.
+
+The V2 surface persists the client request identity per Project and session,
+starts the request once, treats POST only as the intake acknowledgement, and
+uses the owner-qualified read endpoint as the sole execution-outcome source
+for persistent-route polling and refresh recovery. A `DIRECT` acknowledgement
+must contain its answer and is rendered immediately without a GET; a missing
+answer fails closed. Project/session changes and unmount abort the old poll,
+and stale responses cannot update the current view. Availability failure
+disables only the V2 input.
+
+The page renders the server-owned ordered Step projection, including
+`SUPERSEDED_BY_REPLAN`, followed by one final result. Output paths are shown
+only as locations. A waiting-confirmation result states that the original
+Project is unchanged and hands the Candidate to the existing Changes,
+Sandbox-validation, and explicit-apply authority. The frontend does not plan,
+infer success from technical output, manufacture progress, or apply changes.
