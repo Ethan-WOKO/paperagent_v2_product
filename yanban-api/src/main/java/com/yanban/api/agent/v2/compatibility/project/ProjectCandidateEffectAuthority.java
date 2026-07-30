@@ -12,8 +12,24 @@ public record ProjectCandidateEffectAuthority(
         Long turnId,
         String projectVersion,
         String objective,
-        List<String> paths) {
+        List<String> paths,
+        RepairAuthority repair) {
     public ProjectCandidateEffectAuthority {
         paths = List.copyOf(paths);
+    }
+    public ProjectCandidateEffectAuthority(String kind, String authorityJson, String authoritySha256,
+            Long userId, Long projectId, Long sessionId, Long turnId, String projectVersion,
+            String objective, List<String> paths) {
+        this(kind, authorityJson, authoritySha256, userId, projectId, sessionId, turnId,
+                projectVersion, objective, paths, null);
+    }
+    public record RepairAuthority(String sourceValidationId, long sourceCandidateArtifactId,
+            String sourceCandidateFingerprint, int selectedChangeIndex, String selectedPath,
+            String failedReceiptDigest, String originalProjectVersion, int attempt, int maxAttempts,
+            java.util.Map<String, String> sourceReplacements, String sourceReplacementsSha256,
+            String compilerDiagnostic) {
+        public RepairAuthority {
+            sourceReplacements = java.util.Map.copyOf(sourceReplacements);
+        }
     }
 }

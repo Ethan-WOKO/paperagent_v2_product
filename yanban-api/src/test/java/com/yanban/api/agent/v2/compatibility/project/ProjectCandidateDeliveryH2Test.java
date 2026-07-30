@@ -90,6 +90,41 @@ class ProjectCandidateDeliveryH2Test {
                 Long.class, value.id().sessionId()));
     }
 
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void preparedReplacementsRoundTripDurablyAndTamperingFailsClosed() {
+        var value = open("prepared");
+        deliveries.bindPlanAndSteps(value.id(), "plan-prepared", List.of());
+        Map<String, String> replacements = new LinkedHashMap<>();
+        replacements.put("notes/result.md", "new result");
+        replacements.put("README.md", "new readme");
+
+        deliveries.bindPrepared(
+                "plan-prepared", replacements,
+                List.of("ch.qos.logback:logback-core:1.5.18"), "d".repeat(64));
+        deliveries.bindPrepared(
+                "plan-prepared", Map.of(
+                        "README.md", "new readme",
+                        "notes/result.md", "new result"),
+                List.of("ch.qos.logback:logback-core:1.5.18"), "d".repeat(64));
+
+        var recovered = deliveries.prepared("plan-prepared");
+        assertEquals(replacements, recovered.replacements());
+        assertEquals(List.of("ch.qos.logback:logback-core:1.5.18"),
+                recovered.mavenCoordinates());
+        assertEquals("d".repeat(64), recovered.diffFingerprint());
+        assertThrows(IllegalStateException.class, () ->
+                deliveries.bindPrepared("plan-prepared",
+                        Map.of("README.md", "changed"),
+                        "e".repeat(64)));
+
+        jdbc.update("update agent_v2_project_candidate_deliveries "
+                        + "set prepared_replacements_json = ? where plan_id = ?",
+                "{\"README.md\":\"tampered\"}", "plan-prepared");
+        assertThrows(IllegalStateException.class,
+                () -> deliveries.prepared("plan-prepared"));
+    }
+
     private ProjectCandidateDeliveryEntity open(String request) {
         var session = sessions.saveAndFlush(new AgentSession(
                 7L, "project", "test", "test", 8, true,

@@ -110,6 +110,41 @@ class ProductFinalSynthesisRepositoryH2Test {
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void nanosecondObservedAtUsesPersistenceCanonicalDigestAndReplays() {
+        ProjectVersionRef source = new ProjectVersionRef(
+                "43", "version-nanoseconds");
+        WorkspaceDiff diff = new WorkspaceDiff(
+                new DiffId("diff-nanoseconds"),
+                new WorkspaceRef(
+                        new WorkspaceId("workspace-nanoseconds"), source),
+                List.of(), Instant.parse("2026-07-29T01:02:03.123455Z"));
+        FinalSynthesis proposed = new FinalSynthesis(
+                new FinalSynthesisId("synthesis-nanoseconds"),
+                new TaskFrameId("task-nanoseconds"),
+                new PlanId("plan-nanoseconds"),
+                new PlanRevisionId("revision-nanoseconds"),
+                Optional.of(source), Optional.of(diff),
+                List.of(new ReceiptId("receipt-nanoseconds")),
+                "Persistence precision result.",
+                Instant.parse("2026-07-29T01:02:03.123456789Z"));
+        Instant persistedTime =
+                Instant.parse("2026-07-29T01:02:03.123456Z");
+
+        var applied = repository.append(proposed);
+
+        assertEquals(PersistenceOutcome.APPLIED, applied.outcome());
+        assertEquals(persistedTime,
+                applied.value().orElseThrow().observedAt());
+        assertEquals(applied.value().orElseThrow(),
+                repository.find(proposed.planId()).value().orElseThrow());
+        var replayed = repository.append(proposed);
+        assertEquals(PersistenceOutcome.REPLAYED, replayed.outcome());
+        assertEquals(persistedTime,
+                replayed.value().orElseThrow().observedAt());
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void readsV55LegacyLiteratureCanonicalRow() throws Exception {
         FinalSynthesis value = new FinalSynthesis(
                 new FinalSynthesisId("legacy-synthesis"),

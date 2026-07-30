@@ -36,6 +36,9 @@ class CandidateSandboxValidation {
     @Column(name = "receipt_digest", length = 64) private String receiptDigest;
     @Lob @Column(name = "receipt_json", columnDefinition = "LONGTEXT") private String receiptJson;
     @Column(name = "error_code", length = 64) private String errorCode;
+    @Column(name = "repair_origin_validation_id", length = 36) private String repairOriginValidationId;
+    @Column(name = "repair_attempt") private Integer repairAttempt;
+    @Lob @Column(name = "dependency_coordinates_json", columnDefinition = "TEXT") private String dependencyCoordinatesJson;
     @Lob @Column(name = "analysis_summary", columnDefinition = "TEXT") private String analysisSummary;
     @Column(name = "analysis_disclaimer", length = 255) private String analysisDisclaimer;
     @Column(name = "decision_status", nullable = false, length = 16) private String decisionStatus;
@@ -70,6 +73,9 @@ class CandidateSandboxValidation {
     String requestDigest() { return requestDigest; } String policyDigest() { return policyDigest; } String requestJson() { return requestJson; }
     String status() { return status; } String brokerExecutionId() { return brokerExecutionId; } String receiptDigest() { return receiptDigest; }
     String receiptJson() { return receiptJson; } String errorCode() { return errorCode; } String analysisSummary() { return analysisSummary; }
+    String repairOriginValidationId() { return repairOriginValidationId; }
+    Integer repairAttempt() { return repairAttempt; }
+    String dependencyCoordinatesJson() { return dependencyCoordinatesJson; }
     String analysisDisclaimer() { return analysisDisclaimer; } String decisionStatus() { return decisionStatus; }
     Long applicationOperationId() { return applicationOperationId; } Long appliedRevisionId() { return appliedRevisionId; }
     LocalDateTime nextAttemptAt() { return nextAttemptAt; } LocalDateTime claimExpiresAt() { return claimExpiresAt; }
@@ -96,6 +102,19 @@ class CandidateSandboxValidation {
     void complete(String terminalStatus, String digest, String receipt, String code, LocalDateTime now) {
         status = terminalStatus; receiptDigest = digest; receiptJson = receipt; errorCode = code;
         requestJson = null; nextAttemptAt = null; release(now);
+    }
+    void markRepair(String originValidationId, int attempt, String coordinatesJson, LocalDateTime now) {
+        if (brokerExecutionId != null || !"QUEUED".equals(status) || repairOriginValidationId != null
+                || attempt != 1) throw new IllegalStateException("invalid repair validation authority");
+        repairOriginValidationId = originValidationId;
+        repairAttempt = attempt;
+        dependencyCoordinatesJson = coordinatesJson;
+        updatedAt = now;
+    }
+    void completeLocal(String summary, String disclaimer, LocalDateTime now) {
+        status = "SUCCEEDED"; receiptDigest = null; receiptJson = null; errorCode = null;
+        requestJson = null; nextAttemptAt = null; analysisSummary = summary;
+        analysisDisclaimer = disclaimer; release(now);
     }
     void saveAnalysis(String summary, String disclaimer, LocalDateTime now) { if (analysisSummary == null) { analysisSummary = summary; analysisDisclaimer = disclaimer; updatedAt = now; } }
     void reject(LocalDateTime now) { if (!"APPLIED".equals(decisionStatus)) { decisionStatus = "REJECTED"; requestCancel(now); } }

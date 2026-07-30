@@ -47,4 +47,25 @@ describe('Candidate validation application eligibility', () => {
     expect(candidateValidationCanApply(validation({ timedOut: true }), binding)).toBe(false);
     expect(candidateValidationCanApply(validation({ provider: 'untrusted' }), binding)).toBe(false);
   });
+
+  it('allows only receipt-free local proof for document integrity', () => {
+    const document = {
+      profile: 'DOCUMENT_INTEGRITY' as const,
+      exitCode: null,
+      provider: null,
+      receiptDigest: null,
+      errorCode: null,
+      stdout: '',
+      stderr: '',
+    };
+    expect(candidateValidationCanApply(validation(document), binding)).toBe(true);
+    expect(candidateValidationCanApply(validation({
+      ...document,
+      provider: 'e2b',
+    }), binding)).toBe(false);
+    expect(candidateValidationCanApply(validation({
+      ...document,
+      receiptDigest: 'd'.repeat(64),
+    }), binding)).toBe(false);
+  });
 });

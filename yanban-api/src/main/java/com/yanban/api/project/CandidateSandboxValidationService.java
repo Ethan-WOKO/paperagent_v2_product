@@ -38,7 +38,7 @@ import org.springframework.web.server.ResponseStatusException;
 @ConditionalOnProperty(prefix = "yanban.sandbox", name = "enabled", havingValue = "true")
 public class CandidateSandboxValidationService {
     private static final TypeReference<List<Integer>> INTEGER_LIST = new TypeReference<>() { };
-    private static final String POLICY_VERSION = "candidate-validation-v1";
+    static final String POLICY_VERSION = "candidate-validation-v1";
 
     private final CandidateSandboxValidationRepository validations;
     private final CandidateChangeArtifactService candidates;
@@ -64,6 +64,31 @@ public class CandidateSandboxValidationService {
     public CandidateValidationResponse create(Long userId, Long projectId, Long artifactId,
                                               String idempotencyKey, String ifMatch,
                                               CreateCandidateValidationRequest request) {
+        return createInternal(userId, projectId, artifactId, idempotencyKey, ifMatch, request, null, List.of());
+    }
+
+    @Transactional
+    CandidateValidationResponse createRepair(Long userId, Long projectId, Long artifactId,
+            String sourceValidationId, int attempt, String ifMatch, int selectedIndex,
+            List<String> coordinates) {
+        if (sourceValidationId == null || sourceValidationId.length() != 36 || attempt != 1) {
+            throw new IllegalArgumentException("invalid repair validation authority");
+        }
+        CandidateValidationResponse response = createInternal(userId, projectId, artifactId,
+                "candidate-repair:" + sourceValidationId, ifMatch,
+                new CreateCandidateValidationRequest(CandidateValidationProfile.JAVA_SOURCE_RUN,
+                        List.of(selectedIndex), true), sourceValidationId, coordinates);
+        CandidateSandboxValidation value = validations.lockByValidationId(response.validationId()).orElseThrow();
+        value.markRepair(sourceValidationId, attempt, write(coordinates), dbNow());
+        validations.saveAndFlush(value);
+        return response(value);
+    }
+
+    private CandidateValidationResponse createInternal(Long userId, Long projectId, Long artifactId,
+                                              String idempotencyKey, String ifMatch,
+                                              CreateCandidateValidationRequest request,
+                                              String repairOriginValidationId,
+                                              List<String> dependencyCoordinates) {
         requireIdentity(userId, projectId, artifactId);
         String key = requireIdempotencyKey(idempotencyKey);
         String expectedVersion = requireIfMatch(ifMatch);
@@ -73,9 +98,16 @@ public class CandidateSandboxValidationService {
         }
         CandidateValidationProfile profile = request.profile() == null
                 ? CandidateValidationProfile.MAVEN_TEST : request.profile();
+        dependencyCoordinates = com.yanban.sandbox.contract.JavaMavenCoordinates
+                .normalize(dependencyCoordinates);
+        if (!dependencyCoordinates.isEmpty()
+                && (profile != CandidateValidationProfile.JAVA_SOURCE_RUN
+                    || repairOriginValidationId == null)) {
+            invalid("Java Maven dependencies require a bounded repair validation");
+        }
         List<Integer> accepted = sortedDistinctNonEmpty(request.acceptedChangeIndexes());
         String requestHash = sha256(projectId + "\n" + artifactId + "\n" + expectedVersion + "\n"
-                + profile.name() + "\n" + write(accepted) + "\nconfirmed");
+                + profile.name() + "\n" + write(accepted) + "\n" + write(dependencyCoordinates) + "\nconfirmed");
         CandidateSandboxValidation replay = validations
                 .findByUserIdAndProjectIdAndIdempotencyKey(userId, projectId, key).orElse(null);
         if (replay != null) return replay(replay, requestHash);
@@ -93,6 +125,16 @@ public class CandidateSandboxValidationService {
         if (!expectedVersion.equals(manifest.version())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Project current version changed");
         }
+        if (profile.localOnly()) {
+            requireDocumentOnly(manifest, candidate, accepted);
+            return storeDocumentValidation(userId, projectId, artifactId, key, expectedVersion,
+                    requestHash, accepted, artifact, candidate);
+        }
+        if ((profile == CandidateValidationProfile.MAVEN_TEST
+                || profile == CandidateValidationProfile.MAVEN_VERIFY)
+                && manifest.files().stream().noneMatch(file -> "pom.xml".equals(file.path()))) {
+            invalid("Maven validation requires a root pom.xml; document-only Candidates use DOCUMENT_INTEGRITY");
+        }
         Set<String> allPaths = manifest.files().stream().map(ProjectFileEntry::path)
                 .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
         ProjectService.SandboxWorkspaceMaterialization materialized =
@@ -103,7 +145,7 @@ public class CandidateSandboxValidationService {
                     "The complete trusted ProjectVersion cannot be materialized for validation");
         }
         Map<String, String> files = applyCandidate(manifest, materialized.textFiles(), candidate, accepted);
-        List<String> argv = validationArgv(profile, candidate, accepted);
+        List<String> argv = validationArgv(profile, candidate, accepted, dependencyCoordinates);
         commands.validate(argv, Map.of());
 
         String validationId = UUID.randomUUID().toString();
@@ -211,7 +253,8 @@ public class CandidateSandboxValidationService {
     }
 
     private List<String> validationArgv(CandidateValidationProfile profile, CandidateArtifactResponse candidate,
-                                        List<Integer> accepted) {
+                                        List<Integer> accepted, List<String> dependencyCoordinates) {
+        if (profile.localOnly()) throw new IllegalStateException("Local validation must not be dispatched");
         if (!profile.sourceProfile()) return profile.argv(null);
         if (accepted.size() != 1) invalid(profile.name() + " requires exactly one selected Candidate change");
         CandidateFileChange change = candidate.changes().get(accepted.get(0));
@@ -219,7 +262,55 @@ public class CandidateSandboxValidationService {
         if (change.type() == CandidateFileChange.Type.DELETE || !profile.accepts(path)) {
             invalid(profile.name() + " requires one added or modified matching source");
         }
-        return profile.argv(path);
+        return profile.argv(path, dependencyCoordinates);
+    }
+
+    private CandidateValidationResponse storeDocumentValidation(Long userId, Long projectId, Long artifactId,
+            String key, String expectedVersion, String requestHash, List<Integer> accepted,
+            ArtifactResponse artifact, CandidateArtifactResponse candidate) {
+        String acceptedJson = write(accepted);
+        String policyDigest = sha256(POLICY_VERSION + "\nDOCUMENT_INTEGRITY");
+        String requestDigest = sha256(projectId + "\n" + artifactId + "\n" + expectedVersion
+                + "\n" + candidate.fingerprint().sha256() + "\n" + acceptedJson
+                + "\n" + policyDigest);
+        LocalDateTime now = dbNow();
+        var created = new CandidateSandboxValidation(UUID.randomUUID().toString(), userId, projectId,
+                artifact.sessionId(), artifactId, expectedVersion, candidate.fingerprint().sha256(),
+                acceptedJson, sha256(acceptedJson), CandidateValidationProfile.DOCUMENT_INTEGRITY.name(),
+                key, requestHash, requestDigest, policyDigest, null, now);
+        created.completeLocal(
+                "Document Candidate integrity checks passed. No code was executed.",
+                "Verified locally from trusted ProjectVersion and Candidate metadata; E2B was not invoked.",
+                now);
+        try {
+            return response(validations.saveAndFlush(created));
+        } catch (DataIntegrityViolationException race) {
+            CandidateSandboxValidation winner = validations
+                    .findByUserIdAndProjectIdAndIdempotencyKey(userId, projectId, key)
+                    .orElseThrow(() -> race);
+            return replay(winner, requestHash);
+        }
+    }
+
+    private void requireDocumentOnly(ProjectManifestResponse manifest,
+            CandidateArtifactResponse candidate, List<Integer> accepted) {
+        if (manifest.files().isEmpty()
+                || manifest.files().stream().anyMatch(file -> !documentPath(file.path()))) {
+            invalid("DOCUMENT_INTEGRITY is only available for document-only Projects");
+        }
+        for (Integer index : accepted) {
+            if (!documentPath(candidate.changes().get(index).relativePath().value())) {
+                invalid("DOCUMENT_INTEGRITY only accepts document Candidate changes");
+            }
+        }
+    }
+
+    private static boolean documentPath(String path) {
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".md") || lower.endsWith(".markdown")
+                || lower.endsWith(".txt") || lower.endsWith(".rst")
+                || lower.endsWith(".adoc") || lower.endsWith(".tex")
+                || lower.endsWith(".pdf") || lower.endsWith(".docx");
     }
 
     private void requireApplicableCandidate(Long projectId, String expectedVersion, CandidateArtifactResponse candidate) {

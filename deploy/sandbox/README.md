@@ -10,8 +10,15 @@ exists only in the Broker container and is never forwarded to user code.
 
 The supplied E2B template supports Java 17, Python 3, C17, and C++20 through
 fixed server-side profiles. MATLAB remains review-only and has no execution
-profile. E2B sandbox Internet access is disabled on creation and verified
-before execution.
+profile. E2B sandbox Internet access is disabled on creation for ordinary
+profiles. A governed Maven Project sandbox instead receives temporary
+dependency-network access while only `pom.xml` manifests are uploaded. It runs
+the fixed server-owned dependency preparation command, atomically tightens and
+verifies deny-all networking, and only then uploads the full Workspace and runs
+the original offline Maven test. Project files cannot supply the preparation
+command, and no application secrets are injected. Maven's local repository is
+reused between preparation and testing inside that one disposable sandbox; no
+cross-user dependency cache is shared.
 
 Build the private template once from the repository root. Do not put the API
 key in a command argument, shell history, repository file, or chat message:

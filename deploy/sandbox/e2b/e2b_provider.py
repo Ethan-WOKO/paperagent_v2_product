@@ -16,6 +16,8 @@ from e2b import CommandExitException, Sandbox, SandboxQuery
 MANAGED_KEY = "yanban-managed"
 NAME_KEY = "yanban-name"
 REMOTE_ROOT = PurePosixPath("/home/user/project")
+TEMURIN_HOME = "/opt/yanban/temurin-17"
+MAVEN_ENV = {"JAVA_HOME": TEMURIN_HOME}
 active_sandbox_id = None
 
 
@@ -52,34 +54,49 @@ def command_health(_args):
     return 0
 
 
+def upload_workspace(sandbox, workspace, manifests_only=False, coordinates_only=False):
+    workspace = Path(workspace).resolve(strict=True)
+    for source in sorted(workspace.rglob("*")):
+        if source.is_symlink():
+            raise RuntimeError("workspace links are forbidden")
+        if not source.is_file():
+            continue
+        if coordinates_only:
+            continue
+        relative = source.relative_to(workspace)
+        if manifests_only and source.name != "pom.xml":
+            continue
+        remote = REMOTE_ROOT.joinpath(*relative.parts).as_posix()
+        sandbox.files.write(remote, source.read_bytes(), request_timeout=60)
+
+
 def command_create(args):
     global active_sandbox_id
+    coordinates_only = getattr(args, "coordinates_only", False)
+    if coordinates_only and not args.dependency_network:
+        raise RuntimeError("coordinates-only mode requires dependency networking")
     if exact(args.name):
         raise RuntimeError("managed E2B sandbox already exists")
     ttl_seconds = min(3600, max(180, math.ceil(args.timeout_millis / 1000) + 120))
-    sandbox = Sandbox.create(
-        args.template,
-        timeout=ttl_seconds,
-        metadata={MANAGED_KEY: "true", NAME_KEY: args.name},
-        envs={},
-        secure=True,
-        allow_internet_access=False,
-        lifecycle={"on_timeout": "kill", "auto_resume": False},
-    )
+    create_options = {
+        "timeout": ttl_seconds,
+        "metadata": {MANAGED_KEY: "true", NAME_KEY: args.name},
+        "envs": {},
+        "secure": True,
+        "lifecycle": {"on_timeout": "kill", "auto_resume": False},
+    }
+    if args.dependency_network:
+        create_options["allow_internet_access"] = True
+    else:
+        create_options["allow_internet_access"] = False
+    sandbox = Sandbox.create(args.template, **create_options)
     active_sandbox_id = sandbox.sandbox_id
     try:
         info = sandbox.get_info()
         if info.cpu_count > args.cpus or info.memory_mb * 1024 * 1024 > args.memory_bytes:
             raise RuntimeError("E2B template exceeds the requested resource limits")
-        workspace = Path(args.workspace).resolve(strict=True)
-        for source in sorted(workspace.rglob("*")):
-            if source.is_symlink():
-                raise RuntimeError("workspace links are forbidden")
-            if not source.is_file():
-                continue
-            relative = source.relative_to(workspace)
-            remote = REMOTE_ROOT.joinpath(*relative.parts).as_posix()
-            sandbox.files.write(remote, source.read_bytes(), request_timeout=60)
+        upload_workspace(sandbox, args.workspace, manifests_only=args.dependency_network,
+                         coordinates_only=coordinates_only)
         print(json.dumps({"name": args.name, "sandboxId": sandbox.sandbox_id}, separators=(",", ":")))
         active_sandbox_id = None
         return 0
@@ -91,12 +108,44 @@ def command_create(args):
         raise
 
 
+def command_network(args):
+    item = exact(args.name)
+    if not item:
+        raise RuntimeError("managed E2B sandbox not found")
+    sandbox = Sandbox.connect(item.sandbox_id)
+    sandbox.update_network({"allow_internet_access": False})
+    return 0
+
+
+def command_sync(args):
+    item = exact(args.name)
+    if not item:
+        raise RuntimeError("managed E2B sandbox not found")
+    sandbox = Sandbox.connect(item.sandbox_id)
+    upload_workspace(sandbox, args.workspace)
+    return 0
+
+
 def command_policy(args):
     item = exact(args.name)
     if not item:
         raise RuntimeError("managed E2B sandbox not found")
     info = Sandbox.get_info(item.sandbox_id)
-    if info.allow_internet_access is not False:
+    network = info.network or {}
+    allow_out = sorted(network.get("allow_out") or [])
+    deny_out = sorted(network.get("deny_out") or [])
+    if args.expect == "dependency-network":
+        if info.allow_internet_access is False or "0.0.0.0/0" in deny_out:
+            raise RuntimeError("E2B dependency network is not active")
+        print(json.dumps({
+            "origin": "scoped",
+            "resource_type": "network",
+            "status": "active",
+            "decision": "allow",
+            "resources": ["**"],
+        }, separators=(",", ":")))
+        return 0
+    if info.allow_internet_access is not False and "0.0.0.0/0" not in deny_out:
         raise RuntimeError("E2B deny-all network policy is not active")
     print(json.dumps({
         "origin": "scoped",
@@ -121,11 +170,12 @@ def command_exec(args):
     sandbox = Sandbox.connect(item.sandbox_id)
     active_sandbox_id = item.sandbox_id
     try:
+        command_env = MAVEN_ENV if argv[0] in ("mvn", "yanban-java-dependencies") else {}
         try:
             result = sandbox.commands.run(
                 shlex.join(argv),
                 cwd=REMOTE_ROOT.as_posix(),
-                envs={},
+                envs=command_env,
                 stdin=False,
                 timeout=0,
             )
@@ -168,10 +218,21 @@ def parser():
     create.add_argument("--cpus", required=True, type=int)
     create.add_argument("--memory-bytes", required=True, type=int)
     create.add_argument("--timeout-millis", required=True, type=int)
+    create.add_argument("--dependency-network", action="store_true")
+    create.add_argument("--coordinates-only", action="store_true")
     create.set_defaults(handler=command_create)
     policy = commands.add_parser("policy", add_help=False)
     policy.add_argument("--name", required=True)
+    policy.add_argument("--expect", required=True, choices=("deny-all", "dependency-network"))
     policy.set_defaults(handler=command_policy)
+    network = commands.add_parser("network", add_help=False)
+    network.add_argument("--name", required=True)
+    network.add_argument("--mode", required=True, choices=("deny-all",))
+    network.set_defaults(handler=command_network)
+    sync = commands.add_parser("sync", add_help=False)
+    sync.add_argument("--name", required=True)
+    sync.add_argument("--workspace", required=True)
+    sync.set_defaults(handler=command_sync)
     execute = commands.add_parser("exec", add_help=False)
     execute.add_argument("--name", required=True)
     execute.add_argument("argv", nargs=argparse.REMAINDER)
@@ -181,6 +242,29 @@ def parser():
     kill.set_defaults(handler=command_kill)
     commands.add_parser("list", add_help=False).set_defaults(handler=command_list)
     return root
+
+
+def provider_error_code(error):
+    message = str(error).lower()
+    if "network" in message and any(
+            marker in message for marker in (
+                "not supported", "not available", "requires", "plan", "tier",
+                "upgrade", "feature", "access", "billing", "paid", "team",
+            )):
+        return "NETWORK_POLICY_UNAVAILABLE"
+    if "network" in message and any(
+            marker in message for marker in ("invalid", "validation", "bad request", "400")):
+        return "NETWORK_POLICY_INVALID"
+    for status, code in (
+            ("401", "UNAUTHORIZED"),
+            ("403", "FORBIDDEN"),
+            ("429", "RATE_LIMITED"),
+            ("500", "PROVIDER_INTERNAL"),
+            ("502", "PROVIDER_BAD_GATEWAY"),
+            ("503", "PROVIDER_UNAVAILABLE")):
+        if status in message:
+            return code
+    return type(error).__name__
 
 
 def main():
@@ -198,5 +282,7 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as error:
-        print(f"E2B provider error: {type(error).__name__}: {error}", file=sys.stderr)
+        # Emit a bounded diagnostic code only. Provider messages can contain
+        # request details and must not flow into user-visible receipts.
+        print(f"E2B provider error: {provider_error_code(error)}:", file=sys.stderr)
         raise SystemExit(70)

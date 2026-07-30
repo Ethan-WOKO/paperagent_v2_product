@@ -24,4 +24,14 @@ class SandboxWorkerPolicyTest {
         assertThat((Boolean)ReflectionTestUtils.invokeMethod(worker,"sandboxExists","[{\"name\":\"yb-123\"}]","yb-123")).isTrue();
         assertThat((Boolean)ReflectionTestUtils.invokeMethod(worker,"sandboxExists","[{\"name\":\"yb-1234\"}]","yb-123")).isFalse();
     }
+
+    @Test void acceptsOnlyTheExplicitDependencyNetworkPermission(){
+        String valid="{\"origin\":\"scoped\",\"decision\":\"allow\",\"resource_type\":\"network\","
+                +"\"status\":\"active\",\"resources\":[\"**\"]}";
+        ReflectionTestUtils.invokeMethod(worker,"requireDependencyNetwork",valid);
+        assertThatThrownBy(()->ReflectionTestUtils.invokeMethod(worker,"requireDependencyNetwork",
+                valid.replace("**","example.com"))).isInstanceOf(Exception.class);
+        assertThatThrownBy(()->ReflectionTestUtils.invokeMethod(worker,"requireDependencyNetwork",
+                valid.replace("\"allow\"","\"deny\""))).isInstanceOf(Exception.class);
+    }
 }

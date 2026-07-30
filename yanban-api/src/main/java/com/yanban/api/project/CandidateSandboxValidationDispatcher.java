@@ -30,14 +30,17 @@ class CandidateSandboxValidationDispatcher {
     private final TransactionTemplate transactions;
     private final CandidateValidationAnalysisProjectionService analysis;
     private final SandboxExecutionProperties sandboxProperties;
+    private final CandidateValidationRepairService repairs;
 
     CandidateSandboxValidationDispatcher(CandidateSandboxValidationRepository validations,
                                          SandboxBrokerClient broker, ObjectMapper json, JdbcTemplate jdbc,
                                          TransactionTemplate transactions,
                                          CandidateValidationAnalysisProjectionService analysis,
-                                         SandboxExecutionProperties sandboxProperties) {
+                                         SandboxExecutionProperties sandboxProperties,
+                                         CandidateValidationRepairService repairs) {
         this.validations = validations; this.broker = broker; this.json = json; this.jdbc = jdbc;
         this.transactions = transactions; this.analysis = analysis; this.sandboxProperties = sandboxProperties;
+        this.repairs = repairs;
     }
 
     @Scheduled(fixedDelayString = "${yanban.sandbox.dispatch-delay-ms:1000}")
@@ -103,6 +106,9 @@ class CandidateSandboxValidationDispatcher {
         commit(validationId, token, value -> value.complete(view.status().name(), digest, receiptJson,
                 view.errorCode() == null ? null : view.errorCode().name(), dbNow()));
         if (receipt != null) analysis.analyzeAfterCommit(validationId);
+        if (view.status() == SandboxExecutionStatus.FAILED && receipt != null) {
+            repairs.repairAfterFailure(validationId);
+        }
     }
 
     private void validateReceipt(CandidateSandboxValidation value, SandboxReceipt receipt,

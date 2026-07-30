@@ -27,6 +27,7 @@ import io.paperagent.v2.persistence.PersistenceResult;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -55,31 +56,32 @@ public class ProductFinalSynthesisRepositoryAdapter
             return PersistenceResult.rejected(
                     PersistenceErrorCode.INVALID_ARGUMENT, "finalSynthesis");
         }
+        FinalSynthesis persisted = persistenceCanonical(synthesis);
         Optional<ProductFinalSynthesisEntity> existing =
-                rows.findById(synthesis.planId().value());
+                rows.findById(persisted.planId().value());
         if (existing.isPresent()) {
-            return classify(existing.orElseThrow(), synthesis);
+            return classify(existing.orElseThrow(), persisted);
         }
-        String receiptJson = receiptJson(synthesis.receiptIds());
-        String workspaceJson = synthesis.workspaceDiff()
+        String receiptJson = receiptJson(persisted.receiptIds());
+        String workspaceJson = persisted.workspaceDiff()
                 .map(this::workspaceJson).orElse(null);
-        String canonical = canonical(synthesis, receiptJson, workspaceJson);
+        String canonical = canonical(persisted, receiptJson, workspaceJson);
         try {
             rows.saveAndFlush(new ProductFinalSynthesisEntity(
-                    synthesis.planId().value(), synthesis.id().value(),
-                    synthesis.taskFrameId().value(),
-                    synthesis.planRevisionId().value(),
-                    synthesis.sourceProjectVersion()
+                    persisted.planId().value(), persisted.id().value(),
+                    persisted.taskFrameId().value(),
+                    persisted.planRevisionId().value(),
+                    persisted.sourceProjectVersion()
                             .map(ProjectVersionRef::projectId).orElse(null),
-                    synthesis.sourceProjectVersion()
+                    persisted.sourceProjectVersion()
                             .map(ProjectVersionRef::versionId).orElse(null),
                     workspaceJson, receiptJson,
-                    synthesis.narrative(), synthesis.observedAt(),
+                    persisted.narrative(), persisted.observedAt(),
                     sha256(canonical), Instant.now()));
-            return PersistenceResult.applied(synthesis);
+            return PersistenceResult.applied(persisted);
         } catch (DataIntegrityViolationException race) {
-            return rows.findById(synthesis.planId().value())
-                    .map(row -> classify(row, synthesis))
+            return rows.findById(persisted.planId().value())
+                    .map(row -> classify(row, persisted))
                     .orElseThrow(() -> race);
         }
     }
@@ -179,6 +181,20 @@ public class ProductFinalSynthesisRepositoryAdapter
                 diff.workspace().sourceProjectVersion().equals(
                         value.sourceProjectVersion().orElseThrow()))
                 .isPresent();
+    }
+
+    private static FinalSynthesis persistenceCanonical(
+            FinalSynthesis value) {
+        Instant observedAt = value.observedAt().truncatedTo(
+                ChronoUnit.MICROS);
+        if (observedAt.equals(value.observedAt())) {
+            return value;
+        }
+        return new FinalSynthesis(
+                value.id(), value.taskFrameId(), value.planId(),
+                value.planRevisionId(), value.sourceProjectVersion(),
+                value.workspaceDiff(), value.receiptIds(),
+                value.narrative(), observedAt);
     }
 
     private Optional<ProjectVersionRef> source(

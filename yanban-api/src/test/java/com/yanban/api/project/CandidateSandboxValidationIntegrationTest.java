@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -148,6 +149,62 @@ class CandidateSandboxValidationIntegrationTest {
     }
 
     @Test
+    void documentOnlyCandidateCompletesLocallyWithoutE2bAndCanApply() {
+        String documentVersion = ProjectManifestIdentity.derive(List.of(
+                new ProjectManifestIdentity.Entry(
+                        new ProjectRelativePath("research-plan.md"),
+                        new FileHash("3".repeat(64)), 12))).value();
+        CandidateArtifactResponse documentCandidate = candidate(
+                FINGERPRINT, documentVersion, "research-plan.md", "3".repeat(64));
+        when(candidates.getCurrent(USER, ARTIFACT)).thenReturn(documentCandidate);
+        when(projects.manifest(USER, PROJECT)).thenReturn(new ProjectManifestResponse(
+                PROJECT, documentVersion, List.of(new ProjectFileEntry(
+                        "research-plan.md", 12, Instant.EPOCH, "3".repeat(64)))));
+
+        CandidateValidationResponse result = service.create(
+                USER, PROJECT, ARTIFACT, "document-key", documentVersion,
+                new CreateCandidateValidationRequest(
+                        CandidateValidationProfile.DOCUMENT_INTEGRITY, List.of(0), true));
+
+        assertThat(result.status()).isEqualTo("SUCCEEDED");
+        assertThat(result.profile()).isEqualTo(CandidateValidationProfile.DOCUMENT_INTEGRITY);
+        assertThat(result.provider()).isNull();
+        assertThat(result.receiptDigest()).isNull();
+        assertThat(result.analysisSummary()).contains("No code was executed");
+        verify(projects, never()).materializeSandbox(any(), any(), any());
+        verifyNoInteractions(broker);
+        gate.requireSuccessful(USER, PROJECT, ARTIFACT, result.validationId(),
+                documentVersion, documentCandidate, List.of(0));
+    }
+
+    @Test
+    void mavenProfileWithoutRootPomFailsBeforeE2b() {
+        String documentVersion = ProjectManifestIdentity.derive(List.of(
+                new ProjectManifestIdentity.Entry(
+                        new ProjectRelativePath("research-plan.md"),
+                        new FileHash("3".repeat(64)), 12))).value();
+        CandidateArtifactResponse documentCandidate = candidate(
+                FINGERPRINT, documentVersion, "research-plan.md", "3".repeat(64));
+        when(candidates.getCurrent(USER, ARTIFACT)).thenReturn(documentCandidate);
+        when(projects.manifest(USER, PROJECT)).thenReturn(new ProjectManifestResponse(
+                PROJECT, documentVersion, List.of(new ProjectFileEntry(
+                        "research-plan.md", 12, Instant.EPOCH, "3".repeat(64)))));
+
+        assertThatThrownBy(() -> service.create(
+                USER, PROJECT, ARTIFACT, "wrong-maven-key", documentVersion,
+                new CreateCandidateValidationRequest(
+                        CandidateValidationProfile.MAVEN_TEST, List.of(0), true)))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        error -> {
+                            assertThat(error.getStatusCode()).isEqualTo(
+                                    HttpStatus.UNPROCESSABLE_ENTITY);
+                            assertThat(error.getReason()).contains("root pom.xml");
+                        });
+        verify(projects, never()).materializeSandbox(any(), any(), any());
+        verifyNoInteractions(broker);
+    }
+
+    @Test
     void failedAndTimedOutReceiptsRemainVisibleButCannotApply() {
         CandidateValidationResponse failed = create("failure-key");
         dispatcher.reconcile(failed.validationId());
@@ -279,16 +336,20 @@ class CandidateSandboxValidationIntegrationTest {
         return new CreateCandidateValidationRequest(CandidateValidationProfile.MAVEN_TEST, List.of(0), true);
     }
     private CandidateArtifactResponse candidate(String fingerprint) {
+        return candidate(fingerprint, VERSION, "a.txt", "1".repeat(64));
+    }
+    private CandidateArtifactResponse candidate(
+            String fingerprint, String version, String path, String baseHash) {
         CandidateArtifactResponse value = org.mockito.Mockito.mock(CandidateArtifactResponse.class);
         CandidateValidationResult validation = org.mockito.Mockito.mock(CandidateValidationResult.class);
-        ResearchEvidenceRef evidence = new ResearchEvidenceRef(new ProjectVersionRef(VERSION),
-                new ProjectRelativePath("a.txt"), new FileHash("1".repeat(64)), new SourceRange(1, 1),
+        ResearchEvidenceRef evidence = new ResearchEvidenceRef(new ProjectVersionRef(version),
+                new ProjectRelativePath(path), new FileHash(baseHash), new SourceRange(1, 1),
                 new ParserVersionRef("test-v1"), TrustLabel.UNTRUSTED_PROJECT_CONTENT);
-        CandidateFileChange change = CandidateFileChange.modify(new ProjectVersionRef(VERSION),
-                new ProjectRelativePath("a.txt"), new FileHash("1".repeat(64)),
+        CandidateFileChange change = CandidateFileChange.modify(new ProjectVersionRef(version),
+                new ProjectRelativePath(path), new FileHash(baseHash),
                 CandidateTextPayload.fromText("changed"), List.of(evidence));
         when(validation.valid()).thenReturn(true);
-        when(value.projectId()).thenReturn(PROJECT); when(value.projectVersion()).thenReturn(new ProjectVersionRef(VERSION));
+        when(value.projectId()).thenReturn(PROJECT); when(value.projectVersion()).thenReturn(new ProjectVersionRef(version));
         when(value.fingerprint()).thenReturn(new CandidateFingerprint(fingerprint));
         when(value.governanceStatus()).thenReturn(CandidateChangeSet.GovernanceStatus.VALIDATED);
         when(value.applicationStatus()).thenReturn(CandidateChangeSet.ApplicationStatus.NOT_APPLIED);

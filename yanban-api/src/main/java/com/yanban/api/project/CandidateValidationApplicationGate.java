@@ -41,12 +41,30 @@ public class CandidateValidationApplicationGate {
                         "Candidate validation was not found"));
         List<Integer> storedIndexes = readIndexes(value.acceptedChangeIndexesJson());
         SandboxReceipt receipt = readReceipt(value.receiptJson());
-        if (!value.artifactId().equals(artifactId) || !value.projectVersion().equals(projectVersion)
+        boolean bindingInvalid = !value.artifactId().equals(artifactId) || !value.projectVersion().equals(projectVersion)
                 || !value.candidateFingerprint().equals(candidate.fingerprint().sha256())
                 || !storedIndexes.equals(acceptedChangeIndexes)
                 || !value.selectionDigest().equals(CandidateSandboxValidationService.sha256(write(storedIndexes)))
-                || !"SUCCEEDED".equals(value.status()) || !"PENDING".equals(value.decisionStatus())
-                || receipt == null || receipt.status() != SandboxExecutionStatus.SUCCEEDED
+                || !"SUCCEEDED".equals(value.status()) || !"PENDING".equals(value.decisionStatus());
+        if (bindingInvalid) {
+            invalid("Candidate validation is stale, unsuccessful, rejected, or bound to different content");
+        }
+        if (CandidateValidationProfile.DOCUMENT_INTEGRITY.name().equals(value.profile())) {
+            String acceptedJson = write(storedIndexes);
+            String policyDigest = CandidateSandboxValidationService.sha256(
+                    CandidateSandboxValidationService.POLICY_VERSION + "\nDOCUMENT_INTEGRITY");
+            String requestDigest = CandidateSandboxValidationService.sha256(
+                    projectId + "\n" + artifactId + "\n" + projectVersion
+                            + "\n" + candidate.fingerprint().sha256() + "\n"
+                            + acceptedJson + "\n" + policyDigest);
+            if (receipt != null || value.receiptDigest() != null || value.errorCode() != null
+                    || !policyDigest.equals(value.policyDigest())
+                    || !requestDigest.equals(value.requestDigest())) {
+                invalid("Document Candidate validation is invalid");
+            }
+            return;
+        }
+        if (receipt == null || receipt.status() != SandboxExecutionStatus.SUCCEEDED
                 || receipt.exitCode() == null || receipt.exitCode() != 0 || receipt.errorCode() != null
                 || !sandboxProperties.getProvider().equals(receipt.provider())
                 || !value.requestDigest().equals(receipt.requestDigest())

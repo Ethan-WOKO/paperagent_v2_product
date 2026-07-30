@@ -47,7 +47,6 @@ public class V2ProjectCandidateService {
     private final StepRecoveryRepository recovery;
     private final LeaseRepository leases;
     private final AgentTurnProductContextResolver turnContexts;
-    private final AuthenticatedAgentTurnWorkspacePortFactory workspaces;
     private final ProjectCandidateCompositionEffect composition;
     private final ObjectMapper json;
 
@@ -58,21 +57,36 @@ public class V2ProjectCandidateService {
             AuthenticatedPersistentPlanAgentLoopComposer loop,
             StepRecoveryRepository recovery, LeaseRepository leases,
             AgentTurnProductContextResolver turnContexts,
-            AuthenticatedAgentTurnWorkspacePortFactory workspaces,
             ProjectCandidateCompositionEffect composition, ObjectMapper json) {
         this.sessions = sessions; this.projects = projects; this.deliveries = deliveries;
         this.starts = starts; this.contexts = contexts; this.loop = loop;
         this.recovery = recovery; this.leases = leases;
-        this.turnContexts = turnContexts; this.workspaces = workspaces;
+        this.turnContexts = turnContexts;
         this.composition = composition; this.json = json;
     }
 
     public V2ProjectCandidateResponse execute(Long userId, Long projectId, Long sessionId,
                                                V2ProjectCandidateRequest input) {
+        Request request = normalize(input);
+        return executeLocked(userId, projectId, sessionId, request);
+    }
+
+    public V2ProjectCandidateResponse executeRepair(Long userId, Long projectId, Long sessionId,
+            V2ProjectCandidateRepairRequest repair) {
+        requireRepair(repair);
+        List<String> paths = List.copyOf(repair.sourceReplacements().keySet());
+        Request request = new Request(
+                "Repair failed Java Candidate validation without changing the original ProjectVersion",
+                paths, "candidate-repair-" + repair.sourceValidationId(), repair);
+        return executeLocked(userId, projectId, sessionId, request);
+    }
+
+    private V2ProjectCandidateResponse executeLocked(Long userId, Long projectId, Long sessionId,
+            Request request) {
         String key = userId + "\0" + projectId + "\0" + sessionId + "\0"
-                + (input == null ? "" : input.clientRequestId());
+                + request.requestId();
         synchronized (locks[(key.hashCode() & Integer.MAX_VALUE) % locks.length]) {
-            return executeSerialized(userId, projectId, sessionId, input);
+            return executeSerialized(userId, projectId, sessionId, request);
         }
     }
 
@@ -93,8 +107,7 @@ public class V2ProjectCandidateService {
     }
 
     private V2ProjectCandidateResponse executeSerialized(Long userId, Long projectId,
-            Long sessionId, V2ProjectCandidateRequest input) {
-        Request request = normalize(input);
+            Long sessionId, Request request) {
         var session = sessions.findByIdAndUserId(sessionId, userId).orElseThrow(
                 () -> new IllegalArgumentException("project agent session was not found"));
         if (session.getScope() != AgentSessionScope.PROJECT
@@ -117,6 +130,9 @@ public class V2ProjectCandidateService {
             delivery = deliveries.open(userId, projectId, sessionId, request.requestId(),
                     requestHash, request.objective(), request.paths(), manifest.version(),
                     owner, token, now.plus(Duration.ofMinutes(5)));
+        }
+        if (request.repair() != null) {
+            delivery = deliveries.bindRepair(delivery.id(), request.repair());
         }
         if (!delivery.leaseExpiresAt().isAfter(now)) {
             delivery = deliveries.rotateExpiredLease(key,
@@ -154,7 +170,7 @@ public class V2ProjectCandidateService {
         try {
             started = starts.start(userId, delivery.turnId(),
                     new AuthenticatedAgentTurnFreshExecutionStartCommand(
-                            bootstrap(request, delivery.turnId(), now),
+                    bootstrap(request, delivery.turnId(), now),
                             Optional.of(startAttempt(delivery, now))));
         } catch (RuntimeException failure) {
             throw StartFailure.thrown(failure);
@@ -186,11 +202,7 @@ public class V2ProjectCandidateService {
                 || !(inspected.value().orElse(null)
                 instanceof PersistedStepRecoverySucceeded)) throw failed();
         if (delivery.artifactId() == null) {
-            var workspace = workspaces.create(userId, delivery.turnId());
-            var materialized = workspace.inspectMaterialization(
-                    ready.persistedContext().materializationSpec());
-            composition.publish(planId.value(), userId, delivery.turnId(), workspace,
-                    materialized.workspace(), now.plusMillis(20));
+            composition.publish(planId.value(), userId, delivery.turnId());
         }
         delivery = deliveries.deliver(delivery.id());
         if (!projectId.equals(projects.manifest(userId, projectId).projectId())) throw failed();
@@ -209,7 +221,7 @@ public class V2ProjectCandidateService {
                     Set.of(), List.of("One successful project.read receipt"),
                     new BoundedExecutionHints(1, Duration.ofMinutes(2))));
         }
-        String compositionArguments = compositionArguments();
+        String compositionArguments = compositionArguments(request.repair());
         steps.add(new PlanStep(new PlanStepId("project-candidate-compose"),
                 "Call project.candidate.compose exactly once with " + compositionArguments
                         + ". The governed effect creates replacements for only the frozen targets.",
@@ -244,7 +256,7 @@ public class V2ProjectCandidateService {
                     String.format("project-read-%02d", index++), "project.read",
                     arguments, hash(arguments)));
         }
-        String arguments = compositionArguments();
+        String arguments = compositionArguments(request.repair());
         values.add(new ProjectCandidateDeliveryTransactions.StepAuthority(
                 "project-candidate-compose", ProjectCandidateCompositionEffect.KIND,
                 arguments, hash(arguments)));
@@ -291,8 +303,21 @@ public class V2ProjectCandidateService {
     private String readArguments(String path) {
         ObjectNode node = json.createObjectNode(); node.put("path", path); return write(node);
     }
-    private String compositionArguments() {
-        ObjectNode node = json.createObjectNode(); node.put("operation", "compose"); return write(node);
+    private String compositionArguments(V2ProjectCandidateRepairRequest repair) {
+        ObjectNode node = json.createObjectNode();
+        node.put("operation", repair == null ? "compose" : "repair");
+        if (repair != null) {
+            node.put("sourceCandidateArtifactId", repair.sourceCandidateArtifactId());
+            node.put("sourceCandidateFingerprint", repair.sourceCandidateFingerprint());
+            node.put("selectedChangeIndex", repair.selectedChangeIndex());
+            node.put("selectedPath", repair.selectedPath());
+            node.put("failedReceiptDigest", repair.failedReceiptDigest());
+            node.put("originalProjectVersion", repair.originalProjectVersion());
+            node.put("attempt", repair.attempt());
+            node.put("maxAttempts", repair.maxAttempts());
+            node.put("sourceReplacementsSha256", hash(writeReplacements(repair.sourceReplacements())));
+        }
+        return write(node);
     }
     private String write(ObjectNode node) {
         try { return json.writeValueAsString(node); }
@@ -309,7 +334,32 @@ public class V2ProjectCandidateService {
         }
         if (objective.isBlank() || objective.length() > 2000
                 || paths.isEmpty() || paths.size() > 4) throw invalid();
-        return new Request(objective, List.copyOf(paths), requestId);
+        return new Request(objective, List.copyOf(paths), requestId, null);
+    }
+    private static void requireRepair(V2ProjectCandidateRepairRequest repair) {
+        if (repair == null || repair.sourceValidationId() == null
+                || !repair.sourceValidationId().matches("[0-9a-fA-F-]{36}")
+                || repair.sourceCandidateArtifactId() < 1
+                || repair.sourceCandidateFingerprint() == null
+                || !repair.sourceCandidateFingerprint().matches("[0-9a-f]{64}")
+                || repair.failedReceiptDigest() == null
+                || !repair.failedReceiptDigest().matches("[0-9a-f]{64}")
+                || repair.originalProjectVersion() == null || repair.originalProjectVersion().isBlank()
+                || repair.attempt() != 1 || repair.maxAttempts() != 1
+                || repair.sourceReplacements().isEmpty() || repair.sourceReplacements().size() > 4
+                || repair.selectedChangeIndex() < 0
+                || repair.selectedChangeIndex() >= repair.sourceReplacements().size()
+                || !repair.sourceReplacements().containsKey(repair.selectedPath())
+                || !repair.selectedPath().endsWith(".java")
+                || repair.sourceReplacements().entrySet().stream().anyMatch(entry ->
+                    !portable(entry.getKey()) || entry.getValue() == null
+                            || entry.getValue().getBytes(StandardCharsets.UTF_8).length > 64 * 1024)
+                || repair.compilerDiagnostic() == null
+                || repair.compilerDiagnostic().length() > 12_000) throw invalid();
+    }
+    private String writeReplacements(Map<String, String> replacements) {
+        try { return json.writeValueAsString(new TreeMap<>(replacements)); }
+        catch (Exception failure) { throw invalid(); }
     }
     private static void requireManifest(Long projectId, List<String> paths,
                                         com.yanban.api.project.ProjectManifestResponse manifest) {
@@ -402,12 +452,24 @@ public class V2ProjectCandidateService {
         return key.userId() + "\0" + key.projectId() + "\0"
                 + key.sessionId() + "\0" + key.clientRequestId();
     }
-    private record Request(String objective, List<String> paths, String requestId) {
+    private record Request(String objective, List<String> paths, String requestId,
+                           V2ProjectCandidateRepairRequest repair) {
         String canonical() {
             StringBuilder value = new StringBuilder()
                     .append(objective.length()).append(':').append(objective)
                     .append(paths.size()).append(':');
             paths.forEach(path -> value.append(path.length()).append(':').append(path));
+            if (repair != null) {
+                value.append(repair.sourceCandidateArtifactId())
+                        .append(':').append(repair.sourceCandidateFingerprint())
+                        .append(':').append(repair.selectedChangeIndex())
+                        .append(':').append(repair.selectedPath())
+                        .append(':').append(repair.failedReceiptDigest())
+                        .append(':').append(repair.originalProjectVersion())
+                        .append(':').append(repair.attempt()).append(':').append(repair.maxAttempts())
+                        .append(':').append(hash(new com.fasterxml.jackson.databind.ObjectMapper()
+                                .valueToTree(new TreeMap<>(repair.sourceReplacements())).toString()));
+            }
             return value.toString();
         }
     }

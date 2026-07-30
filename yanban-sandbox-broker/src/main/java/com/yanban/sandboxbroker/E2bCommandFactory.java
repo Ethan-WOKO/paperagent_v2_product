@@ -20,13 +20,37 @@ final class E2bCommandFactory implements SandboxProviderCommands {
 
     @Override public String provider() { return "e2b"; }
     @Override public List<String> health() { return base("health"); }
+    @Override public boolean supportsDependencyNetwork() { return true; }
     @Override public List<String> create(String name, Path workspace, int cpus, long memoryBytes, long timeoutMillis) {
         return base("create", "--name", name, "--workspace", workspace.toString(), "--template", template,
                 "--cpus", Integer.toString(cpus), "--memory-bytes", Long.toString(memoryBytes),
                 "--timeout-millis", Long.toString(timeoutMillis));
     }
-    @Override public List<String> denyAllNetwork(String name) { return base("policy", "--name", name); }
-    @Override public List<String> verifyNetworkPolicy(String name) { return base("policy", "--name", name); }
+    @Override public List<String> createWithDependencyNetwork(String name, Path workspace, int cpus,
+                                                              long memoryBytes, long timeoutMillis) {
+        ArrayList<String> command = new ArrayList<>(create(name, workspace, cpus, memoryBytes, timeoutMillis));
+        command.add("--dependency-network");
+        return List.copyOf(command);
+    }
+    @Override public List<String> createWithCoordinateDependencyNetwork(String name, Path workspace,
+            int cpus, long memoryBytes, long timeoutMillis) {
+        ArrayList<String> command = new ArrayList<>(
+                createWithDependencyNetwork(name, workspace, cpus, memoryBytes, timeoutMillis));
+        command.add("--coordinates-only");
+        return List.copyOf(command);
+    }
+    @Override public List<String> verifyDependencyNetwork(String name) {
+        return base("policy", "--name", name, "--expect", "dependency-network");
+    }
+    @Override public List<String> syncWorkspace(String name, Path workspace) {
+        return base("sync", "--name", name, "--workspace", workspace.toString());
+    }
+    @Override public List<String> denyAllNetwork(String name) {
+        return base("network", "--name", name, "--mode", "deny-all");
+    }
+    @Override public List<String> verifyNetworkPolicy(String name) {
+        return base("policy", "--name", name, "--expect", "deny-all");
+    }
     @Override public List<String> exec(String name, List<String> argv) {
         ArrayList<String> command = new ArrayList<>(base("exec", "--name", name));
         command.add("--");

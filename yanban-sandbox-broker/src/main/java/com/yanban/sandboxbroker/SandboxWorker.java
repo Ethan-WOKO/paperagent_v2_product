@@ -52,19 +52,56 @@ class SandboxWorker {
             throwIfCancelled(lease);
             // Interrupting sbx create can leave the provider holding the workspace before the sandbox is listable.
             // Let the bounded create finish, then honor cancellation before policy or user code can run.
+            Optional<List<List<String>>> dependencyCommands=SandboxCommandProfiles.dependencyPreparation(request.argv());
+            boolean dependencyNetwork=dependencyCommands.isPresent()&&commands.supportsDependencyNetwork();
+            boolean coordinateDependencies=dependencyNetwork
+                    &&SandboxCommandProfiles.usesJavaDependencies(request.argv());
             providerPhase="CREATE";
-            requireOk(execute(lease,commands.create(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis()),CREATE_TIMEOUT_MILLIS,65536,false),"create");
+            List<String> createCommand=dependencyNetwork
+                    ?(coordinateDependencies
+                        ?commands.createWithCoordinateDependencyNetwork(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis())
+                        :commands.createWithDependencyNetwork(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis()))
+                    :commands.create(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis());
+            requireOk(execute(lease,createCommand,CREATE_TIMEOUT_MILLIS,65536,false),"create");
             throwIfCancelled(lease);
             leases.transition(lease,"CREATED",checkpoint("CREATED",entity.sandboxName()));
+            ExecResult dependencyResult=null;
+            long executionDeadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(request.timeoutMillis());
+            if(dependencyNetwork){
+                providerPhase="DEPENDENCY_NETWORK_VERIFY";
+                ExecResult dependencyPolicy=execute(lease,commands.verifyDependencyNetwork(entity.sandboxName()),30000,262144);
+                requireOk(dependencyPolicy,"dependency network verification");
+                requireDependencyNetwork(dependencyPolicy.stdout());
+                providerPhase="DEPENDENCY_INSTALL";
+                leases.transition(lease,"RUNNING",checkpoint(providerPhase,entity.sandboxName()));
+                long dependencyBudget=Math.min(300000L,Math.max(1L,request.timeoutMillis()/3L));
+                long dependencyDeadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(dependencyBudget);
+                for(List<String> dependencyCommand:dependencyCommands.orElseThrow()){
+                    dependencyResult=execute(lease,commands.exec(entity.sandboxName(),dependencyCommand),
+                            remainingMillis(dependencyDeadline,dependencyBudget),request.maxOutputBytes());
+                    if(dependencyResult.exitCode()!=0)break;
+                }
+            }
             providerPhase="NETWORK_POLICY_APPLY";
             requireOk(execute(lease,commands.denyAllNetwork(entity.sandboxName()),30000,65536),"network policy");
             providerPhase="NETWORK_POLICY_VERIFY";
             ExecResult policy=execute(lease,commands.verifyNetworkPolicy(entity.sandboxName()),30000,262144);
             requireOk(policy,"policy verification"); requireDenyAll(policy.stdout());
+            if(dependencyNetwork&&dependencyResult!=null&&dependencyResult.exitCode()==0){
+                providerPhase="FULL_WORKSPACE_UPLOAD";
+                requireOk(execute(lease,commands.syncWorkspace(entity.sandboxName(),root),
+                        CREATE_TIMEOUT_MILLIS,65536),"full workspace upload");
+            }
             leases.transition(lease,"POLICY_APPLIED",checkpoint("POLICY_APPLIED",entity.sandboxName()));
             leases.transition(lease,"RUNNING",checkpoint("RUNNING",entity.sandboxName()));
-            providerPhase="EXECUTE";
-            result=execute(lease,commands.exec(entity.sandboxName(),request.argv()),request.timeoutMillis(),request.maxOutputBytes());
+            if(dependencyResult!=null&&dependencyResult.exitCode()!=0){
+                providerPhase="DEPENDENCY_INSTALL";
+                result=dependencyResult;
+            }else{
+                providerPhase="EXECUTE";
+                result=execute(lease,commands.exec(entity.sandboxName(),request.argv()),
+                        remainingMillis(executionDeadline,request.timeoutMillis()),request.maxOutputBytes());
+            }
             desired=result.exitCode()==0?SandboxExecutionStatus.SUCCEEDED:SandboxExecutionStatus.FAILED;
             if(result.exitCode()!=0){
                 String providerError=providerErrorType(result.stderr());
@@ -189,7 +226,36 @@ class SandboxWorker {
     private void throwIfCancelled(SandboxLeaseService.Lease lease)throws CancelledException{if(leases.cancellationRequested(lease))throw new CancelledException();}
     private Thread reader(InputStream input,ByteArrayOutputStream output,AtomicLong budget,AtomicReference<Throwable> failure){return new Thread(()->{try(input){byte[] b=new byte[8192];int n;while((n=input.read(b))>=0){long left=budget.addAndGet(-n);if(left<0){failure.compareAndSet(null,new OutputLimitException());return;}output.write(b,0,n);}}catch(Throwable ex){failure.compareAndSet(null,ex);}},"sandbox-output-reader");}
     private String decode(ByteArrayOutputStream bytes)throws CharacterCodingException{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString();}
+    private long remainingMillis(long deadline,long cap)throws TimeoutException{
+        long remaining=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime());
+        if(remaining<1)throw new TimeoutException();
+        return Math.min(remaining,cap);
+    }
     private void requireDenyAll(String value)throws Exception{JsonNode root=json.readTree(value);if(!containsRule(root))throw new IllegalStateException("active scoped deny-all rule missing");}
+    private void requireDependencyNetwork(String value)throws Exception{
+        JsonNode root=json.readTree(value);
+        if(!containsExactRule(root,"allow",Set.of("**")))
+            throw new IllegalStateException("dependency network permission missing");
+    }
+    private boolean containsExactRule(JsonNode node,String decision,Set<String> expected){
+        if(node==null)return false;
+        if(node.isObject()){
+            boolean current=("local".equals(node.path("origin").asText())||"scoped".equals(node.path("origin").asText()))
+                    &&"network".equals(node.path("resource_type").asText())
+                    &&"active".equals(node.path("status").asText())
+                    &&decision.equals(node.path("decision").asText())
+                    &&exactResources(node.path("resources"),expected);
+            if(current)return true;
+            var fields=node.fields();while(fields.hasNext())if(containsExactRule(fields.next().getValue(),decision,expected))return true;
+        }else if(node.isArray())for(JsonNode child:node)if(containsExactRule(child,decision,expected))return true;
+        return false;
+    }
+    private boolean exactResources(JsonNode resources,Set<String> expected){
+        if(!resources.isArray()||resources.size()!=expected.size())return false;
+        Set<String> actual=new HashSet<>();
+        for(JsonNode resource:resources)if(resource.isTextual())actual.add(resource.asText());else return false;
+        return actual.equals(expected);
+    }
     private boolean containsRule(JsonNode node){if(node==null)return false;if(node.isObject()){boolean legacy="local".equals(node.path("source").asText())&&"network".equals(node.path("type").asText())&&node.path("active").asBoolean(false)&&"**".equals(node.path("resource").asText());boolean current=("local".equals(node.path("origin").asText())||"scoped".equals(node.path("origin").asText()))&&"network".equals(node.path("resource_type").asText())&&"active".equals(node.path("status").asText())&&containsResource(node.path("resources"),"**");if("deny".equals(node.path("decision").asText())&&(legacy||current))return true;var fields=node.fields();while(fields.hasNext())if(containsRule(fields.next().getValue()))return true;}else if(node.isArray())for(JsonNode child:node)if(containsRule(child))return true;return false;}
     private boolean containsResource(JsonNode resources,String expected){if(!resources.isArray())return false;for(JsonNode resource:resources)if(resource.isTextual()&&expected.equals(resource.asText()))return true;return false;}
     private boolean sandboxExists(String value,String name)throws Exception{JsonNode root=json.readTree(value);return exactName(root,name);}

@@ -7,6 +7,7 @@ $configPath = Join-Path $repoRoot '.env.sandbox.local'
 $brokerPort = 8091
 $runtimeRoot = Join-Path $env:LOCALAPPDATA 'Yanban\E2bSandboxBroker'
 $brokerJar = Join-Path $repoRoot 'yanban-sandbox-broker\target\yanban-sandbox-broker-0.1.0-SNAPSHOT.jar'
+$providerHelper = Join-Path $repoRoot 'deploy\sandbox\e2b\e2b_provider.py'
 $stdoutLog = Join-Path $runtimeRoot 'broker.out.log'
 $stderrLog = Join-Path $runtimeRoot 'broker.err.log'
 
@@ -29,8 +30,7 @@ $required = @(
     'YANBAN_SANDBOX_DB_PASSWORD',
     'E2B_API_KEY',
     'YANBAN_E2B_TEMPLATE',
-    'YANBAN_E2B_PYTHON_EXECUTABLE',
-    'YANBAN_E2B_HELPER'
+    'YANBAN_E2B_PYTHON_EXECUTABLE'
 )
 foreach ($name in $required) {
     if ([string]::IsNullOrWhiteSpace($settings[$name])) { throw "Missing required setting: $name" }
@@ -42,9 +42,10 @@ if ($settings['YANBAN_SANDBOX_BROKER_ENABLED'] -ne 'true' -or
 if (-not (Test-Path -LiteralPath $settings['YANBAN_E2B_PYTHON_EXECUTABLE'] -PathType Leaf)) {
     throw 'YANBAN_E2B_PYTHON_EXECUTABLE does not point to an existing Python executable.'
 }
-if (-not (Test-Path -LiteralPath $settings['YANBAN_E2B_HELPER'] -PathType Leaf)) {
-    throw 'YANBAN_E2B_HELPER does not point to the E2B provider helper.'
+if (-not (Test-Path -LiteralPath $providerHelper -PathType Leaf)) {
+    throw 'The repository-owned E2B provider helper is missing.'
 }
+$settings['YANBAN_E2B_HELPER'] = $providerHelper
 
 $listener = Get-NetTCPConnection -LocalPort $brokerPort -State Listen -ErrorAction SilentlyContinue
 if ($listener) {

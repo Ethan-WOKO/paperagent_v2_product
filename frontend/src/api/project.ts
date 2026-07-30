@@ -110,7 +110,7 @@ export interface V2ProjectCandidateTurnResponse {
   replayed: boolean;
 }
 
-export type CandidateValidationProfile = 'MAVEN_TEST' | 'MAVEN_VERIFY' | 'JAVA_SOURCE_RUN'
+export type CandidateValidationProfile = 'DOCUMENT_INTEGRITY' | 'MAVEN_TEST' | 'MAVEN_VERIFY' | 'JAVA_SOURCE_RUN'
   | 'PYTHON_SOURCE_RUN' | 'C_SOURCE_RUN' | 'CPP_SOURCE_RUN';
 
 export interface CandidateValidationResponse {

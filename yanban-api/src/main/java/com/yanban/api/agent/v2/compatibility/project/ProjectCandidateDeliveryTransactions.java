@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.core.agent.*;
 import jakarta.persistence.*;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.stereotype.Component;
@@ -71,6 +73,15 @@ class ProjectCandidateDeliveryTransactions {
     }
 
     @Transactional
+    ProjectCandidateDeliveryEntity bindRepair(ProjectCandidateDeliveryKey key,
+            V2ProjectCandidateRepairRequest repair) {
+        var delivery = locked(key);
+        String replacements = encodeReplacements(repair.sourceReplacements());
+        delivery.bindRepair(repair, replacements, hash(replacements));
+        return deliveries.saveAndFlush(delivery);
+    }
+
+    @Transactional
     ProjectCandidateDeliveryEntity bindPlanAndSteps(ProjectCandidateDeliveryKey key,
             String planId, List<StepAuthority> authorities) {
         var delivery = locked(key); delivery.bindPlan(planId); deliveries.saveAndFlush(delivery);
@@ -94,6 +105,55 @@ class ProjectCandidateDeliveryTransactions {
     ProjectCandidateDeliveryEntity bindWorkspace(ProjectCandidateDeliveryKey key, String workspace) {
         var value = locked(key); value.bindWorkspace(workspace);
         return deliveries.saveAndFlush(value);
+    }
+
+    @Transactional
+    void bindPrepared(String planId, Map<String, String> replacements,
+            String diffFingerprint) {
+        bindPrepared(planId, replacements, List.of(), diffFingerprint);
+    }
+
+    @Transactional
+    void bindPrepared(String planId, Map<String, String> replacements,
+            List<String> mavenCoordinates, String diffFingerprint) {
+        var delivery = deliveries.findByPlanId(planId).orElseThrow(
+                () -> new IllegalStateException("project candidate delivery disappeared"));
+        var locked = locked(delivery.id());
+        String encoded = encodeReplacements(replacements);
+        String coordinates = encodeCoordinates(
+                com.yanban.sandbox.contract.JavaMavenCoordinates.normalize(mavenCoordinates));
+        locked.bindPrepared(encoded, hash(encoded), coordinates, hash(coordinates), diffFingerprint);
+        deliveries.saveAndFlush(locked);
+    }
+
+    @Transactional(readOnly = true)
+    PreparedCandidate prepared(String planId) {
+        var delivery = deliveries.findByPlanId(planId).orElseThrow(
+                () -> new IllegalStateException("project candidate delivery unavailable"));
+        String encoded = delivery.preparedReplacementsJson();
+        String coordinateJson = delivery.preparedMavenCoordinatesJson();
+        if (encoded == null || delivery.preparedReplacementsSha256() == null
+                || coordinateJson == null || delivery.preparedMavenCoordinatesSha256() == null
+                || delivery.preparedDiffFingerprint() == null
+                || !hash(encoded).equals(delivery.preparedReplacementsSha256())
+                || !hash(coordinateJson).equals(delivery.preparedMavenCoordinatesSha256())) {
+            throw conflict();
+        }
+        try {
+            Map<String, String> replacements = json.readValue(
+                    encoded, new TypeReference<>() {});
+            List<String> coordinates = json.readValue(
+                    coordinateJson, new TypeReference<>() {});
+            if (!encodeReplacements(replacements).equals(encoded)) throw conflict();
+            coordinates = com.yanban.sandbox.contract.JavaMavenCoordinates.normalize(coordinates);
+            if (!encodeCoordinates(coordinates).equals(coordinateJson)) throw conflict();
+            return new PreparedCandidate(
+                    replacements, coordinates, delivery.preparedDiffFingerprint());
+        } catch (RuntimeException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw conflict();
+        }
     }
 
     @Transactional
@@ -156,10 +216,29 @@ class ProjectCandidateDeliveryTransactions {
                 () -> new IllegalStateException("project candidate authority unavailable"));
         var delivery = deliveries.findByPlanId(planId).orElseThrow(
                 () -> new IllegalStateException("project candidate delivery unavailable"));
+        ProjectCandidateEffectAuthority.RepairAuthority repair = null;
+        if (delivery.repairSourceValidationId() != null) {
+            String replacements = delivery.repairSourceReplacementsJson();
+            if (replacements == null || !hash(replacements).equals(
+                    delivery.repairSourceReplacementsSha256())) throw conflict();
+            Map<String, String> decoded;
+            try {
+                decoded = json.readValue(replacements, new TypeReference<>() {});
+            } catch (Exception failure) {
+                throw conflict();
+            }
+            if (!encodeReplacements(decoded).equals(replacements)) throw conflict();
+            repair = new ProjectCandidateEffectAuthority.RepairAuthority(
+                    delivery.repairSourceValidationId(), delivery.repairSourceArtifactId(),
+                    delivery.repairSourceFingerprint(), delivery.repairSelectedIndex(),
+                    delivery.repairSelectedPath(), delivery.repairFailedReceiptDigest(),
+                    delivery.projectVersionId(), delivery.repairAttempt(), delivery.repairMaxAttempts(),
+                    decoded, delivery.repairSourceReplacementsSha256(), delivery.repairDiagnostic());
+        }
         return new ProjectCandidateEffectAuthority(step.effectKind(), step.authorityJson(),
                 step.authoritySha256(), delivery.id().userId(), delivery.id().projectId(),
                 delivery.id().sessionId(), delivery.turnId(), delivery.projectVersionId(),
-                delivery.objective(), paths(delivery));
+                delivery.objective(), paths(delivery), repair);
     }
 
     List<String> paths(ProjectCandidateDeliveryEntity delivery) {
@@ -184,6 +263,22 @@ class ProjectCandidateDeliveryTransactions {
         try { return json.writeValueAsString(paths); }
         catch (Exception failure) { throw invalid(); }
     }
+    private String encodeReplacements(Map<String, String> replacements) {
+        try { return json.writeValueAsString(new TreeMap<>(replacements)); }
+        catch (Exception failure) { throw invalid(); }
+    }
+    private String encodeCoordinates(List<String> coordinates) {
+        try { return json.writeValueAsString(coordinates); }
+        catch (Exception failure) { throw invalid(); }
+    }
+    private static String hash(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception failure) {
+            throw new IllegalStateException("SHA-256 unavailable");
+        }
+    }
     private static IllegalArgumentException invalid() {
         return new IllegalArgumentException("project candidate request is invalid");
     }
@@ -191,4 +286,11 @@ class ProjectCandidateDeliveryTransactions {
         return new IllegalStateException("project candidate authority conflict");
     }
     record StepAuthority(String stepId, String kind, String authority, String hash) {}
+    record PreparedCandidate(Map<String, String> replacements, List<String> mavenCoordinates,
+                             String diffFingerprint) {
+        PreparedCandidate {
+            replacements = Map.copyOf(replacements);
+            mavenCoordinates = List.copyOf(mavenCoordinates);
+        }
+    }
 }

@@ -24,6 +24,29 @@ class ProjectCandidateDeliveryEntity {
     @Column(name = "lease_expires_at", nullable = false) private Instant leaseExpiresAt;
     @Column(name = "plan_id", length = 128) private String planId;
     @Column(name = "workspace_id", length = 128) private String workspaceId;
+    @Column(name = "repair_source_validation_id", length = 36) private String repairSourceValidationId;
+    @Column(name = "repair_source_artifact_id") private Long repairSourceArtifactId;
+    @Column(name = "repair_source_fingerprint", length = 64) private String repairSourceFingerprint;
+    @Column(name = "repair_selected_index") private Integer repairSelectedIndex;
+    @Column(name = "repair_selected_path", length = 512) private String repairSelectedPath;
+    @Column(name = "repair_failed_receipt_digest", length = 64) private String repairFailedReceiptDigest;
+    @Column(name = "repair_attempt") private Integer repairAttempt;
+    @Column(name = "repair_max_attempts") private Integer repairMaxAttempts;
+    @Lob @Column(name = "repair_source_replacements_json", columnDefinition = "LONGTEXT")
+    private String repairSourceReplacementsJson;
+    @Column(name = "repair_source_replacements_sha256", length = 64)
+    private String repairSourceReplacementsSha256;
+    @Lob @Column(name = "repair_diagnostic", columnDefinition = "TEXT") private String repairDiagnostic;
+    @Column(name = "prepared_replacements_json", columnDefinition = "LONGTEXT")
+    private String preparedReplacementsJson;
+    @Column(name = "prepared_replacements_sha256", length = 64)
+    private String preparedReplacementsSha256;
+    @Column(name = "prepared_diff_fingerprint", length = 64)
+    private String preparedDiffFingerprint;
+    @Lob @Column(name = "prepared_maven_coordinates_json", columnDefinition = "TEXT")
+    private String preparedMavenCoordinatesJson;
+    @Column(name = "prepared_maven_coordinates_sha256", length = 64)
+    private String preparedMavenCoordinatesSha256;
     @Column(name = "artifact_id") private Long artifactId;
     @Column(name = "candidate_fingerprint", length = 64) private String candidateFingerprint;
     @Column(name = "diff_fingerprint", length = 64) private String diffFingerprint;
@@ -58,6 +81,22 @@ class ProjectCandidateDeliveryEntity {
     Instant leaseExpiresAt() { return leaseExpiresAt; }
     String planId() { return planId; }
     String workspaceId() { return workspaceId; }
+    String repairSourceValidationId() { return repairSourceValidationId; }
+    Long repairSourceArtifactId() { return repairSourceArtifactId; }
+    String repairSourceFingerprint() { return repairSourceFingerprint; }
+    Integer repairSelectedIndex() { return repairSelectedIndex; }
+    String repairSelectedPath() { return repairSelectedPath; }
+    String repairFailedReceiptDigest() { return repairFailedReceiptDigest; }
+    Integer repairAttempt() { return repairAttempt; }
+    Integer repairMaxAttempts() { return repairMaxAttempts; }
+    String repairSourceReplacementsJson() { return repairSourceReplacementsJson; }
+    String repairSourceReplacementsSha256() { return repairSourceReplacementsSha256; }
+    String repairDiagnostic() { return repairDiagnostic; }
+    String preparedReplacementsJson() { return preparedReplacementsJson; }
+    String preparedReplacementsSha256() { return preparedReplacementsSha256; }
+    String preparedDiffFingerprint() { return preparedDiffFingerprint; }
+    String preparedMavenCoordinatesJson() { return preparedMavenCoordinatesJson; }
+    String preparedMavenCoordinatesSha256() { return preparedMavenCoordinatesSha256; }
     Long artifactId() { return artifactId; }
     String candidateFingerprint() { return candidateFingerprint; }
     String diffFingerprint() { return diffFingerprint; }
@@ -72,6 +111,52 @@ class ProjectCandidateDeliveryEntity {
     void bindWorkspace(String value) {
         if (workspaceId != null && !workspaceId.equals(value)) throw conflict();
         workspaceId = value; updatedAt = Instant.now();
+    }
+    void bindRepair(V2ProjectCandidateRepairRequest repair, String replacementsJson,
+            String replacementsSha256) {
+        if (repairSourceValidationId != null) {
+            if (!repairSourceValidationId.equals(repair.sourceValidationId())
+                    || !repairSourceArtifactId.equals(repair.sourceCandidateArtifactId())
+                    || !repairSourceFingerprint.equals(repair.sourceCandidateFingerprint())
+                    || repairSelectedIndex != repair.selectedChangeIndex()
+                    || !repairSelectedPath.equals(repair.selectedPath())
+                    || !repairFailedReceiptDigest.equals(repair.failedReceiptDigest())
+                    || repairAttempt != repair.attempt() || repairMaxAttempts != repair.maxAttempts()
+                    || !repairSourceReplacementsJson.equals(replacementsJson)
+                    || !repairSourceReplacementsSha256.equals(replacementsSha256)
+                    || !java.util.Objects.equals(repairDiagnostic, repair.compilerDiagnostic())) throw conflict();
+            return;
+        }
+        if (planId != null
+                || repair.attempt() != 1 || repair.maxAttempts() != 1
+                || !projectVersionId.equals(repair.originalProjectVersion())) throw conflict();
+        repairSourceValidationId = repair.sourceValidationId();
+        repairSourceArtifactId = repair.sourceCandidateArtifactId();
+        repairSourceFingerprint = repair.sourceCandidateFingerprint();
+        repairSelectedIndex = repair.selectedChangeIndex();
+        repairSelectedPath = repair.selectedPath();
+        repairFailedReceiptDigest = repair.failedReceiptDigest();
+        repairAttempt = repair.attempt();
+        repairMaxAttempts = repair.maxAttempts();
+        repairSourceReplacementsJson = replacementsJson;
+        repairSourceReplacementsSha256 = replacementsSha256;
+        repairDiagnostic = repair.compilerDiagnostic();
+        updatedAt = Instant.now();
+    }
+    void bindPrepared(String replacements, String replacementsSha256, String coordinates,
+            String coordinatesSha256, String diff) {
+        if (preparedReplacementsJson != null
+                && (!preparedReplacementsJson.equals(replacements)
+                || !preparedReplacementsSha256.equals(replacementsSha256)
+                || !preparedMavenCoordinatesJson.equals(coordinates)
+                || !preparedMavenCoordinatesSha256.equals(coordinatesSha256)
+                || !preparedDiffFingerprint.equals(diff))) throw conflict();
+        preparedReplacementsJson = replacements;
+        preparedReplacementsSha256 = replacementsSha256;
+        preparedMavenCoordinatesJson = coordinates;
+        preparedMavenCoordinatesSha256 = coordinatesSha256;
+        preparedDiffFingerprint = diff;
+        updatedAt = Instant.now();
     }
     void rotateLease(String token, Instant expiresAt) {
         leaseToken = token; leaseExpiresAt = expiresAt; updatedAt = Instant.now();

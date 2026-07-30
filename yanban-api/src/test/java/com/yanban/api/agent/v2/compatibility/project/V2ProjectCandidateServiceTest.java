@@ -33,14 +33,12 @@ class V2ProjectCandidateServiceTest {
             mock(io.paperagent.v2.persistence.LeaseRepository.class);
     private final com.yanban.api.agent.v2.AgentTurnProductContextResolver turnContexts =
             mock(com.yanban.api.agent.v2.AgentTurnProductContextResolver.class);
-    private final AuthenticatedAgentTurnWorkspacePortFactory workspaces =
-            mock(AuthenticatedAgentTurnWorkspacePortFactory.class);
     private final ProjectCandidateCompositionEffect composition =
             mock(ProjectCandidateCompositionEffect.class);
     private final V2ProjectCandidateService service = new V2ProjectCandidateService(
             sessions, projects, deliveries, starts, contexts, loop, recovery,
             leases, turnContexts,
-            workspaces, composition, new ObjectMapper());
+            composition, new ObjectMapper());
 
     @Test
     void invalidObjectivePathsAndRequestIdentityFailBeforeProductLookup() {
@@ -231,11 +229,7 @@ class V2ProjectCandidateServiceTest {
         var terminal = mock(io.paperagent.v2.persistence.PersistedStepRecoverySucceeded.class);
         when(recovery.inspect(planId)).thenReturn(
                 io.paperagent.v2.persistence.PersistenceResult.found(terminal));
-        var workspace = mock(io.paperagent.v2.workspace.WorkspacePort.class);
-        when(workspaces.create(7L, 2L)).thenReturn(workspace);
-        when(workspace.inspectMaterialization(spec)).thenReturn(verified);
-        when(composition.publish(eq("plan"), eq(7L), eq(2L), eq(workspace),
-                eq(ref), any())).thenReturn(
+        when(composition.publish("plan", 7L, 2L)).thenReturn(
                 new ProjectCandidateCompositionEffect.CandidateResult(
                         42L, "d".repeat(64), "e".repeat(64)));
         var delivered = new ProjectCandidateDeliveryEntity(key, "c".repeat(64),
@@ -275,8 +269,7 @@ class V2ProjectCandidateServiceTest {
                 .readyActivationAttempt().leaseExpiresAt());
         assertEquals(expiry, loopCommand.getValue()
                 .nextStepActivationAttempt().leaseExpiresAt());
-        verify(composition).publish(eq("plan"), eq(7L), eq(2L), eq(workspace),
-                eq(ref), any());
+        verify(composition).publish("plan", 7L, 2L);
         verify(deliveries).deliver(key);
     }
 

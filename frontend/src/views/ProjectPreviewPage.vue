@@ -135,31 +135,48 @@
           </section>
         </aside>
 
-        <section class="project-panel project-panel--main">
+        <section class="project-panel project-panel--main" :class="{ 'project-panel--v2': agentMode === 'v2' }">
           <div class="project-tabs">
-            <strong class="project-tabs__title">{{ t('project.page.conversation') }}</strong>
+            <div class="project-agent-mode">
+              <strong class="project-tabs__title">{{ agentMode === 'v1' ? 'V1 会话' : 'V2 工作台' }}</strong>
+              <div class="project-agent-mode__switch" role="group" aria-label="选择 Agent 版本">
+                <button type="button" :class="{ active: agentMode === 'v1' }" @click="setAgentMode('v1')">
+                  V1 <small>旧版会话</small>
+                </button>
+                <button type="button" :class="{ active: agentMode === 'v2' }" @click="setAgentMode('v2')">
+                  V2 <small>持久化任务</small>
+                </button>
+              </div>
+            </div>
             <div class="project-tabs__actions">
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">{{ t('project.page.preview') }}</button>
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" @click="toggleInspector('evidence')">{{ t('project.page.evidence') }} <span>{{ evidence.length }}</span></button>
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" @click="toggleInspector('changes')">{{ t('project.page.changes') }} <span>{{ candidates.length }}</span></button>
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" @click="toggleInspector('versions')">{{ t('project.page.versions') }} <span>{{ revisions.length }}</span></button>
-              <NButton size="tiny" quaternary :disabled="loading.send" @click="startNewConversation">{{ t('project.page.newConversation') }}</NButton>
+              <template v-if="agentMode === 'v1'">
+                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">{{ t('project.page.preview') }}</button>
+                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" @click="toggleInspector('evidence')">{{ t('project.page.evidence') }} <span>{{ evidence.length }}</span></button>
+                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" @click="toggleInspector('changes')">{{ t('project.page.changes') }} <span>{{ candidates.length }}</span></button>
+                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" @click="toggleInspector('versions')">{{ t('project.page.versions') }} <span>{{ revisions.length }}</span></button>
+                <NButton size="tiny" quaternary :disabled="loading.send" @click="startNewConversation">{{ t('project.page.newConversation') }}</NButton>
+              </template>
+              <template v-else>
+                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">文件预览</button>
+                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
+                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
+              </template>
             </div>
           </div>
 
           <section v-if="inspectorOpen" class="project-inspector">
             <div class="project-inspector__tabs">
-              <strong>{{ t('project.page.inspector') }}</strong>
-              <button type="button" class="project-inspector__close" @click="inspectorOpen = false">{{ t('project.page.hideInspector') }}</button>
+              <strong>{{ agentMode === 'v2' ? '任务详情' : t('project.page.inspector') }}</strong>
+              <button type="button" class="project-inspector__close" @click="inspectorOpen = false">{{ agentMode === 'v2' ? '收起' : t('project.page.hideInspector') }}</button>
             </div>
 
             <div class="project-inspector__body">
               <template v-if="inspectorTab === 'preview'">
                 <div class="project-preview project-preview--inline">
-                  <div class="project-panel__title"><strong>{{ selectedFile?.path || 'Preview' }}</strong><span v-if="selectedFile">{{ shortHash(selectedFile.sha256) }}</span></div>
+                  <div class="project-panel__title"><strong>{{ selectedFile?.path || (agentMode === 'v2' ? '文件预览' : 'Preview') }}</strong><span v-if="selectedFile">{{ shortHash(selectedFile.sha256) }}</span></div>
                   <NSpin v-if="loading.file" size="small" />
                   <pre v-else-if="selectedFile">{{ selectedFile.content }}</pre>
-                  <NEmpty v-else size="small" description="Select a readable file to preview it here." />
+                  <NEmpty v-else size="small" :description="agentMode === 'v2' ? '请从左侧选择一个可读取文件。' : 'Select a readable file to preview it here.'" />
                 </div>
               </template>
 
@@ -186,42 +203,42 @@
 
               <template v-else-if="inspectorTab === 'changes'">
                 <div class="project-inspector__changes-head">
-                  <p class="project-panel__hint">Read-only suggestions. Original Project files are never changed.</p>
-                  <NButton size="tiny" secondary :loading="loading.candidates" :disabled="!activeProject || candidates.length === 0" title="Compare each proposal's base hash with the current Project file" @click="refreshCandidates">Revalidate</NButton>
+                  <p class="project-panel__hint">这里只展示候选修改；确认前不会改动原项目。</p>
+                  <NButton size="tiny" secondary :loading="loading.candidates" :disabled="!activeProject || candidates.length === 0" title="重新核对候选修改与当前项目版本" @click="refreshCandidates">重新核对</NButton>
                 </div>
 
                 <div class="project-candidate-list">
                   <button v-for="candidate in candidates" :key="candidate.artifact.id" :class="{ active: selectedCandidate?.artifact.id === candidate.artifact.id }" @click="selectCandidate(candidate)">
                     <strong :title="candidateTitle(candidate)">{{ candidateTitle(candidate) }}</strong>
                     <span>
-                      <NTag size="tiny" type="info">NOT_APPLIED</NTag>
-                      <NTag size="tiny" :type="candidateStateType(candidate.state)">{{ candidate.state }}</NTag>
-                      <small v-if="candidate.candidate">{{ candidate.candidate.changes.length }} file{{ candidate.candidate.changes.length === 1 ? '' : 's' }}</small>
+                      <NTag size="tiny" type="info">尚未应用</NTag>
+                      <NTag size="tiny" :type="candidateStateType(candidate.state)">{{ candidateStateLabel(candidate.state) }}</NTag>
+                      <small v-if="candidate.candidate">{{ candidate.candidate.changes.length }} 个文件</small>
                     </span>
                   </button>
-                  <NEmpty v-if="!loading.candidates && candidates.length === 0" size="small" description="No read-only Candidate proposals yet." />
+                  <NEmpty v-if="!loading.candidates && candidates.length === 0" size="small" description="目前还没有候选修改。" />
                 </div>
 
                 <div v-if="selectedCandidate" class="project-diff">
-                  <div class="project-panel__title"><strong>Read-only Candidate</strong><span>artifact {{ selectedCandidate.artifact.id }}</span></div>
+                  <div class="project-panel__title"><strong>候选修改</strong><span>编号 {{ selectedCandidate.artifact.id }}</span></div>
                   <NAlert v-if="selectedCandidate.error" :type="selectedCandidate.state === 'STALE' ? 'warning' : 'error'" :show-icon="false">
                     {{ selectedCandidate.error }}
                   </NAlert>
 
                   <template v-if="selectedCandidate.candidate">
                     <dl class="project-candidate-meta">
-                      <dt>schema</dt><dd>{{ selectedCandidate.candidate.schemaVersion }}</dd>
-                      <dt>Project version</dt><dd :title="selectedCandidate.candidate.projectVersion">{{ selectedCandidate.candidate.projectVersion }}</dd>
-                      <dt>fingerprint</dt><dd :title="selectedCandidate.candidate.fingerprint">{{ selectedCandidate.candidate.fingerprint }}</dd>
-                      <dt>state</dt><dd>{{ selectedCandidate.candidate.governanceStatus }} / {{ selectedCandidate.candidate.applicationStatus }}</dd>
-                      <dt>review format</dt><dd>{{ selectedCandidate.candidate.reviewDiff.format }}</dd>
+                      <dt>格式版本</dt><dd>{{ selectedCandidate.candidate.schemaVersion }}</dd>
+                      <dt>项目版本</dt><dd :title="selectedCandidate.candidate.projectVersion">{{ selectedCandidate.candidate.projectVersion }}</dd>
+                      <dt>候选指纹</dt><dd :title="selectedCandidate.candidate.fingerprint">{{ selectedCandidate.candidate.fingerprint }}</dd>
+                      <dt>当前状态</dt><dd>{{ selectedCandidate.candidate.governanceStatus }} / {{ selectedCandidate.candidate.applicationStatus }}</dd>
+                      <dt>差异格式</dt><dd>{{ selectedCandidate.candidate.reviewDiff.format }}</dd>
                     </dl>
 
                     <section class="project-candidate-validation">
-                      <div class="project-panel__title"><strong>Validation</strong><span>{{ candidateValidationLabel(selectedCandidate.candidate) }}</span></div>
+                      <div class="project-panel__title"><strong>候选内容检查</strong><span>{{ candidateValidationLabel(selectedCandidate.candidate) }}</span></div>
                       <div class="project-validation-checks">
                         <NTag v-for="check in selectedCandidate.candidate.validation.checks" :key="check.area" size="tiny" :type="check.status === 'PASSED' ? 'success' : check.status === 'FAILED' ? 'error' : 'warning'">
-                          {{ check.area }} {{ check.status }}
+                          {{ candidateCheckAreaLabel(check.area) }} {{ technicalStatusLabel(check.status) }}
                         </NTag>
                       </div>
                       <ul v-if="selectedCandidate.candidate.validation.issues.length" class="project-validation-issues">
@@ -230,66 +247,69 @@
                         </li>
                       </ul>
                       <dl class="project-candidate-usage">
-                        <dt>changes</dt><dd>{{ selectedCandidate.candidate.validation.usage.inspectedChanges }} / {{ selectedCandidate.candidate.validation.usage.requestedChanges }}</dd>
-                        <dt>Evidence</dt><dd>{{ selectedCandidate.candidate.validation.usage.inspectedEvidenceRefs }} / {{ selectedCandidate.candidate.validation.usage.requestedEvidenceRefs }}</dd>
-                        <dt>candidate UTF-8</dt><dd>{{ formatBytes(selectedCandidate.candidate.validation.usage.inspectedCandidateUtf8Bytes) }} / {{ formatBytes(selectedCandidate.candidate.validation.usage.requestedCandidateUtf8Bytes) }}</dd>
+                        <dt>修改数量</dt><dd>{{ selectedCandidate.candidate.validation.usage.inspectedChanges }} / {{ selectedCandidate.candidate.validation.usage.requestedChanges }}</dd>
+                        <dt>证据数量</dt><dd>{{ selectedCandidate.candidate.validation.usage.inspectedEvidenceRefs }} / {{ selectedCandidate.candidate.validation.usage.requestedEvidenceRefs }}</dd>
+                        <dt>候选内容大小</dt><dd>{{ formatBytes(selectedCandidate.candidate.validation.usage.inspectedCandidateUtf8Bytes) }} / {{ formatBytes(selectedCandidate.candidate.validation.usage.requestedCandidateUtf8Bytes) }}</dd>
                       </dl>
                     </section>
 
                     <section class="project-candidate-sandbox">
                       <div class="project-panel__title">
-                        <strong>Sandbox verification</strong>
-                        <span>Candidate remains NOT_APPLIED</span>
+                        <strong>{{ documentOnlyProject ? '文档完整性检查' : '沙箱运行验证' }}</strong>
+                        <span>{{ documentOnlyProject ? '文档不会作为代码执行' : '验证不会直接应用修改' }}</span>
                       </div>
+                      <NAlert v-if="documentOnlyProject" type="info" :show-icon="false">
+                        这个项目只包含文档。系统会核对项目版本、路径、哈希、权限和候选绑定，不会把文档放进 E2B 执行。
+                      </NAlert>
                       <div class="project-candidate-sandbox__controls">
                         <NSelect v-model:value="validationProfile" size="small" :options="validationProfileOptions" :disabled="loading.candidateValidation" />
                         <NButton size="small" secondary :loading="loading.candidateValidation"
                           :disabled="!candidateCanSelect(selectedCandidate) || selectedChangeIndexes.size === 0"
-                          @click="validationModalOpen = true">Validate selected changes</NButton>
+                          @click="validationModalOpen = true">{{ documentOnlyProject ? '检查所选文档修改' : '在沙箱运行所选修改' }}</NButton>
                       </div>
                       <NAlert v-if="validationMessage" :type="validationMessageType" :show-icon="false">{{ validationMessage }}</NAlert>
                       <div v-if="candidateValidations.length" class="project-candidate-validation-history">
                         <button v-for="validation in candidateValidations" :key="validation.validationId"
                           :class="{ active: selectedValidation?.validationId === validation.validationId }"
                           @click="selectedValidation = validation">
-                          <span>{{ validation.profile }}</span>
-                          <NTag size="tiny" :type="candidateValidationStatusType(validation.status)">{{ validation.status }}</NTag>
+                          <span>{{ candidateValidationProfileLabel(validation.profile) }}</span>
+                          <NTag size="tiny" :type="candidateValidationStatusType(validation.status)">{{ technicalStatusLabel(validation.status) }}</NTag>
                           <small>{{ formatDateTime(validation.createdAt) }}</small>
                         </button>
                       </div>
                       <article v-if="selectedValidation" class="project-candidate-validation-receipt">
                         <dl>
-                          <dt>validation</dt><dd :title="selectedValidation.validationId">{{ selectedValidation.validationId }}</dd>
-                          <dt>binding</dt><dd>{{ shortHash(selectedValidation.candidateFingerprint) }} / {{ shortHash(selectedValidation.projectVersion) }}</dd>
-                          <dt>profile</dt><dd>{{ selectedValidation.profile }}</dd>
-                          <dt>status</dt><dd>{{ selectedValidation.status }}</dd>
-                          <dt>exit code</dt><dd>{{ selectedValidation.exitCode ?? '-' }}</dd>
-                          <dt>timed out</dt><dd>{{ selectedValidation.timedOut ? 'true' : 'false' }}</dd>
-                          <dt>output truncated</dt><dd>{{ selectedValidation.outputTruncated ? 'true' : 'false' }}</dd>
-                          <dt>provider</dt><dd>{{ selectedValidation.provider || '-' }}</dd>
-                          <dt>request digest</dt><dd :title="selectedValidation.requestDigest">{{ selectedValidation.requestDigest }}</dd>
-                          <dt>receipt digest</dt><dd :title="selectedValidation.receiptDigest || '-'">{{ selectedValidation.receiptDigest || '-' }}</dd>
-                          <dt>decision</dt><dd>{{ selectedValidation.decisionStatus }}</dd>
+                           <dt>验证编号</dt><dd :title="selectedValidation.validationId">{{ selectedValidation.validationId }}</dd>
+                           <dt>绑定信息</dt><dd>{{ shortHash(selectedValidation.candidateFingerprint) }} / {{ shortHash(selectedValidation.projectVersion) }}</dd>
+                           <dt>运行方式</dt><dd>{{ candidateValidationProfileLabel(selectedValidation.profile) }}</dd>
+                           <dt>运行状态</dt><dd>{{ technicalStatusLabel(selectedValidation.status) }}</dd>
+                           <dt>退出码</dt><dd>{{ selectedValidation.exitCode ?? '-' }}</dd>
+                           <dt>是否超时</dt><dd>{{ selectedValidation.timedOut ? '是' : '否' }}</dd>
+                           <dt>输出是否截断</dt><dd>{{ selectedValidation.outputTruncated ? '是' : '否' }}</dd>
+                           <dt>沙箱提供方</dt><dd>{{ selectedValidation.provider || '-' }}</dd>
+                           <dt>请求摘要</dt><dd :title="selectedValidation.requestDigest">{{ selectedValidation.requestDigest }}</dd>
+                           <dt>执行凭证摘要</dt><dd :title="selectedValidation.receiptDigest || '-'">{{ selectedValidation.receiptDigest || '-' }}</dd>
+                           <dt>确认状态</dt><dd>{{ technicalStatusLabel(selectedValidation.decisionStatus) }}</dd>
                         </dl>
                         <NAlert v-if="selectedValidation.errorCode" type="warning" :show-icon="false">{{ selectedValidation.errorCode }}</NAlert>
                         <NAlert v-if="selectedValidation.outputTruncated" type="warning" :show-icon="false">
-                          Output reached the configured limit and was truncated. Review the bounded stdout/stderr below.
+                          输出超过限制，下面只显示截断后的标准输出和错误输出。
                         </NAlert>
-                        <details open><summary>Raw stdout</summary><pre>{{ selectedValidation.stdout || '(empty)' }}</pre></details>
-                        <details open><summary>Raw stderr</summary><pre>{{ selectedValidation.stderr || '(empty)' }}</pre></details>
+                        <details open><summary>程序标准输出</summary><pre>{{ selectedValidation.stdout || '（空）' }}</pre></details>
+                        <details open><summary>程序错误输出</summary><pre>{{ selectedValidation.stderr || '（空）' }}</pre></details>
                         <div class="project-candidate-output-analysis">
-                          <strong>Read-only analysis summary</strong>
+                          <strong>运行结果分析</strong>
                           <p>{{ selectedValidation.analysisDisclaimer || '基于输出、未独立验证。' }}</p>
-                          <pre>{{ selectedValidation.analysisSummary || 'No analysis summary was generated; review the raw Broker output above.' }}</pre>
+                          <pre>{{ selectedValidation.analysisSummary || '没有生成分析摘要，请直接查看上面的程序输出。' }}</pre>
                         </div>
                         <NSpace justify="end">
                           <NButton v-if="!candidateValidationTerminal(selectedValidation.status)" size="tiny" secondary
-                            :loading="loading.cancelCandidateValidation" @click="cancelSelectedValidation">Cancel run</NButton>
+                            :loading="loading.cancelCandidateValidation" @click="cancelSelectedValidation">取消运行</NButton>
                           <NButton v-if="selectedValidation.decisionStatus === 'PENDING'" size="tiny" type="warning" secondary
-                            :loading="loading.rejectCandidateValidation" @click="rejectSelectedValidation">Reject Candidate</NButton>
+                            :loading="loading.rejectCandidateValidation" @click="rejectSelectedValidation">拒绝候选修改</NButton>
                         </NSpace>
                       </article>
-                      <NEmpty v-else size="small" description="No sandbox verification receipt for this Candidate yet." />
+                      <NEmpty v-else size="small" description="这个候选修改还没有运行验证记录。" />
                     </section>
 
                     <section class="project-candidate-files">
@@ -298,30 +318,30 @@
                           <NCheckbox
                             :checked="selectedChangeIndexes.has(changeIndex)"
                             :disabled="!candidateCanSelect(selectedCandidate) || loading.applyCandidate || loading.candidateValidation"
-                            :aria-label="`Accept ${entry.relativePath}`"
+                            :aria-label="`选择 ${entry.relativePath}`"
                             @update:checked="(checked) => setChangeSelected(changeIndex, checked)"
                           />
-                          <NTag size="tiny" :type="candidateChangeType(entry.type)">{{ entry.type }}</NTag>
+                           <NTag size="tiny" :type="candidateChangeType(entry.type)">{{ candidateChangeTypeLabel(entry.type) }}</NTag>
                           <strong :title="entry.relativePath">{{ entry.relativePath }}</strong>
                         </header>
                         <dl>
-                          <dt>base hash</dt><dd :title="entry.baseFileHash || '-'">{{ entry.baseFileHash || '-' }}</dd>
-                          <dt>result hash</dt><dd :title="entry.resultFileHash || '-'">{{ entry.resultFileHash || '-' }}</dd>
+                          <dt>原文件哈希</dt><dd :title="entry.baseFileHash || '-'">{{ entry.baseFileHash || '-' }}</dd>
+                          <dt>修改后哈希</dt><dd :title="entry.resultFileHash || '-'">{{ entry.resultFileHash || '-' }}</dd>
                         </dl>
                         <details open>
-                          <summary>Review replacement</summary>
+                          <summary>查看修改后的完整内容</summary>
                           <pre v-if="entry.replacementText !== null">{{ entry.replacementText }}</pre>
-                          <p v-else class="project-delete-marker">File deletion only. No replacement content.</p>
+                          <p v-else class="project-delete-marker">这是删除文件操作，没有替换内容。</p>
                         </details>
                         <details>
-                          <summary>Evidence provenance ({{ candidateEvidence(selectedCandidate.candidate, entry.relativePath).length }})</summary>
+                          <summary>修改依据（{{ candidateEvidence(selectedCandidate.candidate, entry.relativePath).length }}）</summary>
                           <div class="project-candidate-evidence">
                             <dl v-for="(ref, index) in candidateEvidence(selectedCandidate.candidate, entry.relativePath)" :key="`${ref.relativePath}:${ref.range.startLine}:${ref.range.endLine}:${index}`">
-                              <dt>path</dt><dd :title="ref.relativePath">{{ ref.relativePath }}</dd>
-                              <dt>lines</dt><dd>{{ ref.range.startLine }}-{{ ref.range.endLine }}</dd>
-                              <dt>file hash</dt><dd :title="ref.fileHash">{{ ref.fileHash }}</dd>
-                              <dt>parser</dt><dd>{{ ref.parserVersion }}</dd>
-                              <dt>trust</dt><dd>{{ ref.trustLabel }}</dd>
+                              <dt>路径</dt><dd :title="ref.relativePath">{{ ref.relativePath }}</dd>
+                              <dt>行号</dt><dd>{{ ref.range.startLine }}-{{ ref.range.endLine }}</dd>
+                              <dt>文件哈希</dt><dd :title="ref.fileHash">{{ ref.fileHash }}</dd>
+                              <dt>解析器</dt><dd>{{ ref.parserVersion }}</dd>
+                              <dt>可信状态</dt><dd>{{ ref.trustLabel }}</dd>
                             </dl>
                           </div>
                         </details>
@@ -331,14 +351,14 @@
                       {{ applicationMessage }}
                     </NAlert>
                     <div class="project-candidate-apply">
-                      <span>{{ selectedChangeIndexes.size }} of {{ selectedCandidate.candidate.changes.length }} changes selected</span>
+                      <span>已选择 {{ selectedChangeIndexes.size }} / {{ selectedCandidate.candidate.changes.length }} 项修改</span>
                       <NButton
                         type="primary"
                         size="small"
                         :loading="loading.applyCandidate"
                         :disabled="!candidateCanApply(selectedCandidate) || selectedChangeIndexes.size === 0"
                         @click="openApplyConfirmation"
-                      >Apply selected changes</NButton>
+                      >确认并创建新版本</NButton>
                     </div>
                   </template>
                 </div>
@@ -374,7 +394,7 @@
             </div>
           </section>
 
-          <div class="project-scroll-shell">
+          <div v-if="agentMode === 'v1'" class="project-scroll-shell">
             <div ref="messagesContainer" class="project-messages" aria-label="Project conversation" @scroll="handleProjectContentScroll">
               <template v-for="item in projectTimelineItems" :key="item.key">
                 <div
@@ -590,6 +610,7 @@
             </nav>
           </div>
           <ProjectContextDebugPanel
+            v-if="agentMode === 'v1'"
             :snapshot="contextSnapshot"
             :loading="loading.context"
             :error="contextError"
@@ -607,39 +628,76 @@
             :dropped-label="t('project.context.dropped')"
             @refresh="loadContextDebug()"
           />
+          <section v-if="agentMode === 'v2'" class="v2-workbench__hero">
+            <div>
+              <span class="v2-workbench__eyebrow">PaperAgent V2</span>
+              <h2>持久化项目任务</h2>
+              <p>固定当前项目版本，在隔离工作区执行；任何候选修改都需要检查和你的确认。</p>
+            </div>
+            <NTag :type="v2ProjectAvailable ? 'success' : 'error'">
+              {{ v2ProjectAvailable ? 'V2 可用' : 'V2 不可用' }}
+            </NTag>
+          </section>
+          <div v-if="agentMode === 'v2'" class="v2-workbench__kind" role="group" aria-label="选择 V2 任务类型">
+            <button type="button" :class="{ active: v2TaskKind === 'analysis' }" @click="v2TaskKind = 'analysis'">
+              <strong>读取并分析</strong>
+              <span>读取指定文件并回答，不修改项目</span>
+            </button>
+            <button type="button" :class="{ active: v2TaskKind === 'candidate' }" @click="v2TaskKind = 'candidate'">
+              <strong>生成候选修改</strong>
+              <span>隔离修改，之后检查、运行并确认</span>
+            </button>
+          </div>
           <p
+            v-if="agentMode === 'v2'"
             class="v2-availability-indicator"
             :data-status="v2ProjectAvailable ? 'available' : 'unavailable'"
           >{{ v2ProjectAvailabilityLabel }}</p>
-          <details class="v2-project-analysis" :open="projectAnalysisOpen || undefined" @toggle="syncProjectAnalysisOpen">
+          <section v-if="agentMode === 'v2' && v2ActiveOutcome" class="v2-workbench__progress">
+            <header>
+              <strong>执行过程</strong>
+              <small>以下状态来自当前 V2 请求，不是旧 Agent 会话</small>
+            </header>
+            <article v-for="step in v2ProgressSteps" :key="step.key" :data-state="step.state">
+              <span>{{ step.state === 'done' ? '✓' : step.state === 'failed' ? '!' : step.state === 'running' ? '…' : '·' }}</span>
+              <div>
+                <strong>{{ step.title }}</strong>
+                <small>{{ step.detail }}</small>
+              </div>
+              <NTag size="tiny" :type="step.state === 'done' ? 'success' : step.state === 'failed' ? 'error' : step.state === 'running' ? 'info' : 'default'">
+                {{ v2ProgressStateLabel(step.state) }}
+              </NTag>
+            </article>
+          </section>
+          <details v-if="agentMode === 'v2'" v-show="v2TaskKind === 'analysis'" class="v2-project-analysis" open @toggle="syncProjectAnalysisOpen">
             <summary>
               <span>
-                <strong>{{ t('project.v2Analysis.title') }}</strong>
-                <small>{{ t('project.v2Analysis.readOnly') }}</small>
+                <strong>1. 填写分析任务</strong>
+                <small>明确指定要读取的文件，不会修改项目</small>
               </span>
               <NTag size="tiny" type="info">V2</NTag>
             </summary>
             <div class="v2-project-analysis__body">
-              <p>{{ t('project.v2Analysis.description') }}</p>
+              <p>填写问题和 1–4 个项目内文件路径。V2 会固定当前项目版本，创建持久化计划并返回分析结果。</p>
               <NInput
                 v-model:value="projectAnalysisForm.objective"
                 type="textarea"
                 :maxlength="2000"
                 :autosize="{ minRows: 2, maxRows: 4 }"
-                :placeholder="t('project.v2Analysis.objective')"
+                placeholder="例如：分析 Sort.java 为什么无法编译，并说明最小修改方法"
               />
               <NInput
                 v-model:value="projectAnalysisForm.pathsText"
                 type="textarea"
                 :autosize="{ minRows: 2, maxRows: 5 }"
-                :placeholder="t('project.v2Analysis.paths')"
+                placeholder="项目内文件路径，每行一个，例如：src/main/java/Sort.java"
               />
               <div class="v2-project-analysis__search">
                 <NInput
                   v-model:value="projectAnalysisForm.searchQuery"
                   :maxlength="256"
                   clearable
-                  :placeholder="t('project.v2Analysis.search')"
+                  placeholder="可选：在项目内搜索的原文"
                 />
                 <NInputNumber
                   v-model:value="projectAnalysisForm.maxSearchResults"
@@ -654,14 +712,14 @@
               <section v-if="projectAnalysisOutcome" class="v2-project-analysis__outcome">
                 <header>
                   <NTag size="tiny" :type="projectAnalysisOutcome.status === 'SUCCEEDED' ? 'success' : projectAnalysisOutcome.status === 'FAILED' ? 'error' : 'info'">
-                    {{ projectAnalysisOutcome.status }}
+                    {{ v2OutcomeStatusLabel(projectAnalysisOutcome.status) }}
                   </NTag>
-                  <span>{{ t('project.v2Analysis.version') }} {{ shortHash(projectAnalysisOutcome.projectVersion) }}</span>
+                  <span>固定项目版本 {{ shortHash(projectAnalysisOutcome.projectVersion) }}</span>
                 </header>
                 <MarkdownMessage v-if="projectAnalysisOutcome.finalText" :content="projectAnalysisOutcome.finalText" variant="project" />
-                <p v-else-if="projectAnalysisOutcome.status === 'RUNNING'">{{ t('project.v2Analysis.running') }}</p>
+                <p v-else-if="projectAnalysisOutcome.status === 'RUNNING'">正在执行持久化计划，请稍候。</p>
                 <p v-else-if="projectAnalysisOutcome.status === 'FAILED'">
-                  {{ t('project.v2Analysis.failed') }}
+                  分析失败
                   <code v-if="projectAnalysisOutcome.errorCode">{{ projectAnalysisOutcome.errorCode }}</code>
                 </p>
               </section>
@@ -672,54 +730,57 @@
                   :disabled="!v2ProjectAnalysisAvailable || !activeProject || !projectAnalysisForm.objective.trim() || !projectAnalysisForm.pathsText.trim()"
                   @click="startProjectAnalysis"
                 >
-                  {{ t('project.v2Analysis.start') }}
+                  开始 V2 分析
                 </NButton>
               </div>
             </div>
           </details>
-          <details class="v2-project-analysis" :open="projectCandidateOpen || undefined">
+          <details v-if="agentMode === 'v2'" v-show="v2TaskKind === 'candidate'" class="v2-project-analysis" open>
             <summary>
               <span>
-                <strong>Propose reviewed changes</strong>
-                <small>Isolated Workspace; explicit validation and apply required</small>
+                <strong>1. 填写修改任务</strong>
+                <small>只在隔离工作区修改，验证和确认后才创建新版本</small>
               </span>
-              <NTag size="tiny" type="warning">V2 Candidate</NTag>
+              <NTag size="tiny" type="warning">V2 候选修改</NTag>
             </summary>
             <div class="v2-project-analysis__body">
-              <p>Choose 1–4 existing text files. V2 prepares MODIFY-only replacements and opens the existing Candidate review flow; it never applies them automatically.</p>
+              <p>选择 1–4 个现有文本文件。V2 只生成候选修改，不会直接改动原项目。</p>
               <NInput v-model:value="projectCandidateForm.objective" type="textarea"
                 :maxlength="2000" :autosize="{ minRows: 2, maxRows: 4 }"
-                placeholder="Describe the exact modification objective" />
+                placeholder="例如：删除未使用且导致编译失败的 Logback import，其他代码保持不变" />
               <NInput v-model:value="projectCandidateForm.pathsText" type="textarea"
                 :autosize="{ minRows: 2, maxRows: 5 }"
-                placeholder="One existing Project-relative text path per line" />
+                placeholder="要修改的项目内文件路径，每行一个，例如：src/main/java/Sort.java" />
               <NAlert v-if="projectCandidateError" type="error" :show-icon="false">
                 {{ projectCandidateError }}
               </NAlert>
               <section v-if="projectCandidateOutcome" class="v2-project-analysis__outcome">
                 <header>
                   <NTag size="tiny" :type="projectCandidateOutcome.status === 'SUCCEEDED' ? 'success' : projectCandidateOutcome.status === 'FAILED' ? 'error' : 'info'">
-                    {{ projectCandidateOutcome.status }}
+                    {{ v2OutcomeStatusLabel(projectCandidateOutcome.status) }}
                   </NTag>
-                  <span>Project version {{ shortHash(projectCandidateOutcome.projectVersion) }}</span>
+                  <span>固定项目版本 {{ shortHash(projectCandidateOutcome.projectVersion) }}</span>
                 </header>
                 <p v-if="projectCandidateOutcome.status === 'SUCCEEDED'">
-                  Candidate #{{ projectCandidateOutcome.candidateArtifactId }} is selected in Changes.
-                  Sandbox validation and explicit confirmation are still required.
+                  候选修改 #{{ projectCandidateOutcome.candidateArtifactId }} 已生成，原项目尚未修改。
+                  下一步需要查看差异、运行验证并由你确认。
                 </p>
-                <p v-else-if="projectCandidateOutcome.status === 'RUNNING'">Preparing an isolated review Candidate…</p>
-                <p v-else>Candidate was not created. <code>{{ projectCandidateOutcome.errorCode }}</code></p>
+                <p v-else-if="projectCandidateOutcome.status === 'RUNNING'">正在隔离工作区中生成候选修改。</p>
+                <p v-else>候选修改生成失败。<code>{{ projectCandidateOutcome.errorCode }}</code></p>
+                <NButton v-if="projectCandidateOutcome.status === 'SUCCEEDED'" type="primary" secondary @click="openV2CandidateReview">
+                  2. 查看修改、运行验证并确认
+                </NButton>
               </section>
               <div class="v2-project-analysis__actions">
                 <NButton type="primary" :loading="projectCandidateStarting || projectCandidatePolling"
                   :disabled="!v2ProjectCandidateAvailable || !activeProject || !projectCandidateForm.objective.trim() || !projectCandidateForm.pathsText.trim()"
                   @click="startProjectCandidate">
-                  Prepare Candidate
+                  生成候选修改
                 </NButton>
               </div>
             </div>
           </details>
-          <div class="project-composer">
+          <div v-if="agentMode === 'v1'" class="project-composer">
             <NInput v-model:value="chatInput" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="Ask about this read-only Project..." @keydown="handleComposerKeydown" />
             <NButton type="primary" :loading="loading.send" :disabled="!chatInput.trim() || !activeProject" @click="sendChat">Send</NButton>
           </div>
@@ -798,25 +859,34 @@
       </NSpace>
     </NModal>
 
-    <NModal v-model:show="applyModalOpen" preset="card" title="Apply selected Candidate changes" :mask-closable="!loading.applyCandidate" :closable="!loading.applyCandidate" :style="{ width: 'min(520px, calc(100vw - 32px))' }">
+    <NModal v-model:show="applyModalOpen" preset="card" title="确认创建新的项目版本" :mask-closable="!loading.applyCandidate" :closable="!loading.applyCandidate" :style="{ width: 'min(520px, calc(100vw - 32px))' }">
       <p class="project-delete-copy">
-        This creates a new immutable Project version from {{ selectedChangeIndexes.size }} selected change{{ selectedChangeIndexes.size === 1 ? '' : 's' }}.
-        The current and earlier versions remain available for rollback.
+        系统会使用选中的 {{ selectedChangeIndexes.size }} 项修改创建一个新的不可变项目版本。
+        当前版本和历史版本都会保留，可以随时回退。
       </p>
       <NSpace justify="end">
-        <NButton :disabled="loading.applyCandidate" @click="applyModalOpen = false">Cancel</NButton>
-        <NButton type="primary" :loading="loading.applyCandidate" @click="confirmApplyCandidate">Create new version</NButton>
+        <NButton :disabled="loading.applyCandidate" @click="applyModalOpen = false">取消</NButton>
+        <NButton type="primary" :loading="loading.applyCandidate" @click="confirmApplyCandidate">创建新版本</NButton>
       </NSpace>
     </NModal>
 
-    <NModal v-model:show="validationModalOpen" preset="card" title="Run Candidate verification in sandbox" :mask-closable="!loading.candidateValidation" :closable="!loading.candidateValidation" :style="{ width: 'min(560px, calc(100vw - 32px))' }">
+    <NModal v-model:show="validationModalOpen" preset="card" :title="documentOnlyProject ? '检查文档候选修改' : '在沙箱中运行候选修改'" :mask-closable="!loading.candidateValidation" :closable="!loading.candidateValidation" :style="{ width: 'min(560px, calc(100vw - 32px))' }">
       <p class="project-delete-copy">
-        This materializes the trusted ProjectVersion plus {{ selectedChangeIndexes.size }} selected Candidate change{{ selectedChangeIndexes.size === 1 ? '' : 's' }} into an isolated work copy and runs {{ validationProfile }}.
-        Networking and sensitive environment injection remain disabled. This does not apply or modify the Project.
+        <template v-if="documentOnlyProject">
+          系统会核对选中的 {{ selectedChangeIndexes.size }} 项文档修改与可信项目版本、候选元数据是否一致。
+          文档不会作为代码执行，也不会启动 E2B。
+        </template>
+        <template v-else>
+          系统会把可信项目版本和选中的 {{ selectedChangeIndexes.size }} 项修改放入隔离工作区，并使用 {{ validationProfile }} 运行。
+          如需 Maven 依赖，只在工作区仅包含依赖清单时临时联网下载；完整代码上传前会恢复并确认断网。
+          敏感环境变量不会传入沙箱，这一步也不会修改原项目。
+        </template>
       </p>
       <NSpace justify="end">
-        <NButton :disabled="loading.candidateValidation" @click="validationModalOpen = false">Cancel</NButton>
-        <NButton type="primary" :loading="loading.candidateValidation" @click="confirmCandidateValidation">Confirm and run</NButton>
+        <NButton :disabled="loading.candidateValidation" @click="validationModalOpen = false">取消</NButton>
+        <NButton type="primary" :loading="loading.candidateValidation" @click="confirmCandidateValidation">
+          {{ documentOnlyProject ? '确认检查' : '确认并运行' }}
+        </NButton>
       </NSpace>
     </NModal>
 
@@ -895,6 +965,9 @@ import {
 
 type ProjectChatRole = 'user' | 'assistant' | 'process';
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
+type ProjectAgentMode = 'v1' | 'v2';
+type V2TaskKind = 'analysis' | 'candidate';
+type V2ProgressState = 'pending' | 'running' | 'done' | 'failed';
 
 interface ProjectChatMessage {
   localId: string;
@@ -942,6 +1015,8 @@ const authStore = useAuthStore();
 const { isEnglish, t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const agentMode = ref<ProjectAgentMode>(route.query.agent === 'v2' ? 'v2' : 'v1');
+const v2TaskKind = ref<V2TaskKind>('analysis');
 const projects = ref<ProjectSummaryResponse[]>([]);
 const activeProjectId = ref<number | null>(null);
 const projectSessions = ref<AgentSessionResponse[]>([]);
@@ -964,13 +1039,11 @@ const selectedChangeIndexes = ref<Set<number>>(new Set());
 const candidateValidations = ref<CandidateValidationResponse[]>([]);
 const selectedValidation = ref<CandidateValidationResponse | null>(null);
 const validationProfile = ref<CandidateValidationProfile>('MAVEN_TEST');
-const validationProfileOptions = [
-  { label: 'Maven offline test', value: 'MAVEN_TEST' },
-  { label: 'Maven offline verify', value: 'MAVEN_VERIFY' },
-  { label: 'Java source compile and run', value: 'JAVA_SOURCE_RUN' },
-  { label: 'Python source run', value: 'PYTHON_SOURCE_RUN' },
-  { label: 'C source compile and run', value: 'C_SOURCE_RUN' },
-  { label: 'C++ source compile and run', value: 'CPP_SOURCE_RUN' },
+const codeValidationProfileOptions: Array<{ label: string; value: CandidateValidationProfile }> = [
+  { label: '编译并运行 Java 源文件', value: 'JAVA_SOURCE_RUN' },
+  { label: '运行 Python 源文件', value: 'PYTHON_SOURCE_RUN' },
+  { label: '编译并运行 C 源文件', value: 'C_SOURCE_RUN' },
+  { label: '编译并运行 C++ 源文件', value: 'CPP_SOURCE_RUN' },
 ];
 const revisions = ref<ProjectRevisionResponse[]>([]);
 const applyModalOpen = ref(false);
@@ -985,7 +1058,7 @@ const validationMessageType = ref<'success' | 'warning' | 'error'>('success');
 const revisionMessage = ref('');
 const revisionMessageType = ref<'success' | 'warning' | 'error'>('success');
 const inspectorTab = ref<ProjectInspectorTab>('preview');
-const inspectorOpen = ref(true);
+const inspectorOpen = ref(agentMode.value === 'v1');
 const chatInput = ref('');
 const error = ref('');
 const createModalOpen = ref(false);
@@ -1040,8 +1113,71 @@ const v2ProjectAvailable = computed(() => (
   v2ProjectAnalysisAvailable.value || v2ProjectCandidateAvailable.value
 ));
 const v2ProjectAvailabilityLabel = computed(() => {
-  if (v2ProjectAvailable.value) return 'V2 available';
+  if (v2ProjectAvailable.value) return 'V2 已连接，可以开始测试。';
   return v2AvailabilityLabel(v2Availability.value, 'project.read-analysis');
+});
+const v2ActiveOutcome = computed(() => (
+  v2TaskKind.value === 'analysis' ? projectAnalysisOutcome.value : projectCandidateOutcome.value
+));
+const v2ProgressSteps = computed<Array<{
+  key: string;
+  title: string;
+  detail: string;
+  state: V2ProgressState;
+}>>(() => {
+  const outcome = v2ActiveOutcome.value;
+  const starting = v2TaskKind.value === 'analysis'
+    ? projectAnalysisStarting.value || projectAnalysisPolling.value
+    : projectCandidateStarting.value || projectCandidatePolling.value;
+  const terminalState: V2ProgressState = outcome?.status === 'SUCCEEDED'
+    ? 'done'
+    : outcome?.status === 'FAILED'
+      ? 'failed'
+      : outcome || starting
+        ? 'running'
+        : 'pending';
+  const taskLabel = v2TaskKind.value === 'analysis' ? '读取并分析文件' : '在隔离工作区生成候选修改';
+  const resultLabel = v2TaskKind.value === 'analysis' ? '生成分析结果' : '等待检查、验证和确认';
+  return [
+    {
+      key: 'task',
+      title: '固定任务和项目版本',
+      detail: outcome?.projectVersion
+        ? `已固定版本 ${shortHash(outcome.projectVersion)}`
+        : starting ? '正在接收任务并固定当前版本' : '提交任务后开始',
+      state: outcome ? 'done' : starting ? 'running' : 'pending',
+    },
+    {
+      key: 'plan',
+      title: '创建持久化计划',
+      detail: outcome?.planId ? `计划 ${outcome.planId}` : outcome?.status === 'FAILED' ? '计划未能正常完成' : '等待创建计划',
+      state: outcome?.planId ? 'done' : outcome?.status === 'FAILED' ? 'failed' : starting ? 'running' : 'pending',
+    },
+    {
+      key: 'execute',
+      title: taskLabel,
+      detail: outcome?.status === 'SUCCEEDED'
+        ? '执行成功'
+        : outcome?.status === 'FAILED'
+          ? `执行失败：${outcome.errorCode || '没有返回具体原因'}`
+          : outcome || starting ? '正在执行' : '等待执行',
+      state: terminalState,
+    },
+    {
+      key: 'result',
+      title: resultLabel,
+      detail: v2TaskKind.value === 'candidate' && outcome?.status === 'SUCCEEDED'
+        ? '候选修改已生成，原项目尚未改变'
+        : outcome?.status === 'SUCCEEDED'
+          ? '结果已返回'
+          : outcome?.status === 'FAILED'
+            ? '没有生成可接受的结果'
+            : '等待前一步完成',
+      state: outcome?.status === 'SUCCEEDED'
+        ? v2TaskKind.value === 'candidate' ? 'running' : 'done'
+        : outcome?.status === 'FAILED' ? 'failed' : 'pending',
+    },
+  ];
 });
 
 const loading = reactive({
@@ -1107,6 +1243,31 @@ const sessionMenuOptions = computed(() => [
   { label: isEnglish.value ? 'Delete' : '删除', key: 'delete' },
 ]);
 const activeProject = computed(() => projects.value.find((item) => item.id === activeProjectId.value) || null);
+const documentOnlyProject = computed(() => {
+  const files = manifest.value?.files || [];
+  return files.length > 0 && files.every((file) =>
+    /\.(?:md|markdown|txt|rst|adoc|tex|pdf|docx)$/i.test(file.path));
+});
+const validationProfileOptions = computed<Array<{ label: string; value: CandidateValidationProfile }>>(() => {
+  if (!manifest.value) return [];
+  if (documentOnlyProject.value) {
+    return [{ label: '文档完整性检查（不启动 E2B）', value: 'DOCUMENT_INTEGRITY' }];
+  }
+  const options = [...codeValidationProfileOptions];
+  if (manifest.value?.files.some((file) => file.path === 'pom.xml')) {
+    options.unshift(
+      { label: '下载 Maven 依赖后离线测试', value: 'MAVEN_TEST' },
+      { label: '下载 Maven 依赖后离线验证', value: 'MAVEN_VERIFY' },
+    );
+  }
+  return options;
+});
+watch(validationProfileOptions, (options) => {
+  if (options.length > 0
+      && !options.some((option) => option.value === validationProfile.value)) {
+    validationProfile.value = options[0].value;
+  }
+}, { immediate: true });
 const timelinePlans = computed(() => [...plans.value].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()));
 const projectTimelineItems = computed(() => [
   ...messages.value.map((message, index) => ({
@@ -1466,6 +1627,33 @@ function showInspector(tab: ProjectInspectorTab) {
   inspectorOpen.value = true;
 }
 
+function setAgentMode(mode: ProjectAgentMode) {
+  agentMode.value = mode;
+  if (mode === 'v2') inspectorOpen.value = false;
+  const query = { ...route.query };
+  if (mode === 'v2') query.agent = 'v2';
+  else delete query.agent;
+  void router.replace({ query });
+}
+
+function v2OutcomeStatusLabel(status: 'RUNNING' | 'SUCCEEDED' | 'FAILED') {
+  if (status === 'SUCCEEDED') return '执行成功';
+  if (status === 'FAILED') return '执行失败';
+  return '正在执行';
+}
+
+function v2ProgressStateLabel(state: V2ProgressState) {
+  if (state === 'done') return '已完成';
+  if (state === 'failed') return '失败';
+  if (state === 'running') return '进行中';
+  return '等待中';
+}
+
+function openV2CandidateReview() {
+  showInspector('changes');
+  nextTick(() => document.querySelector('.project-inspector')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
+
 function selectCandidate(candidate: CandidateReviewItem) {
   selectedCandidate.value = candidate;
   selectedChangeIndexes.value = candidateCanSelect(candidate) && candidate.candidate
@@ -1532,7 +1720,7 @@ async function confirmApplyCandidate() {
       item.candidate.projectVersion, accepted, validation.validationId, newClientRequestId());
     applyModalOpen.value = false;
     applicationMessageType.value = 'success';
-    applicationMessage.value = `New Project version ${shortHash(data.resultVersion)} was published. Candidate ${item.artifact.id} remains NOT_APPLIED.`;
+    applicationMessage.value = `已创建新的项目版本 ${shortHash(data.resultVersion)}。候选修改 ${item.artifact.id} 仍作为历史记录保留。`;
     selectedFile.value = null;
     searchResults.value = [];
     await Promise.all([loadManifest(epoch), loadRevisions()]);
@@ -1545,9 +1733,9 @@ async function confirmApplyCandidate() {
     const status = apiStatus(cause);
     applicationMessageType.value = status === 409 ? 'warning' : 'error';
     applicationMessage.value = status === 409
-      ? `The Project changed before publication. Revalidate the Candidate and review it again. ${apiError(cause)}`
+      ? `创建新版本前项目已经发生变化，请重新核对候选修改。${apiError(cause)}`
       : status === 422
-        ? `The Candidate failed current validation and was not applied. ${apiError(cause)}`
+        ? `候选修改没有通过当前检查，因此没有创建新版本。${apiError(cause)}`
         : apiError(cause);
   } finally {
     loading.applyCandidate = false;
@@ -1581,7 +1769,7 @@ async function loadCandidateValidations(item = selectedCandidate.value, epoch = 
     selectedValidation.value = null;
     validationMessageType.value = apiStatus(cause) === 503 ? 'warning' : 'error';
     validationMessage.value = apiStatus(cause) === 503
-      ? `Sandbox verification is unavailable. Candidate review and ordinary Project chat remain available. ${apiError(cause)}`
+      ? `沙箱验证当前不可用，仍可查看候选修改。${apiError(cause)}`
       : apiError(cause);
   }
 }
@@ -1605,7 +1793,7 @@ async function confirmCandidateValidation() {
     if (epoch !== projectEpoch) return;
     validationMessageType.value = apiStatus(cause) === 503 ? 'warning' : 'error';
     validationMessage.value = apiStatus(cause) === 503
-      ? `Sandbox verification is unavailable. The Candidate was not applied. ${apiError(cause)}`
+      ? `沙箱验证当前不可用，候选修改没有被应用。${apiError(cause)}`
       : apiError(cause);
   } finally {
     if (epoch === projectEpoch) loading.candidateValidation = false;
@@ -1619,7 +1807,7 @@ async function pollCandidateValidation(artifactId: number, validationId: string,
   if (!current || candidateValidationTerminal(current.status) || current.decisionStatus !== 'PENDING') return;
   if (attempt >= 450) {
     validationMessageType.value = 'warning';
-    validationMessage.value = 'Sandbox verification is still pending. Refresh the Candidate to read its durable result.';
+    validationMessage.value = '沙箱验证仍在进行中，请稍后重新打开候选修改查看持久化结果。';
     return;
   }
   candidateValidationPoll = window.setTimeout(() => {
@@ -1649,7 +1837,7 @@ async function rejectSelectedValidation() {
   try {
     selectedValidation.value = (await rejectCandidateValidation(projectId, validation.validationId)).data;
     validationMessageType.value = 'warning';
-    validationMessage.value = 'Candidate rejected. No Project version was created; the validation remains in history.';
+    validationMessage.value = '已拒绝候选修改，没有创建新的项目版本；验证记录会保留。';
     await loadCandidateValidations();
   } catch (cause) {
     validationMessageType.value = 'error'; validationMessage.value = apiError(cause);
@@ -1754,15 +1942,64 @@ function candidateStateType(state: CandidateReviewState): 'success' | 'warning' 
   return 'info';
 }
 
+function candidateStateLabel(state: CandidateReviewState) {
+  const labels: Partial<Record<CandidateReviewState, string>> = {
+    VALIDATED: '内容检查通过',
+    STALE: '项目版本已变化',
+    DRAFT: '草稿',
+    INVALID: '内容无效',
+    ERROR: '读取失败',
+  };
+  return labels[state] || state;
+}
+
 function candidateChangeType(type: CandidateChangeType): 'success' | 'warning' | 'error' {
   if (type === 'ADD') return 'success';
   if (type === 'DELETE') return 'error';
   return 'warning';
 }
 
+function candidateChangeTypeLabel(type: CandidateChangeType) {
+  if (type === 'ADD') return '新增';
+  if (type === 'DELETE') return '删除';
+  return '修改';
+}
+
 function candidateValidationLabel(candidate: CandidateArtifactResponse) {
   return candidate.validation.issues.length === 0
-    && candidate.validation.checks.every((check) => check.status === 'PASSED') ? 'PASSED' : 'FAILED';
+    && candidate.validation.checks.every((check) => check.status === 'PASSED') ? '通过' : '失败';
+}
+
+function candidateValidationProfileLabel(profile: CandidateValidationProfile) {
+  const option = validationProfileOptions.value.find((value) => value.value === profile);
+  return option?.label || profile;
+}
+
+function candidateCheckAreaLabel(area: string) {
+  const labels: Record<string, string> = {
+    SCHEMA: '格式',
+    GOVERNANCE: '权限',
+    CHANGES: '修改内容',
+    EVIDENCE: '修改依据',
+    BUDGET: '大小限制',
+  };
+  return labels[area] || area;
+}
+
+function technicalStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    PASSED: '通过',
+    FAILED: '失败',
+    SUCCEEDED: '成功',
+    RUNNING: '运行中',
+    PENDING: '等待确认',
+    CANCELLED: '已取消',
+    CANCEL_REQUESTED: '正在取消',
+    TIMED_OUT: '已超时',
+    CLEANUP_FAILED: '清理失败',
+    REJECTED: '已拒绝',
+  };
+  return labels[status] || status;
 }
 
 function candidateEvidence(candidate: CandidateArtifactResponse, relativePath: string): CandidateEvidenceRef[] {
@@ -3199,6 +3436,45 @@ onUnmounted(() => {
 .project-tabs__title { flex: 0 0 auto; font-size: 12px; line-height: 26px; }
 .project-tabs__actions { min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
 .project-tabs__actions > * { flex: 0 0 auto; }
+.project-agent-mode { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.project-agent-mode__switch { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--yb-border); border-radius: 9px; background: var(--yb-bg-muted); }
+.project-agent-mode__switch button { display: flex; align-items: baseline; gap: 5px; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--yb-text-secondary); font-weight: 750; cursor: pointer; }
+.project-agent-mode__switch button small { color: var(--yb-text-muted); font-size: 9px; font-weight: 500; }
+.project-agent-mode__switch button.active { background: var(--yb-bg-elevated); color: var(--yb-primary); box-shadow: 0 1px 3px color-mix(in srgb, var(--yb-text) 10%, transparent); }
+.project-agent-mode__switch button.active small { color: var(--yb-text-secondary); }
+.project-panel--v2 { overflow-y: auto; scrollbar-gutter: stable; }
+
+.v2-workbench__hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 16px; border: 1px solid color-mix(in srgb, var(--yb-primary) 28%, var(--yb-border)); border-radius: 12px; background: color-mix(in srgb, var(--yb-primary) 5%, var(--yb-bg-elevated)); }
+.v2-workbench__hero h2 { margin: 3px 0 5px; font-size: 18px; }
+.v2-workbench__hero p { max-width: 720px; margin: 0; color: var(--yb-text-secondary); font-size: 11px; line-height: 1.6; }
+.v2-workbench__eyebrow { color: var(--yb-primary); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.v2-workbench__kind { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.v2-workbench__kind button { min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 10px; background: var(--yb-bg-elevated); color: var(--yb-text); text-align: left; cursor: pointer; }
+.v2-workbench__kind button span { color: var(--yb-text-muted); font-size: 10px; line-height: 1.5; }
+.v2-workbench__kind button.active { border-color: var(--yb-primary); background: color-mix(in srgb, var(--yb-primary) 7%, var(--yb-bg-elevated)); box-shadow: inset 3px 0 0 var(--yb-primary); }
+.v2-availability-indicator { margin: 0; padding: 7px 10px; border-radius: 7px; background: var(--yb-bg-muted); color: var(--yb-text-secondary); font-size: 10px; }
+.v2-availability-indicator[data-status="available"] { color: color-mix(in srgb, #18a058 86%, var(--yb-text)); }
+.v2-availability-indicator[data-status="unavailable"] { color: #d03050; }
+.v2-project-analysis { border: 1px solid var(--yb-border); border-radius: 10px; background: var(--yb-bg-elevated); }
+.v2-project-analysis > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; list-style: none; cursor: pointer; }
+.v2-project-analysis > summary::-webkit-details-marker { display: none; }
+.v2-project-analysis > summary > span { display: flex; flex-direction: column; gap: 3px; }
+.v2-project-analysis > summary small { color: var(--yb-text-muted); font-size: 9px; font-weight: 400; }
+.v2-project-analysis__body { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 14px; border-top: 1px solid var(--yb-border); }
+.v2-project-analysis__body > p { margin: 10px 0 0; color: var(--yb-text-secondary); font-size: 10px; line-height: 1.55; }
+.v2-project-analysis__search { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 8px; }
+.v2-project-analysis__outcome { display: flex; flex-direction: column; gap: 9px; padding: 11px; border: 1px solid var(--yb-border); border-radius: 8px; background: var(--yb-bg-muted); }
+.v2-project-analysis__outcome > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--yb-text-muted); font-size: 9px; }
+.v2-project-analysis__actions { display: flex; justify-content: flex-end; }
+.v2-workbench__progress { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 10px; background: var(--yb-bg-muted); }
+.v2-workbench__progress > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+.v2-workbench__progress > header small { color: var(--yb-text-muted); font-size: 9px; }
+.v2-workbench__progress > article { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px; border-radius: 7px; background: var(--yb-bg-elevated); }
+.v2-workbench__progress > article > span { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--yb-border); border-radius: 50%; color: var(--yb-text-muted); font-weight: 800; }
+.v2-workbench__progress > article[data-state="done"] > span { border-color: #18a058; color: #18a058; }
+.v2-workbench__progress > article[data-state="failed"] > span { border-color: #d03050; color: #d03050; }
+.v2-workbench__progress > article > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.v2-workbench__progress > article > div small { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 
 .project-utility-chip { min-height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--yb-border); border-radius: 999px; background: transparent; color: var(--yb-text-secondary); font-size: 10px; line-height: 1; white-space: nowrap; cursor: pointer; }
 .project-utility-chip span { color: var(--yb-text-muted); }
