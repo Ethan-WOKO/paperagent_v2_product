@@ -203,3 +203,29 @@
 - Retirement decision: all legacy Agent orchestration remains present and
   unchanged. Removing it requires stable production evidence and a later
   explicit user decision; it is not part of the current migration plan.
+
+## Adaptive natural-language V2 execution
+
+- Status: `REUSE_WITH_ADAPTER`.
+- Assessed entries: the product execution-start recovery, Project execution
+  context, persistent one-cycle loop, effect adapters, append-only active-Step
+  replan, user model endpoint resolution, and assistant-message persistence.
+- Intake: the #95 POST response remains an acknowledgement. A persistent
+  request creates a V62 owner/session/request-bound execution projection after
+  its intake transaction commits; the read-only GET is the outcome authority.
+- Execution: every coordination iteration invokes exactly one existing
+  durable loop cycle, then reflects only over bounded conversation and
+  authoritative execution facts. Reflection is strict JSON and cannot make a
+  nonterminal Plan complete.
+- Replan: replacement revisions retain completed Steps and facts, mark the
+  obsolete active Step `SUPERSEDED_BY_REPLAN`, and append only new
+  `NOT_STARTED` Steps under the existing fenced persistence boundary.
+- Delivery: only a durable terminal-success cut plus accepted COMPLETE
+  reflection creates the single replayable assistant message. Project writes
+  remain isolated and Candidate application remains an explicit later action.
+- Sandbox: no synchronous product `SandboxPort` is currently available for
+  this composition. `sandbox_execute` therefore fails with
+  `SANDBOX_EXECUTION_UNAVAILABLE` before Provider, Sandbox, or host-process
+  invocation; it is never silently executed on the host.
+- Excluded: legacy Agent orchestration, V2 core changes, automatic Candidate
+  apply, scheduler/polling recursion, and unrelated RAG/paper/UI behavior.

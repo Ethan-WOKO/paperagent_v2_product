@@ -25,6 +25,8 @@ import com.yanban.api.agent.AgentRagExperimentResult;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
+import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
+import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionResult;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
@@ -246,6 +248,33 @@ class V2NaturalLanguageTurnServiceTest {
     }
 
     @Test
+    void persistentTurnStartsAdaptiveExecutionAndDeliversFinalMessage() {
+        stubPersistentPlanning();
+        V2AdaptiveExecutionService adaptive =
+                mock(V2AdaptiveExecutionService.class);
+        when(adaptive.execute(any())).thenReturn(
+                new V2AdaptiveExecutionResult(
+                        "SUCCEEDED", List.of(), "最终结论",
+                        null, 1, 0, 0));
+        when(transactions.savePersistentAssistant(
+                7L, 9L, "request-1", "最终结论"))
+                .thenReturn(mock(AgentMessage.class));
+
+        var response = service(adaptive).execute(7L, 9L, request());
+
+        assertThat(response.route())
+                .isEqualTo("PERSISTENT_PLAN_EXECUTE");
+        ArgumentCaptor<V2AdaptiveExecutionService.Command> command =
+                ArgumentCaptor.forClass(
+                        V2AdaptiveExecutionService.Command.class);
+        verify(adaptive).execute(command.capture());
+        assertThat(command.getValue().bindings())
+                .containsEntry("read-1", "project.read");
+        verify(transactions).savePersistentAssistant(
+                7L, 9L, "request-1", "最终结论");
+    }
+
+    @Test
     void changedPayloadConflictStopsBeforePlanning() {
         when(transactions.open(
                 eq(7L), eq(9L), eq("request-1"), any(), eq("question"),
@@ -378,6 +407,14 @@ class V2NaturalLanguageTurnServiceTest {
                 sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
                 model);
+    }
+
+    private V2NaturalLanguageTurnService service(
+            V2AdaptiveExecutionService adaptive) {
+        return new V2NaturalLanguageTurnService(
+                sessions, transactions, contexts, contextBuilder, summaries,
+                memories, experiments, skills, settings, bootstraps, json,
+                model, adaptive);
     }
 
     private V2NaturalLanguageTurnRequest request() {

@@ -159,6 +159,31 @@ class V2TurnIntakeTransactions {
                 new IllegalStateException("V2 assistant message disappeared"));
     }
 
+    AgentMessage savePersistentAssistant(
+            Long userId, Long sessionId, String requestId, String answer) {
+        return requiresNew.execute(status -> {
+            V2TurnIntakeEntity intake = intakes.findLocked(
+                            userId, sessionId, requestId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "V2 turn intake disappeared"));
+            if (intake.assistantMessageId() != null) {
+                return message(intake.assistantMessageId());
+            }
+            AgentMessage assistant = messages.saveAndFlush(
+                    new AgentMessage(
+                            sessionId, userId, "assistant",
+                            answer, null, null));
+            AgentTurn turn = turns.findById(intake.turnId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "V2 Agent turn disappeared"));
+            turn.complete(assistant.getId());
+            turns.saveAndFlush(turn);
+            intake.bindPersistentAssistant(assistant.getId(), Instant.now());
+            intakes.saveAndFlush(intake);
+            return assistant;
+        });
+    }
+
     private static V2TurnIntakeEntity sameRequest(
             V2TurnIntakeEntity value, String requestHash) {
         if (!value.requestSha256().equals(requestHash)) {

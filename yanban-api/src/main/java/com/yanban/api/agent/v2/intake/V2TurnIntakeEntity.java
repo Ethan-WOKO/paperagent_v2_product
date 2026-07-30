@@ -133,6 +133,20 @@ class V2TurnIntakeEntity {
         updatedAt = now;
     }
 
+    void bindPersistentAssistant(Long messageId, Instant now) {
+        if (!PERSISTENT.equals(status)) {
+            throw new IllegalStateException(
+                    "V2 persistent intake is not ready");
+        }
+        if (assistantMessageId != null
+                && !assistantMessageId.equals(messageId)) {
+            throw new IllegalStateException(
+                    "V2 assistant message authority conflict");
+        }
+        assistantMessageId = messageId;
+        updatedAt = now;
+    }
+
     private void requireRunning() {
         if (!RUNNING.equals(status)) {
             throw new IllegalStateException("V2 turn intake is already terminal");

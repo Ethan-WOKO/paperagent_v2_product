@@ -74,6 +74,18 @@ public final class V2AdaptiveExecutionCoordinator {
                     return failed(timeline, "REPLAN_LIMIT_EXCEEDED",
                             index, replanCount);
                 }
+                int last = timeline.size() - 1;
+                V2AdaptiveTurnResponse.Step obsolete = timeline.get(last);
+                timeline.set(last, new V2AdaptiveTurnResponse.Step(
+                        obsolete.index(), obsolete.title(),
+                        "SUPERSEDED_BY_REPLAN", decision.reason()));
+                for (ReflectionReplacementStep replacement
+                        : decision.replacementSteps()) {
+                    timeline.add(new V2AdaptiveTurnResponse.Step(
+                            timeline.size() + 1,
+                            replacement.step().intent(),
+                            "PENDING", "由重新规划追加"));
+                }
                 pendingReplan = decision;
             }
         }

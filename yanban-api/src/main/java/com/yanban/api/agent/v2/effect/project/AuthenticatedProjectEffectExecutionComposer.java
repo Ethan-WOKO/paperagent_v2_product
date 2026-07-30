@@ -10,6 +10,7 @@ import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisEffectAuthor
 import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectGateway;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
+import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnWorkspacePortFactory;
 import io.paperagent.v2.contracts.BooleanValue;
 import io.paperagent.v2.contracts.ContractValue;
@@ -64,6 +65,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final ProjectCandidateEffectGateway candidateAuthorities;
     private final ProjectCandidateCompositionEffect candidateComposition;
     private final ObjectMapper json;
+    private final NaturalLanguageEffectAuthoritySource naturalAuthorities;
 
     public AuthenticatedProjectEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
@@ -76,7 +78,24 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ProjectAnalysisAuthoritySource authorities,
             ObjectMapper json) {
         this(contexts, planIds, recoverer, intents, claims, executionContexts,
-                workspaces, authorities, null, null, json);
+                workspaces, authorities, null, null, json, null);
+    }
+
+    public AuthenticatedProjectEffectExecutionComposer(
+            AgentTurnProductContextResolver contexts,
+            ProductPlanIdDerivation planIds,
+            StepRecoverer recoverer,
+            EffectIntentRepository intents,
+            ProductEffectExecutionClaimRepository claims,
+            PlanExecutionContextRepository executionContexts,
+            AuthenticatedAgentTurnWorkspacePortFactory workspaces,
+            ProjectAnalysisAuthoritySource authorities,
+            ProjectCandidateEffectGateway candidateAuthorities,
+            ProjectCandidateCompositionEffect candidateComposition,
+            ObjectMapper json) {
+        this(contexts, planIds, recoverer, intents, claims,
+                executionContexts, workspaces, authorities,
+                candidateAuthorities, candidateComposition, json, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -91,7 +110,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ProjectAnalysisAuthoritySource authorities,
             ProjectCandidateEffectGateway candidateAuthorities,
             ProjectCandidateCompositionEffect candidateComposition,
-            ObjectMapper json) {
+            ObjectMapper json,
+            NaturalLanguageEffectAuthoritySource naturalAuthorities) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.recoverer = recoverer;
@@ -103,6 +123,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
         this.candidateAuthorities = candidateAuthorities;
         this.candidateComposition = candidateComposition;
         this.json = json;
+        this.naturalAuthorities = naturalAuthorities;
     }
 
     public AuthenticatedProjectEffectExecutionOutcome execute(
@@ -164,17 +185,29 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 authority = authorities.require(
                         planId.value(), intent.intent().stepId().value());
             } catch (RuntimeException missingAnalysis) {
-                if (candidateAuthorities == null) throw failed();
-                var candidate = candidateAuthorities.require(
-                        planId.value(), intent.intent().stepId().value());
-                authority = new ProjectAnalysisEffectAuthority(
-                        candidate.kind(), candidate.authorityJson(),
-                        candidate.authoritySha256());
+                try {
+                    if (candidateAuthorities == null) throw failed();
+                    var candidate = candidateAuthorities.require(
+                            planId.value(), intent.intent().stepId().value());
+                    authority = new ProjectAnalysisEffectAuthority(
+                            candidate.kind(), candidate.authorityJson(),
+                            candidate.authoritySha256());
+                } catch (RuntimeException missingCandidate) {
+                    if (naturalAuthorities == null
+                            || !naturalAuthorities.authorizes(
+                                    userId, turnId, planId.value(),
+                                    intent.intent().stepId().value(),
+                                    intent.intent().kind())) {
+                        throw failed();
+                    }
+                    authority = null;
+                }
             }
             String arguments = canonical(intent.intent().arguments());
-            if (!authority.kind().equals(intent.intent().kind())
+            if (authority != null
+                    && (!authority.kind().equals(intent.intent().kind())
                     || !authority.argumentJson().equals(arguments)
-                    || !authority.argumentSha256().equals(hash(arguments))) {
+                    || !authority.argumentSha256().equals(hash(arguments)))) {
                 throw failed();
             }
         }

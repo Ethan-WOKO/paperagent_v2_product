@@ -107,6 +107,19 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             Long userId, Long agentTurnId,
             PersistentPlanAgentLoopCommand command,
             SingleTurnStepKernel turnKernel) {
+        return executeWithKernelAndReplanFactory(
+                userId, agentTurnId, command, turnKernel,
+                ignored -> command.replanProposal().orElse(null));
+    }
+
+    public PersistentPlanAgentLoopOutcome executeWithKernelAndReplanFactory(
+            Long userId, Long agentTurnId,
+            PersistentPlanAgentLoopCommand command,
+            SingleTurnStepKernel turnKernel,
+            java.util.function.Function<
+                    RecoveredActiveStep,
+                    io.paperagent.v2.persistence.ActiveStepReplanRequest>
+                    replanFactory) {
         VerifiedAgentTurnProductContext context =
                 contexts.resolve(userId, agentTurnId);
         PlanId planId = planIds.derive(context.identity());
@@ -172,10 +185,11 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             PlanStepId stepId =
                     active.recovery().activation().stepId();
             if (kernelOutcome instanceof SingleTurnNoEffect) {
-                if (command.replanProposal().isPresent()) {
+                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal =
+                        replanFactory == null ? null : replanFactory.apply(active);
+                if (proposal != null) {
                     return replanNoEffect(
-                            planId, cycle, active,
-                            command.replanProposal().orElseThrow());
+                            planId, cycle, active, proposal);
                 }
                 return outcome(planId, cycle,
                         PersistentPlanAgentLoopState.REPLAN_REQUIRED,

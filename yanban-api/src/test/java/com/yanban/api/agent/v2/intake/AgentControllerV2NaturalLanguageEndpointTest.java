@@ -13,9 +13,12 @@ import com.yanban.api.agent.AgentService;
 import com.yanban.api.agent.v2.compatibility.V2ProductAvailability;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeService;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
+import com.yanban.api.agent.v2.adaptive.V2AdaptiveTurnQueryService;
+import com.yanban.api.agent.v2.adaptive.V2AdaptiveTurnResponse;
 import com.yanban.api.security.JwtUser;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
+import java.util.List;
 
 class AgentControllerV2NaturalLanguageEndpointTest {
     private static final JwtUser USER =
@@ -55,6 +58,24 @@ class AgentControllerV2NaturalLanguageEndpointTest {
         verify(turns, never()).execute(7L, 9L, request);
     }
 
+    @Test
+    void outcomeGetDelegatesOnceToOwnerQualifiedReadService() {
+        V2NaturalLanguageTurnService turns =
+                mock(V2NaturalLanguageTurnService.class);
+        V2AdaptiveTurnQueryService outcomes =
+                mock(V2AdaptiveTurnQueryService.class);
+        var expected = new V2AdaptiveTurnResponse(
+                "RUNNING", "PERSISTENT_PLAN_EXECUTE", "plan-1",
+                "version-1", List.of(), null, null, List.of(), null);
+        when(outcomes.get(7L, 9L, "request-1")).thenReturn(expected);
+        var controller = controller(
+                new V2ProductAvailability(true), turns, outcomes);
+
+        assertSame(expected, controller.getV2NaturalLanguageTurn(
+                USER, 9L, "request-1"));
+        verify(outcomes).get(7L, 9L, "request-1");
+    }
+
     private AgentController controller(
             V2ProductAvailability availability,
             V2NaturalLanguageTurnService turns) {
@@ -65,5 +86,17 @@ class AgentControllerV2NaturalLanguageEndpointTest {
                 mock(V2LiteratureOutcomeService.class),
                 availability,
                 turns);
+    }
+
+    private AgentController controller(
+            V2ProductAvailability availability,
+            V2NaturalLanguageTurnService turns,
+            V2AdaptiveTurnQueryService outcomes) {
+        return new AgentController(
+                mock(AgentService.class),
+                mock(AgentContextSnapshotService.class),
+                mock(V2LiteratureTurnService.class),
+                mock(V2LiteratureOutcomeService.class),
+                availability, turns, outcomes);
     }
 }
