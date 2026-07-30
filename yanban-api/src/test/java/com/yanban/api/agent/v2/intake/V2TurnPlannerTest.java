@@ -14,6 +14,8 @@ import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ToolCall;
 import io.paperagent.v2.contracts.Route;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.api.DynamicTest;
 
 class V2TurnPlannerTest {
     private final ObjectMapper json = new ObjectMapper();
@@ -135,6 +137,50 @@ class V2TurnPlannerTest {
                                 "trace"));
     }
 
+    @TestFactory
+    java.util.stream.Stream<DynamicTest> mapsEveryPublicAliasExactly() {
+        java.util.Map<String, String> expected = java.util.Map.of(
+                "literature_search", "literature.search",
+                "project_read", "project.read",
+                "project_search", "project.search",
+                "project_candidate", "project.candidate.compose",
+                "sandbox_execute", "sandbox.execute");
+        return expected.entrySet().stream().map(entry ->
+                DynamicTest.dynamicTest(entry.getKey(), () ->
+                        assertEquals(
+                                entry.getValue(),
+                                V2PlannerCapabilityCatalog.internalToolId(
+                                        entry.getKey()).value())));
+    }
+
+    @Test
+    void rejectsDuplicateStepIdsAndOversizedModelOutput() {
+        String duplicate = """
+                {"route":"PERSISTENT_PLAN_EXECUTE",
+                 "taskFrame":{"objective":"x","targets":["x"],
+                   "deliverables":["x"],"constraints":["x"]},
+                 "plan":{"reason":"x","steps":[
+                  {"id":"same","intent":"x","expectedOutcome":"x",
+                   "dependencies":[],"completionCriteria":["x"],
+                   "maxAttempts":1,"maxDurationSeconds":1,"capability":null},
+                  {"id":"same","intent":"x","expectedOutcome":"x",
+                   "dependencies":[],"completionCriteria":["x"],
+                   "maxAttempts":1,"maxDurationSeconds":1,"capability":null}]}}
+                """;
+        assertThrows(V2TurnPlanningException.class,
+                () -> planner(answer("unused")).parse(duplicate));
+
+        String oversized = "{\"route\":\"DIRECT\",\"answer\":\""
+                + "x".repeat(32_001) + "\"}";
+        assertThrows(V2TurnPlanningException.class,
+                () -> planner(answer(oversized)).plan(
+                        context("question"),
+                        endpoint(),
+                        null,
+                        false,
+                        "trace"));
+    }
+
     private String answerText() {
         return """
                 {
@@ -176,6 +222,22 @@ class V2TurnPlannerTest {
 
     private V2TurnPlanner planner(ChatModelProvider provider) {
         return new V2TurnPlanner(provider, json);
+    }
+
+    private com.yanban.api.agent.AgentContextPackage context(String current) {
+        return new com.yanban.api.agent.AgentContextPackage(
+                java.util.List.of(ChatMessage.system("context")),
+                java.util.List.of(),
+                java.util.List.of(),
+                1, 1, 1,
+                com.yanban.api.agent.EvidenceLedger.empty(),
+                ChatMessage.user(current),
+                null);
+    }
+
+    private com.yanban.api.settings.UserSettingsService.ModelEndpoint endpoint() {
+        return new com.yanban.api.settings.UserSettingsService.ModelEndpoint(
+                "deepseek", "model", null, null, "builtin", "DeepSeek");
     }
 
     private ChatModelProvider answer(String value) {

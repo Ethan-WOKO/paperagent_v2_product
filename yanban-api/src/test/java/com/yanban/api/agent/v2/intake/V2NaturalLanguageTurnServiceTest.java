@@ -2,12 +2,14 @@ package com.yanban.api.agent.v2.intake;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
@@ -84,7 +86,9 @@ class V2NaturalLanguageTurnServiceTest {
         when(transactions.locked(eq(intake), any())).thenAnswer(invocation -> {
             Function<V2TurnIntakeEntity, Object> operation =
                     invocation.getArgument(1);
-            return operation.apply(intake);
+            synchronized (intake) {
+                return operation.apply(intake);
+            }
         });
         when(contexts.resolve(7L, 12L)).thenReturn(
                 new VerifiedAgentTurnProductContext(
@@ -239,6 +243,134 @@ class V2NaturalLanguageTurnServiceTest {
         assertThat(response.planId()).isEqualTo("product-plan.test");
         verify(model, never()).chat(any());
         verify(bootstraps, never()).bootstrap(any(), any(), any());
+    }
+
+    @Test
+    void changedPayloadConflictStopsBeforePlanning() {
+        when(transactions.open(
+                eq(7L), eq(9L), eq("request-1"), any(), eq("question"),
+                eq(false), eq("skill-1"), any()))
+                .thenThrow(new IllegalArgumentException(
+                        "clientRequestId was already used for another payload"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service().execute(7L, 9L, request()));
+
+        verify(model, never()).chat(any());
+        verify(bootstraps, never()).bootstrap(any(), any(), any());
+    }
+
+    @Test
+    void malformedPlannerFailureCreatesNoSuccessfulFacts() {
+        when(model.chat(any())).thenReturn(new ChatResponse(
+                ChatMessage.assistant("{bad json"), "stop", null));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            intake.fail(invocation.getArgument(1), Instant.now());
+            return null;
+        }).when(transactions).saveFailure(eq(intake), any());
+
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> service().execute(7L, 9L, request()));
+
+        verify(transactions, never()).saveAssistant(any(), any(), any());
+        verify(transactions, never()).savePersistent(any(), any(), any(), any());
+        verify(bootstraps, never()).bootstrap(any(), any(), any());
+        assertThat(intake.status()).isEqualTo(V2TurnIntakeEntity.FAILED);
+    }
+
+    @Test
+    void projectVersionComesFromAuthenticatedContextAndDirectIsForbidden() {
+        when(contexts.resolve(7L, 12L)).thenReturn(
+                new VerifiedAgentTurnProductContext(
+                        new AgentRunIdentity(
+                                "AGENT_TURN", "12", 7L, 9L, 91L),
+                        Optional.of("server-manifest-v8")));
+        when(model.chat(any())).thenReturn(new ChatResponse(
+                ChatMessage.assistant(
+                        "{\"route\":\"DIRECT\",\"answer\":\"answer\"}"),
+                "stop", null));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            intake.fail(invocation.getArgument(1), Instant.now());
+            return null;
+        }).when(transactions).saveFailure(eq(intake), any());
+
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> service().execute(7L, 9L, request()));
+
+        ArgumentCaptor<AgentContextBuildRequest> context =
+                ArgumentCaptor.forClass(AgentContextBuildRequest.class);
+        verify(contextBuilder).build(context.capture());
+        assertThat(context.getValue().projectState().projectId())
+                .isEqualTo(91L);
+        assertThat(context.getValue().projectState().projectVersion())
+                .isEqualTo("server-manifest-v8");
+        verify(bootstraps, never()).bootstrap(any(), any(), any());
+        verify(transactions, never()).saveAssistant(any(), any(), any());
+    }
+
+    @Test
+    void concurrentSameKeyAttemptsConvergeOnOnePersistentPlan()
+            throws Exception {
+        stubPersistentPlanning();
+        int attempts = 8;
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(attempts);
+        try {
+            List<java.util.concurrent.Future<V2NaturalLanguageTurnResponse>>
+                    futures = new java.util.ArrayList<>();
+            for (int index = 0; index < attempts; index++) {
+                futures.add(pool.submit(
+                        () -> service().execute(7L, 9L, request())));
+            }
+            List<V2NaturalLanguageTurnResponse> responses =
+                    new java.util.ArrayList<>();
+            for (var future : futures) {
+                responses.add(future.get(
+                        10, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            assertThat(responses)
+                    .extracting(V2NaturalLanguageTurnResponse::planId)
+                    .containsOnly("product-plan.test");
+            assertThat(responses.stream()
+                    .filter(value -> !value.replayed()).count())
+                    .isEqualTo(1);
+            verify(model, times(1)).chat(any());
+            verify(bootstraps, times(1)).bootstrap(
+                    eq(7L), eq(12L), any());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private void stubPersistentPlanning() {
+        when(model.chat(any())).thenReturn(new ChatResponse(
+                ChatMessage.assistant("""
+                        {"route":"PERSISTENT_PLAN_EXECUTE",
+                         "taskFrame":{"objective":"Inspect","targets":["project"],
+                           "deliverables":["report"],"constraints":["read only"]},
+                         "plan":{"reason":"Need evidence","steps":[{
+                           "id":"read-1","intent":"Read source",
+                           "expectedOutcome":"Text is available",
+                           "dependencies":[],
+                           "completionCriteria":["Read receipt exists"],
+                           "maxAttempts":1,"maxDurationSeconds":120,
+                           "capability":"project_read"}]}}
+                        """),
+                "stop", null));
+        PersistedPlanBootstrap persisted = mock(PersistedPlanBootstrap.class);
+        Plan plan = mock(Plan.class);
+        when(plan.id()).thenReturn(new PlanId("product-plan.test"));
+        when(persisted.plan()).thenReturn(plan);
+        when(bootstraps.bootstrap(eq(7L), eq(12L), any()))
+                .thenReturn(PersistenceResult.applied(persisted));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            intake.completePersistent(
+                    invocation.getArgument(1),
+                    invocation.getArgument(2),
+                    invocation.getArgument(3),
+                    Instant.now());
+            return null;
+        }).when(transactions).savePersistent(
+                eq(intake), eq("product-plan.test"), any(), any());
     }
 
     private V2NaturalLanguageTurnService service() {
