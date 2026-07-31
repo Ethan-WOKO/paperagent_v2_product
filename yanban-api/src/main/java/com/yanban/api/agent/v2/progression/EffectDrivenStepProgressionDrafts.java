@@ -9,6 +9,7 @@ import io.paperagent.v2.contracts.ObjectValue;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanRevisionId;
 import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.ReceiptStatus;
 import io.paperagent.v2.contracts.TextValue;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
@@ -64,6 +65,45 @@ final class EffectDrivenStepProgressionDrafts {
                 occurredAt);
     }
 
+    static ActiveStepCompletionMaterializationRequest completion(
+            RecoveredActiveStep active,
+            List<EffectDrivenStepEvidence> evidence) {
+        List<EffectDrivenStepEvidence> ordered = ordered(evidence);
+        String evidenceHash = evidenceHash(ordered);
+        EventId eventId = new EventId(deterministic(
+                "effect-completion-event", evidenceHash));
+        PlanRevisionId revisionId = new PlanRevisionId(deterministic(
+                "effect-completion-revision", evidenceHash));
+        var occurredAt = ordered.stream()
+                .map(value -> value.receipt().endedAt())
+                .max(java.util.Comparator.naturalOrder())
+                .orElseThrow();
+        PersistedEffectIntent first = ordered.get(0).intent();
+        var payload = payload(
+                first.intent().planId(), first.intent().stepId(),
+                "effectCount=" + ordered.size(), evidenceHash,
+                ReceiptStatus.SUCCESS.name(),
+                first.activationEventId().value());
+        return new ActiveStepCompletionMaterializationRequest(
+                active,
+                new ActiveStepCompletionFactDraft(
+                        evidenceHash, occurredAt,
+                        ordered.stream()
+                                .map(value -> value.receipt().id())
+                                .toList()),
+                new ActiveStepCompletionEventDraft(
+                        eventId, occurredAt, new EventType("STEP_COMPLETED"),
+                        Optional.of(first.activationEventId()),
+                        deterministic("effect-completion-correlation",
+                                evidenceHash),
+                        payload),
+                new ActiveStepCompletionRevisionDraft(
+                        revisionId,
+                        "complete Step from successful persisted effect",
+                        occurredAt),
+                occurredAt);
+    }
+
     static StepActivationAttempt activation(
             PersistedStepRecoveryReady ready,
             PersistedEffectIntent intent,
@@ -95,10 +135,49 @@ final class EffectDrivenStepProgressionDrafts {
                 occurredAt);
     }
 
+    static StepActivationAttempt activation(
+            PersistedStepRecoveryReady ready,
+            List<EffectDrivenStepEvidence> evidence,
+            EffectDrivenStepProgressionActivationLeaseAttempt lease) {
+        List<EffectDrivenStepEvidence> ordered = ordered(evidence);
+        EventId completionEventId = completionEventId(ordered);
+        String authority = nextActivationAuthority(
+                ready.readyStepId(), ordered);
+        EffectDrivenStepEvidence first = ordered.get(0);
+        var occurredAt = ready.checkpoint().checkpoint().createdAt();
+        return new StepActivationAttempt(
+                lease.leaseOwnerId(), lease.leaseToken(),
+                lease.leaseExpiresAt(),
+                new StepActivationEventDraft(
+                        nextActivationEventId(
+                                ready.readyStepId(), ordered),
+                        occurredAt,
+                        new EventType("STEP_ACTIVATED"),
+                        Optional.of(completionEventId),
+                        deterministic(
+                                "effect-next-activation-correlation",
+                                authority),
+                        payload(
+                                first.intent().intent().planId(),
+                                ready.readyStepId(),
+                                "effectCount=" + ordered.size(),
+                                evidenceHash(ordered),
+                                ReceiptStatus.SUCCESS.name(),
+                                completionEventId.value())),
+                occurredAt);
+    }
+
     static EventId completionEventId(
             PersistedEffectIntent intent, ExecutionReceipt receipt) {
         return new EventId(deterministic(
                 "effect-completion-event", receiptHash(intent, receipt)));
+    }
+
+    static EventId completionEventId(
+            List<EffectDrivenStepEvidence> evidence) {
+        return new EventId(deterministic(
+                "effect-completion-event",
+                evidenceHash(ordered(evidence))));
     }
 
     static EventId nextActivationEventId(
@@ -119,6 +198,67 @@ final class EffectDrivenStepProgressionDrafts {
                 completionEventId(intent, receipt).value(),
                 nextStepId.value(),
                 receipt.id().value());
+    }
+
+    static EventId nextActivationEventId(
+            PlanStepId nextStepId,
+            List<EffectDrivenStepEvidence> evidence) {
+        return new EventId(deterministic(
+                "effect-next-activation-event",
+                nextActivationAuthority(
+                        nextStepId, ordered(evidence))));
+    }
+
+    private static String nextActivationAuthority(
+            PlanStepId nextStepId,
+            List<EffectDrivenStepEvidence> evidence) {
+        return deterministic(
+                "effect-next-activation-authority",
+                completionEventId(evidence).value(),
+                nextStepId.value(),
+                evidenceHash(evidence));
+    }
+
+    static String evidenceHash(
+            List<EffectDrivenStepEvidence> evidence) {
+        List<EffectDrivenStepEvidence> ordered = ordered(evidence);
+        MessageDigest digest = digest();
+        add(digest, "multi-effect-completion-evidence-v1");
+        add(digest, Integer.toString(ordered.size()));
+        ordered.forEach(value -> add(
+                digest, receiptHash(value.intent(), value.receipt())));
+        return "sha256." + hex(digest.digest());
+    }
+
+    private static List<EffectDrivenStepEvidence> ordered(
+            List<EffectDrivenStepEvidence> evidence) {
+        if (evidence == null || evidence.isEmpty()
+                || evidence.stream().anyMatch(value -> value == null)
+                || evidence.stream().noneMatch(value ->
+                        value.receipt().status()
+                                == ReceiptStatus.SUCCESS)) {
+            throw new IllegalArgumentException(
+                    "final effect evidence with a success is required");
+        }
+        List<EffectDrivenStepEvidence> ordered = evidence.stream()
+                .sorted(java.util.Comparator.comparing(value ->
+                        value.intent().intent().toolCallId().value()))
+                .toList();
+        PersistedEffectIntent first = ordered.get(0).intent();
+        boolean consistent = ordered.stream().allMatch(value ->
+                value.intent().intent().planId().equals(
+                        first.intent().planId())
+                        && value.intent().intent().stepId().equals(
+                                first.intent().stepId())
+                        && value.intent().activationEventId().equals(
+                                first.activationEventId())
+                        && value.receipt().toolCallId().equals(
+                                value.intent().intent().toolCallId()));
+        if (!consistent) {
+            throw new IllegalArgumentException(
+                    "effect evidence authority mismatch");
+        }
+        return List.copyOf(ordered);
     }
 
     static String receiptHash(
