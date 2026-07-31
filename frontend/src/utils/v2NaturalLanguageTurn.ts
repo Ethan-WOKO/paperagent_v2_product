@@ -23,6 +23,7 @@ interface PollOptions {
   signal?: AbortSignal;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
+  resume?: () => Promise<unknown>;
   onOutcome?: (outcome: V2NaturalLanguageTurnResponse) => void;
 }
 
@@ -121,6 +122,14 @@ export async function pollV2NaturalLanguageTurn(
     if (isV2NaturalLanguageTerminal(outcome)) return outcome;
     if (now() - startedAt >= timeoutMs) throw new Error('v2-natural-language-poll-timeout');
     await sleep(intervalMs);
+    if (options.signal?.aborted) throw abortError();
+    if (options.resume) {
+      try {
+        await options.resume();
+      } catch (cause) {
+        if (isDefinitiveV2NaturalLanguageStartRejection(cause)) throw cause;
+      }
+    }
   }
 }
 

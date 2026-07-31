@@ -100,8 +100,7 @@ class V2AdaptiveExecutionCoordinatorTest {
                        "expectedOutcome":"Compilation succeeds",
                        "dependencies":[],
                        "completionCriteria":["exit code is zero"],
-                       "maxAttempts":1,"maxDurationSeconds":120,
-                       "capability":"project_read"}]}
+                       "maxAttempts":1,"maxDurationSeconds":120}]}
                     """;
             case 2 -> """
                     {"decision":"CONTINUE","reason":"run replacement",
@@ -121,6 +120,26 @@ class V2AdaptiveExecutionCoordinatorTest {
         assertEquals("SUCCEEDED", result.steps().get(1).status());
         assertEquals(1, result.steps().stream()
                 .filter(value -> "step-1".equals(value.title())).count());
+    }
+
+    @Test
+    void pendingSandboxRecoveryKeepsStepRunning() {
+        var result = coordinator(
+                ignored -> new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .RECOVERY_PENDING,
+                        "step-1", "sandbox execution is still running",
+                        false, null),
+                ignored -> {
+                    throw new AssertionError(
+                            "pending execution must not reflect yet");
+                })
+                .execute(command(Map.of()));
+
+        assertEquals("RUNNING", result.status());
+        assertEquals("RUNNING", result.steps().get(0).status());
+        assertEquals("sandbox execution is still running",
+                result.steps().get(0).detail());
     }
 
     @Test
@@ -264,7 +283,7 @@ class V2AdaptiveExecutionCoordinatorTest {
                 1L, 2L, "plan-1",
                 List.of(new V2AdaptiveTurnResponse.Step(
                         1, "step-1", "PENDING", "")),
-                bindings, context());
+                bindings, Map.of("step-1", 0), context());
     }
 
     private static String complete() {

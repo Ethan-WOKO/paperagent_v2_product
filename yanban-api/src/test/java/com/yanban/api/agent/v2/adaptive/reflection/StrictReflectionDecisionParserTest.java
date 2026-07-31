@@ -52,7 +52,7 @@ class StrictReflectionDecisionParserTest {
     }
 
     @Test
-    void parsesReplanAndMapsPublicCapabilityAlias() {
+    void parsesToolFreeReplanStep() {
         ReflectionOutcome outcome = parser.parse("""
                 {
                   "decision":"REPLAN",
@@ -65,14 +65,24 @@ class StrictReflectionDecisionParserTest {
                     "dependencies":[],
                     "completionCriteria":["Compilation succeeds"],
                     "maxAttempts":2,
-                    "maxDurationSeconds":120,
-                    "capability":"sandbox_execute"
+                    "maxDurationSeconds":120
                   }]
                 }
                 """);
 
         assertEquals(ReflectionAction.REPLAN, outcome.decision());
         assertEquals(1, outcome.replacementSteps().size());
+        assertNull(outcome.replacementSteps().get(0).publicCapability());
+        assertNull(outcome.replacementSteps().get(0).internalToolId());
+    }
+
+    @Test
+    void acceptsLegacyCapabilityAsCompatibilityHint() {
+        ReflectionOutcome outcome = parser.parse(replanWithStep(
+                "\"id\":\"one\"",
+                "\"dependencies\":[]",
+                "\"capability\":\"sandbox_execute\""));
+
         assertEquals(
                 "sandbox_execute",
                 outcome.replacementSteps().get(0).publicCapability());

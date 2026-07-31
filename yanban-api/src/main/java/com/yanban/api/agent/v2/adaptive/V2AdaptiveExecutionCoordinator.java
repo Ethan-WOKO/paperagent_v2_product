@@ -158,9 +158,18 @@ public final class V2AdaptiveExecutionCoordinator {
             return;
         }
         V2AdaptiveTurnResponse.Step existing = timeline.get(row);
-        String status = cycle.state()
+        String status;
+        if (cycle.state()
                 == V2AdaptiveCyclePort.CycleResult.State.FAILED
-                || cycle.failedReceipt() ? "FAILED" : "SUCCEEDED";
+                || cycle.failedReceipt()) {
+            status = "FAILED";
+        } else if (cycle.state()
+                == V2AdaptiveCyclePort.CycleResult.State
+                        .RECOVERY_PENDING) {
+            status = "RUNNING";
+        } else {
+            status = "SUCCEEDED";
+        }
         timeline.set(row, new V2AdaptiveTurnResponse.Step(
                 existing.index(), existing.title(), status,
                 bounded(cycle.detail())));

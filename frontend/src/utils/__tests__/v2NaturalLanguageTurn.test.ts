@@ -55,17 +55,20 @@ describe('V2 自然语言请求', () => {
     expect(() => normalizeV2NaturalLanguageRequest(' ', clientRequestId)).toThrow('content-required');
   });
 
-  it('只调用一次 POST，之后只读轮询到终态', async () => {
+  it('RUNNING 时用同一请求编号续跑，之后读取到终态', async () => {
     const start = vi.fn(async () => intakeAck);
+    const resume = vi.fn(async () => intakeAck);
     const states = [outcome('RUNNING'), outcome('SUCCEEDED', { finalText: '完成' })];
     const read = vi.fn(async () => states.shift()!);
     const result = await startThenPollV2NaturalLanguageTurn(start, read, {
       intervalMs: 1_000,
       sleep: async () => undefined,
       now: () => 0,
+      resume,
     });
     expect(result.status).toBe('SUCCEEDED');
     expect(start).toHaveBeenCalledTimes(1);
+    expect(resume).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(2);
   });
 
@@ -185,7 +188,7 @@ describe('V2 自然语言 API 与页面接入', () => {
   const api = readFileSync(new URL('../../api/agent.ts', import.meta.url), 'utf8');
   const page = readFileSync(new URL('../../views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
 
-  it('POST 和 GET 使用同一个 session 与 clientRequestId 契约', () => {
+  it('POST 续跑和 GET 使用同一个 session 与 clientRequestId 契约', () => {
     expect(api).toContain('export interface V2NaturalLanguageTurnStartResponse');
     expect(api).toContain('http.post<V2NaturalLanguageTurnStartResponse>');
     expect(api).toContain('http.get<V2NaturalLanguageTurnResponse>');
@@ -193,6 +196,7 @@ describe('V2 自然语言 API 与页面接入', () => {
     expect(api).toContain('`/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(clientRequestId)}`');
     expect(page).toContain('await startV2NaturalLanguageTurn(sessionId, request, controller.signal)');
     expect(page).toContain('await getV2NaturalLanguageTurn(sessionId, clientRequestId, controller.signal)');
+    expect(page).toContain('resume: async () =>');
     expect(page).toContain('<span>{{ step.index }}</span>');
   });
 
@@ -209,6 +213,7 @@ describe('V2 自然语言 API 与页面接入', () => {
   it('展示执行过程、最终结果、输出位置并复用 Candidate 检查入口', () => {
     expect(page).toContain('执行过程');
     expect(page).toContain('最终结果');
+    expect(page).toContain('结果：{{ step.detail }}');
     expect(page).toContain('生成内容位置');
     expect(page).toContain('原项目尚未修改');
     expect(page).toContain('打开修改与验证');
