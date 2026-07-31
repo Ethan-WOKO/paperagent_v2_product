@@ -123,9 +123,9 @@ final class AutonomousNaturalLanguageStepTurnAdapter
                     : "MODEL_OUTPUT_EMPTY");
             return new NoEffectDecision();
         }
-        if (response.proposedToolCalls().size() != 1) {
-            diagnostics.add("MODEL_FORMAT_MULTIPLE_TOOL_CALLS");
-            return new NoEffectDecision();
+        if (response.proposedToolCalls().size() > 1) {
+            diagnostics.add(
+                    "MODEL_FORMAT_MULTIPLE_TOOL_CALLS_USING_FIRST");
         }
         ProposedToolCall call = response.proposedToolCalls().get(0);
         if (tools.stream().noneMatch(

@@ -153,6 +153,62 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
     }
 
     @Test
+    void multipleToolCallsUseOnlyTheFirstWithAStableIntent() {
+        Fixture fixture = fixture();
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId()))
+                .thenReturn(List.of());
+        ModelResponse response = mock(ModelResponse.class);
+        when(response.proposedToolCalls()).thenReturn(List.of(
+                new ProposedToolCall(
+                        "provider-call-1", new ToolId("project.read"),
+                        arguments()),
+                new ProposedToolCall(
+                        "provider-call-2", new ToolId("sandbox.execute"),
+                        new ObjectValue(Map.of()))));
+        when(response.assistantText()).thenReturn(Optional.empty());
+        when(fixture.provider().complete(any())).thenReturn(response);
+
+        EffectIntent first = assertInstanceOf(
+                EffectIntentDecision.class,
+                fixture.adapter().decide(fixture.input())).intent();
+        EffectIntent replay = assertInstanceOf(
+                EffectIntentDecision.class,
+                fixture.adapter().decide(fixture.input())).intent();
+
+        assertEquals("project.read", first.kind());
+        assertEquals(arguments(), first.arguments());
+        assertEquals(first, replay);
+        assertTrue(fixture.adapter().diagnostics().contains(
+                "MODEL_FORMAT_MULTIPLE_TOOL_CALLS_USING_FIRST"));
+    }
+
+    @Test
+    void unknownFirstToolCallFailsWithoutSkippingToLaterValidCall() {
+        Fixture fixture = fixture();
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId()))
+                .thenReturn(List.of());
+        ModelResponse response = mock(ModelResponse.class);
+        when(response.proposedToolCalls()).thenReturn(List.of(
+                new ProposedToolCall(
+                        "provider-call-1", new ToolId("unknown.tool"),
+                        arguments()),
+                new ProposedToolCall(
+                        "provider-call-2", new ToolId("project.read"),
+                        arguments())));
+        when(response.assistantText()).thenReturn(Optional.empty());
+        when(fixture.provider().complete(any())).thenReturn(response);
+
+        assertInstanceOf(
+                NoEffectDecision.class,
+                fixture.adapter().decide(fixture.input()));
+
+        assertTrue(fixture.adapter().diagnostics().contains(
+                "MODEL_SELECTED_UNKNOWN_TOOL"));
+    }
+
+    @Test
     void assistantCompletionWithDurableSuccessReplaysSuccessfulIntent() {
         Fixture fixture = fixture();
         V2EffectHistorySource.Entry success = completed(

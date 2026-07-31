@@ -916,3 +916,57 @@ Focused verification only:
 - no legacy Agent, RAG, literature, Candidate-apply, broad frontend, full
   product suite, or real signed-in E2B user journey was run in this
   implementation pass.
+
+### 2026-07-31 reflection progression repair and real E2B retest
+
+A signed-in V2 user journey exposed four related progression defects before
+the sandbox Step could finish:
+
+- the reflection prompt described `COMPLETE` as whole-Plan completion even
+  though the coordinator uses it to complete the current Step;
+- when the model chose reflection after a successful Receipt, `CONTINUE`
+  replayed the same successful intent and could exhaust the cycle limit;
+- internal `COMPLETE_STEP` persistence transitions consumed the same
+  eight-cycle budget as real execution and reflection;
+- a provider response containing several ordered tool calls was rejected
+  completely, producing `MODEL_FORMAT_MULTIPLE_TOOL_CALLS` followed by
+  `PREMATURE_COMPLETE`.
+
+The minimum repair keeps the existing persistent execution boundary:
+
+- `COMPLETE` now explicitly means that the current Step is satisfied; only a
+  terminal Plan exposes that Step text as the final user answer;
+- an exact current-cycle
+  `MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS` diagnostic gets one guarded
+  re-reflection instead of blindly replaying the same intent;
+- the eight-cycle ceiling counts real execute/reflect cycles, while
+  `COMPLETE_STEP` remains separately bounded by a 16-iteration absolute
+  ceiling;
+- when the model returns several tool calls, the adapter persists and executes
+  only the first call. Later calls are discarded and the next cycle asks the
+  model again with the first call's durable Receipt. An unknown first tool
+  still fails closed instead of skipping to a later call.
+
+Focused verification:
+
+- `mvn -pl yanban-api -am
+  "-Dtest=V2AdaptiveExecutionCoordinatorTest,V2ModelReflectionProviderTest,StrictReflectionDecisionParserTest,AutonomousNaturalLanguageStepTurnAdapterTest,NaturalLanguageStepKernelFactoryTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 40 tests with 0 failures, 0 errors, and 0 skipped;
+- `git diff --check` passed;
+- no legacy Agent, RAG, literature, Candidate apply, broad frontend, or full
+  product suite was run.
+
+The final signed-in browser retest used Project 44,
+`E2B Sandbox Smoke 20260729`, in V2 mode. The read-only request asked the
+Agent to inspect the Maven configuration, source, and tests, then run the
+existing tests in E2B without modifying the Project.
+
+Observed final result:
+
+- all three `project.read` Steps completed from durable effect results;
+- the fourth Step entered E2B and Maven exited with code 0;
+- the final answer reported the inspected Maven/Java test setup and the
+  successful test execution;
+- the UI remained at one pre-existing Candidate and two Project versions, so
+  no Candidate was created or applied and no Project file changed.

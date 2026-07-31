@@ -118,6 +118,180 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void durableSuccessReflectionContinueGetsOneNoProgressReconsideration() {
+        AtomicInteger cycleCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = command -> {
+            int call = cycleCalls.incrementAndGet();
+            if (call == 1) {
+                assertEquals(
+                        V2AdaptiveCyclePort.Action.EXECUTE,
+                        command.action());
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "reflection selected", false, null,
+                        List.of(
+                                "executionReceipt=status=SUCCESS",
+                                "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS"),
+                        true, false);
+            }
+            assertEquals(
+                    V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                    "step-1", "durable completion", true, null);
+        };
+        AtomicInteger reflectionCalls = new AtomicInteger();
+        ReflectionProvider provider = reflectionContext -> {
+            int call = reflectionCalls.incrementAndGet();
+            boolean guarded = reflectionContext.recentExecutionFacts()
+                    .stream().anyMatch(value ->
+                            value.startsWith("noProgressGuard="));
+            if (call == 1) {
+                assertFalse(guarded);
+                return """
+                        {"decision":"CONTINUE","reason":"continue",
+                         "finalText":null,"replacementSteps":[]}
+                        """;
+            }
+            assertTrue(guarded);
+            return complete();
+        };
+
+        var result = coordinator(cycles, provider)
+                .execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals(2, cycleCalls.get());
+        assertEquals(2, reflectionCalls.get());
+    }
+
+    @Test
+    void repeatedContinueAfterNoProgressGuardFailsWithoutReplayingTool() {
+        AtomicInteger cycleCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = ignored -> {
+            cycleCalls.incrementAndGet();
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED,
+                    "step-1", "reflection selected", false, null,
+                    List.of(
+                            "executionReceipt=status=SUCCESS",
+                            "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS"),
+                    true, false);
+        };
+        AtomicInteger reflectionCalls = new AtomicInteger();
+        ReflectionProvider provider = reflectionContext -> {
+            int call = reflectionCalls.incrementAndGet();
+            if (call == 2) {
+                assertTrue(reflectionContext.recentExecutionFacts()
+                        .stream().anyMatch(value ->
+                                value.contains(
+                                        "CONTINUE would replay the same")));
+            }
+            return """
+                    {"decision":"CONTINUE","reason":"continue",
+                     "finalText":null,"replacementSteps":[]}
+                    """;
+        };
+
+        var result = coordinator(cycles, provider)
+                .execute(command(Map.of()));
+
+        assertEquals("FAILED", result.status());
+        assertEquals("REFLECTION_NO_PROGRESS", result.errorCode());
+        assertEquals(1, cycleCalls.get());
+        assertEquals(2, reflectionCalls.get());
+    }
+
+    @Test
+    void eightExecutionCyclesAndEightCompletionTransitionsFitBudget() {
+        AtomicInteger cycleCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = command -> {
+            int call = cycleCalls.incrementAndGet();
+            assertEquals(call, command.cycle());
+            if ((call & 1) == 1) {
+                assertEquals(
+                        V2AdaptiveCyclePort.Action.EXECUTE,
+                        command.action());
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "receipt " + call, false, null,
+                        List.of("executionReceipt=status=SUCCESS"),
+                        true, false);
+            }
+            assertEquals(
+                    V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    call == V2AdaptiveExecutionCoordinator.MAX_CYCLES * 2
+                            ? V2AdaptiveCyclePort.CycleResult.State
+                                    .PLAN_SUCCEEDED
+                            : V2AdaptiveCyclePort.CycleResult.State
+                                    .STEP_SUCCEEDED,
+                    "step-1", "completion " + call,
+                    call == V2AdaptiveExecutionCoordinator.MAX_CYCLES * 2,
+                    null);
+        };
+        AtomicInteger reflectionCalls = new AtomicInteger();
+
+        var result = coordinator(cycles, ignored -> {
+            reflectionCalls.incrementAndGet();
+            return complete();
+        }).execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals(V2AdaptiveExecutionCoordinator.MAX_CYCLES,
+                result.reflections());
+        assertEquals(V2AdaptiveExecutionCoordinator.MAX_CYCLES * 2,
+                cycleCalls.get());
+        assertEquals(V2AdaptiveExecutionCoordinator.MAX_CYCLES,
+                reflectionCalls.get());
+    }
+
+    @Test
+    void ninthExecutionCycleIsRejectedAfterEightCompletionTransitions() {
+        AtomicInteger cycleCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = command -> {
+            int call = cycleCalls.incrementAndGet();
+            assertEquals(call, command.cycle());
+            if ((call & 1) == 1) {
+                assertEquals(
+                        V2AdaptiveCyclePort.Action.EXECUTE,
+                        command.action());
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "receipt " + call, false, null,
+                        List.of("executionReceipt=status=SUCCESS"),
+                        true, false);
+            }
+            assertEquals(
+                    V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED,
+                    "step-1", "completion " + call, false, null);
+        };
+        AtomicInteger reflectionCalls = new AtomicInteger();
+
+        var result = coordinator(cycles, ignored -> {
+            reflectionCalls.incrementAndGet();
+            return complete();
+        }).execute(command(Map.of()));
+
+        assertEquals("FAILED", result.status());
+        assertEquals("CYCLE_LIMIT_EXCEEDED", result.errorCode());
+        assertEquals(V2AdaptiveExecutionCoordinator.MAX_CYCLES,
+                result.reflections());
+        assertEquals(V2AdaptiveExecutionCoordinator.MAX_CYCLES * 2,
+                cycleCalls.get());
+        assertEquals(V2AdaptiveExecutionCoordinator.MAX_CYCLES,
+                reflectionCalls.get());
+    }
+
+    @Test
     void failedReceiptReplansWithoutDuplicateRowsAndCountsRepairOnlyAfterCommit() {
         AtomicInteger cycle = new AtomicInteger();
         V2AdaptiveCyclePort cycles = ignored -> switch (

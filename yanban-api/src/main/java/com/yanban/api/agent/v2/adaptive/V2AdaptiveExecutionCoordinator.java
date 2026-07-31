@@ -7,6 +7,15 @@ import java.util.*;
 public final class V2AdaptiveExecutionCoordinator {
     static final int MAX_CYCLES = 8;
     static final int MAX_REPLANS = 3;
+    private static final int MAX_TOTAL_ITERATIONS = MAX_CYCLES * 2;
+    private static final String REFLECTION_WITH_DURABLE_SUCCESS =
+            "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS";
+    private static final String NO_PROGRESS_GUARD =
+            "noProgressGuard=CONTINUE would replay the same "
+                    + "already-successful intent and create no new durable "
+                    + "evidence; choose COMPLETE if the current Step is "
+                    + "satisfied, REPLAN if the approach must change, or "
+                    + "FAIL if execution cannot proceed";
     private final V2AdaptiveCyclePort cycles;
     private final ReflectionProvider reflections;
     private final StrictReflectionDecisionParser parser;
@@ -35,22 +44,36 @@ public final class V2AdaptiveExecutionCoordinator {
         String acceptedFinalText = null;
         int replanCount = 0;
         int repairCount = 0;
-        for (int index = 1; index <= MAX_CYCLES; index++) {
+        int executionCycles = 0;
+        int totalIterations = 0;
+        while (totalIterations < MAX_TOTAL_ITERATIONS) {
+            boolean completionTransition =
+                    nextAction == V2AdaptiveCyclePort.Action.COMPLETE_STEP;
+            if (!completionTransition
+                    && executionCycles >= MAX_CYCLES) {
+                return failed(timeline, "CYCLE_LIMIT_EXCEEDED",
+                        executionCycles, replanCount, repairCount);
+            }
+            totalIterations++;
+            if (!completionTransition) {
+                executionCycles++;
+            }
             V2AdaptiveCyclePort.CycleResult cycle;
             try {
                 cycle = cycles.executeOne(
                         new V2AdaptiveCyclePort.CycleCommand(
                                 command.userId(), command.turnId(),
-                                command.planId(), index, pendingReplan,
+                                command.planId(), totalIterations,
+                                pendingReplan,
                                 nextAction));
             } catch (V2AdaptiveRuntimeCycleFactory.CycleStageException
                     failure) {
                 return failed(timeline,
                         "CYCLE_" + failure.stage() + "_EXCEPTION",
-                        index, replanCount, repairCount);
+                        executionCycles, replanCount, repairCount);
             } catch (RuntimeException failure) {
                 return failed(timeline, "CYCLE_EXECUTION_EXCEPTION",
-                        index, replanCount, repairCount);
+                        executionCycles, replanCount, repairCount);
             }
             pendingReplan = null;
             V2AdaptiveCyclePort.Action completedAction = nextAction;
@@ -79,12 +102,12 @@ public final class V2AdaptiveExecutionCoordinator {
                         && cycle.durableSucceeded()) {
                     return new V2AdaptiveExecutionResult(
                             "SUCCEEDED", timeline, acceptedFinalText, null,
-                            index, replanCount, repairCount);
+                            executionCycles, replanCount, repairCount);
                 }
                 if (cycle.state()
                         == V2AdaptiveCyclePort.CycleResult.State.FAILED) {
                     return failed(timeline, "STEP_COMPLETION_FAILED",
-                            index, replanCount, repairCount);
+                            executionCycles, replanCount, repairCount);
                 }
                 acceptedFinalText = null;
                 continue;
@@ -94,18 +117,33 @@ public final class V2AdaptiveExecutionCoordinator {
                             .RECOVERY_PENDING) {
                 return new V2AdaptiveExecutionResult(
                         "RUNNING", timeline, null, null,
-                        index, replanCount, repairCount);
+                        executionCycles, replanCount, repairCount);
             }
 
             ReflectionOutcome decision;
-            ReflectionResolution reflection = reflect(
+            ReflectionContext reflectionContext =
                     command.reflectionContext(
-                            accumulatedExecutionFacts, timeline));
+                            accumulatedExecutionFacts, timeline);
+            ReflectionResolution reflection = reflect(
+                    reflectionContext);
             if (reflection.failureCode() != null) {
                 return failed(timeline, reflection.failureCode(),
-                        index, replanCount, repairCount);
+                        executionCycles, replanCount, repairCount);
             }
             decision = reflection.decision();
+            if (requiresNoProgressReflection(cycle, decision)) {
+                ReflectionResolution reconsidered = reflect(
+                        withNoProgressGuard(reflectionContext));
+                if (reconsidered.failureCode() != null) {
+                    return failed(timeline, reconsidered.failureCode(),
+                            executionCycles, replanCount, repairCount);
+                }
+                decision = reconsidered.decision();
+                if (decision.decision() == ReflectionAction.CONTINUE) {
+                    return failed(timeline, "REFLECTION_NO_PROGRESS",
+                            executionCycles, replanCount, repairCount);
+                }
+            }
             if (decision.decision() == ReflectionAction.COMPLETE) {
                 if (cycle.state()
                         == V2AdaptiveCyclePort.CycleResult.State
@@ -113,7 +151,7 @@ public final class V2AdaptiveExecutionCoordinator {
                         && cycle.durableSucceeded()) {
                     return new V2AdaptiveExecutionResult(
                             "SUCCEEDED", timeline, decision.finalText(), null,
-                            index, replanCount, repairCount);
+                            executionCycles, replanCount, repairCount);
                 }
                 if (cycle.state()
                         != V2AdaptiveCyclePort.CycleResult.State
@@ -121,7 +159,7 @@ public final class V2AdaptiveExecutionCoordinator {
                         || cycle.stepId() == null
                         || !receiptBackedSteps.contains(cycle.stepId())) {
                     return failed(timeline,
-                            "PREMATURE_COMPLETE", index, replanCount,
+                            "PREMATURE_COMPLETE", executionCycles, replanCount,
                             repairCount);
                 }
                 acceptedFinalText = decision.finalText();
@@ -130,16 +168,16 @@ public final class V2AdaptiveExecutionCoordinator {
             }
             if (decision.decision() == ReflectionAction.FAIL) {
                 return failed(timeline, "REFLECTION_FAILED",
-                        index, replanCount, repairCount);
+                        executionCycles, replanCount, repairCount);
             }
             if (cycle.durableSucceeded()) {
                 return failed(timeline, "TERMINAL_DECISION_INVALID",
-                        index, replanCount, repairCount);
+                        executionCycles, replanCount, repairCount);
             }
             if (decision.decision() == ReflectionAction.REPLAN) {
                 if (++replanCount > MAX_REPLANS) {
                     return failed(timeline, "REPLAN_LIMIT_EXCEEDED",
-                            index, replanCount, repairCount);
+                            executionCycles, replanCount, repairCount);
                 }
                 pendingReplan = decision;
                 pendingDecision = decision;
@@ -147,7 +185,7 @@ public final class V2AdaptiveExecutionCoordinator {
             }
         }
         return failed(timeline, "CYCLE_LIMIT_EXCEEDED",
-                MAX_CYCLES, replanCount, repairCount);
+                executionCycles, replanCount, repairCount);
     }
 
     private static void updateExisting(
@@ -249,6 +287,30 @@ public final class V2AdaptiveExecutionCoordinator {
             }
         }
         return new ReflectionResolution(null, failureCode);
+    }
+
+    private static boolean requiresNoProgressReflection(
+            V2AdaptiveCyclePort.CycleResult cycle,
+            ReflectionOutcome decision) {
+        return decision.decision() == ReflectionAction.CONTINUE
+                && cycle.state()
+                        == V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED
+                && cycle.receiptBacked()
+                && !cycle.failedReceipt()
+                && cycle.authoritativeFacts().contains(
+                        REFLECTION_WITH_DURABLE_SUCCESS);
+    }
+
+    private static ReflectionContext withNoProgressGuard(
+            ReflectionContext context) {
+        List<String> facts = new ArrayList<>(
+                context.recentExecutionFacts());
+        facts.add(NO_PROGRESS_GUARD);
+        return new ReflectionContext(
+                context.taskFrame(), context.currentPlan(),
+                context.conversationContext(), context.completedFacts(),
+                facts, context.unfinishedSteps());
     }
 
     private static ReflectionContext withReflectionDiagnostic(

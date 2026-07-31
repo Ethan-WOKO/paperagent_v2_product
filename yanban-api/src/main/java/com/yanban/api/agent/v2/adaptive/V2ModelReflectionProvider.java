@@ -16,7 +16,17 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             Reflect on authoritative V2 execution facts. Return one strict JSON
             object with exactly decision, reason, finalText, replacementSteps.
             decision is CONTINUE, REPLAN, COMPLETE, or FAIL.
-            COMPLETE is allowed only when the supplied durable cut is terminal.
+            COMPLETE means the current active Step's completion criteria are
+            satisfied by the supplied durable Receipts and facts, even when
+            the Plan has later Steps. The coordinator then persists this Step
+            completion and advances the Plan. It exposes finalText as the
+            user's final answer only when the completed Step makes the whole
+            Plan terminal. CONTINUE means the same active Step still needs
+            another effect. For a completed nonterminal Step, put a concise
+            verified Step-result summary in finalText; the coordinator
+            discards that provisional text after advancing. Do not return
+            CONTINUE merely because later Steps remain or the final user
+            answer is not ready.
             CONTINUE, FAIL, and REPLAN require finalText:null. COMPLETE
             requires a nonblank finalText. Only REPLAN may have nonempty
             replacementSteps.
