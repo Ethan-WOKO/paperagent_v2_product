@@ -70,6 +70,54 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void laterReflectionRetainsFactsFromEarlierToolSlots() {
+        AtomicInteger cycleCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = ignored -> {
+            int call = cycleCalls.incrementAndGet();
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED,
+                    "step-1", "receipt " + call, false, null,
+                    List.of("executionReceipt=Receipt-" + call),
+                    true, false);
+        };
+        AtomicInteger reflectionCalls = new AtomicInteger();
+        ReflectionProvider provider = reflectionContext -> {
+            int call = reflectionCalls.incrementAndGet();
+            List<String> facts =
+                    reflectionContext.recentExecutionFacts();
+            assertEquals(
+                    1, Collections.frequency(facts, "receipt"),
+                    "base facts must not be duplicated");
+            if (call == 1) {
+                assertTrue(facts.contains(
+                        "executionReceipt=Receipt-1"));
+                assertFalse(facts.contains(
+                        "executionReceipt=Receipt-2"));
+                return """
+                        {"decision":"CONTINUE","reason":"run another tool",
+                         "finalText":null,"replacementSteps":[]}
+                        """;
+            }
+            assertTrue(facts.contains(
+                    "executionReceipt=Receipt-1"));
+            assertTrue(facts.contains(
+                    "executionReceipt=Receipt-2"));
+            return """
+                    {"decision":"FAIL","reason":"test complete",
+                     "finalText":null,"replacementSteps":[]}
+                    """;
+        };
+
+        var result = coordinator(cycles, provider)
+                .execute(command(Map.of()));
+
+        assertEquals("FAILED", result.status());
+        assertEquals("REFLECTION_FAILED", result.errorCode());
+        assertEquals(2, cycleCalls.get());
+        assertEquals(2, reflectionCalls.get());
+    }
+
+    @Test
     void failedReceiptReplansWithoutDuplicateRowsAndCountsRepairOnlyAfterCommit() {
         AtomicInteger cycle = new AtomicInteger();
         V2AdaptiveCyclePort cycles = ignored -> switch (

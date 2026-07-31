@@ -10,6 +10,7 @@ import com.yanban.api.agent.v2.workspace
         .AuthenticatedAgentTurnWorkspacePortFactory;
 import com.yanban.sandbox.contract.SandboxCanonicalDigest;
 import com.yanban.sandbox.contract.SandboxDispatch;
+import com.yanban.sandbox.contract.SandboxDispatchResponse;
 import com.yanban.sandbox.contract.SandboxExecutionStatus;
 import com.yanban.sandbox.contract.SandboxExecutionView;
 import com.yanban.sandbox.contract.SandboxReceipt;
@@ -49,6 +50,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -212,8 +214,13 @@ public class V2SandboxEffectExecutionComposer {
                 unsigned.policyDigest(), unsigned.files(), unsigned.argv(),
                 unsigned.cpus(), unsigned.memoryBytes(),
                 unsigned.timeoutMillis(), unsigned.maxOutputBytes(), false);
-        broker.requireHealthy();
-        var accepted = broker.dispatch(dispatch);
+        SandboxDispatchResponse accepted;
+        try {
+            broker.requireHealthy();
+            accepted = broker.dispatch(dispatch);
+        } catch (RuntimeException temporarilyUnknown) {
+            throw new V2SandboxEffectPendingException();
+        }
         if (accepted == null
                 || !key.equals(accepted.idempotencyKey())
                 || !dispatch.requestDigest().equals(
@@ -277,6 +284,23 @@ public class V2SandboxEffectExecutionComposer {
                         && source.exitCode() != null
                         && source.exitCode() == 0
                         && source.errorCode() == null;
+        ReceiptStatus receiptStatus = switch (source.status()) {
+            case SUCCEEDED -> ReceiptStatus.SUCCESS;
+            case TIMED_OUT -> ReceiptStatus.TIMEOUT;
+            case CANCELLED -> ReceiptStatus.CANCELLED;
+            default -> ReceiptStatus.FAILURE;
+        };
+        if ((receiptStatus == ReceiptStatus.SUCCESS && !succeeded)
+                || (receiptStatus == ReceiptStatus.FAILURE
+                        && source.exitCode() != null
+                        && source.exitCode() == 0)) {
+            throw failed("receipt_authority");
+        }
+        Optional<Integer> exitCode =
+                receiptStatus == ReceiptStatus.CANCELLED
+                                || receiptStatus == ReceiptStatus.TIMEOUT
+                        ? Optional.empty()
+                        : Optional.ofNullable(source.exitCode());
         List<ArtifactRef> artifacts = source.artifacts().entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> new ArtifactRef(
@@ -288,16 +312,32 @@ public class V2SandboxEffectExecutionComposer {
                 new ReceiptId("sandbox-receipt." + hash(
                         toolCallId.value())),
                 toolCallId,
-                succeeded ? ReceiptStatus.SUCCESS : ReceiptStatus.FAILURE,
+                receiptStatus,
                 source.startedAt(), source.finishedAt(),
-                Optional.ofNullable(source.exitCode()),
+                exitCode,
                 succeeded ? Optional.empty()
-                        : Optional.of(source.errorCode() == null
-                                ? source.status().name()
-                                : source.errorCode().name()),
+                        : Optional.of(resultCode(source)),
                 capture(source.stdout(), source.outputTruncated()),
                 capture(source.stderr(), source.outputTruncated()),
                 artifacts, Optional.empty(), List.of());
+    }
+
+    private static String resultCode(SandboxReceipt source) {
+        String code = source.errorCode() == null
+                ? source.status().name()
+                : source.errorCode().name();
+        if (source.providerDiagnostic() == null) {
+            return code;
+        }
+        String phase = source.providerDiagnostic().failurePhase();
+        if (phase == null) {
+            return code;
+        }
+        String normalized = phase.trim().toUpperCase(Locale.ROOT);
+        if (!normalized.matches("[A-Z][A-Z0-9_]{0,63}")) {
+            return code;
+        }
+        return code + "." + normalized;
     }
 
     private static Arguments arguments(PersistedEffectIntent intent) {

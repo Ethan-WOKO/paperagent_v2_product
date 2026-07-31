@@ -23,8 +23,10 @@ import com.yanban.api.agent.v2.workspace
 import com.yanban.core.agent.AgentRunIdentity;
 import com.yanban.sandbox.contract.SandboxDispatch;
 import com.yanban.sandbox.contract.SandboxDispatchResponse;
+import com.yanban.sandbox.contract.SandboxErrorCode;
 import com.yanban.sandbox.contract.SandboxExecutionStatus;
 import com.yanban.sandbox.contract.SandboxExecutionView;
+import com.yanban.sandbox.contract.SandboxProviderDiagnostic;
 import com.yanban.sandbox.contract.SandboxReceipt;
 import io.paperagent.v2.contracts.EffectIntent;
 import io.paperagent.v2.contracts.EventId;
@@ -97,6 +99,38 @@ class V2SandboxEffectExecutionComposerTest {
     }
 
     @Test
+    void dispatchTimeoutCanRedispatchWithSameAuthorityAndRecover() {
+        Fixture fixture = new Fixture();
+        List<SandboxDispatch> dispatches = new ArrayList<>();
+        when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            dispatches.add(dispatch);
+            if (dispatches.size() == 1) {
+                throw new IllegalStateException(
+                        "dispatch response timed out");
+            }
+            return accepted(dispatch);
+        });
+        when(fixture.broker.status("execution-1"))
+                .thenAnswer(invocation -> succeeded(dispatches.get(1)));
+
+        assertThrows(V2SandboxEffectPendingException.class,
+                fixture::execute);
+        V2SandboxEffectExecutionOutcome result = fixture.execute();
+
+        assertThat(result.result().receipt().status())
+                .isEqualTo(ReceiptStatus.SUCCESS);
+        assertThat(dispatches).hasSize(2);
+        assertThat(dispatches)
+                .extracting(SandboxDispatch::idempotencyKey)
+                .containsOnly(fixture.toolCallId.value());
+        assertThat(dispatches)
+                .extracting(SandboxDispatch::requestDigest)
+                .containsOnly(dispatches.get(0).requestDigest());
+        verify(fixture.claims, times(2)).execute(any());
+    }
+
+    @Test
     void brokerAuthorityStageIsNotCollapsedIntoGenericClaimFailure() {
         Fixture fixture = new Fixture();
         when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
@@ -112,6 +146,73 @@ class V2SandboxEffectExecutionComposerTest {
                 fixture::execute);
 
         assertThat(failure.stage()).isEqualTo("dispatch_authority");
+    }
+
+    @Test
+    void structuredProviderPhaseIsPreservedWithoutFreeText() {
+        Fixture fixture = new Fixture();
+        List<SandboxDispatch> dispatches = new ArrayList<>();
+        when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            dispatches.add(dispatch);
+            return accepted(dispatch);
+        });
+        when(fixture.broker.status("execution-1"))
+                .thenAnswer(invocation -> failedDependencyInstall(
+                        dispatches.get(0)));
+
+        V2SandboxEffectExecutionOutcome result = fixture.execute();
+
+        assertThat(result.result().receipt().status())
+                .isEqualTo(ReceiptStatus.FAILURE);
+        assertThat(result.result().receipt().resultCode())
+                .contains("PROVIDER_REJECTED.DEPENDENCY_INSTALL");
+        assertThat(result.result().receipt().resultCode().orElseThrow())
+                .doesNotContain("ProviderCommandException")
+                .doesNotContain("MavenDependencyResolutionError");
+    }
+
+    @Test
+    void timeoutAndCancellationRemainDistinctReceiptStatuses() {
+        Fixture timedOut = new Fixture();
+        List<SandboxDispatch> timedOutDispatches = new ArrayList<>();
+        when(timedOut.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            timedOutDispatches.add(dispatch);
+            return accepted(dispatch);
+        });
+        when(timedOut.broker.status("execution-1"))
+                .thenAnswer(invocation -> terminal(
+                        timedOutDispatches.get(0),
+                        SandboxExecutionStatus.TIMED_OUT,
+                        SandboxErrorCode.TIMED_OUT));
+
+        var timedOutReceipt = timedOut.execute().result().receipt();
+
+        assertThat(timedOutReceipt.status())
+                .isEqualTo(ReceiptStatus.TIMEOUT);
+        assertThat(timedOutReceipt.exitCode()).isEmpty();
+        assertThat(timedOutReceipt.resultCode()).contains("TIMED_OUT");
+
+        Fixture cancelled = new Fixture();
+        List<SandboxDispatch> cancelledDispatches = new ArrayList<>();
+        when(cancelled.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            cancelledDispatches.add(dispatch);
+            return accepted(dispatch);
+        });
+        when(cancelled.broker.status("execution-1"))
+                .thenAnswer(invocation -> terminal(
+                        cancelledDispatches.get(0),
+                        SandboxExecutionStatus.CANCELLED,
+                        SandboxErrorCode.CANCELLED));
+
+        var cancelledReceipt = cancelled.execute().result().receipt();
+
+        assertThat(cancelledReceipt.status())
+                .isEqualTo(ReceiptStatus.CANCELLED);
+        assertThat(cancelledReceipt.exitCode()).isEmpty();
+        assertThat(cancelledReceipt.resultCode()).contains("CANCELLED");
     }
 
     private static SandboxDispatchResponse accepted(
@@ -142,6 +243,48 @@ class V2SandboxEffectExecutionComposerTest {
                 "e2b", SandboxExecutionStatus.SUCCEEDED, 0,
                 "ok", "", false, Map.of(), started,
                 started.plusSeconds(1), null);
+        return new SandboxExecutionView(
+                receipt.executionId(), receipt.idempotencyKey(),
+                receipt.requestDigest(), receipt.fence(),
+                receipt.status(), receipt, null);
+    }
+
+    private static SandboxExecutionView failedDependencyInstall(
+            SandboxDispatch dispatch) {
+        Instant started = Instant.parse("2026-07-31T00:00:00Z");
+        SandboxReceipt receipt = new SandboxReceipt(
+                "execution-1", dispatch.idempotencyKey(),
+                dispatch.requestDigest(), dispatch.userId(),
+                dispatch.projectId(), dispatch.sessionId(),
+                dispatch.planId(), dispatch.stepId(), dispatch.fence(),
+                dispatch.projectVersion(), dispatch.policyDigest(),
+                "e2b", SandboxExecutionStatus.FAILED, 1,
+                "", "dependency resolution failed", false, Map.of(),
+                started, started.plusSeconds(1),
+                SandboxErrorCode.PROVIDER_REJECTED,
+                new SandboxProviderDiagnostic(
+                        "DEPENDENCY_INSTALL",
+                        "ProviderCommandException",
+                        "MavenDependencyResolutionError", 1));
+        return new SandboxExecutionView(
+                receipt.executionId(), receipt.idempotencyKey(),
+                receipt.requestDigest(), receipt.fence(),
+                receipt.status(), receipt, null);
+    }
+
+    private static SandboxExecutionView terminal(
+            SandboxDispatch dispatch,
+            SandboxExecutionStatus status,
+            SandboxErrorCode error) {
+        Instant started = Instant.parse("2026-07-31T00:00:00Z");
+        SandboxReceipt receipt = new SandboxReceipt(
+                "execution-1", dispatch.idempotencyKey(),
+                dispatch.requestDigest(), dispatch.userId(),
+                dispatch.projectId(), dispatch.sessionId(),
+                dispatch.planId(), dispatch.stepId(), dispatch.fence(),
+                dispatch.projectVersion(), dispatch.policyDigest(),
+                "e2b", status, null, "", "", false, Map.of(),
+                started, started.plusSeconds(1), error);
         return new SandboxExecutionView(
                 receipt.executionId(), receipt.idempotencyKey(),
                 receipt.requestDigest(), receipt.fence(),

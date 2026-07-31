@@ -25,6 +25,8 @@ public final class V2AdaptiveExecutionCoordinator {
         Map<String, Integer> stepIndexes =
                 new LinkedHashMap<>(command.stepIndexes());
         Set<String> receiptBackedSteps = new LinkedHashSet<>();
+        List<String> accumulatedExecutionFacts = new ArrayList<>(
+                command.baseContext().recentExecutionFacts());
         Object pendingReplan = null;
         ReflectionOutcome pendingDecision = null;
         boolean pendingRepair = false;
@@ -54,6 +56,7 @@ public final class V2AdaptiveExecutionCoordinator {
             V2AdaptiveCyclePort.Action completedAction = nextAction;
             nextAction = V2AdaptiveCyclePort.Action.EXECUTE;
             updateExisting(timeline, stepIndexes, cycle);
+            appendExecutionFacts(accumulatedExecutionFacts, cycle);
             if (cycle.receiptBacked() && cycle.stepId() != null) {
                 receiptBackedSteps.add(cycle.stepId());
             }
@@ -96,7 +99,8 @@ public final class V2AdaptiveExecutionCoordinator {
 
             ReflectionOutcome decision;
             ReflectionResolution reflection = reflect(
-                    command.reflectionContext(cycle, timeline));
+                    command.reflectionContext(
+                            accumulatedExecutionFacts, timeline));
             if (reflection.failureCode() != null) {
                 return failed(timeline, reflection.failureCode(),
                         index, replanCount, repairCount);
@@ -173,6 +177,17 @@ public final class V2AdaptiveExecutionCoordinator {
         timeline.set(row, new V2AdaptiveTurnResponse.Step(
                 existing.index(), existing.title(), status,
                 bounded(cycle.detail())));
+    }
+
+    private static void appendExecutionFacts(
+            List<String> accumulated,
+            V2AdaptiveCyclePort.CycleResult cycle) {
+        if (cycle.authoritativeFacts().isEmpty()) {
+            accumulated.add(
+                    cycle.state() + ": " + bounded(cycle.detail()));
+        } else {
+            accumulated.addAll(cycle.authoritativeFacts());
+        }
     }
 
     private static void applyPersistedReplan(
@@ -278,19 +293,13 @@ public final class V2AdaptiveExecutionCoordinator {
         }
 
         ReflectionContext reflectionContext(
-                V2AdaptiveCyclePort.CycleResult cycle,
+                List<String> accumulatedExecutionFacts,
                 List<V2AdaptiveTurnResponse.Step> timeline) {
-            List<String> facts = new ArrayList<>(
-                    baseContext.recentExecutionFacts());
-            if (cycle.authoritativeFacts().isEmpty()) {
-                facts.add(cycle.state() + ": " + bounded(cycle.detail()));
-            } else {
-                facts.addAll(cycle.authoritativeFacts());
-            }
             return new ReflectionContext(
                     baseContext.taskFrame(), baseContext.currentPlan(),
                     baseContext.conversationContext(),
-                    baseContext.completedFacts(), facts,
+                    baseContext.completedFacts(),
+                    List.copyOf(accumulatedExecutionFacts),
                     timeline.stream()
                             .filter(step -> "PENDING".equals(step.status()))
                             .map(V2AdaptiveTurnResponse.Step::title).toList());

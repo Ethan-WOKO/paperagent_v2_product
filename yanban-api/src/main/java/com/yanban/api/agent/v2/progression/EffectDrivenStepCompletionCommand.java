@@ -6,8 +6,9 @@ import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLease
 import java.util.Objects;
 
 /**
- * Caller-owned attempts for completing one ACTIVE Step from all its durable
- * successful effect Receipts.
+ * Caller-owned attempts for completing one ACTIVE Step from its durable final
+ * effect Receipts. Failed Receipts remain in the completion audit bundle but
+ * cannot satisfy the required successful evidence by themselves.
  */
 public record EffectDrivenStepCompletionCommand(
         PlanId planId,
