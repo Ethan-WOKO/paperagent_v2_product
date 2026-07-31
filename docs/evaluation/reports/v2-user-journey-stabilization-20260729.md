@@ -866,3 +866,40 @@ Proposed minimum follow-up:
 Project 44 remained at two versions with one existing Candidate. No Candidate
 was created or applied, no Project file changed, and E2B was not invoked for
 this read-only retest.
+
+### 2026-07-31 autonomous execution composition
+
+Issue #103 supersedes the preceding proposal to persist a fixed tool binding
+for every replacement Step. The persistent Plan and replacement Steps now
+describe goals and completion criteria without choosing tools. The active
+Step receives the bounded product catalog and the model selects tools from the
+current conversation, execution history, final Receipts, Candidate/Workspace
+facts, and unfinished work.
+
+The product-side composition now supports:
+
+- several sequential ToolCall slots on one ACTIVE Step, with stable replay
+  identity for the current slot and a new identity for the next slot;
+- reflection after successful effects, explicit CONTINUE/REPLAN/COMPLETE/FAIL,
+  and tool-free replacement Plans;
+- completion from the aggregate final Receipt cut, requiring at least one
+  success and no pending or unknown effect;
+- shared E2B execution without host fallback or a second broker;
+- bounded `RUNNING` outcomes and same-`clientRequestId` POST resume without
+  replanning or duplicate E2B dispatch;
+- a single Chinese V2 conversation input showing ordered Steps, per-Step
+  results, and one final result.
+
+Focused verification only:
+
+- `mvn -pl yanban-api -am
+  "-Dtest=V2TurnPlannerTest,V2NaturalLanguageTurnServiceTest,NaturalLanguageEffectAuthoritySourceTest,NaturalLanguageStepKernelFactoryTest,AutonomousNaturalLanguageStepTurnAdapterTest,AuthenticatedPersistentPlanAgentLoopComposerTest,V2AdaptiveExecutionCoordinatorTest,V2AdaptiveExecutionServiceTest,V2SandboxEffectExecutionComposerTest,V2ModelReflectionProviderTest,StrictReflectionDecisionParserTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 84 tests with 0 failures, 0 errors, and 0 skipped;
+- `npx vitest run src/utils/__tests__/v2NaturalLanguageTurn.test.ts
+  src/views/__tests__/ProjectPreviewPageV2Conversation.test.ts
+  tests/v2ProjectModeSwitch.test.ts`
+  ran 19 tests with 0 failures;
+- no legacy Agent, RAG, literature, Candidate-apply, broad frontend, full
+  product suite, or real signed-in E2B user journey was run in this
+  implementation pass.

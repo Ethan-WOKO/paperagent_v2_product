@@ -206,35 +206,47 @@
 
 ## Adaptive natural-language V2 execution
 
-- Status: `REUSE_WITH_ADAPTER`.
+- Status: `V2_COMPOSE_WITH_PRODUCT_ADAPTERS`.
 - Assessed entries: the product execution-start recovery, Project execution
-  context, persistent one-cycle loop, effect adapters, append-only active-Step
-  replan, user model endpoint resolution, and assistant-message persistence.
-- Intake: the #95 POST response remains an acknowledgement. A persistent
-  request creates a V62 owner/session/request-bound execution projection after
-  its intake transaction commits; the read-only GET is the outcome authority.
-- Execution: every coordination iteration invokes exactly one existing
-  durable loop cycle, then reflects only over bounded conversation and
-  authoritative execution facts, including capped Receipt status/result/exit
-  output, artifact/diff references, and completion/replan cut. Reflection is
-  strict JSON and cannot make a nonterminal or unreceipted tool Plan complete.
+  context, persistent Agent loop, append-only active-Step replan, Project
+  effects, the shared E2B broker, user model endpoint resolution, and
+  assistant-message persistence.
+- Intake and Plan: one natural-language request creates a frozen TaskFrame and
+  a bounded, persistent Plan whose Steps describe goals and completion
+  criteria, not fixed tools. Replan replacement Steps use the same tool-free
+  schema. Legacy replacement capability hints remain parser-compatible but
+  are not authority for the autonomous path.
+- Execution: the active Step receives the bounded product tool catalog. The
+  model may select another tool after inspecting a Receipt while the Step
+  remains ACTIVE. Each tool slot has a stable ToolCall identity across replay;
+  a later slot receives a new identity. Reflection receives bounded
+  conversation context, prior failures, final Receipts, Workspace/Candidate
+  references, and unfinished work. `CONTINUE`, `REPLAN`, `COMPLETE`, and
+  `FAIL` remain bounded; COMPLETE cannot override durable completion facts.
 - Provider: the natural intake's settings-page provider/model/key endpoint is
   adapted per request and carried only in memory through kernel, Candidate,
   and reflection calls. It does not use the explicit-delivery plan resolver
   and does not persist or log the key.
-- Replan: replacement revisions retain completed Steps and facts, mark the
-  obsolete active Step `SUPERSEDED_BY_REPLAN`, and append only new
-  `NOT_STARTED` Steps under the existing fenced persistence boundary.
+- Replan and completion: replacement revisions retain completed Steps and
+  facts, mark the obsolete active Step `SUPERSEDED_BY_REPLAN`, and append only
+  new `NOT_STARTED` Steps under the existing fenced persistence boundary.
+  Step completion aggregates all final Receipt references, requires at least
+  one SUCCESS and no pending or unknown effect, then invokes the stable
+  completion boundary once.
 - Delivery: only a durable terminal-success cut plus accepted COMPLETE
   reflection creates the single replayable assistant message. A natural
   Candidate instead uses a V62 natural authority/prepared binding, publishes
   the mature numeric Candidate artifact only after terminal success, and
   returns `WAITING_CONFIRMATION`; Project writes remain isolated and Candidate
-  application remains an explicit later action. POST remains the #95
-  acknowledgement and GET remains the read-only outcome.
-- Sandbox: no synchronous product `SandboxPort` is currently available for
-  this composition. `sandbox_execute` therefore fails with
-  `SANDBOX_EXECUTION_UNAVAILABLE` before Provider, Sandbox, or host-process
-  invocation; it is never silently executed on the host.
+  application remains an explicit later action.
+- Sandbox and resume: `sandbox.execute` uses only the existing shared E2B
+  broker, with the existing preparation/upload/execute-offline policy. It
+  never falls back to a host process or creates a second broker. A bounded
+  request may return `RUNNING`; repeating the same POST with the same
+  `clientRequestId` resumes the same persistent turn and the same in-flight
+  ToolCall rather than replanning or redispatching it. GET remains read-only.
+- UI: V2 Project mode has one Chinese conversation input. It shows the ordered
+  server-owned Steps, each Step result, and one final result without exposing
+  separate read/Candidate forms or internal tool identifiers.
 - Excluded: legacy Agent orchestration, V2 core changes, automatic Candidate
-  apply, scheduler/polling recursion, and unrelated RAG/paper/UI behavior.
+  apply, a new Sandbox protocol or schema, and unrelated RAG/paper behavior.
