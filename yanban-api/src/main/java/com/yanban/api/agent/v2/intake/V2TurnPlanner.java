@@ -46,9 +46,11 @@ final class V2TurnPlanner {
             Choose route DIRECT only for an answer that needs no Project, tool, execution,
             network access, or modification. A Project session must be persistent.
             Otherwise choose PERSISTENT_PLAN_EXECUTE and author a bounded TaskFrame and Plan.
-            Do not call tools while planning. Public capability names are:
-            literature_search, project_read, project_search, project_candidate, sandbox_execute.
-            Never emit dotted internal tool names.
+            Do not call tools while planning. Plan steps describe goals,
+            dependencies and completion criteria only.
+            Do not assign a tool or capability to a step.
+            The execution model will select tools
+            dynamically from the task-level catalog after the Plan is stored.
             DIRECT schema:
             {"route":"DIRECT","answer":"nonblank"}
             Persistent schema:
@@ -56,8 +58,8 @@ final class V2TurnPlanner {
              "taskFrame":{"objective":"...","targets":["..."],"deliverables":["..."],"constraints":["..."]},
              "plan":{"reason":"...","steps":[{"id":"step-1","intent":"...",
                "expectedOutcome":"...","dependencies":[],"completionCriteria":["..."],
-               "maxAttempts":1,"maxDurationSeconds":120,"capability":"project_read"}]}}
-            capability may be null only for a reasoning-only step. Use 1-8 ordered steps.
+               "maxAttempts":1,"maxDurationSeconds":120}]}}
+            Use 1-8 ordered steps.
             """;
 
     private final ChatModelProvider provider;
@@ -224,10 +226,15 @@ final class V2TurnPlanner {
             Set<String> seen = new LinkedHashSet<>();
             for (JsonNode step : stepsNode) {
                 requireObject(step, "step");
-                exactFields(step, Set.of(
-                        "id", "intent", "expectedOutcome", "dependencies",
-                        "completionCriteria", "maxAttempts",
-                        "maxDurationSeconds", "capability"),
+                exactFieldsOneOf(step, Set.of(
+                                "id", "intent", "expectedOutcome",
+                                "dependencies", "completionCriteria",
+                                "maxAttempts", "maxDurationSeconds"),
+                        Set.of(
+                                "id", "intent", "expectedOutcome",
+                                "dependencies", "completionCriteria",
+                                "maxAttempts", "maxDurationSeconds",
+                                "capability"),
                         "STEP_FIELDS");
                 String id = requiredText(step, "id", 128);
                 if (!seen.add(id)) {
@@ -313,6 +320,16 @@ final class V2TurnPlanner {
         Set<String> actual = new HashSet<>();
         node.fieldNames().forEachRemaining(actual::add);
         if (!actual.equals(allowed)) {
+            throw invalid(diagnostic);
+        }
+    }
+
+    private static void exactFieldsOneOf(
+            JsonNode node, Set<String> current, Set<String> legacy,
+            String diagnostic) {
+        Set<String> actual = new HashSet<>();
+        node.fieldNames().forEachRemaining(actual::add);
+        if (!actual.equals(current) && !actual.equals(legacy)) {
             throw invalid(diagnostic);
         }
     }

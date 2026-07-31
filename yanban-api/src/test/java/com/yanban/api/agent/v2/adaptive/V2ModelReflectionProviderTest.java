@@ -40,6 +40,8 @@ class V2ModelReflectionProviderTest {
         assertTrue(system.contains("maxAttempts"));
         assertTrue(system.contains("maxDurationSeconds"));
         assertTrue(system.contains(
+                "Tool selection remains dynamic"));
+        assertTrue(system.contains(
                 "failed Receipt can be corrected, return REPLAN"));
     }
 }

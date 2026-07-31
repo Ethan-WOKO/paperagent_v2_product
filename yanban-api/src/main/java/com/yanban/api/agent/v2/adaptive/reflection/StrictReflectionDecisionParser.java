@@ -109,10 +109,18 @@ public final class StrictReflectionDecisionParser {
             if (!step.isObject()) {
                 throw invalid();
             }
-            exactFields(step, Set.of(
+            Set<String> fields = new HashSet<>();
+            step.fieldNames().forEachRemaining(fields::add);
+            Set<String> currentFields = Set.of(
                     "id", "intent", "expectedOutcome", "dependencies",
                     "completionCriteria", "maxAttempts",
-                    "maxDurationSeconds", "capability"));
+                    "maxDurationSeconds");
+            Set<String> legacyFields = new HashSet<>(currentFields);
+            legacyFields.add("capability");
+            if (!fields.equals(currentFields)
+                    && !fields.equals(legacyFields)) {
+                throw invalid();
+            }
             String id = requiredText(step, "id", 128);
             if (!seen.add(id)) {
                 throw invalid();

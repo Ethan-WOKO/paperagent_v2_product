@@ -29,6 +29,7 @@ describe('ProjectPreviewPage V2 中文会话界面', () => {
     expect(source).toContain('执行过程');
     expect(source).toContain('最终结果');
     expect(source).toContain('v2NaturalLanguageStepStatusLabel(step.status)');
+    expect(source).toContain('结果：{{ step.detail }}');
     expect(source).toContain("v2TurnOutcome.status === 'SUCCEEDED'");
     expect(source).toContain("v2TurnOutcome.status === 'FAILED'");
     expect(source).toContain("v2TurnOutcome.status === 'WAITING_CONFIRMATION'");
@@ -47,5 +48,6 @@ describe('ProjectPreviewPage V2 中文会话界面', () => {
     expect(source).toContain('resetV2NaturalLanguageView();');
     expect(source).toContain('onUnmounted(() =>');
     expect(source).toContain('stopV2NaturalLanguagePolling();');
+    expect(source).toContain('resume: async () =>');
   });
 });

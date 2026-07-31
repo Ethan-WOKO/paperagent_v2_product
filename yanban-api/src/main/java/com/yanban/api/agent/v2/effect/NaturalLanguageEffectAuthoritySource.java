@@ -5,7 +5,14 @@ import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-/** Resolves only the frozen #95 Step-to-tool binding. */
+/**
+ * Resolves request ownership and the bounded V2 tool catalog.
+ *
+ * <p>The model selects a tool at runtime. This source does not turn the
+ * planner's capability hint into a per-Step allow rule; active Step, Plan,
+ * lease, ProjectVersion and ToolCall authority remain mechanically checked by
+ * the effect composers.
+ */
 @Component
 public class NaturalLanguageEffectAuthoritySource {
     private final JdbcTemplate jdbc;
@@ -29,25 +36,26 @@ public class NaturalLanguageEffectAuthoritySource {
         if (documents.size() != 1 || documents.get(0) == null) {
             return false;
         }
+        if (stepId == null || stepId.isBlank()
+                || !java.util.Set.of(
+                        "literature.search", "project.read",
+                        "project.search", "project.candidate.compose",
+                        "sandbox.execute").contains(toolId)) {
+            return false;
+        }
         try {
             var root = json.readTree(documents.get(0));
             if (!root.isArray() || root.size() > 8) {
                 return false;
             }
-            int matches = 0;
             for (var item : root) {
                 if (!item.isObject() || item.size() != 3
                         || !item.path("stepId").isTextual()
                         || !item.path("internalToolId").isTextual()) {
                     return false;
                 }
-                if (stepId.equals(item.path("stepId").textValue())
-                        && toolId.equals(
-                                item.path("internalToolId").textValue())) {
-                    matches++;
-                }
             }
-            return matches == 1;
+            return true;
         } catch (Exception invalid) {
             return false;
         }

@@ -23,6 +23,7 @@ import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolCod
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolException;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelStage;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
+import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopTurnLimitReached;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLeaseRejected;
 import io.paperagent.v2.runtime.execution.replan.composition.BoundedStepReplanApplied;
 import org.junit.jupiter.api.Test;
@@ -358,6 +359,96 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
                 outcome.receiptFacts().orElseThrow().status());
         assertEquals(java.util.Optional.of("TOOL_FAILED"),
                 outcome.receiptFacts().orElseThrow().resultCode());
+        verifyNoInteractions(fixture.progression());
+    }
+
+    @Test
+    void failedReceiptWithProposalAppliesReplanAndRetainsReceiptFacts() {
+        var fixture = PersistentPlanAgentLoopTestSupport.fixture();
+        var active = PersistentPlanAgentLoopTestSupport.active(
+                fixture.planId(), "step-a");
+        var intent = PersistentPlanAgentLoopTestSupport.intent(
+                fixture.planId(), active.stepId(), "a",
+                "literature.search");
+        when(fixture.kernel().run(any())).thenReturn(intent.outcome());
+        var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
+        when(receipt.toolCallId()).thenReturn(intent.toolCallId());
+        when(receipt.status()).thenReturn(
+                io.paperagent.v2.contracts.ReceiptStatus.FAILURE);
+        when(receipt.resultCode()).thenReturn(
+                java.util.Optional.of("TOOL_FAILED"));
+        var failedResult = mock(io.paperagent.v2.persistence
+                .PersistedEffectResult.class);
+        when(failedResult.receipt()).thenReturn(receipt);
+        when(fixture.effects().execute(
+                org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.eq(TURN_ID), any()))
+                .thenReturn(new com.yanban.api.agent.v2.effect
+                        .AuthenticatedLiteratureSearchEffectExecutionOutcome(
+                                failedResult, true));
+
+        ActiveStepReplanRequest proposal =
+                mock(ActiveStepReplanRequest.class);
+        PersistedActiveStepReplan persisted =
+                mock(PersistedActiveStepReplan.class);
+        EventEnvelope supersession = mock(EventEnvelope.class);
+        EventEnvelope replan = mock(EventEnvelope.class);
+        PlanRevision revision = mock(PlanRevision.class);
+        VersionedCheckpoint superseded =
+                mock(VersionedCheckpoint.class);
+        VersionedCheckpoint replacement =
+                mock(VersionedCheckpoint.class);
+        when(persisted.supersededStepId()).thenReturn(active.stepId());
+        when(persisted.supersessionEvent()).thenReturn(supersession);
+        when(persisted.replanEvent()).thenReturn(replan);
+        when(persisted.replannedRevision()).thenReturn(revision);
+        when(persisted.supersededCheckpoint()).thenReturn(superseded);
+        when(persisted.replannedCheckpoint()).thenReturn(replacement);
+        when(supersession.id()).thenReturn(
+                new EventId("supersession-event"));
+        when(replan.id()).thenReturn(new EventId("replan-event"));
+        when(revision.id()).thenReturn(
+                new io.paperagent.v2.contracts.PlanRevisionId(
+                        "replacement-revision"));
+        when(superseded.version()).thenReturn(4L);
+        when(replacement.version()).thenReturn(5L);
+        PersistedStepRecoveryReady ready =
+                mock(PersistedStepRecoveryReady.class);
+        when(ready.planId()).thenReturn(fixture.planId());
+        when(ready.readyStepId()).thenReturn(
+                new PlanStepId("replacement-step"));
+        when(fixture.inspections().inspect(fixture.planId()))
+                .thenReturn(PersistenceResult.found(active.recovery()))
+                .thenReturn(PersistenceResult.found(ready));
+        when(fixture.recoverer().recover(any()))
+                .thenReturn(active.active());
+        when(fixture.replans().compose(
+                org.mockito.ArgumentMatchers.eq(active.active()),
+                any(), org.mockito.ArgumentMatchers.eq(proposal)))
+                .thenReturn(new BoundedStepReplanApplied(persisted));
+
+        PersistentPlanAgentLoopOutcome outcome =
+                fixture.composer().execute(
+                        USER_ID, TURN_ID,
+                        PersistentPlanAgentLoopTestSupport.command(
+                                1, proposal));
+
+        assertEquals(PersistentPlanAgentLoopState.REPLAN_APPLIED,
+                outcome.state());
+        assertEquals("FAILURE",
+                outcome.receiptFacts().orElseThrow().status());
+        assertEquals(java.util.Optional.of("TOOL_FAILED"),
+                outcome.receiptFacts().orElseThrow().resultCode());
+        ArgumentCaptor<BoundedStepAgentLoopTurnLimitReached> completed =
+                ArgumentCaptor.forClass(
+                        BoundedStepAgentLoopTurnLimitReached.class);
+        verify(fixture.replans()).compose(
+                org.mockito.ArgumentMatchers.eq(active.active()),
+                completed.capture(),
+                org.mockito.ArgumentMatchers.eq(proposal));
+        assertEquals(1, completed.getValue().turnsExecuted());
+        assertEquals(java.util.List.of(intent.persisted()),
+                completed.getValue().persistedIntents());
         verifyNoInteractions(fixture.progression());
     }
 

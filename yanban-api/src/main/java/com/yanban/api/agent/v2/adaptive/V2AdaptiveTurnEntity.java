@@ -96,4 +96,17 @@ class V2AdaptiveTurnEntity {
         repairCount = repairs;
         updatedAt = now;
     }
+
+    void progress(
+            String newStepsJson, int reflections,
+            int replans, int repairs, Instant now) {
+        if (!"RUNNING".equals(status)) {
+            throw new IllegalStateException("adaptive turn is terminal");
+        }
+        stepsJson = newStepsJson;
+        reflectionCount = reflections;
+        replanCount = replans;
+        repairCount = repairs;
+        updatedAt = now;
+    }
 }

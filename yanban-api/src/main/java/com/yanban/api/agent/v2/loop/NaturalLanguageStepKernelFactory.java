@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.loop;
 
 import com.yanban.agent.v2.adapter.provider.DeterministicProductStepTurnAdapter;
+import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ToolDescriptor;
 import io.paperagent.v2.contracts.ToolId;
@@ -17,11 +18,20 @@ import org.springframework.stereotype.Component;
 public class NaturalLanguageStepKernelFactory {
     private final ModelProvider provider;
     private final EffectIntentRepository intents;
+    private final V2EffectHistorySource history;
 
     public NaturalLanguageStepKernelFactory(
             ModelProvider provider, EffectIntentRepository intents) {
+        this(provider, intents, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public NaturalLanguageStepKernelFactory(
+            ModelProvider provider, EffectIntentRepository intents,
+            V2EffectHistorySource history) {
         this.provider = provider;
         this.intents = intents;
+        this.history = history;
     }
 
     public SingleTurnStepKernel create(Map<PlanStepId, ToolId> bindings) {
@@ -46,9 +56,38 @@ public class NaturalLanguageStepKernelFactory {
         return new DefaultSingleTurnStepKernel(turn, intents);
     }
 
+    public AutonomousKernel createAutonomous(
+            ModelProvider requestProvider,
+            boolean replayLatestForReplan) {
+        if (history == null) {
+            throw new IllegalStateException(
+                    "V2 effect history is unavailable");
+        }
+        var turn = new AutonomousNaturalLanguageStepTurnAdapter(
+                requestProvider, history, autonomousTools(),
+                replayLatestForReplan);
+        return new AutonomousKernel(
+                new DefaultSingleTurnStepKernel(turn, intents), turn);
+    }
+
+    public AutonomousKernel createAutonomous(
+            boolean replayLatestForReplan) {
+        return createAutonomous(provider, replayLatestForReplan);
+    }
+
+    private static List<ToolDescriptor> autonomousTools() {
+        return List.of(
+                descriptor(new ToolId("literature.search")),
+                descriptor(new ToolId("project.read")),
+                descriptor(new ToolId("project.search")),
+                descriptor(new ToolId("project.candidate.compose")),
+                descriptor(new ToolId("sandbox.execute")));
+    }
+
     static ToolDescriptor descriptor(ToolId id) {
         if (!Set.of("literature.search", "project.read", "project.search",
-                "project.candidate.compose").contains(id.value())) {
+                "project.candidate.compose", "sandbox.execute")
+                .contains(id.value())) {
             throw new IllegalArgumentException(
                     "NATURAL_LANGUAGE_CAPABILITY_UNAVAILABLE");
         }
@@ -67,9 +106,28 @@ public class NaturalLanguageStepKernelFactory {
                             + "{\"operation\":\"compose\",\"paths\":["
                             + "\"normalized/existing/path\"]}; "
                             + "include 1-4 paths.";
+            case "sandbox.execute" ->
+                    "Run Project code in the existing isolated E2B Sandbox. "
+                            + "Arguments must be exactly "
+                            + "{\"paths\":[\"normalized/path\"],"
+                            + "\"argv\":[\"yanban-runner\",\"java\","
+                            + "\"normalized/path.java\"]}. Supported argv "
+                            + "profiles include yanban-runner java/python/c/"
+                            + "cpp, Maven test/verify, java, javac, and "
+                            + "bounded git checks. Java runner arguments may "
+                            + "append --dependency=group:artifact:version; "
+                            + "dependencies are prepared before offline run.";
             default ->
                     "Execute the exact frozen V2 capability for this Step.";
         };
         return new ToolDescriptor(id, description, Set.of());
+    }
+
+    public record AutonomousKernel(
+            SingleTurnStepKernel kernel,
+            AutonomousNaturalLanguageStepTurnAdapter turn) {
+        public List<String> diagnostics() {
+            return turn.diagnostics();
+        }
     }
 }

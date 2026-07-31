@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.progression;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
 import com.yanban.core.agent.AgentRunIdentity;
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.Checkpoint;
@@ -105,6 +106,8 @@ final class EffectDrivenStepProgressionTestFixtures {
             mock(ActiveStepCompletionComposer.class);
     final StepActivationComposer activation =
             mock(StepActivationComposer.class);
+    final V2EffectHistorySource history =
+            mock(V2EffectHistorySource.class);
     final VerifiedAgentTurnProductContext context =
             new VerifiedAgentTurnProductContext(
                     new AgentRunIdentity(
@@ -160,7 +163,7 @@ final class EffectDrivenStepProgressionTestFixtures {
                                 .RETAINED_FOR_RECOVERY));
         composer = new AuthenticatedEffectDrivenStepProgressionComposer(
                 contexts, planIds, inspector, recoverer, intents, outcomes,
-                completion, activation);
+                completion, activation, history);
     }
 
     EffectDrivenStepProgressionCommand command() {

@@ -11,9 +11,13 @@ import com.yanban.api.agent.v2.effect.project.AuthenticatedProjectEffectExecutio
 import com.yanban.api.agent.v2.effect.project.ProjectEffectExecutionException;
 import com.yanban.api.agent.v2.progression.AuthenticatedEffectDrivenStepProgressionComposer;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionCommand;
+import com.yanban.api.agent.v2.progression.EffectDrivenStepCompletionCommand;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionException;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionOutcome;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionState;
+import com.yanban.api.agent.sandbox.V2SandboxEffectExecutionComposer;
+import com.yanban.api.agent.sandbox.V2SandboxEffectExecutionException;
+import com.yanban.api.agent.sandbox.V2SandboxEffectPendingException;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ReceiptStatus;
@@ -41,6 +45,7 @@ import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelOutcome;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolException;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelRequest;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
+import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopTurnLimitReached;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryCompositionOutcome;
@@ -66,6 +71,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
     private static final String LITERATURE_SEARCH = "literature.search";
     private static final String PROJECT_CANDIDATE_COMPOSE =
             "project.candidate.compose";
+    private static final String SANDBOX_EXECUTE = "sandbox.execute";
 
     private final AgentTurnProductContextResolver contexts;
     private final ProductPlanIdDerivation planIds;
@@ -77,6 +83,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
     private final AuthenticatedProjectEffectExecutionComposer projectEffects;
     private final AuthenticatedEffectDrivenStepProgressionComposer progression;
     private final BoundedStepReplanComposer replans;
+    private final V2SandboxEffectExecutionComposer sandboxEffects;
 
     public AuthenticatedPersistentPlanAgentLoopComposer(
             AgentTurnProductContextResolver contexts,
@@ -89,6 +96,42 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             AuthenticatedProjectEffectExecutionComposer projectEffects,
             AuthenticatedEffectDrivenStepProgressionComposer progression,
             BoundedStepReplanComposer replans) {
+        this(contexts, planIds, inspections, recoverer, activation, kernel,
+                effects, projectEffects, progression, replans,
+                (V2SandboxEffectExecutionComposer) null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AuthenticatedPersistentPlanAgentLoopComposer(
+            AgentTurnProductContextResolver contexts,
+            ProductPlanIdDerivation planIds,
+            StepRecoveryRepository inspections,
+            StepRecoverer recoverer,
+            StepActivationComposer activation,
+            SingleTurnStepKernel kernel,
+            AuthenticatedLiteratureSearchEffectExecutionComposer effects,
+            AuthenticatedProjectEffectExecutionComposer projectEffects,
+            AuthenticatedEffectDrivenStepProgressionComposer progression,
+            BoundedStepReplanComposer replans,
+            org.springframework.beans.factory.ObjectProvider<
+                    V2SandboxEffectExecutionComposer> sandboxEffects) {
+        this(contexts, planIds, inspections, recoverer, activation, kernel,
+                effects, projectEffects, progression, replans,
+                sandboxEffects.getIfAvailable());
+    }
+
+    private AuthenticatedPersistentPlanAgentLoopComposer(
+            AgentTurnProductContextResolver contexts,
+            ProductPlanIdDerivation planIds,
+            StepRecoveryRepository inspections,
+            StepRecoverer recoverer,
+            StepActivationComposer activation,
+            SingleTurnStepKernel kernel,
+            AuthenticatedLiteratureSearchEffectExecutionComposer effects,
+            AuthenticatedProjectEffectExecutionComposer projectEffects,
+            AuthenticatedEffectDrivenStepProgressionComposer progression,
+            BoundedStepReplanComposer replans,
+            V2SandboxEffectExecutionComposer sandboxEffects) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.inspections = inspections;
@@ -99,6 +142,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         this.projectEffects = projectEffects;
         this.progression = progression;
         this.replans = replans;
+        this.sandboxEffects = sandboxEffects;
     }
 
     public PersistentPlanAgentLoopOutcome execute(
@@ -126,7 +170,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                     replanFactory) {
         return executeWithKernelAndReplanFactory(
                 userId, agentTurnId, command, turnKernel,
-                replanFactory, null);
+                replanFactory, null, false);
     }
 
     public PersistentPlanAgentLoopOutcome executeWithKernelAndReplanFactory(
@@ -138,6 +182,36 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                     io.paperagent.v2.persistence.ActiveStepReplanRequest>
                     replanFactory,
             ModelProvider requestProvider) {
+        return executeWithKernelAndReplanFactory(
+                userId, agentTurnId, command, turnKernel,
+                replanFactory, requestProvider, false);
+    }
+
+    public PersistentPlanAgentLoopOutcome executeAutonomousEffect(
+            Long userId, Long agentTurnId,
+            PersistentPlanAgentLoopCommand command,
+            SingleTurnStepKernel turnKernel,
+            java.util.function.Function<
+                    RecoveredActiveStep,
+                    io.paperagent.v2.persistence.ActiveStepReplanRequest>
+                    replanFactory,
+            ModelProvider requestProvider) {
+        return executeWithKernelAndReplanFactory(
+                userId, agentTurnId, command, turnKernel,
+                replanFactory, requestProvider, true);
+    }
+
+    private PersistentPlanAgentLoopOutcome
+            executeWithKernelAndReplanFactory(
+            Long userId, Long agentTurnId,
+            PersistentPlanAgentLoopCommand command,
+            SingleTurnStepKernel turnKernel,
+            java.util.function.Function<
+                    RecoveredActiveStep,
+                    io.paperagent.v2.persistence.ActiveStepReplanRequest>
+                    replanFactory,
+            ModelProvider requestProvider,
+            boolean deferSuccessfulProgression) {
         VerifiedAgentTurnProductContext context;
         PlanId planId;
         try {
@@ -210,13 +284,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             PlanStepId stepId =
                     active.recovery().activation().stepId();
             if (kernelOutcome instanceof SingleTurnNoEffect) {
-                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal;
-                try {
-                    proposal = replanFactory == null
-                            ? null : replanFactory.apply(active);
-                } catch (RuntimeException exception) {
-                    throw protocol("replanFactory");
-                }
+                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal =
+                        replanProposal(active, replanFactory);
                 if (proposal != null) {
                     return replanNoEffect(
                             planId, cycle, active, proposal);
@@ -245,7 +314,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             if (!LITERATURE_SEARCH.equals(effectKind)
                     && !"project.read".equals(effectKind)
                     && !"project.search".equals(effectKind)
-                    && !PROJECT_CANDIDATE_COMPOSE.equals(effectKind)) {
+                    && !PROJECT_CANDIDATE_COMPOSE.equals(effectKind)
+                    && !SANDBOX_EXECUTE.equals(effectKind)) {
                 return outcome(planId, cycle,
                         PersistentPlanAgentLoopState
                                 .UNSUPPORTED_INTENT,
@@ -266,6 +336,20 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                                                     .toolCallId(),
                                             recoveryAttempt));
                     effectResult = effect.result();
+                } else if (SANDBOX_EXECUTE.equals(effectKind)) {
+                    if (sandboxEffects == null) {
+                        return outcome(
+                                planId, cycle,
+                                PersistentPlanAgentLoopState
+                                        .EFFECT_REJECTED,
+                                Optional.of(stepId),
+                                Optional.of(active.recovery()),
+                                Optional.empty(), Optional.empty());
+                    }
+                    effectResult = sandboxEffects.execute(
+                            userId, agentTurnId, planId,
+                            intent.persistedIntent().intent().toolCallId(),
+                            recoveryAttempt).result();
                 } else {
                     var effect = projectEffects.execute(
                             userId, agentTurnId,
@@ -276,6 +360,16 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                                     recoveryAttempt, requestProvider));
                     effectResult = effect.result();
                 }
+            } catch (V2SandboxEffectPendingException pending) {
+                return outcome(
+                        planId, cycle,
+                        PersistentPlanAgentLoopState
+                                .EFFECT_RECOVERY_PENDING,
+                        Optional.of(stepId),
+                        Optional.of(active.recovery()),
+                        Optional.empty(), Optional.empty());
+            } catch (V2SandboxEffectExecutionException exception) {
+                throw protocol("effect.sandbox." + exception.stage());
             } catch (ProjectEffectExecutionException exception) {
                 throw protocol("effect." + exception.stage());
             } catch (RuntimeException exception) {
@@ -301,8 +395,31 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             }
             if (effectResult.receipt().status()
                     != ReceiptStatus.SUCCESS) {
+                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal =
+                        replanProposal(active, replanFactory);
+                if (proposal != null) {
+                    return replanCompletedEffect(
+                            planId, cycle, active, proposal,
+                            intent.persistedIntent(), latestReceipt);
+                }
                 return outcome(planId, cycle,
                         PersistentPlanAgentLoopState.EFFECT_REJECTED,
+                        Optional.of(stepId),
+                        Optional.of(active.recovery()),
+                        Optional.empty(), Optional.empty(), latestReceipt);
+            }
+            if (deferSuccessfulProgression) {
+                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal =
+                        replanProposal(active, replanFactory);
+                if (proposal != null) {
+                    return replanCompletedEffect(
+                            planId, cycle, active, proposal,
+                            intent.persistedIntent(), latestReceipt);
+                }
+                return outcome(
+                        planId, cycle,
+                        PersistentPlanAgentLoopState
+                                .EFFECT_SUCCEEDED_AWAITING_REFLECTION,
                         Optional.of(stepId),
                         Optional.of(active.recovery()),
                         Optional.empty(), Optional.empty(), latestReceipt);
@@ -361,6 +478,70 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                 Optional.empty(), Optional.empty(), latestReceipt);
     }
 
+    public PersistentPlanAgentLoopOutcome completeAutonomousStep(
+            Long userId, Long agentTurnId,
+            PersistentPlanAgentLoopCommand command) {
+        VerifiedAgentTurnProductContext context;
+        PlanId planId;
+        try {
+            context = contexts.resolve(userId, agentTurnId);
+            planId = planIds.derive(context.identity());
+        } catch (RuntimeException exception) {
+            throw protocol("context");
+        }
+        requireCommand(command);
+        StepRecoverySnapshot cut = inspect(planId);
+        if (cut instanceof PersistedStepRecoverySucceeded) {
+            return outcome(
+                    planId, 0,
+                    PersistentPlanAgentLoopState.PLAN_SUCCEEDED,
+                    Optional.empty(), Optional.of(cut),
+                    Optional.empty(), Optional.empty());
+        }
+        if (!(cut instanceof PersistedStepRecoveryActive active)) {
+            throw protocol("completion.activeStep");
+        }
+        EffectDrivenStepProgressionOutcome progressed;
+        try {
+            progressed = progression.completeAll(
+                    userId, agentTurnId,
+                    new EffectDrivenStepCompletionCommand(
+                            planId, active.activation().stepId(),
+                            command.currentRecoveryAttempt(),
+                            command.nextStepActivationAttempt()));
+        } catch (EffectDrivenStepProgressionException exception) {
+            throw protocol("progression." + exception.path());
+        } catch (RuntimeException exception) {
+            throw protocol("progression");
+        }
+        PersistentPlanAgentLoopState state =
+                progressed.state()
+                        == EffectDrivenStepProgressionState.PLAN_SUCCEEDED
+                        ? PersistentPlanAgentLoopState.PLAN_SUCCEEDED
+                        : PersistentPlanAgentLoopState
+                                .EFFECT_SUCCEEDED_AWAITING_REFLECTION;
+        return outcome(
+                planId, 0, state,
+                Optional.of(progressed.completedStepId()),
+                Optional.of(progressed.snapshot()),
+                Optional.empty(), Optional.empty());
+    }
+
+    private static io.paperagent.v2.persistence.ActiveStepReplanRequest
+            replanProposal(
+                    RecoveredActiveStep active,
+                    java.util.function.Function<
+                            RecoveredActiveStep,
+                            io.paperagent.v2.persistence.ActiveStepReplanRequest>
+                            replanFactory) {
+        try {
+            return replanFactory == null
+                    ? null : replanFactory.apply(active);
+        } catch (RuntimeException exception) {
+            throw protocol("replanFactory");
+        }
+    }
+
     private PersistentPlanAgentLoopOutcome replanNoEffect(
             PlanId planId, int cycle, RecoveredActiveStep active,
             io.paperagent.v2.persistence.ActiveStepReplanRequest request) {
@@ -376,6 +557,35 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         } catch (RuntimeException exception) {
             throw protocol("replan");
         }
+        return replanOutcome(
+                planId, cycle, active, composed, Optional.empty());
+    }
+
+    private PersistentPlanAgentLoopOutcome replanCompletedEffect(
+            PlanId planId, int cycle, RecoveredActiveStep active,
+            io.paperagent.v2.persistence.ActiveStepReplanRequest request,
+            io.paperagent.v2.persistence.PersistedEffectIntent intent,
+            Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts) {
+        BoundedStepAgentLoopTurnLimitReached completedEffect =
+                new BoundedStepAgentLoopTurnLimitReached(
+                        planId,
+                        active.recovery().activation().stepId(),
+                        1, java.util.List.of(intent));
+        BoundedStepReplanCompositionOutcome composed;
+        try {
+            composed = replans.compose(
+                    active, completedEffect, request);
+        } catch (RuntimeException exception) {
+            throw protocol("replan");
+        }
+        return replanOutcome(
+                planId, cycle, active, composed, receiptFacts);
+    }
+
+    private PersistentPlanAgentLoopOutcome replanOutcome(
+            PlanId planId, int cycle, RecoveredActiveStep active,
+            BoundedStepReplanCompositionOutcome composed,
+            Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts) {
         if (composed
                 instanceof BoundedStepReplanPersistenceRejected rejected) {
             return outcome(planId, cycle,
@@ -385,7 +595,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                             active.recovery().activation().stepId()),
                     Optional.of(active.recovery()),
                     Optional.empty(),
-                    Optional.of(rejected.failure()));
+                    Optional.of(rejected.failure()), receiptFacts);
         }
         PersistedActiveStepReplan persisted;
         PersistentPlanAgentLoopState state;
@@ -403,7 +613,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         return outcome(planId, cycle, state,
                 Optional.of(persisted.supersededStepId()),
                 Optional.of(replacement), Optional.of(persisted),
-                Optional.empty());
+                Optional.empty(), receiptFacts);
     }
 
     private StepRecoverySnapshot inspect(PlanId planId) {

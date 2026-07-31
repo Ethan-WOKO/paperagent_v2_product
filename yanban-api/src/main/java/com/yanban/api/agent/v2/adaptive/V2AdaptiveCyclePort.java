@@ -9,7 +9,22 @@ public interface V2AdaptiveCyclePort {
 
     record CycleCommand(
             Long userId, Long turnId, String planId, int cycle,
-            Object replanRequest) {
+            Object replanRequest, Action action) {
+        public CycleCommand(
+                Long userId, Long turnId, String planId, int cycle,
+                Object replanRequest) {
+            this(userId, turnId, planId, cycle, replanRequest,
+                    Action.EXECUTE);
+        }
+
+        public CycleCommand {
+            action = action == null ? Action.EXECUTE : action;
+        }
+    }
+
+    enum Action {
+        EXECUTE,
+        COMPLETE_STEP
     }
 
     record CycleResult(
@@ -31,7 +46,8 @@ public interface V2AdaptiveCyclePort {
         }
 
         public enum State {
-            STEP_SUCCEEDED, REPLAN_REQUIRED, PLAN_SUCCEEDED, FAILED
+            STEP_SUCCEEDED, RECOVERY_PENDING, REPLAN_REQUIRED,
+            PLAN_SUCCEEDED, FAILED
         }
     }
 }

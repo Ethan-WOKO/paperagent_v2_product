@@ -22,16 +22,15 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             replacementSteps.
             Each REPLAN replacement Step must contain exactly:
             id, intent, expectedOutcome, dependencies, completionCriteria,
-            maxAttempts, maxDurationSeconds, capability.
+            maxAttempts, maxDurationSeconds.
             dependencies is an array containing only earlier replacement Step
             ids. completionCriteria is a nonempty string array. maxAttempts is
             an integer from 1 to 5. maxDurationSeconds is an integer from 1 to
-            3600. capability is a public alias string or null.
+            3600. Replacement Steps describe goals and outcomes; do not bind
+            them to tools. Tool selection remains dynamic during execution.
             When a failed Receipt can be corrected, return REPLAN with a
             complete replacement Step instead of CONTINUE unchanged.
             REPLAN appends 1-8 replacement Steps and never rewrites facts.
-            Use only public aliases: literature_search, project_read,
-            project_search, project_candidate, sandbox_execute.
             finalText is non-null only for COMPLETE. No markdown.
             """;
     private final ModelProvider provider;

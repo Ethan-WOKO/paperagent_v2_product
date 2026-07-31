@@ -68,20 +68,20 @@ class V2AdaptiveExecutionServiceTest {
     }
 
     @Test
-    void unavailableSandboxFailsBeforeStartContextCycleOrReflection() {
+    void sandboxCapabilityIsNotRejectedBeforeExecutionStart() {
         var fixture = fixture();
         V2AdaptiveExecutionResult result = fixture.service.execute(
                 command(fixture.bootstrap, "version-1",
                         Map.of("step-1", "sandbox.execute"),
                         fixture.modelProvider));
-        assertEquals("SANDBOX_EXECUTION_UNAVAILABLE", result.errorCode());
+        assertEquals("EXECUTION_START_REJECTED", result.errorCode());
+        verify(fixture.starts).recover(eq(7L), eq(11L), any());
         verifyNoInteractions(
-                fixture.starts, fixture.contexts,
-                fixture.cycles, fixture.modelProvider);
+                fixture.contexts, fixture.cycles, fixture.modelProvider);
         verify(fixture.store).finish(
                 eq(7L), eq(9L), eq("request-1"), eq("FAILED"),
                 anyList(), isNull(), isNull(), eq(List.of()),
-                eq("SANDBOX_EXECUTION_UNAVAILABLE"),
+                eq("EXECUTION_START_REJECTED"),
                 eq(0), eq(0), eq(0));
     }
 

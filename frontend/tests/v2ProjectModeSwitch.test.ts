@@ -14,17 +14,19 @@ describe('项目页 V1 / V2 模式切换', () => {
     expect(source).toContain("@click=\"setAgentMode('v2')\"");
     expect(source).toContain("v-if=\"agentMode === 'v1'\" class=\"project-scroll-shell\"");
     expect(source).toContain("v-if=\"agentMode === 'v1'\" class=\"project-composer\"");
-    expect(source).toContain("v-if=\"agentMode === 'v2'\" class=\"v2-workbench__hero\"");
+    expect(source).toContain("v-if=\"agentMode === 'v2'\" class=\"v2-conversation\"");
   });
 
-  it('V2 页面只使用显式 V2 任务入口并提供中文过程说明', () => {
-    expect(source).toContain('读取并分析');
-    expect(source).toContain('生成候选修改');
+  it('V2 页面使用一个自然语言入口并提供中文过程说明', () => {
+    expect(source).toContain('V2 项目助手');
+    expect(source).toContain('直接说明你想完成什么');
     expect(source).toContain('执行过程');
-    expect(source).toContain('@click="startProjectAnalysis"');
-    expect(source).toContain('@click="startProjectCandidate"');
-    expect(source).toContain('以下状态来自当前 V2 请求，不是旧 Agent 会话');
-    expect(source).toContain('查看修改、运行验证并确认');
+    expect(source).toContain('结果：{{ step.detail }}');
+    expect(source).toContain('最终结果');
+    expect(source).toContain('生成内容位置');
+    expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
+    expect(source).not.toContain('@click="startProjectAnalysis"');
+    expect(source).not.toContain('@click="startProjectCandidate"');
   });
 
   it('切换模式时保留同一个项目和会话查询参数', () => {

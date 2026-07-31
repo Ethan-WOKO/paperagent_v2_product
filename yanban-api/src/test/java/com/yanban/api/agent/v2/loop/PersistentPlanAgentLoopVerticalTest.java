@@ -15,6 +15,7 @@ import com.yanban.api.agent.v2.persistence
         .ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence
         .ProductPlanBootstrapRepositoryAdapter;
+import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
 import com.yanban.api.agent.v2.progression
         .AuthenticatedEffectDrivenStepProgressionComposer;
 import com.yanban.api.agent.v2.progression
@@ -127,6 +128,9 @@ class PersistentPlanAgentLoopVerticalTest {
 
     @Autowired
     private StepActivationRepository stepActivationRepository;
+
+    @Autowired
+    private V2EffectHistorySource effectHistory;
 
     @Autowired
     private StepRecoveryRepository stepRecoveryRepository;
@@ -415,7 +419,7 @@ class PersistentPlanAgentLoopVerticalTest {
                         productContexts, planIds, progressionInspector,
                         persistedRecoverer, effectIntentRepository,
                         effectOutcomeRepository, completion,
-                        persistedActivation);
+                        persistedActivation, effectHistory);
         var composer =
                 new AuthenticatedPersistentPlanAgentLoopComposer(
                         productContexts, planIds, stepRecoveryRepository,
@@ -524,7 +528,7 @@ class PersistentPlanAgentLoopVerticalTest {
                         productContexts, planIds, progressionInspector,
                         persistedRecoverer, effectIntentRepository,
                         effectOutcomeRepository, completion,
-                        persistedActivation);
+                        persistedActivation, effectHistory);
         var composer =
                 new AuthenticatedPersistentPlanAgentLoopComposer(
                         productContexts, planIds, stepRecoveryRepository,

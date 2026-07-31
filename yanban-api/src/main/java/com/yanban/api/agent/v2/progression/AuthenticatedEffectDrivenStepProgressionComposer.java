@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.progression;
 
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
+import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
 import io.paperagent.v2.contracts.CompletionFact;
 import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.ExecutionReceipt;
@@ -35,6 +36,7 @@ import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryReque
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Comparator;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -56,6 +58,7 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
     private final EffectOutcomeRepository outcomes;
     private final ActiveStepCompletionComposer completion;
     private final StepActivationComposer activation;
+    private final V2EffectHistorySource history;
 
     public AuthenticatedEffectDrivenStepProgressionComposer(
             AgentTurnProductContextResolver contexts,
@@ -65,7 +68,8 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
             EffectIntentRepository intents,
             EffectOutcomeRepository outcomes,
             ActiveStepCompletionComposer completion,
-            StepActivationComposer activation) {
+            StepActivationComposer activation,
+            V2EffectHistorySource history) {
         this.contexts = Objects.requireNonNull(contexts, "contexts");
         this.planIds = Objects.requireNonNull(planIds, "planIds");
         this.inspector = Objects.requireNonNull(inspector, "inspector");
@@ -74,6 +78,7 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
         this.outcomes = Objects.requireNonNull(outcomes, "outcomes");
         this.completion = Objects.requireNonNull(completion, "completion");
         this.activation = Objects.requireNonNull(activation, "activation");
+        this.history = Objects.requireNonNull(history, "history");
     }
 
     public EffectDrivenStepProgressionOutcome progress(
@@ -173,6 +178,144 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
                 completionOutcome, activationOutcome);
     }
 
+    /**
+     * Completes one ACTIVE Step from every durable successful effect belonging
+     * to its current activation. Failed effects remain reflection evidence but
+     * never become completion evidence.
+     */
+    public EffectDrivenStepProgressionOutcome completeAll(
+            Long userId, Long agentTurnId,
+            EffectDrivenStepCompletionCommand command) {
+        Objects.requireNonNull(command, "command");
+        PlanId authoritativePlan = planIds.derive(
+                contexts.resolve(userId, agentTurnId).identity());
+        if (!authoritativePlan.equals(command.planId())) {
+            throw rejected("command.planId");
+        }
+
+        StepRecoverySnapshot cut = inspect(authoritativePlan);
+        if (!(cut instanceof PersistedStepRecoveryActive active)
+                || !active.activation().stepId().equals(command.stepId())) {
+            throw rejected("completion.activeStep");
+        }
+        List<V2EffectHistorySource.Entry> entries =
+                history.inspect(authoritativePlan, command.stepId());
+        if (entries.isEmpty()) {
+            throw rejected("completion.effectHistory");
+        }
+        List<EffectDrivenStepEvidence> evidence = entries.stream()
+                .map(entry -> validateHistoryEntry(
+                        authoritativePlan, active, entry))
+                .sorted(Comparator.comparing(value ->
+                        value.intent().intent().toolCallId().value()))
+                .toList();
+        if (evidence.stream().noneMatch(value ->
+                value.receipt().status() == ReceiptStatus.SUCCESS)) {
+            throw rejected("completion.successfulEvidence");
+        }
+
+        PersistedEffectIntent first = evidence.get(0).intent();
+        ExecutionReceipt representative =
+                evidence.get(evidence.size() - 1).receipt();
+        Optional<PersistenceOutcome> completionOutcome = Optional.empty();
+        RecoveredActiveStep recovered = recoverOrNull(
+                authoritativePlan,
+                command.currentStepRecoveryAttempt(), first);
+        if (recovered == null) {
+            cut = inspect(authoritativePlan);
+            if (!completedFromExactEvidence(cut, evidence)) {
+                throw rejected("recovery.activeStep");
+            }
+        } else {
+            ActiveStepCompletionCompositionOutcome composed =
+                    completion.compose(
+                            EffectDrivenStepProgressionDrafts.completion(
+                                    recovered, evidence));
+            if (!(composed instanceof ActiveStepCompletionCommitted committed)
+                    || !committed.planId().equals(authoritativePlan)
+                    || !committed.stepId().equals(command.stepId())) {
+                cut = inspect(authoritativePlan);
+                if (!completedFromExactEvidence(cut, evidence)) {
+                    throw rejected("completion.persistence");
+                }
+            } else {
+                completionOutcome = Optional.of(
+                        committed.persistenceOutcome());
+                validateCommittedCompletion(committed, evidence);
+                cut = inspect(authoritativePlan);
+            }
+        }
+
+        if (!completedFromExactEvidence(cut, evidence)) {
+            throw rejected("completion.evidence");
+        }
+        if (cut instanceof PersistedStepRecoverySucceeded) {
+            return outcome(
+                    cut, first, representative,
+                    EffectDrivenStepProgressionState.PLAN_SUCCEEDED,
+                    completionOutcome, Optional.empty());
+        }
+        if (cut instanceof PersistedStepRecoveryActive nextActive) {
+            validateNextActive(nextActive, evidence);
+            return outcome(
+                    cut, first, representative,
+                    EffectDrivenStepProgressionState.NEXT_STEP_ACTIVE,
+                    completionOutcome, Optional.empty());
+        }
+        if (!(cut instanceof PersistedStepRecoveryReady ready)) {
+            throw rejected("progression.afterCompletion");
+        }
+
+        StepActivationCompositionOutcome activated = activation.composeReady(
+                new ReadyStepActivationCompositionRequest(
+                        ready,
+                        EffectDrivenStepProgressionDrafts.activation(
+                                ready, evidence,
+                                command.nextStepActivationAttempt())));
+        Optional<PersistenceOutcome> activationOutcome = Optional.empty();
+        if (activated instanceof StepActivationCommitted committed) {
+            if (!committed.planId().equals(authoritativePlan)
+                    || !committed.persistedActivation().stepId()
+                            .equals(ready.readyStepId())) {
+                throw rejected("activation.authority");
+            }
+            activationOutcome = Optional.of(
+                    committed.activationOutcome());
+        }
+        StepRecoverySnapshot finalCut = inspect(authoritativePlan);
+        if (!(finalCut instanceof PersistedStepRecoveryActive finalActive)) {
+            throw rejected("activation.persistence");
+        }
+        validateNextActive(finalActive, evidence);
+        return outcome(
+                finalCut, first, representative,
+                EffectDrivenStepProgressionState.NEXT_STEP_ACTIVE,
+                completionOutcome, activationOutcome);
+    }
+
+    private static EffectDrivenStepEvidence validateHistoryEntry(
+            PlanId planId,
+            PersistedStepRecoveryActive active,
+            V2EffectHistorySource.Entry entry) {
+        if (!entry.completed()) {
+            throw rejected("completion.pendingEffect");
+        }
+        PersistedEffectIntent intent = entry.intent();
+        PersistedEffectResult result = entry.result();
+        ExecutionReceipt receipt = result.receipt();
+        if (!intent.intent().planId().equals(planId)
+                || !intent.intent().stepId()
+                        .equals(active.activation().stepId())
+                || !sameActivation(active, intent)
+                || !receipt.toolCallId()
+                        .equals(intent.intent().toolCallId())
+                || !intent.leaseOwnerId().equals(result.leaseOwnerId())
+                || intent.fencingToken() != result.fencingToken()) {
+            throw rejected("completion.effectAuthority");
+        }
+        return new EffectDrivenStepEvidence(intent, receipt);
+    }
+
     private PersistedEffectIntent loadIntent(
             EffectDrivenStepProgressionCommand command) {
         PersistenceResult<PersistedEffectIntent> found =
@@ -231,9 +374,17 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
             PlanId planId,
             EffectDrivenStepProgressionCommand command,
             PersistedEffectIntent intent) {
+        return recoverOrNull(
+                planId, command.currentStepRecoveryAttempt(), intent);
+    }
+
+    private RecoveredActiveStep recoverOrNull(
+            PlanId planId,
+            io.paperagent.v2.runtime.execution.recovery.composition
+                    .StepRecoveryLeaseAttempt attempt,
+            PersistedEffectIntent intent) {
         StepRecoveryCompositionOutcome recovered = recoverer.recover(
-                new StepRecoveryRequest(
-                        planId, command.currentStepRecoveryAttempt()));
+                new StepRecoveryRequest(planId, attempt));
         if (!(recovered instanceof RecoveredActiveStep active)
                 || active.leaseDisposition()
                         != StepRecoveryLeaseDisposition.RETAINED_FOR_RECOVERY
@@ -294,6 +445,38 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
                                 intent, receipt));
     }
 
+    private static boolean completedFromExactEvidence(
+            StepRecoverySnapshot cut,
+            List<EffectDrivenStepEvidence> evidence) {
+        EffectDrivenStepEvidence first = evidence.get(0);
+        PlanStepId stepId = first.intent().intent().stepId();
+        List<io.paperagent.v2.contracts.ReceiptId> receiptIds =
+                evidence.stream()
+                        .map(value -> value.receipt().id())
+                        .toList();
+        var completedAt = evidence.stream()
+                .map(value -> value.receipt().endedAt())
+                .max(Comparator.naturalOrder())
+                .orElseThrow();
+        var checkpoint = checkpoint(cut);
+        if (!cut.planId().equals(first.intent().intent().planId())
+                || checkpoint.stepStates().get(stepId)
+                        != StepExecutionState.SUCCEEDED
+                || !checkpoint.receiptReferences()
+                        .containsAll(receiptIds)) {
+            return false;
+        }
+        CompletionFact fact = plan(cut).latestRevision().completedFacts()
+                .get(stepId);
+        return fact != null
+                && fact.stepId().equals(stepId)
+                && fact.completedAt().equals(completedAt)
+                && fact.receiptReferences().equals(receiptIds)
+                && fact.outcomeHash().equals(
+                        EffectDrivenStepProgressionDrafts.evidenceHash(
+                                evidence));
+    }
+
     private static void validateCommittedCompletion(
             ActiveStepCompletionCommitted committed,
             PersistedEffectIntent intent,
@@ -309,6 +492,29 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
                 || fact == null
                 || !fact.receiptReferences()
                         .equals(List.of(receipt.id()))) {
+            throw rejected("completion.authority");
+        }
+    }
+
+    private static void validateCommittedCompletion(
+            ActiveStepCompletionCommitted committed,
+            List<EffectDrivenStepEvidence> evidence) {
+        EffectDrivenStepEvidence first = evidence.get(0);
+        PlanStepId stepId = first.intent().intent().stepId();
+        var persisted = committed.persistedCompletion();
+        CompletionFact fact = persisted.completedRevision().completedFacts()
+                .get(stepId);
+        if (!persisted.planId().equals(
+                        first.intent().intent().planId())
+                || !persisted.stepId().equals(stepId)
+                || !persisted.completionEvent().id().equals(
+                        EffectDrivenStepProgressionDrafts
+                                .completionEventId(evidence))
+                || fact == null
+                || !fact.receiptReferences().equals(
+                        evidence.stream()
+                                .map(value -> value.receipt().id())
+                                .toList())) {
             throw rejected("completion.authority");
         }
     }
@@ -329,6 +535,27 @@ public class AuthenticatedEffectDrivenStepProgressionComposer {
                 || active.activation().activationEvent().causationId()
                         .filter(expectedCause::equals).isEmpty()
                 || !completedFromExactReceipt(active, intent, receipt)) {
+            throw rejected("progression.nextActive");
+        }
+    }
+
+    private static void validateNextActive(
+            PersistedStepRecoveryActive active,
+            List<EffectDrivenStepEvidence> evidence) {
+        EffectDrivenStepEvidence first = evidence.get(0);
+        EventId expectedCause =
+                EffectDrivenStepProgressionDrafts.completionEventId(
+                        evidence);
+        if (active.activation().stepId().equals(
+                        first.intent().intent().stepId())
+                || !active.activation().activationEvent().id().equals(
+                        EffectDrivenStepProgressionDrafts
+                                .nextActivationEventId(
+                                        active.activation().stepId(),
+                                        evidence))
+                || active.activation().activationEvent().causationId()
+                        .filter(expectedCause::equals).isEmpty()
+                || !completedFromExactEvidence(active, evidence)) {
             throw rejected("progression.nextActive");
         }
     }

@@ -656,7 +656,7 @@
                   <span>{{ step.index }}</span>
                   <div>
                     <strong>{{ step.title }}</strong>
-                    <small v-if="step.detail">{{ step.detail }}</small>
+                    <small v-if="step.detail">结果：{{ step.detail }}</small>
                   </div>
                   <NTag size="tiny" :type="v2StepTagType(step.status)">
                     {{ v2NaturalLanguageStepStatusLabel(step.status) }}
@@ -2335,6 +2335,10 @@ async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number
   v2TurnAbortController = controller;
   v2TurnPolling.value = true;
   const epoch = projectEpoch;
+  const request = normalizeV2NaturalLanguageRequest(
+    stored.question,
+    stored.clientRequestId,
+  );
   try {
     const outcome = await pollV2NaturalLanguageTurn(
       async () => (
@@ -2342,6 +2346,11 @@ async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number
       ).data,
       {
         signal: controller.signal,
+        resume: async () => (
+          await startV2NaturalLanguageTurn(
+            sessionId, request, controller.signal,
+          )
+        ).data,
         onOutcome: (value) => {
           if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
             v2TurnOutcome.value = value;
@@ -2407,6 +2416,11 @@ async function sendV2NaturalLanguageTurn() {
       ).data,
       {
         signal: controller.signal,
+        resume: async () => (
+          await startV2NaturalLanguageTurn(
+            sessionId, request, controller.signal,
+          )
+        ).data,
         onOutcome: (value) => {
           if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
             v2TurnOutcome.value = value;
@@ -3695,7 +3709,8 @@ onUnmounted(() => {
 .v2-conversation__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__header h2 { margin: 0 0 5px; font-size: 18px; }
 .v2-conversation__header p { margin: 0; color: var(--yb-text-secondary); font-size: 11px; line-height: 1.6; }
-.v2-conversation__question, .v2-conversation__process, .v2-conversation__result { padding: 12px; border: 1px solid var(--yb-border); border-radius: 10px; background: var(--yb-bg-elevated); }
+.v2-conversation__question { align-self: flex-end; max-width: min(82%, 720px); padding: 10px 12px; border-radius: 12px 12px 2px 12px; background: var(--yb-bg-muted); }
+.v2-conversation__process, .v2-conversation__result { padding: 12px 0; border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__question small { color: var(--yb-text-muted); font-size: 9px; }
 .v2-conversation__question p { margin: 5px 0 0; white-space: pre-wrap; line-height: 1.65; }
 .v2-conversation__process > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }

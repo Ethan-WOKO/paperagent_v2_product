@@ -1209,19 +1209,30 @@ behavior and the user makes a later explicit decision.
 ## Adaptive natural-language execution boundary
 
 The natural-language intake now continues, after its bootstrap transaction,
-through a bounded product-side execution composition. POST retains the #95
-acknowledgement schema; owner-qualified GET returns the V62 outcome projection
-and performs no execution, retry, Provider, tool, or persistence mutation.
+through a bounded product-side autonomous execution composition. The model
+first produces a persistent Plan whose Steps contain goals, dependencies,
+expected outcomes, completion criteria, and execution bounds but no fixed
+tool assignment. The active Step receives the bounded product tool catalog at
+execution time and may choose the next suitable tool from current evidence.
+Replan replacement Steps use the same tool-free schema; the parser accepts an
+old capability field only as a compatibility hint.
 
-Each iteration invokes one existing persistent loop cycle with a Step-specific
-tool selected from the frozen public-alias binding, then asks a no-tools
-reflection Provider for strict `CONTINUE`, `REPLAN`, `COMPLETE`, or `FAIL`
-JSON. Eight cycles and three replans are hard limits. Model COMPLETE is
-rejected unless the durable recovery cut is already terminal successful and
-every executed tool Step has bounded authoritative Receipt facts. The intake
-resolves the settings-page provider, model, URL, and user key once and passes
-a request-scoped Provider through the kernel and reflection calls in memory;
-the key is never persisted or included in facts.
+One persistent Step may contain several sequential ToolCall slots. The current
+slot keeps the same ToolCall ID across replay and pending recovery; CONTINUE
+opens a new uniquely identified slot on the same ACTIVE Step. Each completed
+effect contributes a bounded final Receipt fact to the next model/reflection
+input. Failed model calls, invalid decisions, failed Receipts, and prior
+reflection diagnostics are retained in bounded form, so the next decision can
+change approach rather than repeat an invisible failure.
+
+After each successful effect, reflection returns strict `CONTINUE`, `REPLAN`,
+`COMPLETE`, or `FAIL` JSON. Eight cycles and three replans are hard limits.
+COMPLETE first aggregates every final Receipt reference for the Step, requires
+at least one successful Receipt and no pending or unknown effect, and then
+invokes the stable completion boundary exactly once. A nonterminal or
+unreceipted model answer cannot complete the Plan. The settings-page provider,
+model, URL, and user key remain request-scoped and in memory; the key is never
+persisted or included in facts.
 
 REPLAN materialization uses the exact recovered lease, revision, checkpoint,
 event head, and active Step. Completed Steps, completion facts, and Receipt
@@ -1231,11 +1242,14 @@ is rewritten. Project execution confirms the existing isolated Workspace
 context before a Step runs, and original Project bytes remain outside this
 boundary.
 
-The product has no synchronous V2-to-E2B SandboxPort suitable for this
-composition. `sandbox_execute` therefore returns the stable
-`SANDBOX_EXECUTION_UNAVAILABLE` failure before any Provider, Sandbox, or host
-process call. Adding a real adapter is a later independently frozen boundary,
-not permission to use the host.
+`sandbox.execute` now composes through the existing shared E2B broker and its
+existing preparation/upload/execute-offline policy. It does not create a
+second Sandbox path, modify the broker protocol/schema, or fall back to host
+execution. The product waits only for a bounded poll window. If E2B is still
+running, the outcome remains `RUNNING`; a later POST with the same
+`clientRequestId` reconstructs the same request-scoped Provider and resumes
+the same persistent Plan and ToolCall. It does not bootstrap a new Plan or
+submit a duplicate sandbox execution. Owner-qualified GET remains read-only.
 
 Natural-language `project_candidate` uses strict
 `{"operation":"compose","paths":[...]}` arguments with one to four normalized,
@@ -1248,10 +1262,10 @@ ProjectVersion, publishes a numeric Candidate ID, and returns
 ProjectVersion.
 
 Only durable terminal success plus an accepted COMPLETE reflection may append
-the one assistant message. Failure leaves the already-persisted #95 intake
-facts intact and records a machine-readable adaptive outcome. Legacy Agent
-orchestration, automatic Candidate apply, UI, scheduler, and V2 core contracts
-remain unchanged.
+the one assistant message. Failure leaves the already-persisted intake facts
+intact and records a machine-readable adaptive outcome. Legacy Agent
+orchestration, automatic Candidate apply, unrelated product features, and V2
+core contracts remain unchanged.
 
 ## V2 Project conversational UI boundary
 
@@ -1260,18 +1274,21 @@ conversation surface. V2 presents one Chinese natural-language input and
 delegates planning and tool selection to the unified V2 turn endpoint instead
 of asking the user to choose a read-analysis or Candidate form.
 
-The V2 surface persists the client request identity per Project and session,
-starts the request once, treats POST only as the intake acknowledgement, and
-uses the owner-qualified read endpoint as the sole execution-outcome source
-for persistent-route polling and refresh recovery. A `DIRECT` acknowledgement
-must contain its answer and is rendered immediately without a GET; a missing
-answer fails closed. Project/session changes and unmount abort the old poll,
-and stale responses cannot update the current view. Availability failure
-disables only the V2 input.
+The V2 surface persists the client request identity per Project and session.
+When a persistent outcome is still `RUNNING`, it repeats the same POST to
+advance bounded recovery and then reconciles with the owner-qualified GET.
+This is a resume of the same turn, not a new request. A `DIRECT`
+acknowledgement must contain its answer and is rendered immediately without a
+GET; a missing answer fails closed. Project/session changes and unmount abort
+the old poll, and stale responses cannot update the current view. Availability
+failure disables only the V2 input.
 
-The page renders the server-owned ordered Step projection, including
-`SUPERSEDED_BY_REPLAN`, followed by one final result. Output paths are shown
-only as locations. A waiting-confirmation result states that the original
-Project is unchanged and hands the Candidate to the existing Changes,
-Sandbox-validation, and explicit-apply authority. The frontend does not plan,
-infer success from technical output, manufacture progress, or apply changes.
+The page renders one user question, the server-owned ordered Step projection
+with each Step's execution result (including `SUPERSEDED_BY_REPLAN`), and one
+final result. It removes the former nested workbench-card presentation and
+does not ask the user to select read-analysis or Candidate generation.
+Output paths are shown only as locations. A waiting-confirmation result states
+that the original Project is unchanged and hands the Candidate to the existing
+Changes, Sandbox-validation, and explicit-apply authority. The frontend does
+not plan, infer success from technical output, manufacture progress, or apply
+changes.
