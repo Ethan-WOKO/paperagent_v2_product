@@ -41,6 +41,7 @@ import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelOutcome;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolException;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelRequest;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
+import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopTurnLimitReached;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryCompositionOutcome;
@@ -210,13 +211,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             PlanStepId stepId =
                     active.recovery().activation().stepId();
             if (kernelOutcome instanceof SingleTurnNoEffect) {
-                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal;
-                try {
-                    proposal = replanFactory == null
-                            ? null : replanFactory.apply(active);
-                } catch (RuntimeException exception) {
-                    throw protocol("replanFactory");
-                }
+                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal =
+                        replanProposal(active, replanFactory);
                 if (proposal != null) {
                     return replanNoEffect(
                             planId, cycle, active, proposal);
@@ -301,6 +297,13 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             }
             if (effectResult.receipt().status()
                     != ReceiptStatus.SUCCESS) {
+                io.paperagent.v2.persistence.ActiveStepReplanRequest proposal =
+                        replanProposal(active, replanFactory);
+                if (proposal != null) {
+                    return replanCompletedEffect(
+                            planId, cycle, active, proposal,
+                            intent.persistedIntent(), latestReceipt);
+                }
                 return outcome(planId, cycle,
                         PersistentPlanAgentLoopState.EFFECT_REJECTED,
                         Optional.of(stepId),
@@ -361,6 +364,21 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                 Optional.empty(), Optional.empty(), latestReceipt);
     }
 
+    private static io.paperagent.v2.persistence.ActiveStepReplanRequest
+            replanProposal(
+                    RecoveredActiveStep active,
+                    java.util.function.Function<
+                            RecoveredActiveStep,
+                            io.paperagent.v2.persistence.ActiveStepReplanRequest>
+                            replanFactory) {
+        try {
+            return replanFactory == null
+                    ? null : replanFactory.apply(active);
+        } catch (RuntimeException exception) {
+            throw protocol("replanFactory");
+        }
+    }
+
     private PersistentPlanAgentLoopOutcome replanNoEffect(
             PlanId planId, int cycle, RecoveredActiveStep active,
             io.paperagent.v2.persistence.ActiveStepReplanRequest request) {
@@ -376,6 +394,35 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         } catch (RuntimeException exception) {
             throw protocol("replan");
         }
+        return replanOutcome(
+                planId, cycle, active, composed, Optional.empty());
+    }
+
+    private PersistentPlanAgentLoopOutcome replanCompletedEffect(
+            PlanId planId, int cycle, RecoveredActiveStep active,
+            io.paperagent.v2.persistence.ActiveStepReplanRequest request,
+            io.paperagent.v2.persistence.PersistedEffectIntent intent,
+            Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts) {
+        BoundedStepAgentLoopTurnLimitReached completedEffect =
+                new BoundedStepAgentLoopTurnLimitReached(
+                        planId,
+                        active.recovery().activation().stepId(),
+                        1, java.util.List.of(intent));
+        BoundedStepReplanCompositionOutcome composed;
+        try {
+            composed = replans.compose(
+                    active, completedEffect, request);
+        } catch (RuntimeException exception) {
+            throw protocol("replan");
+        }
+        return replanOutcome(
+                planId, cycle, active, composed, receiptFacts);
+    }
+
+    private PersistentPlanAgentLoopOutcome replanOutcome(
+            PlanId planId, int cycle, RecoveredActiveStep active,
+            BoundedStepReplanCompositionOutcome composed,
+            Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts) {
         if (composed
                 instanceof BoundedStepReplanPersistenceRejected rejected) {
             return outcome(planId, cycle,
@@ -385,7 +432,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                             active.recovery().activation().stepId()),
                     Optional.of(active.recovery()),
                     Optional.empty(),
-                    Optional.of(rejected.failure()));
+                    Optional.of(rejected.failure()), receiptFacts);
         }
         PersistedActiveStepReplan persisted;
         PersistentPlanAgentLoopState state;
@@ -403,7 +450,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         return outcome(planId, cycle, state,
                 Optional.of(persisted.supersededStepId()),
                 Optional.of(replacement), Optional.of(persisted),
-                Optional.empty());
+                Optional.empty(), receiptFacts);
     }
 
     private StepRecoverySnapshot inspect(PlanId planId) {

@@ -762,3 +762,107 @@ Focused verification:
 
 No broad legacy Agent, RAG, literature, frontend, or full-suite test was run.
 A signed-in real-provider replay remains for user acceptance.
+
+### 2026-07-31 signed-in failed-effect replan retest
+
+The signed-in browser retest used Project 44,
+`E2B Sandbox Smoke 20260729`, in V2 mode. The read-only request deliberately
+targeted the missing path
+`src/main/java/demo/DefinitelyMissing.java`. It requested no Project change
+and no code execution.
+
+Observed product result:
+
+- the first `project.read` effect failed and the UI showed
+  `EFFECT_REJECTED`;
+- the second planned step remained pending;
+- the terminal UI result was `REPLAN_LIMIT_EXCEEDED`;
+- the Project still showed one Candidate and two versions, unchanged from
+  before the request.
+
+Durable evidence for adaptive turn 18 showed one effect intent, one complete
+FAILURE effect result with its owned Receipt, four reflection replan
+decisions, and zero rows in `agent_v2_active_step_replans`.
+
+This proves the preceding persistence repair is necessary but not sufficient.
+The replan transaction was never called. The product Agent loop currently
+invokes the supplied replan factory only for `SingleTurnNoEffect`. When an
+effect has a complete failed Receipt, it returns `EFFECT_REJECTED` first.
+Every later cycle replays the same failed result, so the pending reflection
+proposal is never persisted and the coordinator eventually exhausts its
+replan limit.
+
+Proposed minimum follow-up:
+
+- after validating and recording a complete failed Receipt, consume an
+  available caller-supplied replan proposal before returning
+  `EFFECT_REJECTED`;
+- reuse the existing fenced replan composer and the completed-effect
+  eligibility check; do not increase retry/replan limits;
+- add one focused product-loop test and one focused persisted adaptive-chain
+  test proving exactly one replan marker is written and the replacement Step
+  can continue;
+- leave legacy Agent, RAG, literature, UI, Project apply, and unrelated
+  Sandbox behavior unchanged.
+
+### 2026-07-31 completed-effect replan repair and signed-in retest
+
+The approved minimum repair was applied only to
+`AuthenticatedPersistentPlanAgentLoopComposer`. A complete non-success
+Receipt now remains authoritative while an available caller proposal is
+passed to the existing fenced replan composer before the loop returns
+`EFFECT_REJECTED`. The no-proposal path is unchanged.
+
+Focused verification:
+
+- `mvn -pl yanban-api -am
+  "-Dtest=AuthenticatedPersistentPlanAgentLoopComposerTest,V2AdaptiveExecutionCoordinatorTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 26 tests with 0 failures, 0 errors, and 0 skipped;
+- `git diff --check` passed;
+- no legacy Agent, RAG, literature, frontend, Project-apply, Sandbox, or full
+  product suite was run.
+
+The signed-in browser retest repeated the same Project 44 read-only request
+for missing path `src/main/java/demo/DefinitelyMissing.java`.
+
+Observed improvement:
+
+- Step 1 produced the same durable failed `project.read` Receipt;
+- one active-Step replan marker was committed;
+- Step 1 was shown as `SUPERSEDED_BY_REPLAN`;
+- the UI added replacement Steps 2 and 3;
+- the previous `REPLAN_LIMIT_EXCEEDED` loop did not recur.
+
+The retest then exposed the next independent boundary:
+
+- adaptive turn 19 failed with
+  `CYCLE_LOOP_EFFECT_AUTHORITY_EXCEPTION`;
+- its durable counts were 3 reflections, 2 replan decisions, and 1 committed
+  repair;
+- Step 2 persisted a valid `project.search` EffectIntent, but no EffectResult
+  was written;
+- the intake authority document contains only the original
+  `step-1 -> project.read` binding;
+- the committed replan contains replacement Step identities but does not
+  durably store their internal tool bindings.
+
+The direct cause is that replacement tool bindings exist only in the
+request-scoped Reflection result. `NaturalLanguageEffectAuthoritySource`
+authorizes only the original intake bindings, so a replacement Step cannot
+pass Project effect authority after the replan has committed.
+
+Proposed minimum follow-up:
+
+- store the allowlisted replacement `stepId -> internalToolId` bindings as an
+  immutable product-side record attached to the committed replan;
+- reload the committed bindings for later adaptive cycles and use the same
+  record when authorizing the replacement EffectIntent;
+- do not mutate the initial intake document, trust arbitrary model tool IDs,
+  change V2 core contracts, or weaken owner/Plan/Step/lease fencing;
+- add focused tests for committed replacement-binding replay and one
+  failed-read-to-replacement-effect chain only.
+
+Project 44 remained at two versions with one existing Candidate. No Candidate
+was created or applied, no Project file changed, and E2B was not invoked for
+this read-only retest.
