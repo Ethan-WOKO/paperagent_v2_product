@@ -13,6 +13,8 @@ interface CandidateSandboxValidationRepository extends JpaRepository<CandidateSa
     Optional<CandidateSandboxValidation> findByValidationIdAndUserIdAndProjectId(String validationId, Long userId, Long projectId);
     Optional<CandidateSandboxValidation> findByUserIdAndProjectIdAndIdempotencyKey(Long userId, Long projectId, String idempotencyKey);
     List<CandidateSandboxValidation> findByUserIdAndProjectIdAndArtifactIdOrderByCreatedAtDescIdDesc(Long userId, Long projectId, Long artifactId);
+    Optional<CandidateSandboxValidation> findFirstByUserIdAndSessionIdAndArtifactIdOrderByCreatedAtDescIdDesc(
+            Long userId, Long sessionId, Long artifactId);
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select v from CandidateSandboxValidation v where v.validationId=:validationId")
     Optional<CandidateSandboxValidation> lockByValidationId(@Param("validationId") String validationId);

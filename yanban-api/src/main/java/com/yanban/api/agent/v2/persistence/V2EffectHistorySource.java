@@ -38,9 +38,25 @@ public class V2EffectHistorySource {
             throw new IllegalArgumentException(
                     "V2 effect history authority is required");
         }
+        return inspectMatching(planId, stepId.value());
+    }
+
+    /**
+     * Reads the complete, canonically decoded effect history for one Plan.
+     */
+    @Transactional(readOnly = true)
+    public List<Entry> inspect(PlanId planId) {
+        if (planId == null) {
+            throw new IllegalArgumentException(
+                    "V2 effect history authority is required");
+        }
+        return inspectMatching(planId, null);
+    }
+
+    private List<Entry> inspectMatching(PlanId planId, String stepId) {
         List<ProductEffectIntentEntity> rows = intents.findAllByPlanId(
                 planId.value()).stream()
-                .filter(row -> stepId.value().equals(row.stepId()))
+                .filter(row -> stepId == null || stepId.equals(row.stepId()))
                 .sorted(Comparator
                         .comparing(ProductEffectIntentEntity::committedAt)
                         .thenComparing(ProductEffectIntentEntity::toolCallId))
@@ -50,7 +66,10 @@ public class V2EffectHistorySource {
             PersistedEffectIntent intent = markers.intent(row.toolCallId());
             if (intent == null
                     || !intent.intent().planId().equals(planId)
-                    || !intent.intent().stepId().equals(stepId)) {
+                    || !row.stepId().equals(
+                            intent.intent().stepId().value())
+                    || stepId != null && !stepId.equals(
+                            intent.intent().stepId().value())) {
                 throw new IllegalStateException(
                         "V2 effect history is inconsistent");
             }

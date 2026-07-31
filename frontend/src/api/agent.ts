@@ -351,6 +351,28 @@ export interface V2NaturalLanguageTurnResponse {
   errorCode: string | null;
 }
 
+export interface V2AgentAutomaticValidation {
+  status: 'PASSED';
+  provider: 'E2B';
+  exitCode: number;
+  receiptId: string;
+}
+
+export interface V2CandidateConfirmationValidation {
+  status: string;
+  decisionStatus: string;
+}
+
+export interface V2NaturalLanguageTurnHistoryItem extends Omit<V2NaturalLanguageTurnResponse, 'route'> {
+  clientRequestId: string;
+  question: string;
+  route: 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE' | null;
+  createdAt: string;
+  updatedAt: string;
+  agentAutomaticValidation: V2AgentAutomaticValidation | null;
+  confirmationValidation: V2CandidateConfirmationValidation | null;
+}
+
 export function startV2NaturalLanguageTurn(
   sessionId: number,
   payload: V2NaturalLanguageTurnRequest,
@@ -371,6 +393,17 @@ export function getV2NaturalLanguageTurn(
   return http.get<V2NaturalLanguageTurnResponse>(
     `/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(clientRequestId)}`,
     { signal },
+  );
+}
+
+export function listV2NaturalLanguageTurns(
+  sessionId: number,
+  limit = 50,
+  signal?: AbortSignal,
+) {
+  return http.get<V2NaturalLanguageTurnHistoryItem[]>(
+    `/agent/sessions/${sessionId}/v2/turns`,
+    { params: { limit }, signal },
   );
 }
 

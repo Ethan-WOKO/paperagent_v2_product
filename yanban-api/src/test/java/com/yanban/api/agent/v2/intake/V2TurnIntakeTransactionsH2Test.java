@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,6 +55,12 @@ class V2TurnIntakeTransactionsH2Test {
                 7L, session.getId(), "request-1", digest,
                 "question", false, null, null);
 
+        assertThat(first.historyVisible()).isTrue();
+        assertThat(intakes
+                .findByUserIdAndSessionIdAndHistoryVisibleTrueOrderByCreatedAtDescIdDesc(
+                        7L, session.getId(), PageRequest.of(0, 50)))
+                .extracting(V2TurnIntakeEntity::clientRequestId)
+                .containsExactly("request-1");
         assertThat(replay.turnId()).isEqualTo(first.turnId());
         assertThat(replay.userMessageId()).isEqualTo(first.userMessageId());
         assertThatThrownBy(() -> transactions.open(

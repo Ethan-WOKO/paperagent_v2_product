@@ -76,6 +76,48 @@ class AgentControllerV2NaturalLanguageEndpointTest {
         verify(outcomes).get(7L, 9L, "request-1");
     }
 
+    @Test
+    void historyGetDelegatesOnceToOwnerSessionQualifiedReadService() {
+        V2NaturalLanguageTurnService turns =
+                mock(V2NaturalLanguageTurnService.class);
+        V2AdaptiveTurnQueryService outcomes =
+                mock(V2AdaptiveTurnQueryService.class);
+        V2TurnHistoryQueryService history =
+                mock(V2TurnHistoryQueryService.class);
+        List<V2TurnHistoryResponse> expected = List.of(
+                new V2TurnHistoryResponse(
+                        "request-1", "question", "FAILED", null,
+                        null, null, List.of(), null, null,
+                        List.of(), "PLANNER_FAILED",
+                        java.time.Instant.EPOCH,
+                        java.time.Instant.EPOCH, null, null));
+        when(history.list(7L, 9L, 50)).thenReturn(expected);
+        var controller = controller(
+                new V2ProductAvailability(true), turns, outcomes,
+                history);
+
+        assertSame(expected,
+                controller.listV2NaturalLanguageTurns(USER, 9L, 50));
+        verify(history).list(7L, 9L, 50);
+    }
+
+    @Test
+    void disabledHistoryEndpointFailsBeforeDelegation() {
+        V2NaturalLanguageTurnService turns =
+                mock(V2NaturalLanguageTurnService.class);
+        V2AdaptiveTurnQueryService outcomes =
+                mock(V2AdaptiveTurnQueryService.class);
+        V2TurnHistoryQueryService history =
+                mock(V2TurnHistoryQueryService.class);
+        var controller = controller(
+                new V2ProductAvailability(false), turns, outcomes,
+                history);
+
+        assertThrows(ResponseStatusException.class, () ->
+                controller.listV2NaturalLanguageTurns(USER, 9L, 50));
+        verify(history, never()).list(7L, 9L, 50);
+    }
+
     private AgentController controller(
             V2ProductAvailability availability,
             V2NaturalLanguageTurnService turns) {
@@ -98,5 +140,18 @@ class AgentControllerV2NaturalLanguageEndpointTest {
                 mock(V2LiteratureTurnService.class),
                 mock(V2LiteratureOutcomeService.class),
                 availability, turns, outcomes);
+    }
+
+    private AgentController controller(
+            V2ProductAvailability availability,
+            V2NaturalLanguageTurnService turns,
+            V2AdaptiveTurnQueryService outcomes,
+            V2TurnHistoryQueryService history) {
+        return new AgentController(
+                mock(AgentService.class),
+                mock(AgentContextSnapshotService.class),
+                mock(V2LiteratureTurnService.class),
+                mock(V2LiteratureOutcomeService.class),
+                availability, turns, outcomes, history);
     }
 }

@@ -56,6 +56,8 @@ class V2TurnIntakeEntity {
     private String status;
     @Column(name = "failure_code", length = 64)
     private String failureCode;
+    @Column(name = "history_visible", nullable = false)
+    private Boolean historyVisible;
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
     @Column(name = "updated_at", nullable = false)
@@ -87,6 +89,7 @@ class V2TurnIntakeEntity {
         this.userMessageId = userMessageId;
         this.turnId = turnId;
         this.status = RUNNING;
+        this.historyVisible = true;
         this.createdAt = now;
         this.updatedAt = now;
     }
@@ -107,6 +110,10 @@ class V2TurnIntakeEntity {
     String plannerOutputJson() { return plannerOutputJson; }
     String capabilityBindingsJson() { return capabilityBindingsJson; }
     String status() { return status; }
+    String failureCode() { return failureCode; }
+    boolean historyVisible() { return Boolean.TRUE.equals(historyVisible); }
+    Instant createdAt() { return createdAt; }
+    Instant updatedAt() { return updatedAt; }
 
     void completeDirect(Long messageId, String outputJson, Instant now) {
         requireRunning();

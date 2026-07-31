@@ -11,6 +11,8 @@ import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeServi
 import com.yanban.api.agent.v2.intake.V2NaturalLanguageTurnRequest;
 import com.yanban.api.agent.v2.intake.V2NaturalLanguageTurnResponse;
 import com.yanban.api.agent.v2.intake.V2NaturalLanguageTurnService;
+import com.yanban.api.agent.v2.intake.V2TurnHistoryQueryService;
+import com.yanban.api.agent.v2.intake.V2TurnHistoryResponse;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveTurnQueryService;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveTurnResponse;
 import jakarta.validation.Valid;
@@ -39,6 +41,7 @@ public class AgentController {
     private final V2ProductAvailability v2Availability;
     private final V2NaturalLanguageTurnService v2NaturalLanguageTurns;
     private final V2AdaptiveTurnQueryService v2AdaptiveTurns;
+    private final V2TurnHistoryQueryService v2TurnHistory;
 
     public AgentController(AgentService agentService,
                            AgentContextSnapshotService contextSnapshotService,
@@ -69,7 +72,6 @@ public class AgentController {
                 v2NaturalLanguageTurns, null);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
     public AgentController(AgentService agentService,
                            AgentContextSnapshotService contextSnapshotService,
                            V2LiteratureTurnService v2LiteratureTurns,
@@ -77,6 +79,20 @@ public class AgentController {
                            V2ProductAvailability v2Availability,
                            V2NaturalLanguageTurnService v2NaturalLanguageTurns,
                            V2AdaptiveTurnQueryService v2AdaptiveTurns) {
+        this(agentService, contextSnapshotService, v2LiteratureTurns,
+                v2LiteratureOutcomes, v2Availability,
+                v2NaturalLanguageTurns, v2AdaptiveTurns, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability,
+                           V2NaturalLanguageTurnService v2NaturalLanguageTurns,
+                           V2AdaptiveTurnQueryService v2AdaptiveTurns,
+                           V2TurnHistoryQueryService v2TurnHistory) {
         this.agentService = agentService;
         this.contextSnapshotService = contextSnapshotService;
         this.v2LiteratureTurns = v2LiteratureTurns;
@@ -84,6 +100,21 @@ public class AgentController {
         this.v2Availability = v2Availability;
         this.v2NaturalLanguageTurns = v2NaturalLanguageTurns;
         this.v2AdaptiveTurns = v2AdaptiveTurns;
+        this.v2TurnHistory = v2TurnHistory;
+    }
+
+    @GetMapping("/{sessionId}/v2/turns")
+    public List<V2TurnHistoryResponse> listV2NaturalLanguageTurns(
+            @AuthenticationPrincipal JwtUser currentUser,
+            @PathVariable Long sessionId,
+            @RequestParam(defaultValue = "50") Integer limit) {
+        v2Availability.requireAvailable(
+                V2ProductAvailability.NATURAL_LANGUAGE_TURN);
+        if (v2TurnHistory == null) {
+            throw new IllegalStateException(
+                    "V2 turn history is unavailable");
+        }
+        return v2TurnHistory.list(currentUser.id(), sessionId, limit);
     }
 
     @GetMapping("/{sessionId}/v2/turns/{clientRequestId}")

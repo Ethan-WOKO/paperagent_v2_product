@@ -192,32 +192,35 @@ describe('V2 自然语言 API 与页面接入', () => {
     expect(api).toContain('export interface V2NaturalLanguageTurnStartResponse');
     expect(api).toContain('http.post<V2NaturalLanguageTurnStartResponse>');
     expect(api).toContain('http.get<V2NaturalLanguageTurnResponse>');
+    expect(api).toContain('http.get<V2NaturalLanguageTurnHistoryItem[]>');
     expect(api).toContain('`/agent/sessions/${sessionId}/v2/turns`');
     expect(api).toContain('`/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(clientRequestId)}`');
+    expect(page).toContain('listV2NaturalLanguageTurns(sessionId, 50)');
     expect(page).toContain('await startV2NaturalLanguageTurn(sessionId, request, controller.signal)');
     expect(page).toContain('await getV2NaturalLanguageTurn(sessionId, clientRequestId, controller.signal)');
     expect(page).toContain('resume: async () =>');
     expect(page).toContain('<span>{{ step.index }}</span>');
   });
 
-  it('V2 是中文单输入流程，V1 发送方法保持独立', () => {
+  it('V2 是唯一可见的中文单输入流程', () => {
     expect(page).toContain('class="v2-conversation__composer"');
     expect(page).toContain('@click="sendV2NaturalLanguageTurn"');
-    expect(page).toContain('async function sendChat()');
-    expect(page).toContain('await sendProjectWithFallback(projectId, sessionId, content, requestId)');
+    expect(page).not.toContain('class="project-composer"');
+    expect(page).not.toContain("@click=\"setAgentMode('v1')\"");
     expect(page).not.toContain('aria-label="选择 V2 任务类型"');
     expect(page).not.toContain('@click="startProjectAnalysis"');
     expect(page).not.toContain('@click="startProjectCandidate"');
   });
 
-  it('展示执行过程、最终结果、输出位置并复用 Candidate 检查入口', () => {
-    expect(page).toContain('执行过程');
-    expect(page).toContain('最终结果');
+  it('展示一一对应的结果、折叠过程、输出位置并复用 Candidate 检查入口', () => {
+    expect(page).toContain('v-for="task in v2TurnHistory"');
+    expect(page).toContain('<strong>Agent 结果</strong>');
+    expect(page).toContain('<summary>查看执行过程</summary>');
     expect(page).toContain('结果：{{ step.detail }}');
     expect(page).toContain('生成内容位置');
     expect(page).toContain('原项目尚未修改');
     expect(page).toContain('打开修改与验证');
-    expect(page).toContain('@click="openV2CandidateReview"');
+    expect(page).toContain('@click="openV2CandidateReview(task.candidateArtifactId)"');
   });
 
   it('持久化待处理请求并在切换和卸载时中止旧轮询', () => {

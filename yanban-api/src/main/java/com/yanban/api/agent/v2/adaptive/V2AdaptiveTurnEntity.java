@@ -67,6 +67,8 @@ class V2AdaptiveTurnEntity {
     Long candidateArtifactId() { return candidateArtifactId; }
     String outputPathsJson() { return outputPathsJson; }
     String errorCode() { return errorCode; }
+    Instant createdAt() { return createdAt; }
+    Instant updatedAt() { return updatedAt; }
 
     static V2AdaptiveTurnEntity running(
             Long intakeId, Long userId, Long sessionId,

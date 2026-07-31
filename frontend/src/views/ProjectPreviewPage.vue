@@ -135,48 +135,34 @@
           </section>
         </aside>
 
-        <section class="project-panel project-panel--main" :class="{ 'project-panel--v2': agentMode === 'v2' }">
+        <section class="project-panel project-panel--main project-panel--v2">
           <div class="project-tabs">
             <div class="project-agent-mode">
-              <strong class="project-tabs__title">{{ agentMode === 'v1' ? 'V1 会话' : 'V2 工作台' }}</strong>
-              <div class="project-agent-mode__switch" role="group" aria-label="选择 Agent 版本">
-                <button type="button" :class="{ active: agentMode === 'v1' }" @click="setAgentMode('v1')">
-                  V1 <small>旧版会话</small>
-                </button>
-                <button type="button" :class="{ active: agentMode === 'v2' }" @click="setAgentMode('v2')">
-                  V2 <small>持久化任务</small>
-                </button>
-              </div>
+              <strong class="project-tabs__title">V2 项目助手</strong>
+              <span class="project-agent-mode__caption">持久化任务</span>
             </div>
             <div class="project-tabs__actions">
-              <template v-if="agentMode === 'v1'">
-                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">{{ t('project.page.preview') }}</button>
-                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" @click="toggleInspector('evidence')">{{ t('project.page.evidence') }} <span>{{ evidence.length }}</span></button>
-                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" @click="toggleInspector('changes')">{{ t('project.page.changes') }} <span>{{ candidates.length }}</span></button>
-                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" @click="toggleInspector('versions')">{{ t('project.page.versions') }} <span>{{ revisions.length }}</span></button>
-                <NButton size="tiny" quaternary :disabled="loading.send" @click="startNewConversation">{{ t('project.page.newConversation') }}</NButton>
-              </template>
-              <template v-else>
-                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">文件预览</button>
-                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
-                <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
-              </template>
+              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">文件预览</button>
+              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
+              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
+              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
+              <NButton size="tiny" quaternary :disabled="loading.send || v2NaturalTurnBusy" @click="startNewConversation">新建会话</NButton>
             </div>
           </div>
 
           <section v-if="inspectorOpen" class="project-inspector">
             <div class="project-inspector__tabs">
-              <strong>{{ agentMode === 'v2' ? '任务详情' : t('project.page.inspector') }}</strong>
-              <button type="button" class="project-inspector__close" @click="inspectorOpen = false">{{ agentMode === 'v2' ? '收起' : t('project.page.hideInspector') }}</button>
+              <strong>任务详情</strong>
+              <button type="button" class="project-inspector__close" @click="inspectorOpen = false">收起</button>
             </div>
 
             <div class="project-inspector__body">
               <template v-if="inspectorTab === 'preview'">
                 <div class="project-preview project-preview--inline">
-                  <div class="project-panel__title"><strong>{{ selectedFile?.path || (agentMode === 'v2' ? '文件预览' : 'Preview') }}</strong><span v-if="selectedFile">{{ shortHash(selectedFile.sha256) }}</span></div>
+                  <div class="project-panel__title"><strong>{{ selectedFile?.path || '文件预览' }}</strong><span v-if="selectedFile">{{ shortHash(selectedFile.sha256) }}</span></div>
                   <NSpin v-if="loading.file" size="small" />
                   <pre v-else-if="selectedFile">{{ selectedFile.content }}</pre>
-                  <NEmpty v-else size="small" :description="agentMode === 'v2' ? '请从左侧选择一个可读取文件。' : 'Select a readable file to preview it here.'" />
+                  <NEmpty v-else size="small" description="请从左侧选择一个可读取文件。" />
                 </div>
               </template>
 
@@ -255,8 +241,20 @@
 
                     <section class="project-candidate-sandbox">
                       <div class="project-panel__title">
-                        <strong>{{ documentOnlyProject ? '文档完整性检查' : '沙箱运行验证' }}</strong>
+                        <strong>验证状态</strong>
                         <span>{{ documentOnlyProject ? '文档不会作为代码执行' : '验证不会直接应用修改' }}</span>
+                      </div>
+                      <div class="project-candidate-validation-summary">
+                        <NAlert :type="selectedCandidateAutomaticValidation ? 'success' : 'default'" :show-icon="false">
+                          Agent 自动验证：{{ selectedCandidateAutomaticValidation
+                            ? `已通过（${selectedCandidateAutomaticValidation.provider}，退出码 ${selectedCandidateAutomaticValidation.exitCode}）`
+                            : '尚无通过记录' }}
+                        </NAlert>
+                        <NAlert :type="selectedCandidateConfirmationValidation?.status === 'SUCCEEDED' ? 'success' : 'info'" :show-icon="false">
+                          创建新版本前的确认验证：{{ selectedCandidateConfirmationValidation
+                            ? technicalStatusLabel(selectedCandidateConfirmationValidation.status)
+                            : '尚未执行' }}
+                        </NAlert>
                       </div>
                       <NAlert v-if="documentOnlyProject" type="info" :show-icon="false">
                         这个项目只包含文档。系统会核对项目版本、路径、哈希、权限和候选绑定，不会把文档放进 E2B 执行。
@@ -309,7 +307,7 @@
                             :loading="loading.rejectCandidateValidation" @click="rejectSelectedValidation">拒绝候选修改</NButton>
                         </NSpace>
                       </article>
-                      <NEmpty v-else size="small" description="这个候选修改还没有运行验证记录。" />
+                      <NEmpty v-else size="small" description="创建新版本前的确认验证：尚未执行" />
                     </section>
 
                     <section class="project-candidate-files">
@@ -394,241 +392,7 @@
             </div>
           </section>
 
-          <div v-if="agentMode === 'v1'" class="project-scroll-shell">
-            <div ref="messagesContainer" class="project-messages" aria-label="Project conversation" @scroll="handleProjectContentScroll">
-              <template v-for="item in projectTimelineItems" :key="item.key">
-                <div
-                  v-if="item.type === 'message'"
-                  :ref="(el) => setProjectContentRef(el, item.message.localId)"
-                  class="project-message-row"
-                  :class="`project-message-row--${item.message.role}`"
-                >
-                  <details v-if="item.message.role === 'process'" class="project-process-card" :open="item.message.processOpen" @toggle="syncProcessOpen(item.message, $event)">
-                    <summary title="Toggle process details">
-                      <span>{{ processSummary(item.message) }}</span>
-                      <NIcon class="project-process-card__chevron" aria-hidden="true"><ChevronRightIcon /></NIcon>
-                    </summary>
-                    <pre>{{ item.message.content }}</pre>
-                  </details>
-                  <div v-else class="project-message" :class="`project-message--${item.message.role}`">
-                    <small>{{ item.message.role === 'user' ? 'You' : 'Project Agent' }}</small>
-                    <MarkdownMessage :content="item.message.content || (item.message.pending ? 'Thinking...' : '')" :variant="item.message.role === 'assistant' ? 'project' : 'default'" />
-                    <details v-if="item.message.technicalContent" class="project-message-technical">
-                      <summary>{{ t('project.result.technicalDetails') }}</summary>
-                      <pre>{{ item.message.technicalContent }}</pre>
-                    </details>
-                  </div>
-                </div>
-
-                <div
-                  v-else
-                  :ref="(el) => setProjectContentRef(el, projectPlanItemId(item.plan.id, 'plan'))"
-                  class="project-message-row project-message-row--process"
-                >
-                  <article class="project-execution-card" :class="{ 'project-execution-card--selected': selectedPlan?.id === item.plan.id }">
-                    <details class="project-execution-card__details" :open="requiresSandboxConfirmation(item.plan) || undefined">
-                      <summary :title="t('project.result.details')" @click="selectPlan(item.plan)">
-                        <NIcon class="project-execution-card__chevron" aria-hidden="true"><ChevronRightIcon /></NIcon>
-                        <span class="project-execution-card__heading">
-                          <strong>{{ t('project.result.plan') }}</strong>
-                          <span>{{ item.plan.summary || abbreviateText(item.plan.goal, 100) }}</span>
-                        </span>
-                        <span class="project-execution-card__meta">
-                          <NTag size="tiny" :type="planUserStatus(item.plan).tone">{{ t(planUserStatus(item.plan).key) }}</NTag>
-                          <span>{{ planProgressLabel(item.plan) }}</span>
-                          <span>{{ t('project.result.duration', { duration: formatPlanElapsed(planElapsedMs(item.plan)) }) }}</span>
-                        </span>
-                      </summary>
-
-                      <div class="project-execution-card__body">
-                        <div class="project-execution-card__details-title">{{ t('project.result.details') }}</div>
-                        <p v-if="item.plan.summary" class="project-execution-card__summary-copy">{{ item.plan.summary }}</p>
-
-                        <dl class="project-result-layers">
-                          <div>
-                            <dt>{{ t('project.result.execution') }}</dt>
-                            <dd><NTag size="tiny" :type="planExecutionResult(item.plan).tone">{{ t(planExecutionResult(item.plan).key) }}</NTag></dd>
-                          </div>
-                          <div>
-                            <dt>{{ t('project.result.task') }}</dt>
-                            <dd><NTag size="tiny" :type="planTaskResult(item.plan).tone">{{ t(planTaskResult(item.plan).key) }}</NTag></dd>
-                          </div>
-                          <div>
-                            <dt>{{ t('project.result.answerBasis') }}</dt>
-                            <dd><NTag size="tiny" :type="planAnswerResult(item.plan).tone">{{ t(planAnswerResult(item.plan).key) }}</NTag></dd>
-                          </div>
-                        </dl>
-
-                        <details v-if="item.plan.finalSynthesisInput" class="project-result-evidence">
-                          <summary>
-                            <NIcon class="project-result-evidence__chevron" aria-hidden="true"><ChevronRightIcon /></NIcon>
-                            <strong>{{ t('project.result.evidenceTitle') }}</strong>
-                            <span>{{ t('project.result.evidenceCount', { count: item.plan.finalSynthesisInput.evidence.length }) }}</span>
-                          </summary>
-                          <div class="project-result-evidence__body">
-                            <p v-if="planEvidenceGroups(item.plan).length === 0" class="project-panel__hint">{{ t('project.result.evidence.empty') }}</p>
-                            <details v-for="group in planEvidenceGroups(item.plan)" :key="group.group" class="project-result-evidence-group">
-                              <summary>
-                                <NIcon class="project-result-evidence__chevron" aria-hidden="true"><ChevronRightIcon /></NIcon>
-                                <span>{{ t(group.key) }}</span>
-                                <NTag size="tiny" :type="group.tone">{{ group.evidence.length }}</NTag>
-                              </summary>
-                              <div class="project-result-evidence-group__body">
-                                <section v-for="entry in group.evidence" :key="entry.id" class="project-result-evidence-entry">
-                                  <header>
-                                    <span>{{ entry.statement || t('project.result.statementMissing') }}</span>
-                                    <NTag size="tiny" :type="answerStatusResult(entry.status).tone">{{ t(answerStatusResult(entry.status).key) }}</NTag>
-                                  </header>
-
-                                  <details v-if="hasTechnicalEvidenceFields(entry)" class="project-result-technical">
-                                    <summary>{{ t('project.result.technicalDetails') }}</summary>
-                                    <dl>
-                                      <template v-if="entry.id"><dt>{{ t('project.result.field.evidenceId') }}</dt><dd>{{ entry.id }}</dd></template>
-                                      <template v-if="entry.sourceType"><dt>{{ t('project.result.field.source') }}</dt><dd>{{ entry.sourceType }}</dd></template>
-                                      <template v-if="entry.path"><dt>{{ t('project.result.field.path') }}</dt><dd>{{ entry.path }}</dd></template>
-                                      <template v-if="entry.projectVersion"><dt>{{ t('project.result.field.projectVersion') }}</dt><dd>{{ entry.projectVersion }}</dd></template>
-                                      <template v-if="entry.hash"><dt>{{ t('project.result.field.hash') }}</dt><dd>{{ entry.hash }}</dd></template>
-                                      <template v-if="entry.basisRefs.length"><dt>{{ t('project.result.field.basisRefs') }}</dt><dd>{{ entry.basisRefs.join(', ') }}</dd></template>
-                                      <template v-if="entry.executionFact?.provider"><dt>{{ t('project.result.field.provider') }}</dt><dd>{{ entry.executionFact.provider }}</dd></template>
-                                      <template v-if="entry.executionFact?.status"><dt>{{ t('project.result.field.status') }}</dt><dd>{{ entry.executionFact.status }}</dd></template>
-                                      <template v-if="entry.executionFact?.exitCode != null"><dt>{{ t('project.result.field.exitCode') }}</dt><dd>{{ entry.executionFact.exitCode }}</dd></template>
-                                      <template v-if="entry.executionFact?.command.length"><dt>{{ t('project.result.field.command') }}</dt><dd>{{ entry.executionFact.command.join(' ') }}</dd></template>
-                                      <template v-if="entry.executionFact?.failurePhase"><dt>{{ t('project.result.field.failurePhase') }}</dt><dd>{{ entry.executionFact.failurePhase }}</dd></template>
-                                      <template v-if="entry.executionFact?.failureType"><dt>{{ t('project.result.field.failureType') }}</dt><dd>{{ entry.executionFact.failureType }}</dd></template>
-                                      <template v-if="entry.executionFact?.providerErrorType"><dt>{{ t('project.result.field.providerErrorType') }}</dt><dd>{{ entry.executionFact.providerErrorType }}</dd></template>
-                                      <template v-if="entry.executionFact?.providerCommandExitCode != null"><dt>{{ t('project.result.field.providerCommandExitCode') }}</dt><dd>{{ entry.executionFact.providerCommandExitCode }}</dd></template>
-                                    </dl>
-                                  </details>
-
-                                  <details v-if="entry.executionFact" class="project-result-raw-output">
-                                    <summary>{{ t('project.result.rawStdout') }}</summary>
-                                    <pre>{{ entry.executionFact.stdout ?? t('project.result.emptyOutput') }}</pre>
-                                  </details>
-                                  <details v-if="entry.executionFact" class="project-result-raw-output">
-                                    <summary>{{ t('project.result.rawStderr') }}</summary>
-                                    <pre>{{ entry.executionFact.stderr ?? t('project.result.emptyOutput') }}</pre>
-                                  </details>
-                                </section>
-                              </div>
-                            </details>
-
-                            <details class="project-result-verification">
-                              <summary>{{ t('project.result.verificationScope') }}</summary>
-                              <dl>
-                                <dt>{{ t('project.result.verifiedItems') }}</dt>
-                                <dd>{{ item.plan.finalSynthesisInput.verificationScope.verifies.join('；') || t('project.result.noItems') }}</dd>
-                                <dt>{{ t('project.result.limitations') }}</dt>
-                                <dd>{{ item.plan.finalSynthesisInput.verificationScope.limitations.join('；') || t('project.result.noItems') }}</dd>
-                              </dl>
-                            </details>
-                          </div>
-                        </details>
-
-                        <details v-for="step in item.plan.steps" :key="`${item.plan.id}-${step.id}`" class="project-plan-step-details">
-                          <summary @click="selectPlan(item.plan)">
-                            <NIcon class="project-plan-step-details__chevron" aria-hidden="true"><ChevronRightIcon /></NIcon>
-                            <span class="project-plan-step-message__copy">
-                              <small>
-                                {{ t('project.result.step', { number: step.sortOrder }) }}
-                                <NTag size="tiny" :type="planTagType(step.status)">{{ planStepStatusLabel(step.status) }}</NTag>
-                              </small>
-                              <strong class="project-plan-step-message__title">{{ step.title || step.stepKey }}</strong>
-                              <span class="project-plan-step-message__preview">{{ planStepPreviewLine(step) }}</span>
-                            </span>
-                          </summary>
-                          <div class="project-plan-step-details__body">
-                            <MarkdownMessage :content="planStepMessageContent(step)" variant="project" />
-                            <details v-if="step.result || step.errorMessage" class="project-plan-step-record">
-                              <summary>{{ t('project.result.stepRecord') }}</summary>
-                              <pre v-if="step.result">{{ step.result }}</pre>
-                              <pre v-if="step.errorMessage">{{ step.errorMessage }}</pre>
-                            </details>
-                          </div>
-                        </details>
-
-                        <NButton
-                          v-if="!requiresSandboxConfirmation(item.plan) && !planTerminal(item.plan.status)"
-                          size="small"
-                          type="error"
-                          secondary
-                          :loading="cancellingPlanId === item.plan.id"
-                          :disabled="cancellingPlanId !== null"
-                          @click.stop="cancelProjectPlan(item.plan)"
-                        >
-                          {{ t('project.result.cancelRunning') }}
-                        </NButton>
-                      </div>
-                    </details>
-
-                    <NAlert
-                      v-if="requiresSandboxConfirmation(item.plan)"
-                      class="project-sandbox-confirmation"
-                      type="warning"
-                      :title="t('project.result.confirmTitle')"
-                    >
-                      <p>
-                        {{ t('project.result.confirmCopy', { count: sandboxConfirmationStepCount(item.plan) }) }}
-                      </p>
-                      <NButton
-                        type="warning"
-                        size="small"
-                        :loading="executingSandboxPlanId === item.plan.id"
-                        :disabled="executingSandboxPlanId !== null"
-                        @click.stop="confirmSandboxExecution(item.plan)"
-                      >
-                        {{ t('project.result.confirm') }}
-                      </NButton>
-                      <NButton
-                        class="project-sandbox-cancel"
-                        size="small"
-                        :loading="cancellingPlanId === item.plan.id"
-                        :disabled="cancellingPlanId !== null || executingSandboxPlanId !== null"
-                        @click.stop="cancelProjectPlan(item.plan)"
-                      >
-                        {{ t('project.result.reject') }}
-                      </NButton>
-                    </NAlert>
-                  </article>
-                </div>
-              </template>
-
-              <NEmpty v-if="!loading.messages && !loading.plans && projectTimelineItems.length === 0" description="Ask the Project Agent to inspect the selected Project." />
-              <NSpin v-if="loading.messages || loading.plans" size="small" />
-            </div>
-            <nav v-if="projectNavItems.length" class="project-content-nav" aria-label="Project conversation navigation">
-              <button
-                v-for="item in projectNavItems"
-                :key="item.id"
-                type="button"
-                class="project-content-nav__item"
-                :class="[`project-content-nav__item--${item.kind}`, { active: activeProjectNavId === item.id }]"
-                :title="item.title"
-                @click="scrollToProjectNavItem(item)"
-              >
-                <span>{{ item.label }}</span>
-              </button>
-            </nav>
-          </div>
-          <ProjectContextDebugPanel
-            v-if="agentMode === 'v1'"
-            :snapshot="contextSnapshot"
-            :loading="loading.context"
-            :error="contextError"
-            :title="t('project.context.title')"
-            :refresh-label="t('project.context.refresh')"
-            :loading-label="t('project.context.loading')"
-            :empty-label="t('project.context.empty')"
-            :current-label="t('project.context.current')"
-            :recent-label="t('project.context.recent')"
-            :summary-label="t('project.context.summary')"
-            :project-label="t('project.context.project')"
-            :evidence-label="t('project.context.evidence')"
-            :memory-label="t('project.context.memory')"
-            :sections-label="t('project.context.sections')"
-            :dropped-label="t('project.context.dropped')"
-            @refresh="loadContextDebug()"
-          />
-          <section v-if="agentMode === 'v2'" class="v2-conversation">
+          <section class="v2-conversation">
             <header class="v2-conversation__header">
               <div>
                 <h2>V2 项目助手</h2>
@@ -639,65 +403,85 @@
               </NTag>
             </header>
 
-            <article v-if="v2LastQuestion" class="v2-conversation__question">
-              <small>你的问题</small>
-              <p>{{ v2LastQuestion }}</p>
-            </article>
-
-            <section v-if="v2TurnOutcome" class="v2-conversation__process">
-              <header>
-                <strong>执行过程</strong>
-                <NTag size="tiny" :type="v2TurnOutcome.status === 'FAILED' ? 'error' : v2TurnOutcome.status === 'WAITING_CONFIRMATION' ? 'warning' : v2NaturalTurnBusy ? 'info' : 'success'">
-                  {{ v2NaturalLanguageStatusLabel(v2TurnOutcome.status) }}
-                </NTag>
-              </header>
-              <ol v-if="v2TurnOutcome.steps.length">
-                <li v-for="step in v2TurnOutcome.steps" :key="`${step.index}:${step.title}`" :data-status="step.status">
-                  <span>{{ step.index }}</span>
+            <div class="v2-conversation__tasks" aria-live="polite">
+              <article v-for="task in v2TurnHistory" :key="task.clientRequestId" class="v2-task-card">
+                <header class="v2-task-card__question">
                   <div>
-                    <strong>{{ step.title }}</strong>
-                    <small v-if="step.detail">结果：{{ step.detail }}</small>
+                    <small>你的问题</small>
+                    <p>{{ task.question }}</p>
                   </div>
-                  <NTag size="tiny" :type="v2StepTagType(step.status)">
-                    {{ v2NaturalLanguageStepStatusLabel(step.status) }}
+                  <NTag size="small" :type="v2TurnStatusType(task.status)">
+                    {{ v2NaturalLanguageStatusLabel(task.status) }}
                   </NTag>
-                </li>
-              </ol>
-              <p v-else class="v2-conversation__empty-process">
-                {{ v2TurnOutcome.route === 'DIRECT'
-                  ? '此问题无需执行项目步骤，已直接回答。'
-                  : v2TurnOutcome.status === 'PLANNING'
-                    ? '正在制定执行步骤，请稍候。'
-                    : '正在准备执行信息。' }}
-              </p>
-            </section>
+                </header>
 
-            <section v-if="v2TurnOutcome && v2NaturalLanguageTerminal" class="v2-conversation__result">
-              <h3>最终结果</h3>
-              <MarkdownMessage
-                v-if="v2TurnOutcome.status === 'SUCCEEDED' && v2TurnOutcome.finalText"
-                :content="v2TurnOutcome.finalText"
-                variant="project"
-              />
-              <NAlert v-else-if="v2TurnOutcome.status === 'FAILED'" type="error" :show-icon="false">
-                执行没有成功。<template v-if="v2TurnOutcome.errorCode">错误代码：{{ v2TurnOutcome.errorCode }}</template>
-              </NAlert>
-              <NAlert v-else-if="v2TurnOutcome.status === 'WAITING_CONFIRMATION'" type="warning" :show-icon="false">
-                候选修改已经生成，原项目尚未修改。请检查并验证后，再确认是否创建新版本。
-              </NAlert>
-              <p v-else>任务已完成。</p>
+                <section class="v2-task-card__result">
+                  <strong>Agent 结果</strong>
+                  <MarkdownMessage
+                    v-if="task.status === 'SUCCEEDED' && task.finalText"
+                    :content="task.finalText"
+                    variant="project"
+                  />
+                  <NAlert v-else-if="task.status === 'FAILED'" type="error" :show-icon="false">
+                    执行没有成功。<template v-if="task.errorCode">错误代码：{{ task.errorCode }}</template>
+                  </NAlert>
+                  <NAlert v-else-if="task.status === 'WAITING_CONFIRMATION'" type="warning" :show-icon="false">
+                    候选修改已经生成，原项目尚未修改。请检查并验证后，再确认是否创建新版本。
+                  </NAlert>
+                  <p v-else-if="task.status === 'PLANNING'">正在制定持久化计划。</p>
+                  <p v-else-if="task.status === 'RUNNING'">任务正在执行，刷新页面后仍可继续查看。</p>
+                  <p v-else>任务已完成。</p>
+                </section>
 
-              <div v-if="v2TurnOutcome.outputPaths.length" class="v2-conversation__outputs">
-                <strong>生成内容位置</strong>
-                <code v-for="path in v2TurnOutcome.outputPaths" :key="path" :title="path">{{ path }}</code>
-              </div>
-              <div v-if="v2TurnOutcome.candidateArtifactId" class="v2-conversation__candidate">
-                <span>候选修改 #{{ v2TurnOutcome.candidateArtifactId }}</span>
-                <NButton type="primary" secondary @click="openV2CandidateReview">
-                  打开修改与验证
-                </NButton>
-              </div>
-            </section>
+                <div v-if="task.candidateArtifactId || task.outputPaths.length" class="v2-task-card__delivery">
+                  <div v-if="task.candidateArtifactId" class="v2-conversation__candidate">
+                    <span>候选修改 #{{ task.candidateArtifactId }}</span>
+                    <NButton type="primary" secondary @click="openV2CandidateReview(task.candidateArtifactId)">
+                      打开修改与验证
+                    </NButton>
+                  </div>
+                  <div v-if="task.outputPaths.length" class="v2-conversation__outputs">
+                    <strong>生成内容位置</strong>
+                    <code v-for="path in task.outputPaths" :key="path" :title="path">{{ path }}</code>
+                  </div>
+                  <dl v-if="task.candidateArtifactId" class="v2-task-card__validation">
+                    <dt>Agent 自动验证</dt>
+                    <dd>{{ task.agentAutomaticValidation
+                      ? `已通过（${task.agentAutomaticValidation.provider}，退出码 ${task.agentAutomaticValidation.exitCode}）`
+                      : '尚无通过记录' }}</dd>
+                    <dt>创建新版本前的确认验证</dt>
+                    <dd>{{ task.confirmationValidation
+                      ? technicalStatusLabel(task.confirmationValidation.status)
+                      : '尚未执行' }}</dd>
+                  </dl>
+                </div>
+
+                <details class="v2-conversation__process">
+                  <summary>查看执行过程</summary>
+                  <ol v-if="task.steps.length">
+                    <li v-for="step in task.steps" :key="`${task.clientRequestId}:${step.index}:${step.title}`" :data-status="step.status">
+                      <span>{{ step.index }}</span>
+                      <div>
+                        <strong>{{ step.title }}</strong>
+                        <small v-if="step.detail">结果：{{ step.detail }}</small>
+                      </div>
+                      <NTag size="tiny" :type="v2StepTagType(step.status)">
+                        {{ v2NaturalLanguageStepStatusLabel(step.status) }}
+                      </NTag>
+                    </li>
+                  </ol>
+                  <p v-else class="v2-conversation__empty-process">
+                    {{ task.route === 'DIRECT'
+                      ? '此问题无需执行项目步骤，已直接回答。'
+                      : task.status === 'PLANNING'
+                        ? '正在制定执行步骤，请稍候。'
+                        : '没有可展示的执行步骤。' }}
+                  </p>
+                </details>
+              </article>
+              <NEmpty v-if="!loading.v2History && v2TurnHistory.length === 0" description="新版本产生的 V2 任务会显示在这里。" />
+              <NSpin v-if="loading.v2History" size="small" />
+            </div>
 
             <NAlert v-if="v2TurnError" type="error" :show-icon="false">{{ v2TurnError }}</NAlert>
             <div class="v2-conversation__composer">
@@ -719,10 +503,6 @@
               </NButton>
             </div>
           </section>
-          <div v-if="agentMode === 'v1'" class="project-composer">
-            <NInput v-model:value="chatInput" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="Ask about this read-only Project..." @keydown="handleComposerKeydown" />
-            <NButton type="primary" :loading="loading.send" :disabled="!chatInput.trim() || !activeProject" @click="sendChat">Send</NButton>
-          </div>
         </section>
       </section>
     </main>
@@ -849,8 +629,7 @@ import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon,
 import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
-import ProjectContextDebugPanel from '@/components/ProjectContextDebugPanel.vue';
-import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listMessages, listPlans, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentContextSnapshotResponse, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnResponse } from '@/api/agent';
+import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listMessages, listPlans, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentContextSnapshotResponse, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectContextSnapshots, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, readV2ProjectCandidateTurn, readV2ProjectReadAnalysisTurn, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, startV2ProjectCandidateTurn, startV2ProjectReadAnalysisTurn, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse, type V2ProjectCandidateTurnResponse, type V2ProjectReadAnalysisTurnResponse } from '@/api/project';
 import { useAuthStore } from '@/stores/auth';
@@ -905,7 +684,6 @@ import {
   V2NaturalLanguageTurnNotCreatedError,
   isCurrentV2NaturalLanguageRequest,
   isDefinitiveV2NaturalLanguageStartRejection,
-  isV2NaturalLanguageTerminal,
   newV2NaturalLanguageClientRequestId,
   normalizeV2NaturalLanguageRequest,
   pollV2NaturalLanguageTurn,
@@ -917,7 +695,6 @@ import {
 
 type ProjectChatRole = 'user' | 'assistant' | 'process';
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
-type ProjectAgentMode = 'v1' | 'v2';
 type V2TaskKind = 'analysis' | 'candidate';
 type V2ProgressState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -967,7 +744,6 @@ const authStore = useAuthStore();
 const { isEnglish, t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const agentMode = ref<ProjectAgentMode>(route.query.agent === 'v2' ? 'v2' : 'v1');
 const v2TaskKind = ref<V2TaskKind>('analysis');
 const projects = ref<ProjectSummaryResponse[]>([]);
 const activeProjectId = ref<number | null>(null);
@@ -1010,7 +786,7 @@ const validationMessageType = ref<'success' | 'warning' | 'error'>('success');
 const revisionMessage = ref('');
 const revisionMessageType = ref<'success' | 'warning' | 'error'>('success');
 const inspectorTab = ref<ProjectInspectorTab>('preview');
-const inspectorOpen = ref(agentMode.value === 'v1');
+const inspectorOpen = ref(false);
 const chatInput = ref('');
 const error = ref('');
 const createModalOpen = ref(false);
@@ -1058,18 +834,15 @@ let projectCandidateClientRequestId: string | null = null;
 const V2_NATURAL_LANGUAGE_STORAGE_KEY = 'yanban.v2NaturalLanguage.activeRequest.';
 const v2NaturalTurnAvailable = ref(false);
 const v2TurnInput = ref('');
-const v2LastQuestion = ref('');
 const v2TurnStarting = ref(false);
 const v2TurnPolling = ref(false);
 const v2TurnError = ref('');
 const v2TurnOutcome = ref<V2NaturalLanguageTurnResponse | null>(null);
+const v2TurnHistory = ref<V2NaturalLanguageTurnHistoryItem[]>([]);
 let v2TurnAbortController: AbortController | null = null;
 let v2TurnSequence = 0;
 let v2TurnClientRequestId: string | null = null;
 const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.value);
-const v2NaturalLanguageTerminal = computed(() => (
-  v2TurnOutcome.value != null && isV2NaturalLanguageTerminal(v2TurnOutcome.value)
-));
 const v2ProjectAnalysisAvailable = computed(() => (
   isV2CapabilityAvailable(v2Availability.value, 'project.read-analysis')
 ));
@@ -1168,6 +941,7 @@ const loading = reactive({
   create: false,
   deleteProject: false,
   renameSession: false,
+  v2History: false,
 });
 
 const newProject = reactive({
@@ -1210,6 +984,14 @@ const sessionMenuOptions = computed(() => [
   { label: isEnglish.value ? 'Delete' : '删除', key: 'delete' },
 ]);
 const activeProject = computed(() => projects.value.find((item) => item.id === activeProjectId.value) || null);
+const selectedCandidateAutomaticValidation = computed(() => {
+  const artifactId = selectedCandidate.value?.artifact.id;
+  if (!artifactId) return null;
+  return [...v2TurnHistory.value].reverse()
+    .find((item) => item.candidateArtifactId === artifactId)
+    ?.agentAutomaticValidation || null;
+});
+const selectedCandidateConfirmationValidation = computed(() => candidateValidations.value[0] || null);
 const documentOnlyProject = computed(() => {
   const files = manifest.value?.files || [];
   return files.length > 0 && files.every((file) =>
@@ -1594,15 +1376,6 @@ function showInspector(tab: ProjectInspectorTab) {
   inspectorOpen.value = true;
 }
 
-function setAgentMode(mode: ProjectAgentMode) {
-  agentMode.value = mode;
-  if (mode === 'v2') inspectorOpen.value = false;
-  const query = { ...route.query };
-  if (mode === 'v2') query.agent = 'v2';
-  else delete query.agent;
-  void router.replace({ query });
-}
-
 function v2OutcomeStatusLabel(status: 'RUNNING' | 'SUCCEEDED' | 'FAILED') {
   if (status === 'SUCCEEDED') return '执行成功';
   if (status === 'FAILED') return '执行失败';
@@ -1616,7 +1389,18 @@ function v2ProgressStateLabel(state: V2ProgressState) {
   return '等待中';
 }
 
-function openV2CandidateReview() {
+function v2TurnStatusType(status: V2NaturalLanguageTurnHistoryItem['status']) {
+  if (status === 'FAILED') return 'error';
+  if (status === 'WAITING_CONFIRMATION') return 'warning';
+  if (status === 'SUCCEEDED') return 'success';
+  return 'info';
+}
+
+function openV2CandidateReview(artifactId?: number | null) {
+  if (artifactId) {
+    const candidate = candidates.value.find((item) => item.artifact.id === artifactId);
+    if (candidate) selectCandidate(candidate);
+  }
   showInspector('changes');
   nextTick(() => document.querySelector('.project-inspector')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 }
@@ -1693,6 +1477,7 @@ async function confirmApplyCandidate() {
     await Promise.all([loadManifest(epoch), loadRevisions()]);
     await Promise.all([
       activeSessionId.value ? loadCandidates(activeSessionId.value, epoch) : Promise.resolve(),
+      activeSessionId.value ? loadV2TurnHistory(activeSessionId.value, epoch) : Promise.resolve(),
       selectedPlan.value ? selectPlan(selectedPlan.value, epoch) : Promise.resolve(),
     ]);
     showInspector('versions');
@@ -1755,6 +1540,7 @@ async function confirmCandidateValidation() {
     validationModalOpen.value = false;
     selectedValidation.value = data;
     await loadCandidateValidations(item, epoch);
+    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value, epoch);
     void pollCandidateValidation(item.artifact.id, data.validationId, epoch, 0);
   } catch (cause) {
     if (epoch !== projectEpoch) return;
@@ -1771,7 +1557,10 @@ async function pollCandidateValidation(artifactId: number, validationId: string,
   if (epoch !== projectEpoch || selectedCandidate.value?.artifact.id !== artifactId) return;
   await loadCandidateValidations(selectedCandidate.value, epoch);
   const current = candidateValidations.value.find((validation) => validation.validationId === validationId);
-  if (!current || candidateValidationTerminal(current.status) || current.decisionStatus !== 'PENDING') return;
+  if (!current || candidateValidationTerminal(current.status) || current.decisionStatus !== 'PENDING') {
+    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value, epoch);
+    return;
+  }
   if (attempt >= 450) {
     validationMessageType.value = 'warning';
     validationMessage.value = '沙箱验证仍在进行中，请稍后重新打开候选修改查看持久化结果。';
@@ -1790,6 +1579,7 @@ async function cancelSelectedValidation() {
   try {
     selectedValidation.value = (await cancelCandidateValidation(projectId, validation.validationId)).data;
     await loadCandidateValidations();
+    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value);
     void pollCandidateValidation(validation.artifactId, validation.validationId, projectEpoch, 0);
   } catch (cause) {
     validationMessageType.value = 'error'; validationMessage.value = apiError(cause);
@@ -1806,6 +1596,7 @@ async function rejectSelectedValidation() {
     validationMessageType.value = 'warning';
     validationMessage.value = '已拒绝候选修改，没有创建新的项目版本；验证记录会保留。';
     await loadCandidateValidations();
+    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value);
   } catch (cause) {
     validationMessageType.value = 'error'; validationMessage.value = apiError(cause);
   } finally { loading.rejectCandidateValidation = false; }
@@ -2284,7 +2075,73 @@ function resetV2NaturalLanguageView() {
   v2TurnClientRequestId = null;
   v2TurnOutcome.value = null;
   v2TurnError.value = '';
-  v2LastQuestion.value = '';
+  v2TurnHistory.value = [];
+}
+
+function sortV2TurnHistory(items: V2NaturalLanguageTurnHistoryItem[]) {
+  return [...items].sort((left, right) => {
+    const byTime = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+    return byTime || left.clientRequestId.localeCompare(right.clientRequestId);
+  });
+}
+
+function upsertV2TurnOutcome(
+  clientRequestId: string,
+  question: string,
+  outcome: V2NaturalLanguageTurnResponse,
+) {
+  const previous = v2TurnHistory.value.find(
+    (item) => item.clientRequestId === clientRequestId,
+  );
+  const now = new Date().toISOString();
+  const next: V2NaturalLanguageTurnHistoryItem = {
+    ...outcome,
+    clientRequestId,
+    question,
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
+    agentAutomaticValidation: previous?.agentAutomaticValidation || null,
+    confirmationValidation: previous?.confirmationValidation || null,
+  };
+  v2TurnHistory.value = sortV2TurnHistory([
+    ...v2TurnHistory.value.filter((item) => item.clientRequestId !== clientRequestId),
+    next,
+  ]);
+}
+
+function upsertV2PlanningTask(clientRequestId: string, question: string) {
+  upsertV2TurnOutcome(clientRequestId, question, {
+    status: 'PLANNING',
+    route: 'PERSISTENT_PLAN_EXECUTE',
+    planId: null,
+    projectVersion: manifest.value?.version || null,
+    steps: [],
+    finalText: null,
+    candidateArtifactId: null,
+    outputPaths: [],
+    errorCode: null,
+  });
+}
+
+async function loadV2TurnHistory(sessionId: number, epoch = projectEpoch) {
+  loading.v2History = true;
+  try {
+    const items = (await listV2NaturalLanguageTurns(sessionId, 50)).data;
+    if (epoch !== projectEpoch || sessionId !== activeSessionId.value) return;
+    const pending = v2TurnHistory.value.filter((item) => (
+      (item.status === 'PLANNING' || item.status === 'RUNNING')
+      && !items.some((stored) => stored.clientRequestId === item.clientRequestId)
+    ));
+    v2TurnHistory.value = sortV2TurnHistory([...items, ...pending]);
+  } catch (cause) {
+    if (epoch === projectEpoch && sessionId === activeSessionId.value) {
+      v2TurnError.value = apiError(cause);
+    }
+  } finally {
+    if (epoch === projectEpoch && sessionId === activeSessionId.value) {
+      loading.v2History = false;
+    }
+  }
 }
 
 function v2StepTagType(status: V2NaturalLanguageStepStatus) {
@@ -2327,8 +2184,10 @@ async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number
   if (!stored) return;
   stopV2NaturalLanguagePolling();
   v2TurnClientRequestId = stored.clientRequestId;
-  v2LastQuestion.value = stored.question;
   v2TurnError.value = '';
+  if (!v2TurnHistory.value.some((item) => item.clientRequestId === stored.clientRequestId)) {
+    upsertV2PlanningTask(stored.clientRequestId, stored.question);
+  }
   const sequence = v2TurnSequence;
   const expected = { projectId, sessionId, clientRequestId: stored.clientRequestId, sequence };
   const controller = new AbortController();
@@ -2354,13 +2213,16 @@ async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number
         onOutcome: (value) => {
           if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
             v2TurnOutcome.value = value;
+            upsertV2TurnOutcome(stored.clientRequestId, stored.question, value);
           }
         },
       },
     );
     if (!isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) return;
     v2TurnOutcome.value = outcome;
+    upsertV2TurnOutcome(stored.clientRequestId, stored.question, outcome);
     clearStoredV2NaturalLanguageRequest(projectId, sessionId);
+    await loadV2TurnHistory(sessionId, epoch);
     await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
   } catch (cause) {
     if (controller.signal.aborted) return;
@@ -2369,6 +2231,10 @@ async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number
         clearStoredV2NaturalLanguageRequest(projectId, sessionId);
       }
       v2TurnError.value = v2NaturalLanguageFailureText(cause);
+      await loadV2TurnHistory(sessionId, epoch);
+      if (v2TurnHistory.value.some((item) => (
+        item.clientRequestId === stored.clientRequestId && item.status === 'FAILED'
+      ))) v2TurnError.value = '';
     }
   } finally {
     if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
@@ -2380,7 +2246,7 @@ async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number
 
 async function sendV2NaturalLanguageTurn() {
   if (!v2NaturalTurnAvailable.value) {
-    v2TurnError.value = 'V2 暂时不可用，V1 会话和项目其他功能仍可继续使用。';
+    v2TurnError.value = 'V2 暂时不可用，项目文件、候选修改和版本功能仍可继续使用。';
     return;
   }
   const projectId = activeProjectId.value;
@@ -2402,10 +2268,10 @@ async function sendV2NaturalLanguageTurn() {
     const request = normalizeV2NaturalLanguageRequest(question, clientRequestId);
     stopV2NaturalLanguagePolling();
     v2TurnClientRequestId = clientRequestId;
-    v2LastQuestion.value = question;
     const sequence = v2TurnSequence;
     const expected = { projectId, sessionId, clientRequestId, sequence };
     storeV2NaturalLanguageRequest(projectId, sessionId, clientRequestId, question);
+    upsertV2PlanningTask(clientRequestId, question);
     const controller = new AbortController();
     v2TurnAbortController = controller;
     v2TurnPolling.value = true;
@@ -2424,14 +2290,17 @@ async function sendV2NaturalLanguageTurn() {
         onOutcome: (value) => {
           if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
             v2TurnOutcome.value = value;
+            upsertV2TurnOutcome(clientRequestId, question, value);
           }
         },
       },
     );
     if (!isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) return;
     v2TurnOutcome.value = outcome;
+    upsertV2TurnOutcome(clientRequestId, question, outcome);
     v2TurnInput.value = '';
     clearStoredV2NaturalLanguageRequest(projectId, sessionId);
+    await loadV2TurnHistory(sessionId, epoch);
     await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
   } catch (cause) {
     const sessionId = activeSessionId.value;
@@ -2445,6 +2314,12 @@ async function sendV2NaturalLanguageTurn() {
         clearStoredV2NaturalLanguageRequest(projectId, sessionId);
       }
       v2TurnError.value = v2NaturalLanguageFailureText(cause);
+      if (sessionId) {
+        await loadV2TurnHistory(sessionId, epoch);
+        if (v2TurnHistory.value.some((item) => (
+          item.clientRequestId === clientRequestId && item.status === 'FAILED'
+        ))) v2TurnError.value = '';
+      }
     }
   } finally {
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
@@ -2886,20 +2761,17 @@ async function loadConversation(epoch = projectEpoch) {
   try {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch) return;
-    loading.messages = true;
-    loading.plans = true;
-    await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch), loadCandidates(sessionId, epoch)]);
+    await Promise.all([
+      loadCandidates(sessionId, epoch),
+      loadV2TurnHistory(sessionId, epoch),
+    ]);
     if (epoch === projectEpoch && activeProjectId.value) {
+      void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
       void recoverProjectAnalysis(activeProjectId.value, sessionId);
       void recoverProjectCandidate(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
-  } finally {
-    if (epoch === projectEpoch) {
-      loading.messages = false;
-      loading.plans = false;
-    }
   }
 }
 
@@ -3306,10 +3178,11 @@ async function selectConversation(sessionId: number) {
   candidateValidations.value = [];
   selectedValidation.value = null;
   const epoch = projectEpoch;
-  loading.messages = true;
-  loading.plans = true;
   try {
-    await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch), loadCandidates(sessionId, epoch)]);
+    await Promise.all([
+      loadCandidates(sessionId, epoch),
+      loadV2TurnHistory(sessionId, epoch),
+    ]);
     if (epoch === projectEpoch && activeProjectId.value) {
       void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
       void recoverProjectAnalysis(activeProjectId.value, sessionId);
@@ -3317,11 +3190,6 @@ async function selectConversation(sessionId: number) {
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
-  } finally {
-    if (epoch === projectEpoch) {
-      loading.messages = false;
-      loading.plans = false;
-    }
   }
 }
 
@@ -3667,6 +3535,7 @@ onUnmounted(() => {
 .project-tabs__actions { min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
 .project-tabs__actions > * { flex: 0 0 auto; }
 .project-agent-mode { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.project-agent-mode__caption { color: var(--yb-text-muted); font-size: 10px; }
 .project-agent-mode__switch { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--yb-border); border-radius: 9px; background: var(--yb-bg-muted); }
 .project-agent-mode__switch button { display: flex; align-items: baseline; gap: 5px; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--yb-text-secondary); font-weight: 750; cursor: pointer; }
 .project-agent-mode__switch button small { color: var(--yb-text-muted); font-size: 9px; font-weight: 500; }
@@ -3709,11 +3578,25 @@ onUnmounted(() => {
 .v2-conversation__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__header h2 { margin: 0 0 5px; font-size: 18px; }
 .v2-conversation__header p { margin: 0; color: var(--yb-text-secondary); font-size: 11px; line-height: 1.6; }
+.v2-conversation__tasks { display: flex; flex-direction: column; gap: 12px; }
+.v2-task-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 12px; background: var(--yb-bg-elevated); }
+.v2-task-card__question { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.v2-task-card__question > div { min-width: 0; }
+.v2-task-card__question small { color: var(--yb-text-muted); font-size: 9px; }
+.v2-task-card__question p { margin: 5px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.v2-task-card__result { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 8px; background: var(--yb-bg-muted); }
+.v2-task-card__result > p { margin: 0; color: var(--yb-text-secondary); }
+.v2-task-card__delivery { display: flex; flex-direction: column; gap: 8px; }
+.v2-task-card__validation { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 10px; }
+.v2-task-card__validation dt { color: var(--yb-text-muted); }
+.v2-task-card__validation dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .v2-conversation__question { align-self: flex-end; max-width: min(82%, 720px); padding: 10px 12px; border-radius: 12px 12px 2px 12px; background: var(--yb-bg-muted); }
 .v2-conversation__process, .v2-conversation__result { padding: 12px 0; border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__question small { color: var(--yb-text-muted); font-size: 9px; }
 .v2-conversation__question p { margin: 5px 0 0; white-space: pre-wrap; line-height: 1.65; }
 .v2-conversation__process > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.v2-conversation__process > summary { cursor: pointer; color: var(--yb-text-secondary); font-size: 10px; font-weight: 700; }
+.v2-conversation__process[open] > summary { margin-bottom: 8px; }
 .v2-conversation__process ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .v2-conversation__process li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px; border-radius: 7px; background: var(--yb-bg-muted); }
 .v2-conversation__process li > span { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--yb-border); border-radius: 50%; color: var(--yb-text-muted); font-size: 10px; font-weight: 800; }
@@ -3874,6 +3757,7 @@ onUnmounted(() => {
 .project-candidate-meta dt, .project-candidate-usage dt, .project-candidate-files dt, .project-candidate-evidence dt { color: var(--yb-text-muted); }
 .project-candidate-meta dd, .project-candidate-usage dd, .project-candidate-files dd, .project-candidate-evidence dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .project-candidate-validation { display: flex; flex-direction: column; gap: 8px; padding-block: 9px; border-block: 1px solid var(--yb-border); }
+.project-candidate-validation-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .project-candidate-sandbox { display: flex; flex-direction: column; gap: 8px; padding-block: 9px; border-bottom: 1px solid var(--yb-border); }
 .project-candidate-sandbox__controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 .project-candidate-validation-history { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px; }
