@@ -882,11 +882,20 @@ The product-side composition now supports:
   identity for the current slot and a new identity for the next slot;
 - reflection after successful effects, explicit CONTINUE/REPLAN/COMPLETE/FAIL,
   and tool-free replacement Plans;
+- cumulative bounded reflection facts: after Receipt A then Receipt B, the
+  second reflection receives both A and B without duplicating base facts;
 - completion from the aggregate final Receipt cut, requiring at least one
   success and no pending or unknown effect;
 - shared E2B execution without host fallback or a second broker;
 - bounded `RUNNING` outcomes and same-`clientRequestId` POST resume without
   replanning or duplicate E2B dispatch;
+- health or dispatch outcomes that are temporarily unknown resume with the
+  same ToolCall ID, idempotency key, and request digest, while an explicit
+  authority mismatch still fails closed;
+- structured provider phases are carried only as normalized result codes such
+  as `PROVIDER_REJECTED.DEPENDENCY_INSTALL`, without diagnostic free text;
+- Broker `TIMED_OUT` and `CANCELLED` terminal states remain distinct V2
+  `TIMEOUT` and `CANCELLED` Receipts instead of generic failures;
 - a single Chinese V2 conversation input showing ordered Steps, per-Step
   results, and one final result.
 
@@ -895,7 +904,7 @@ Focused verification only:
 - `mvn -pl yanban-api -am
   "-Dtest=V2TurnPlannerTest,V2NaturalLanguageTurnServiceTest,NaturalLanguageEffectAuthoritySourceTest,NaturalLanguageStepKernelFactoryTest,AutonomousNaturalLanguageStepTurnAdapterTest,AuthenticatedPersistentPlanAgentLoopComposerTest,V2AdaptiveExecutionCoordinatorTest,V2AdaptiveExecutionServiceTest,V2SandboxEffectExecutionComposerTest,V2ModelReflectionProviderTest,StrictReflectionDecisionParserTest"
   "-Dsurefire.failIfNoSpecifiedTests=false" test`
-  ran 84 tests with 0 failures, 0 errors, and 0 skipped;
+  ran 88 tests with 0 failures, 0 errors, and 0 skipped;
 - `npx vitest run src/utils/__tests__/v2NaturalLanguageTurn.test.ts
   src/views/__tests__/ProjectPreviewPageV2Conversation.test.ts
   tests/v2ProjectModeSwitch.test.ts`
