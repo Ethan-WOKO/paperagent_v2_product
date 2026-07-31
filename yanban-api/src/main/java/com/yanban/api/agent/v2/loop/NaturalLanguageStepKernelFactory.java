@@ -70,6 +70,11 @@ public class NaturalLanguageStepKernelFactory {
                 new DefaultSingleTurnStepKernel(turn, intents), turn);
     }
 
+    public AutonomousKernel createAutonomous(
+            boolean replayLatestForReplan) {
+        return createAutonomous(provider, replayLatestForReplan);
+    }
+
     private static List<ToolDescriptor> autonomousTools() {
         return List.of(
                 descriptor(new ToolId("literature.search")),

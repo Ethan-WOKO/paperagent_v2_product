@@ -57,31 +57,49 @@ public class V2AdaptiveExecutionService {
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
+        Optional<List<V2AdaptiveTurnResponse.Step>> resumed =
+                store.runningSteps(
+                        command.userId(), command.sessionId(),
+                        command.clientRequestId());
+        if (resumed == null) {
+            resumed = Optional.empty();
+        }
         List<V2AdaptiveTurnResponse.Step> initial =
-                initialSteps(command.bootstrap().plan().latestRevision());
+                resumed.orElseGet(() -> initialSteps(
+                                command.bootstrap().plan()
+                                        .latestRevision()));
         store.open(command.intakeId(), command.userId(),
                 command.sessionId(), command.clientRequestId(),
                 command.bootstrap().plan().id().value(),
                 command.projectVersion(), initial);
         V2AdaptiveExecutionResult result;
-        if (command.bindings().containsValue("sandbox.execute")) {
-            result = new V2AdaptiveExecutionResult(
-                    "FAILED", initial, null,
-                    "SANDBOX_EXECUTION_UNAVAILABLE", 0, 0, 0);
-        } else {
-            try {
-                result = executeStarted(command, initial);
-            } catch (RuntimeException failure) {
-                result = failed(initial, "ADAPTIVE_EXECUTION_FAILED");
-            }
+        try {
+            result = executeStarted(command, initial);
+        } catch (RuntimeException failure) {
+            result = failed(initial, "ADAPTIVE_EXECUTION_FAILED");
         }
         result = publishCandidateIfNeeded(command, result);
-        store.finish(command.userId(), command.sessionId(),
-                command.clientRequestId(), result.status(), result.steps(),
-                result.finalText(), result.candidateArtifactId(),
-                result.outputPaths(), result.errorCode(),
-                result.reflections(), result.replans(), result.repairs());
+        if ("RUNNING".equals(result.status())) {
+            store.progress(
+                    command.userId(), command.sessionId(),
+                    command.clientRequestId(), result.steps(),
+                    result.reflections(), result.replans(),
+                    result.repairs());
+        } else {
+            store.finish(command.userId(), command.sessionId(),
+                    command.clientRequestId(), result.status(),
+                    result.steps(), result.finalText(),
+                    result.candidateArtifactId(),
+                    result.outputPaths(), result.errorCode(),
+                    result.reflections(), result.replans(),
+                    result.repairs());
+        }
         return result;
+    }
+
+    public boolean canResume(
+            Long userId, Long sessionId, String clientRequestId) {
+        return store.isRunning(userId, sessionId, clientRequestId);
     }
 
     private V2AdaptiveExecutionResult publishCandidateIfNeeded(
@@ -89,16 +107,18 @@ public class V2AdaptiveExecutionService {
         if (!"SUCCEEDED".equals(result.status())) {
             return result;
         }
-        if (!command.bindings().containsValue(
-                "project.candidate.compose")) {
+        if (candidateAuthorities == null || candidates == null) {
             return result;
         }
-        if (candidateAuthorities == null || candidates == null) {
-            return candidateFailed(result);
-        }
         try {
-            var authority = candidateAuthorities.require(
-                    command.bootstrap().plan().id().value());
+            String planId = command.bootstrap().plan().id().value();
+            var authority = command.bindings().containsValue(
+                    "project.candidate.compose")
+                    ? candidateAuthorities.require(planId)
+                    : candidateAuthorities.find(planId).orElse(null);
+            if (authority == null) {
+                return result;
+            }
             var published = candidates.publishNatural(
                     command.bootstrap().plan().id().value(),
                     command.userId(), command.turnId(),

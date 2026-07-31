@@ -23,7 +23,7 @@ class V2TurnPlannerTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
-    void parsesStrictPersistentPlanAndMapsPublicAlias() {
+    void parsesToolFreePersistentPlan() {
         var planned = planner(answer("""
                 {
                   "route":"PERSISTENT_PLAN_EXECUTE",
@@ -42,8 +42,7 @@ class V2TurnPlannerTest {
                       "dependencies":[],
                       "completionCriteria":["A bounded read receipt exists"],
                       "maxAttempts":1,
-                      "maxDurationSeconds":120,
-                      "capability":"project_read"
+                      "maxDurationSeconds":120
                     }]
                   }
                 }
@@ -52,6 +51,15 @@ class V2TurnPlannerTest {
         assertEquals(Route.PERSISTENT_PLAN_EXECUTE, planned.route());
         assertEquals("Inspect the project", planned.taskFrame().objective());
         assertEquals(1, planned.plan().steps().size());
+        assertTrue(planned.capabilities().isEmpty());
+    }
+
+    @Test
+    void acceptsLegacyCapabilityAsCompatibilityHintOnly() {
+        var planned = planner(answer("unused")).parse(persistent(
+                "\"capability\":\"project_read\"",
+                "\"dependencies\":[]"));
+
         assertEquals("project_read",
                 planned.capabilities().get(0).publicAlias());
         assertEquals("project.read",
@@ -143,8 +151,9 @@ class V2TurnPlannerTest {
 
     @Test
     void rejectedOutputReportsSafeFieldAndDigest() {
-        String dotted = answerText().replace(
-                "\"project_read\"", "\"project.read\"");
+        String dotted = persistent(
+                "\"capability\":\"project.read\"",
+                "\"dependencies\":[]");
 
         var failure = assertThrows(V2TurnPlanningException.class,
                 () -> planner(answer(dotted)).plan(
@@ -175,6 +184,9 @@ class V2TurnPlannerTest {
         assertTrue(request.getValue().messages().stream()
                 .anyMatch(message -> message.content().contains(
                         "authenticated turn is bound to a Project")));
+        assertTrue(request.getValue().messages().stream()
+                .anyMatch(message -> message.content().contains(
+                        "Do not assign a tool or capability to a step")));
     }
 
     @TestFactory
@@ -240,8 +252,7 @@ class V2TurnPlannerTest {
                       "dependencies":[],
                       "completionCriteria":["A bounded read receipt exists"],
                       "maxAttempts":1,
-                      "maxDurationSeconds":120,
-                      "capability":"project_read"
+                      "maxDurationSeconds":120
                     }]
                   }
                 }
@@ -252,7 +263,7 @@ class V2TurnPlannerTest {
         return """
                 {"route":"PERSISTENT_PLAN_EXECUTE",
                  "taskFrame":{"objective":"x","targets":["x"],
-                   "deliverables":["x"],"constraints":[]},
+                   "deliverables":["x"],"constraints":["x"]},
                  "plan":{"reason":"x","steps":[{
                    "id":"one","intent":"x","expectedOutcome":"x",
                    %s,"completionCriteria":["x"],

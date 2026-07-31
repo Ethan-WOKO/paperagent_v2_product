@@ -76,14 +76,19 @@ public class NaturalLanguageCandidateAuthorityStore {
     }
 
     public ProjectCandidateEffectAuthority require(String planId) {
+        return find(planId).orElseThrow(
+                NaturalLanguageCandidateAuthorityStore::failed);
+    }
+
+    public Optional<ProjectCandidateEffectAuthority> find(String planId) {
         List<ProjectCandidateEffectAuthority> rows = query("""
                 select user_id,session_id,turn_id,project_id,project_version,
                        objective,paths_json,authority_json,authority_sha256
                 from agent_v2_natural_candidate_authorities
                 where plan_id=?
                 """, planId);
-        if (rows.size() != 1) throw failed();
-        return rows.get(0);
+        return rows.size() == 1
+                ? Optional.of(rows.get(0)) : Optional.empty();
     }
 
     private List<ProjectCandidateEffectAuthority> query(

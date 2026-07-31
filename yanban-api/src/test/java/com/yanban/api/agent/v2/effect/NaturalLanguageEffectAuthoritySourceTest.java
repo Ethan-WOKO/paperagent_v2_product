@@ -10,7 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 class NaturalLanguageEffectAuthoritySourceTest {
     @Test
-    void authorizesOnlyExactOwnerTurnPlanStepAndInternalToolBinding() {
+    void authorizesOnlyOwnedPersistentTurnAndBoundedInternalToolCatalog() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         when(jdbc.queryForList(anyString(), eq(String.class),
                 eq(7L), eq(11L), eq("plan-1")))
@@ -22,8 +22,14 @@ class NaturalLanguageEffectAuthoritySourceTest {
                 jdbc, new ObjectMapper());
         assertTrue(source.authorizes(
                 7L, 11L, "plan-1", "read-1", "project.read"));
-        assertFalse(source.authorizes(
+        assertTrue(source.authorizes(
                 7L, 11L, "plan-1", "read-1", "project.search"));
+        assertTrue(source.authorizes(
+                7L, 11L, "plan-1", "read-1", "sandbox.execute"));
+        assertFalse(source.authorizes(
+                7L, 11L, "plan-1", "read-1", "host.shell"));
+        assertFalse(source.authorizes(
+                7L, 11L, "plan-1", " ", "project.read"));
     }
 
     @Test

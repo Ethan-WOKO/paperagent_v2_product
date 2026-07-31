@@ -39,6 +39,37 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void reflectionCompleteMaterializesStepBeforeFinalAnswer() {
+        AtomicInteger calls = new AtomicInteger();
+        V2AdaptiveCyclePort cycle = command -> {
+            if (calls.incrementAndGet() == 1) {
+                assertEquals(
+                        V2AdaptiveCyclePort.Action.EXECUTE,
+                        command.action());
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "receipt ok", false, null,
+                        List.of("executionReceipt=status=SUCCESS"),
+                        true, false);
+            }
+            assertEquals(
+                    V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                    "step-1", "durable completion", true, null);
+        };
+
+        var result = coordinator(cycle, ignored -> complete())
+                .execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals("完成", result.finalText());
+        assertEquals(2, calls.get());
+    }
+
+    @Test
     void failedReceiptReplansWithoutDuplicateRowsAndCountsRepairOnlyAfterCommit() {
         AtomicInteger cycle = new AtomicInteger();
         V2AdaptiveCyclePort cycles = ignored -> switch (
@@ -93,21 +124,28 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
-    void sandboxFailsBeforeProviderOrRuntime() {
+    void sandboxCapabilityReachesRuntimeAndReflection() {
         AtomicInteger cycles = new AtomicInteger();
         AtomicInteger provider = new AtomicInteger();
         var coordinator = coordinator(command -> {
             cycles.incrementAndGet();
-            throw new AssertionError();
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.FAILED,
+                    "step-1", "sandbox receipt failed", false, null,
+                    List.of("executionReceipt=status=FAILURE"),
+                    true, true);
         }, ignored -> {
             provider.incrementAndGet();
-            throw new AssertionError();
+            return """
+                    {"decision":"FAIL","reason":"sandbox failed",
+                     "finalText":null,"replacementSteps":[]}
+                    """;
         });
         var result = coordinator.execute(command(
                 Map.of("step-1", "sandbox.execute")));
-        assertEquals("SANDBOX_EXECUTION_UNAVAILABLE", result.errorCode());
-        assertEquals(0, cycles.get());
-        assertEquals(0, provider.get());
+        assertEquals("REFLECTION_FAILED", result.errorCode());
+        assertEquals(1, cycles.get());
+        assertEquals(1, provider.get());
     }
 
     @Test

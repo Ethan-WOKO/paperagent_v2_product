@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.adaptive;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +37,36 @@ public class V2AdaptiveExecutionStore {
                 projectVersion, write(steps), Instant.now()));
     }
 
+    @Transactional(readOnly = true)
+    public boolean isRunning(
+            Long userId, Long sessionId, String requestId) {
+        return turns.findByUserIdAndSessionIdAndClientRequestId(
+                        userId, sessionId, requestId)
+                .filter(value -> "RUNNING".equals(value.status()))
+                .isPresent();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<List<V2AdaptiveTurnResponse.Step>> runningSteps(
+            Long userId, Long sessionId, String requestId) {
+        return turns.findByUserIdAndSessionIdAndClientRequestId(
+                        userId, sessionId, requestId)
+                .filter(value -> "RUNNING".equals(value.status()))
+                .map(value -> {
+                    try {
+                        return json.readValue(
+                                value.stepsJson(),
+                                new com.fasterxml.jackson.core.type
+                                        .TypeReference<
+                                        List<V2AdaptiveTurnResponse.Step>>() {
+                                });
+                    } catch (Exception invalid) {
+                        throw new IllegalStateException(
+                                "adaptive running steps are invalid");
+                    }
+                });
+    }
+
     @Transactional
     public void finish(
             Long userId, Long sessionId, String requestId,
@@ -48,6 +79,20 @@ public class V2AdaptiveExecutionStore {
                         "adaptive execution was not opened"));
         value.finish(status, write(steps), finalText, artifactId,
                 write(paths), errorCode, reflections, replans, repairs,
+                Instant.now());
+        turns.saveAndFlush(value);
+    }
+
+    @Transactional
+    public void progress(
+            Long userId, Long sessionId, String requestId,
+            List<V2AdaptiveTurnResponse.Step> steps,
+            int reflections, int replans, int repairs) {
+        var value = turns.findByUserIdAndSessionIdAndClientRequestId(
+                        userId, sessionId, requestId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "adaptive execution was not opened"));
+        value.progress(write(steps), reflections, replans, repairs,
                 Instant.now());
         turns.saveAndFlush(value);
     }

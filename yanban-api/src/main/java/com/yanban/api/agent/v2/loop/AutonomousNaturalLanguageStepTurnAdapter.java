@@ -105,10 +105,22 @@ final class AutonomousNaturalLanguageStepTurnAdapter
             return new NoEffectDecision();
         }
         if (response.proposedToolCalls().isEmpty()) {
-            diagnostics.add(response.assistantText()
-                    .filter(value -> !value.isBlank())
-                    .map(value -> "MODEL_CHOSE_REFLECTION")
-                    .orElse("MODEL_OUTPUT_EMPTY"));
+            boolean choseReflection = response.assistantText()
+                    .filter(value -> !value.isBlank()).isPresent();
+            Optional<V2EffectHistorySource.Entry> latestSuccess =
+                    history.stream()
+                            .filter(V2EffectHistorySource.Entry::successful)
+                            .reduce((ignored, latest) -> latest);
+            if (choseReflection && latestSuccess.isPresent()) {
+                diagnostics.add(
+                        "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS");
+                return new EffectIntentDecision(
+                        latestSuccess.orElseThrow()
+                                .intent().intent());
+            }
+            diagnostics.add(choseReflection
+                    ? "MODEL_CHOSE_REFLECTION_WITHOUT_SUCCESS"
+                    : "MODEL_OUTPUT_EMPTY");
             return new NoEffectDecision();
         }
         if (response.proposedToolCalls().size() != 1) {

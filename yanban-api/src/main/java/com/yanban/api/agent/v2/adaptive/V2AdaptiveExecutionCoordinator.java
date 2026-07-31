@@ -20,20 +20,17 @@ public final class V2AdaptiveExecutionCoordinator {
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
-        if (command.toolBindings().containsValue("sandbox.execute")) {
-            return failed(command.steps(),
-                    "SANDBOX_EXECUTION_UNAVAILABLE", 0, 0, 0);
-        }
         List<V2AdaptiveTurnResponse.Step> timeline =
                 new ArrayList<>(command.steps());
         Map<String, Integer> stepIndexes =
                 new LinkedHashMap<>(command.stepIndexes());
-        Set<String> requiredReceiptSteps =
-                new LinkedHashSet<>(command.toolBindings().keySet());
         Set<String> receiptBackedSteps = new LinkedHashSet<>();
         Object pendingReplan = null;
         ReflectionOutcome pendingDecision = null;
         boolean pendingRepair = false;
+        V2AdaptiveCyclePort.Action nextAction =
+                V2AdaptiveCyclePort.Action.EXECUTE;
+        String acceptedFinalText = null;
         int replanCount = 0;
         int repairCount = 0;
         for (int index = 1; index <= MAX_CYCLES; index++) {
@@ -42,7 +39,8 @@ public final class V2AdaptiveExecutionCoordinator {
                 cycle = cycles.executeOne(
                         new V2AdaptiveCyclePort.CycleCommand(
                                 command.userId(), command.turnId(),
-                                command.planId(), index, pendingReplan));
+                                command.planId(), index, pendingReplan,
+                                nextAction));
             } catch (V2AdaptiveRuntimeCycleFactory.CycleStageException
                     failure) {
                 return failed(timeline,
@@ -53,6 +51,8 @@ public final class V2AdaptiveExecutionCoordinator {
                         index, replanCount, repairCount);
             }
             pendingReplan = null;
+            V2AdaptiveCyclePort.Action completedAction = nextAction;
+            nextAction = V2AdaptiveCyclePort.Action.EXECUTE;
             updateExisting(timeline, stepIndexes, cycle);
             if (cycle.receiptBacked() && cycle.stepId() != null) {
                 receiptBackedSteps.add(cycle.stepId());
@@ -60,8 +60,7 @@ public final class V2AdaptiveExecutionCoordinator {
             if (cycle.replanAuthority() != null
                     && pendingDecision != null) {
                 applyPersistedReplan(
-                        timeline, stepIndexes, requiredReceiptSteps,
-                        cycle, pendingDecision);
+                        timeline, stepIndexes, cycle, pendingDecision);
                 if (pendingRepair) {
                     repairCount++;
                 }
@@ -69,40 +68,61 @@ public final class V2AdaptiveExecutionCoordinator {
                 pendingDecision = null;
             }
 
+            if (completedAction
+                    == V2AdaptiveCyclePort.Action.COMPLETE_STEP) {
+                if (cycle.state()
+                        == V2AdaptiveCyclePort.CycleResult.State
+                                .PLAN_SUCCEEDED
+                        && cycle.durableSucceeded()) {
+                    return new V2AdaptiveExecutionResult(
+                            "SUCCEEDED", timeline, acceptedFinalText, null,
+                            index, replanCount, repairCount);
+                }
+                if (cycle.state()
+                        == V2AdaptiveCyclePort.CycleResult.State.FAILED) {
+                    return failed(timeline, "STEP_COMPLETION_FAILED",
+                            index, replanCount, repairCount);
+                }
+                acceptedFinalText = null;
+                continue;
+            }
+            if (cycle.state()
+                    == V2AdaptiveCyclePort.CycleResult.State
+                            .RECOVERY_PENDING) {
+                return new V2AdaptiveExecutionResult(
+                        "RUNNING", timeline, null, null,
+                        index, replanCount, repairCount);
+            }
+
             ReflectionOutcome decision;
-            String rawReflection;
-            try {
-                rawReflection = reflections.reflect(
-                        command.reflectionContext(cycle, timeline));
-            } catch (RuntimeException providerFailure) {
-                return failed(timeline,
-                        "REFLECTION_PROVIDER_EXCEPTION", index, replanCount,
-                        repairCount);
+            ReflectionResolution reflection = reflect(
+                    command.reflectionContext(cycle, timeline));
+            if (reflection.failureCode() != null) {
+                return failed(timeline, reflection.failureCode(),
+                        index, replanCount, repairCount);
             }
-            try {
-                decision = parser.parse(rawReflection);
-            } catch (ReflectionParseException invalid) {
-                return failed(timeline,
-                        "REFLECTION_PARSE_INVALID", index, replanCount,
-                        repairCount);
-            } catch (RuntimeException parserFailure) {
-                return failed(timeline,
-                        "REFLECTION_PARSER_EXCEPTION", index, replanCount,
-                        repairCount);
-            }
+            decision = reflection.decision();
             if (decision.decision() == ReflectionAction.COMPLETE) {
-                if (!cycle.durableSucceeded()
-                        || cycle.state()
-                        != V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED
-                        || !receiptBackedSteps.containsAll(
-                                requiredReceiptSteps)) {
+                if (cycle.state()
+                        == V2AdaptiveCyclePort.CycleResult.State
+                                .PLAN_SUCCEEDED
+                        && cycle.durableSucceeded()) {
+                    return new V2AdaptiveExecutionResult(
+                            "SUCCEEDED", timeline, decision.finalText(), null,
+                            index, replanCount, repairCount);
+                }
+                if (cycle.state()
+                        != V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED
+                        || cycle.stepId() == null
+                        || !receiptBackedSteps.contains(cycle.stepId())) {
                     return failed(timeline,
                             "PREMATURE_COMPLETE", index, replanCount,
                             repairCount);
                 }
-                return new V2AdaptiveExecutionResult(
-                        "SUCCEEDED", timeline, decision.finalText(), null,
-                        index, replanCount, repairCount);
+                acceptedFinalText = decision.finalText();
+                nextAction = V2AdaptiveCyclePort.Action.COMPLETE_STEP;
+                continue;
             }
             if (decision.decision() == ReflectionAction.FAIL) {
                 return failed(timeline, "REFLECTION_FAILED",
@@ -149,7 +169,6 @@ public final class V2AdaptiveExecutionCoordinator {
     private static void applyPersistedReplan(
             List<V2AdaptiveTurnResponse.Step> timeline,
             Map<String, Integer> indexes,
-            Set<String> requiredReceiptSteps,
             V2AdaptiveCyclePort.CycleResult cycle,
             ReflectionOutcome decision) {
         Integer obsoleteIndex = indexes.get(cycle.stepId());
@@ -168,9 +187,6 @@ public final class V2AdaptiveExecutionCoordinator {
             }
             int row = timeline.size();
             indexes.put(id, row);
-            if (replacement.internalToolId() != null) {
-                requiredReceiptSteps.add(id);
-            }
             timeline.add(new V2AdaptiveTurnResponse.Step(
                     row + 1, replacement.step().intent(),
                     "PENDING", "由重新规划追加"));
@@ -183,6 +199,47 @@ public final class V2AdaptiveExecutionCoordinator {
         return new V2AdaptiveExecutionResult(
                 "FAILED", steps, null, code,
                 reflections, replans, repairs);
+    }
+
+    private ReflectionResolution reflect(ReflectionContext initial) {
+        ReflectionContext context = initial;
+        String failureCode = "REFLECTION_PROVIDER_EXCEPTION";
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            String raw;
+            try {
+                raw = reflections.reflect(context);
+            } catch (RuntimeException providerFailure) {
+                failureCode = "REFLECTION_PROVIDER_EXCEPTION";
+                context = withReflectionDiagnostic(context, failureCode);
+                continue;
+            }
+            try {
+                return new ReflectionResolution(
+                        parser.parse(raw), null);
+            } catch (ReflectionParseException invalid) {
+                failureCode = "REFLECTION_PARSE_INVALID";
+                context = withReflectionDiagnostic(context, failureCode);
+            } catch (RuntimeException parserFailure) {
+                failureCode = "REFLECTION_PARSER_EXCEPTION";
+                context = withReflectionDiagnostic(context, failureCode);
+            }
+        }
+        return new ReflectionResolution(null, failureCode);
+    }
+
+    private static ReflectionContext withReflectionDiagnostic(
+            ReflectionContext context, String diagnostic) {
+        List<String> facts = new ArrayList<>(
+                context.recentExecutionFacts());
+        facts.add("previousReflectionFault=" + diagnostic);
+        return new ReflectionContext(
+                context.taskFrame(), context.currentPlan(),
+                context.conversationContext(), context.completedFacts(),
+                facts, context.unfinishedSteps());
+    }
+
+    private record ReflectionResolution(
+            ReflectionOutcome decision, String failureCode) {
     }
 
     private static String bounded(String value) {

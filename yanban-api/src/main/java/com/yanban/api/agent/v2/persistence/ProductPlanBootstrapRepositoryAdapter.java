@@ -89,6 +89,15 @@ public class ProductPlanBootstrapRepositoryAdapter implements PlanBootstrapRepos
         }
     }
 
+    public java.util.Optional<PersistedPlanBootstrap> find(
+            io.paperagent.v2.contracts.PlanId planId) {
+        if (planId == null) {
+            return java.util.Optional.empty();
+        }
+        return transactions.findByPlanId(planId.value())
+                .map(this::decode);
+    }
+
     private PersistenceResult<PersistedPlanBootstrap> classifyPlanReplay(
             ProductPlanBootstrapEntity entity,
             TaskFrame taskFrame,

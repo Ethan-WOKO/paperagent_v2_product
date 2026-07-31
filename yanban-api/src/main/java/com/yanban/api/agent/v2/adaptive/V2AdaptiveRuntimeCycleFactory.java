@@ -41,17 +41,6 @@ public class V2AdaptiveRuntimeCycleFactory {
         bindings.forEach((step, tool) ->
                 tools.put(new PlanStepId(step), new ToolId(tool)));
         return command -> {
-            Map<PlanStepId, ToolId> currentTools = bindingsForCycle(
-                    tools, command.replanRequest());
-            io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernel
-                    kernel;
-            try {
-                kernel = requestProvider == null
-                        ? kernels.create(currentTools)
-                        : kernels.create(requestProvider, currentTools);
-            } catch (RuntimeException failure) {
-                throw new CycleStageException("KERNEL_SETUP");
-            }
             Instant eventTime = authorityTime.plusMillis(
                     10L + command.cycle() * 4L);
             var loopCommand = new PersistentPlanAgentLoopCommand(
@@ -77,13 +66,28 @@ public class V2AdaptiveRuntimeCycleFactory {
                     command.replanRequest() instanceof ReflectionOutcome value
                             ? value : null;
             PersistentPlanAgentLoopOutcome result;
+            List<String> diagnostics = List.of();
             try {
-                result = loop.executeWithKernelAndReplanFactory(
-                        command.userId(), command.turnId(), loopCommand,
-                        kernel, active -> pending == null
-                                ? null : replans.materialize(
-                                        active, pending),
-                        requestProvider);
+                if (command.action()
+                        == V2AdaptiveCyclePort.Action.COMPLETE_STEP) {
+                    result = loop.completeAutonomousStep(
+                            command.userId(), command.turnId(),
+                            loopCommand);
+                } else {
+                    NaturalLanguageStepKernelFactory.AutonomousKernel
+                            autonomous = requestProvider == null
+                            ? kernels.createAutonomous(pending != null)
+                            : kernels.createAutonomous(
+                                    requestProvider, pending != null);
+                    result = loop.executeAutonomousEffect(
+                            command.userId(), command.turnId(), loopCommand,
+                            autonomous.kernel(),
+                            active -> pending == null
+                                    ? null : replans.materialize(
+                                            active, pending),
+                            requestProvider);
+                    diagnostics = autonomous.diagnostics();
+                }
             } catch (PersistentPlanAgentLoopException failure) {
                 throw new CycleStageException(
                         agentLoopStage(failure.diagnosticStage()));
@@ -96,6 +100,15 @@ public class V2AdaptiveRuntimeCycleFactory {
             if (succeeded) {
                 state = V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED;
             } else if (result.state()
+                    == PersistentPlanAgentLoopState
+                            .EFFECT_SUCCEEDED_AWAITING_REFLECTION) {
+                state = V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED;
+            } else if (result.state()
+                    == PersistentPlanAgentLoopState
+                            .EFFECT_RECOVERY_PENDING) {
+                state = V2AdaptiveCyclePort.CycleResult.State
+                        .RECOVERY_PENDING;
+            } else if (result.state()
                     == PersistentPlanAgentLoopState.REPLAN_REQUIRED
                     || result.state()
                     == PersistentPlanAgentLoopState.REPLAN_APPLIED
@@ -105,12 +118,18 @@ public class V2AdaptiveRuntimeCycleFactory {
             } else {
                 state = V2AdaptiveCyclePort.CycleResult.State.FAILED;
             }
+            List<String> facts = new ArrayList<>(
+                    authoritativeFacts(result));
+            facts.addAll(diagnostics);
+            String detail = diagnostics.isEmpty()
+                    ? result.state().name()
+                    : diagnostics.get(diagnostics.size() - 1);
             return new V2AdaptiveCyclePort.CycleResult(
                     state,
                     result.stepId().map(PlanStepId::value).orElse(null),
-                    result.state().name(), succeeded,
+                    detail, succeeded,
                     result.replan().orElse(null),
-                    authoritativeFacts(result),
+                    facts,
                     result.receiptFacts().isPresent(),
                     result.receiptFacts()
                             .map(value -> !"SUCCESS".equals(value.status()))

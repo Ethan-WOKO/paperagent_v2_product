@@ -152,6 +152,50 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                         "NO_PROGRESS_REPEAT")));
     }
 
+    @Test
+    void assistantCompletionWithDurableSuccessReplaysSuccessfulIntent() {
+        Fixture fixture = fixture();
+        V2EffectHistorySource.Entry success = completed(
+                fixture, "successful-call", "project.read",
+                arguments(), ReceiptStatus.SUCCESS);
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId()))
+                .thenReturn(List.of(success));
+        ModelResponse response = mock(ModelResponse.class);
+        when(response.proposedToolCalls()).thenReturn(List.of());
+        when(response.assistantText()).thenReturn(
+                Optional.of("the durable facts satisfy this goal"));
+        when(fixture.provider().complete(any())).thenReturn(response);
+
+        EffectIntentDecision decision = assertInstanceOf(
+                EffectIntentDecision.class,
+                fixture.adapter().decide(fixture.input()));
+
+        assertEquals(
+                success.intent().intent(), decision.intent());
+        assertTrue(fixture.adapter().diagnostics().contains(
+                "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS"));
+    }
+
+    @Test
+    void noToolWithoutDurableSuccessRemainsNoEffect() {
+        Fixture fixture = fixture();
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId()))
+                .thenReturn(List.of());
+        ModelResponse response = mock(ModelResponse.class);
+        when(response.proposedToolCalls()).thenReturn(List.of());
+        when(response.assistantText()).thenReturn(
+                Optional.of("done"));
+        when(fixture.provider().complete(any())).thenReturn(response);
+
+        assertInstanceOf(
+                NoEffectDecision.class,
+                fixture.adapter().decide(fixture.input()));
+        assertTrue(fixture.adapter().diagnostics().contains(
+                "MODEL_CHOSE_REFLECTION_WITHOUT_SUCCESS"));
+    }
+
     private static Fixture fixture() {
         ModelProvider provider = mock(ModelProvider.class);
         V2EffectHistorySource history =

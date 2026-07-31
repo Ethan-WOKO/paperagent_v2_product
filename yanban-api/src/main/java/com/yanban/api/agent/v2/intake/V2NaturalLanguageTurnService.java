@@ -16,6 +16,8 @@ import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
+import com.yanban.api.agent.v2.persistence
+        .ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
@@ -74,6 +76,7 @@ public class V2NaturalLanguageTurnService {
     private final V2TurnPlanner planner;
     private final V2AdaptiveExecutionService adaptive;
     private final ChatModelProvider modelProvider;
+    private final ProductPlanBootstrapRepositoryAdapter resumeBootstraps;
 
     public V2NaturalLanguageTurnService(
             AgentSessionRepository sessions,
@@ -90,7 +93,7 @@ public class V2NaturalLanguageTurnService {
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider) {
         this(sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
-                modelProvider, null);
+                modelProvider, null, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -107,7 +110,8 @@ public class V2NaturalLanguageTurnService {
             AuthenticatedAgentTurnPlanBootstrapComposer bootstraps,
             ObjectMapper json,
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider,
-            V2AdaptiveExecutionService adaptive) {
+            V2AdaptiveExecutionService adaptive,
+            ProductPlanBootstrapRepositoryAdapter resumeBootstraps) {
         this.sessions = sessions;
         this.transactions = transactions;
         this.contexts = contexts;
@@ -122,6 +126,7 @@ public class V2NaturalLanguageTurnService {
         this.planner = new V2TurnPlanner(modelProvider, json);
         this.adaptive = adaptive;
         this.modelProvider = modelProvider;
+        this.resumeBootstraps = resumeBootstraps;
     }
 
     public V2NaturalLanguageTurnResponse execute(
@@ -145,11 +150,22 @@ public class V2NaturalLanguageTurnService {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY, FAILURE_MESSAGE);
         }
-        if (result.pending() != null) {
+        V2AdaptiveExecutionService.Command pending = result.pending();
+        if (pending == null
+                && result.replayed()
+                && V2TurnIntakeEntity.PERSISTENT.equals(
+                        result.intake().status())
+                && adaptive != null
+                && adaptive.canResume(
+                        userId, sessionId, request.clientRequestId())) {
+            pending = resumeCommand(
+                    session, result.intake(), request);
+        }
+        if (pending != null) {
             if (adaptive == null) {
                 return response(result.intake(), result.replayed());
             }
-            var execution = adaptive.execute(result.pending());
+            var execution = adaptive.execute(pending);
             if ("SUCCEEDED".equals(execution.status())
                     && execution.finalText() != null) {
                 transactions.savePersistentAssistant(
@@ -158,6 +174,81 @@ public class V2NaturalLanguageTurnService {
             }
         }
         return response(result.intake(), result.replayed());
+    }
+
+    private V2AdaptiveExecutionService.Command resumeCommand(
+            AgentSession session,
+            V2TurnIntakeEntity intake,
+            NormalizedRequest request) {
+        if (resumeBootstraps == null
+                || !StringUtils.hasText(intake.planId())
+                || !StringUtils.hasText(
+                        intake.capabilityBindingsJson())) {
+            throw new IllegalStateException(
+                    "V2 adaptive resume authority is unavailable");
+        }
+        VerifiedAgentTurnProductContext verified =
+                contexts.resolve(intake.userId(), intake.turnId());
+        PersistedPlanBootstrap bootstrap = resumeBootstraps.find(
+                        new io.paperagent.v2.contracts.PlanId(
+                                intake.planId()))
+                .orElseThrow(() -> new IllegalStateException(
+                        "V2 persistent bootstrap disappeared"));
+        UserSettingsService.ModelEndpoint endpoint =
+                settings.resolveModelEndpoint(
+                        intake.userId(),
+                        session.getModelProviderSnapshot(),
+                        session.getModelSnapshot());
+        ResolvedSkill skill = StringUtils.hasText(request.skillId())
+                ? skills.resolveEnabledSkill(
+                        intake.userId(), request.skillId())
+                : null;
+        AgentExperimentContext experiment = request.ragDisabled()
+                ? experiments.prepare(
+                        intake.userId(), request.content(), null)
+                : experiments.prepare(
+                        intake.userId(), request.content(),
+                        request.experiment());
+        AgentContextPackage context = contextBuilder.build(
+                new AgentContextBuildRequest(
+                        intake.sessionId(), intake.userId(),
+                        endpoint.providerKey(), endpoint.modelName(),
+                        summary(intake), memory(intake),
+                        experiment.ragResult() == null
+                                ? null
+                                : experiment.ragResult().ragContext(),
+                        null, null, null, null, List.of(),
+                        intake.content(), projectState(verified)));
+        Map<String, String> bindings = readBindings(
+                intake.capabilityBindingsJson());
+        List<String> conversation = context.messages().stream()
+                .map(message -> message.role() + ": "
+                        + boundedContext(message.content()))
+                .limit(32)
+                .toList();
+        return new V2AdaptiveExecutionService.Command(
+                intake.id(), intake.userId(), intake.sessionId(),
+                intake.turnId(), intake.clientRequestId(),
+                verified.projectVersionId().orElse(null),
+                bootstrap, bindings, conversation,
+                bootstrap.taskFrame().createdAt(),
+                requestScopedProvider(endpoint));
+    }
+
+    private Map<String, String> readBindings(String value) {
+        try {
+            List<CapabilityBinding> bindings = json.readValue(
+                    value,
+                    new com.fasterxml.jackson.core.type.TypeReference<>() {
+                    });
+            return bindings.stream().collect(
+                    java.util.stream.Collectors.toUnmodifiableMap(
+                            CapabilityBinding::stepId,
+                            CapabilityBinding::internalToolId));
+        } catch (Exception invalid) {
+            throw new IllegalStateException(
+                    "V2 persisted capability hints are invalid");
+        }
     }
 
     private ProcessResult processLocked(
@@ -277,7 +368,7 @@ public class V2NaturalLanguageTurnService {
             Long turnId,
             Instant now) {
         Set<RoutingRequirement> requirements =
-                routingRequirements(planned, verified);
+                routingRequirements(verified);
         RoutingDecisionReason reason = requirements.isEmpty()
                 ? RoutingDecisionReason.INCOMPLETE_ASSESSMENT
                 : RoutingDecisionReason.DECLARED_REQUIREMENT;
@@ -288,7 +379,7 @@ public class V2NaturalLanguageTurnService {
                         reason,
                         requirements),
                 planned.taskFrame(),
-                executionProfile(planned.capabilities()),
+                executionProfile(),
                 planned.plan(),
                 now,
                 now.plusMillis(1),
@@ -296,15 +387,15 @@ public class V2NaturalLanguageTurnService {
     }
 
     private Set<RoutingRequirement> routingRequirements(
-            V2TurnPlanner.PlannedTurn planned,
             VerifiedAgentTurnProductContext verified) {
         Set<RoutingRequirement> values = new LinkedHashSet<>();
         if (verified.projectVersionId().isPresent()) {
             values.add(RoutingRequirement.PROJECT_FILE_ACCESS);
         }
-        for (var capability : planned.capabilities()) {
+        for (var capability
+                : V2PlannerCapabilityCatalog.publicCapabilities()) {
             values.add(RoutingRequirement.TOOL_USE);
-            switch (capability.publicAlias()) {
+            switch (capability.name()) {
                 case "literature_search" -> {
                     values.add(RoutingRequirement.NETWORK);
                     values.add(RoutingRequirement.EXTERNAL_OBSERVATION);
@@ -325,11 +416,11 @@ public class V2NaturalLanguageTurnService {
         return Set.copyOf(values);
     }
 
-    private ExecutionProfile executionProfile(
-            List<V2TurnPlanner.PlannedCapability> planned) {
+    private ExecutionProfile executionProfile() {
         Set<Capability> capabilities = new LinkedHashSet<>();
-        for (var capability : planned) {
-            switch (capability.publicAlias()) {
+        for (var capability
+                : V2PlannerCapabilityCatalog.publicCapabilities()) {
+            switch (capability.name()) {
                 case "literature_search" -> {
                     capabilities.add(Capability.ACCESS_NETWORK);
                     capabilities.add(Capability.INVOKE_EXTERNAL_TOOL);

@@ -27,6 +27,7 @@ import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionResult;
+import com.yanban.api.agent.v2.persistence.ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
@@ -44,6 +45,7 @@ import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
 import io.paperagent.v2.contracts.Plan;
 import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.TaskFrame;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.providers.*;
@@ -196,8 +198,7 @@ class V2NaturalLanguageTurnServiceTest {
                            "expectedOutcome":"Text is available",
                            "dependencies":[],
                            "completionCriteria":["Read receipt exists"],
-                           "maxAttempts":1,"maxDurationSeconds":120,
-                           "capability":"project_read"}]}}
+                           "maxAttempts":1,"maxDurationSeconds":120}]}}
                         """),
                 "stop", null));
         PersistedPlanBootstrap persisted = mock(PersistedPlanBootstrap.class);
@@ -269,8 +270,7 @@ class V2NaturalLanguageTurnServiceTest {
                 ArgumentCaptor.forClass(
                         V2AdaptiveExecutionService.Command.class);
         verify(adaptive).execute(command.capture());
-        assertThat(command.getValue().bindings())
-                .containsEntry("read-1", "project.read");
+        assertThat(command.getValue().bindings()).isEmpty();
         verify(transactions).savePersistentAssistant(
                 7L, 9L, "request-1", "最终结论");
     }
@@ -316,6 +316,56 @@ class V2NaturalLanguageTurnServiceTest {
         assertThat(runtime.messages())
                 .extracting(ChatMessage::content)
                 .noneMatch(value -> value.contains("SECRET-KEY"));
+    }
+
+    @Test
+    void sameClientRequestResumesRunningAdaptiveTurnWithoutReplanning()
+            throws Exception {
+        PersistedPlanBootstrap persisted = stubPersistentPlanning();
+        V2AdaptiveExecutionService adaptive =
+                mock(V2AdaptiveExecutionService.class);
+        when(adaptive.canResume(7L, 9L, "request-1"))
+                .thenReturn(true);
+        when(adaptive.execute(any()))
+                .thenReturn(
+                        new V2AdaptiveExecutionResult(
+                                "RUNNING", List.of(), null,
+                                null, 1, 0, 0),
+                        new V2AdaptiveExecutionResult(
+                                "SUCCEEDED", List.of(), "最终结论",
+                                null, 2, 0, 0));
+        ProductPlanBootstrapRepositoryAdapter resume =
+                mock(ProductPlanBootstrapRepositoryAdapter.class);
+        when(resume.find(new PlanId("product-plan.test")))
+                .thenReturn(Optional.of(persisted));
+        when(transactions.savePersistentAssistant(
+                7L, 9L, "request-1", "最终结论"))
+                .thenReturn(mock(AgentMessage.class));
+        V2NaturalLanguageTurnService service =
+                service(adaptive, resume);
+
+        var first = service.execute(7L, 9L, request());
+        var second = service.execute(7L, 9L, request());
+
+        assertThat(first.replayed()).isFalse();
+        assertThat(second.replayed()).isTrue();
+        ArgumentCaptor<V2AdaptiveExecutionService.Command> commands =
+                ArgumentCaptor.forClass(
+                        V2AdaptiveExecutionService.Command.class);
+        verify(adaptive, times(2)).execute(commands.capture());
+        assertThat(commands.getAllValues())
+                .extracting(
+                        V2AdaptiveExecutionService.Command::clientRequestId)
+                .containsOnly("request-1");
+        assertThat(commands.getAllValues())
+                .extracting(command ->
+                        command.bootstrap().plan().id().value())
+                .containsOnly("product-plan.test");
+        verify(model, times(1)).chat(any());
+        verify(bootstraps, times(1)).bootstrap(
+                eq(7L), eq(12L), any());
+        verify(transactions).savePersistentAssistant(
+                7L, 9L, "request-1", "最终结论");
     }
 
     @Test
@@ -419,7 +469,7 @@ class V2NaturalLanguageTurnServiceTest {
         }
     }
 
-    private void stubPersistentPlanning() {
+    private PersistedPlanBootstrap stubPersistentPlanning() {
         when(model.chat(any())).thenReturn(new ChatResponse(
                 ChatMessage.assistant("""
                         {"route":"PERSISTENT_PLAN_EXECUTE",
@@ -430,14 +480,16 @@ class V2NaturalLanguageTurnServiceTest {
                            "expectedOutcome":"Text is available",
                            "dependencies":[],
                            "completionCriteria":["Read receipt exists"],
-                           "maxAttempts":1,"maxDurationSeconds":120,
-                           "capability":"project_read"}]}}
+                           "maxAttempts":1,"maxDurationSeconds":120}]}}
                         """),
                 "stop", null));
         PersistedPlanBootstrap persisted = mock(PersistedPlanBootstrap.class);
         Plan plan = mock(Plan.class);
+        TaskFrame taskFrame = mock(TaskFrame.class);
         when(plan.id()).thenReturn(new PlanId("product-plan.test"));
         when(persisted.plan()).thenReturn(plan);
+        when(taskFrame.createdAt()).thenReturn(Instant.EPOCH);
+        when(persisted.taskFrame()).thenReturn(taskFrame);
         when(bootstraps.bootstrap(eq(7L), eq(12L), any()))
                 .thenReturn(PersistenceResult.applied(persisted));
         org.mockito.Mockito.doAnswer(invocation -> {
@@ -449,6 +501,7 @@ class V2NaturalLanguageTurnServiceTest {
             return null;
         }).when(transactions).savePersistent(
                 eq(intake), eq("product-plan.test"), any(), any());
+        return persisted;
     }
 
     private V2NaturalLanguageTurnService service() {
@@ -460,10 +513,16 @@ class V2NaturalLanguageTurnServiceTest {
 
     private V2NaturalLanguageTurnService service(
             V2AdaptiveExecutionService adaptive) {
+        return service(adaptive, null);
+    }
+
+    private V2NaturalLanguageTurnService service(
+            V2AdaptiveExecutionService adaptive,
+            ProductPlanBootstrapRepositoryAdapter resume) {
         return new V2NaturalLanguageTurnService(
                 sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
-                model, adaptive);
+                model, adaptive, resume);
     }
 
     private V2NaturalLanguageTurnRequest request() {
@@ -480,4 +539,5 @@ class V2NaturalLanguageTurnServiceTest {
         id.setAccessible(true);
         id.set(message, value);
     }
+
 }
