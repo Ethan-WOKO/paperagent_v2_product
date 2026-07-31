@@ -16,6 +16,8 @@ import io.paperagent.v2.contracts.ProjectPath;
 import io.paperagent.v2.contracts.ProjectVersionRef;
 import io.paperagent.v2.contracts.WorkspaceId;
 import io.paperagent.v2.contracts.WorkspaceRef;
+import io.paperagent.v2.workspace.WorkspaceErrorCode;
+import io.paperagent.v2.workspace.WorkspaceException;
 import io.paperagent.v2.workspace.WorkspaceFileStat;
 import io.paperagent.v2.workspace.WorkspacePort;
 import java.nio.charset.StandardCharsets;
@@ -70,8 +72,9 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         when(workspace.read(ref, path)).thenReturn(exactLimit);
         OutputCapture exactLimitCapture = AuthenticatedProjectEffectExecutionComposer
                 .capture(composer.read(workspace, ref, arguments));
-        assertTrue(exactLimitCapture.truncated());
-        assertEquals(OutputCapture.MAX_INLINE_CHARACTERS,
+        assertFalse(exactLimitCapture.truncated());
+        assertEquals("path: paper/main.md\ncontent:\n".length()
+                        + exactLimit.length,
                 exactLimitCapture.inlineText().orElseThrow().length());
 
         when(workspace.read(ref, path)).thenReturn(new byte[]{1});
@@ -160,7 +163,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     @Test
-    void exact64KiBReadExecutesSuccessfullyWithTruncatedReceipt() {
+    void exact64KiBReadExecutesSuccessfullyWithCompleteReceipt() {
         WorkspacePort workspace = mock(WorkspacePort.class);
         WorkspaceRef ref = ref();
         ProjectPath path = new ProjectPath("paper.md");
@@ -175,8 +178,8 @@ class AuthenticatedProjectEffectExecutionComposerTest {
 
         assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
                 outcome.result().receipt().status());
-        assertTrue(outcome.result().receipt().standardOutput().truncated());
-        assertEquals(OutputCapture.MAX_INLINE_CHARACTERS,
+        assertFalse(outcome.result().receipt().standardOutput().truncated());
+        assertEquals("path: paper.md\ncontent:\n".length() + 64 * 1024,
                 outcome.result().receipt().standardOutput()
                         .inlineText().orElseThrow().length());
         assertFalse(outcome.result().receipt().standardOutput()
@@ -357,6 +360,38 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     @Test
+    void duplicateNaturalCandidateBecomesRecoverableFailureReceipt() {
+        String arguments = "{\"operation\":\"compose\"}";
+        var fixture = candidateFixture(
+                new com.yanban.api.agent.v2.compatibility.project
+                        .ProjectCandidateEffectAuthority(
+                                ProjectCandidateCompositionEffect.KIND,
+                                arguments, sha256(arguments),
+                                7L, 8L, 9L, 42L, "version",
+                                "improve", List.of("paper.md")));
+        when(fixture.naturalAuthorities.authorizes(
+                7L, 42L, fixture.command.planId().value(),
+                "project-candidate-compose",
+                ProjectCandidateCompositionEffect.KIND)).thenReturn(true);
+        when(fixture.naturalCandidates.hasPreparedCandidate(
+                fixture.command.planId().value()))
+                .thenReturn(true);
+
+        var outcome = fixture.composer.execute(
+                7L, 42L, fixture.command);
+
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.FAILURE,
+                outcome.result().receipt().status());
+        assertEquals("CANDIDATE_ALREADY_EXISTS",
+                outcome.result().receipt().resultCode().orElseThrow());
+        assertTrue(outcome.result().receipt().standardError()
+                .inlineText().orElseThrow()
+                .contains("Candidate already exists"));
+        verifyNoInteractions(fixture.workspaces, fixture.composition,
+                fixture.candidateAuthorities);
+    }
+
+    @Test
     void mismatchedOrCrossBoundCandidateAuthorityFailsBeforeMutation() {
         String arguments = "{\"operation\":\"compose\"}";
         var crossUser = candidateFixture(
@@ -386,6 +421,33 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 mismatchedArguments.composition);
     }
 
+    @Test
+    void workspaceFailurePreservesSanitizedCodeAndStopsBeforeClaim() {
+        String arguments = "{\"operation\":\"compose\"}";
+        var fixture = candidateFixture(
+                new com.yanban.api.agent.v2.compatibility.project
+                        .ProjectCandidateEffectAuthority(
+                                ProjectCandidateCompositionEffect.KIND,
+                                arguments, sha256(arguments),
+                                7L, 8L, 9L, 42L, "version",
+                                "improve", List.of("paper.md")));
+        when(fixture.workspace.inspectMaterialization(
+                org.mockito.ArgumentMatchers.any())).thenThrow(
+                        new WorkspaceException(
+                                WorkspaceErrorCode.WORKSPACE_PARTIAL_STATE,
+                                "inspectMaterialization"));
+
+        ProjectEffectExecutionException failure = assertThrows(
+                ProjectEffectExecutionException.class,
+                () -> fixture.composer.execute(
+                        7L, 42L, fixture.command));
+
+        assertEquals(
+                "workspace.WORKSPACE_PARTIAL_STATE",
+                failure.stage());
+        verifyNoInteractions(fixture.claims, fixture.composition);
+    }
+
     private CandidateExecutionFixture candidateFixture(
             com.yanban.api.agent.v2.compatibility.project
                     .ProjectCandidateEffectAuthority authority) {
@@ -408,6 +470,11 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         var candidateAuthorities = mock(com.yanban.api.agent.v2.compatibility
                 .project.ProjectCandidateEffectGateway.class);
         var composition = mock(ProjectCandidateCompositionEffect.class);
+        var naturalAuthorities = mock(
+                com.yanban.api.agent.v2.effect
+                        .NaturalLanguageEffectAuthoritySource.class);
+        var naturalCandidates = mock(
+                NaturalLanguageCandidateAuthorityStore.class);
         var identity = new com.yanban.core.agent.AgentRunIdentity(
                 "AGENT_TURN", "turn-42", 7L, 9L, 8L);
         var planId = planIds.derive(identity);
@@ -512,14 +579,16 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         var composer = new AuthenticatedProjectEffectExecutionComposer(
                 contexts, planIds, recoverer, intents, claims,
                 executionContexts, workspaces, analysisAuthorities,
-                candidateAuthorities, composition, json);
+                candidateAuthorities, composition, json,
+                naturalAuthorities, naturalCandidates);
         var command = new AuthenticatedProjectEffectExecutionCommand(
                 planId, toolCallId,
                 new io.paperagent.v2.runtime.execution.recovery.composition
                         .StepRecoveryLeaseAttempt(
                                 "owner", "token", lease.expiresAt()));
         return new CandidateExecutionFixture(
-                composer, command, claims, workspaces, composition, workspace);
+                composer, command, claims, workspaces, composition, workspace,
+                candidateAuthorities, naturalAuthorities, naturalCandidates);
     }
 
     private record CandidateExecutionFixture(
@@ -530,7 +599,12 @@ class AuthenticatedProjectEffectExecutionComposerTest {
             com.yanban.api.agent.v2.workspace
                     .AuthenticatedAgentTurnWorkspacePortFactory workspaces,
             ProjectCandidateCompositionEffect composition,
-            WorkspacePort workspace) {}
+            WorkspacePort workspace,
+            com.yanban.api.agent.v2.compatibility.project
+                    .ProjectCandidateEffectGateway candidateAuthorities,
+            com.yanban.api.agent.v2.effect
+                    .NaturalLanguageEffectAuthoritySource naturalAuthorities,
+            NaturalLanguageCandidateAuthorityStore naturalCandidates) {}
 
     private static WorkspaceRef ref() {
         return new WorkspaceRef(

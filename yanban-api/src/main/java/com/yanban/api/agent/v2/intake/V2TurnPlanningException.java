@@ -37,4 +37,8 @@ final class V2TurnPlanningException extends RuntimeException {
                 + (outputDigest == null ? "" : "_" + outputDigest);
         return value.length() <= 64 ? value : value.substring(0, 64);
     }
+
+    String diagnostic() {
+        return diagnostic;
+    }
 }

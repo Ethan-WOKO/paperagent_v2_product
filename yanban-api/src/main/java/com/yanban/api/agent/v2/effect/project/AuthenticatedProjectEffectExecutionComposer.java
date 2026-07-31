@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisAuthoritySource;
 import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisEffectAuthority;
 import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectGateway;
@@ -12,6 +13,8 @@ import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimResult;
 import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
+import com.yanban.api.agent.v2.workspace
+        .AuthenticatedAgentTurnWorkspaceConfigurationException;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnWorkspacePortFactory;
 import io.paperagent.v2.contracts.BooleanValue;
 import io.paperagent.v2.contracts.ContractValue;
@@ -36,6 +39,7 @@ import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryLease
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryRequest;
 import io.paperagent.v2.runtime.execution.recovery.composition.StepRecoveryCompositionOutcome;
 import io.paperagent.v2.workspace.VerifiedWorkspaceMaterialization;
+import io.paperagent.v2.workspace.WorkspaceException;
 import io.paperagent.v2.workspace.WorkspacePort;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -50,10 +54,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.LinkedHashSet;
 import io.paperagent.v2.providers.ModelProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AuthenticatedProjectEffectExecutionComposer {
+    private static final Logger log = LoggerFactory.getLogger(
+            AuthenticatedProjectEffectExecutionComposer.class);
     private static final Set<String> KINDS =
             Set.of("project.read", "project.search");
     private static final int MAX_FILE_BYTES = 64 * 1024;
@@ -207,6 +215,12 @@ public class AuthenticatedProjectEffectExecutionComposer {
                         userId, turnId, planId.value(),
                         intent.intent().stepId().value(),
                         intent.intent().kind());
+        if (naturalCandidate
+                && naturalCandidates.hasPreparedCandidate(
+                        planId.value())) {
+            return rejectDuplicateNaturalCandidate(
+                    active, intent, command);
+        }
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
             if (candidateAuthorities == null || candidateComposition == null) {
                 throw failed("candidate_composition");
@@ -224,6 +238,14 @@ public class AuthenticatedProjectEffectExecutionComposer {
                             arguments, strictCandidatePaths(arguments))
                     : candidateAuthorities.require(planId.value(),
                             intent.intent().stepId().value());
+            if (naturalCandidate) {
+                log.info(
+                        "V2 natural Candidate authority bound planId={} "
+                                + "stepId={} pathCount={}",
+                        planId.value(),
+                        intent.intent().stepId().value(),
+                        candidate.paths().size());
+            }
             if (!candidate.kind().equals(intent.intent().kind())
                     || !candidate.authorityJson().equals(arguments)
                     || !candidate.authoritySha256().equals(hash(arguments))
@@ -279,7 +301,44 @@ public class AuthenticatedProjectEffectExecutionComposer {
             workspace = workspaces.create(userId, turnId);
             verified = workspace.inspectMaterialization(
                     confirmed.materializationSpec());
+        } catch (WorkspaceException exception) {
+            log.warn(
+                    "V2 Project effect Workspace rejected "
+                            + "planId={} stepId={} toolCallId={} kind={} "
+                            + "code={} operation={} projectPathPresent={} "
+                            + "origin={}",
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    intent.intent().kind(),
+                    exception.code().name(),
+                    exception.operation(),
+                    exception.projectPath().isPresent(),
+                    safeWorkspaceOrigin(exception));
+            throw failed("workspace." + exception.code().name());
+        } catch (AuthenticatedAgentTurnWorkspaceConfigurationException
+                exception) {
+            log.warn(
+                    "V2 Project effect Workspace configuration rejected "
+                            + "planId={} stepId={} toolCallId={} kind={} "
+                            + "code={}",
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    intent.intent().kind(),
+                    exception.code().name());
+            throw failed(
+                    "workspace.configuration." + exception.code().name());
         } catch (RuntimeException exception) {
+            log.warn(
+                    "V2 Project effect Workspace failed "
+                            + "planId={} stepId={} toolCallId={} kind={} "
+                            + "exceptionType={}",
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    intent.intent().kind(),
+                    exception.getClass().getSimpleName());
             throw failed("workspace");
         }
         Instant started = Instant.now();
@@ -298,10 +357,76 @@ public class AuthenticatedProjectEffectExecutionComposer {
                                     naturalCandidate,
                                     command.requestProvider())));
         } catch (RuntimeException exception) {
+            log.warn(
+                    "V2 Project effect claim failed planId={} stepId={} "
+                            + "toolCallId={} kind={} exceptionType={} "
+                            + "causeType={} origin={}",
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    intent.intent().kind(),
+                    V2SafeFailureDiagnostics.exceptionType(exception),
+                    V2SafeFailureDiagnostics.causeType(exception),
+                    V2SafeFailureDiagnostics.origin(exception));
             throw failed("claim");
         }
         return new AuthenticatedProjectEffectExecutionOutcome(
                 claimed.result(), claimed.replayed());
+    }
+
+    private AuthenticatedProjectEffectExecutionOutcome
+            rejectDuplicateNaturalCandidate(
+                    RecoveredActiveStep active,
+                    PersistedEffectIntent intent,
+                    AuthenticatedProjectEffectExecutionCommand command) {
+        Instant started = Instant.now();
+        ProductEffectExecutionClaimResult claimed;
+        try {
+            claimed = claims.execute(
+                    new ProductEffectExecutionClaimRequest(
+                            active.recovery(), active.lease(), intent,
+                            command.recoveryAttempt().leaseToken(),
+                            active.lease().fencingToken(), started,
+                            () -> duplicateCandidateReceipt(
+                                    intent, started)));
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "V2 duplicate Candidate recovery claim failed "
+                            + "planId={} stepId={} toolCallId={} "
+                            + "exceptionType={} causeType={} origin={}",
+                    active.planId().value(),
+                    active.recovery().activation().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    V2SafeFailureDiagnostics.exceptionType(exception),
+                    V2SafeFailureDiagnostics.causeType(exception),
+                    V2SafeFailureDiagnostics.origin(exception));
+            throw failed("candidate_duplicate_claim");
+        }
+        log.info(
+                "V2 duplicate Candidate request recorded as recoverable "
+                        + "failure planId={} stepId={} toolCallId={} replayed={}",
+                active.planId().value(),
+                active.recovery().activation().stepId().value(),
+                intent.intent().toolCallId().value(), claimed.replayed());
+        return new AuthenticatedProjectEffectExecutionOutcome(
+                claimed.result(), claimed.replayed());
+    }
+
+    private static ExecutionReceipt duplicateCandidateReceipt(
+            PersistedEffectIntent intent, Instant started) {
+        return new ExecutionReceipt(
+                new ReceiptId("project-receipt." + hash(
+                        intent.intent().toolCallId().value())),
+                intent.intent().toolCallId(), ReceiptStatus.FAILURE,
+                started, Instant.now(), java.util.Optional.of(1),
+                java.util.Optional.of("CANDIDATE_ALREADY_EXISTS"),
+                OutputCapture.empty(),
+                OutputCapture.inline(
+                        "A reviewable Candidate already exists for this "
+                                + "Plan. Use the existing Candidate for "
+                                + "validation or choose another tool.",
+                        false),
+                List.of(), java.util.Optional.empty(), List.of());
     }
 
     private ExecutionReceipt receipt(
@@ -355,6 +480,17 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     ? read(workspace, ref, arguments)
                     : search(workspace, ref, arguments);
         } catch (RuntimeException | java.io.IOException exception) {
+            log.warn(
+                    "V2 Project evidence failed planId={} stepId={} "
+                            + "toolCallId={} kind={} exceptionType={} "
+                            + "causeType={} origin={}",
+                    active.planId().value(),
+                    active.recovery().activation().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    intent.intent().kind(),
+                    V2SafeFailureDiagnostics.exceptionType(exception),
+                    V2SafeFailureDiagnostics.causeType(exception),
+                    V2SafeFailureDiagnostics.origin(exception));
             success = false;
             output = "";
         }
@@ -535,5 +671,24 @@ public class AuthenticatedProjectEffectExecutionComposer {
 
     private static ProjectEffectExecutionException failed(String stage) {
         return new ProjectEffectExecutionException(stage);
+    }
+
+    private static String safeWorkspaceOrigin(WorkspaceException exception) {
+        for (StackTraceElement element : exception.getStackTrace()) {
+            if (!element.getClassName().startsWith("io.paperagent.v2.workspace.")
+                    || element.getClassName().endsWith(".WorkspaceException")
+                    || element.getMethodName().equals("failure")
+                    || element.getMethodName().equals("activeFailure")) {
+                continue;
+            }
+            String className = element.getClassName();
+            int separator = className.lastIndexOf('.');
+            String simpleClass = separator < 0
+                    ? className
+                    : className.substring(separator + 1);
+            return simpleClass + "#" + element.getMethodName()
+                    + ":" + element.getLineNumber();
+        }
+        return "workspace-boundary";
     }
 }

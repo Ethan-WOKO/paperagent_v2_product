@@ -189,6 +189,62 @@ class V2TurnPlannerTest {
                         "Do not assign a tool or capability to a step")));
     }
 
+    @Test
+    void retriesOneFreshFormatRepairForNonObjectPlannerOutput() {
+        ChatModelProvider provider = mock(ChatModelProvider.class);
+        when(provider.chat(any())).thenReturn(
+                new ChatResponse(
+                        ChatMessage.assistant("[]"), "stop", null),
+                new ChatResponse(
+                        ChatMessage.assistant(answerText()), "stop", null));
+
+        var planned = planner(provider).plan(
+                context("read the project"), endpoint(),
+                null, true, "trace");
+
+        assertEquals(Route.PERSISTENT_PLAN_EXECUTE, planned.route());
+        ArgumentCaptor<ChatRequest> requests =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        org.mockito.Mockito.verify(provider,
+                org.mockito.Mockito.times(2)).chat(requests.capture());
+        ChatRequest repair = requests.getAllValues().get(1);
+        assertTrue(repair.messages().stream()
+                .anyMatch(message -> message.content().contains(
+                        "exactly one top-level JSON object")));
+        assertEquals("assistant",
+                repair.messages().get(repair.messages().size() - 2).role());
+        assertEquals("[]",
+                repair.messages().get(repair.messages().size() - 2).content());
+        assertEquals("user",
+                repair.messages().get(repair.messages().size() - 1).role());
+    }
+
+    @Test
+    void acceptsOneObjectWrappedByProviderArray() {
+        ChatModelProvider provider = answer("[" + answerText() + "]");
+
+        var planned = planner(provider).plan(
+                context("read the project"), endpoint(),
+                null, true, "trace");
+
+        assertEquals(Route.PERSISTENT_PLAN_EXECUTE, planned.route());
+        org.mockito.Mockito.verify(provider).chat(any());
+    }
+
+    @Test
+    void acceptsOneObjectDoubleEncodedByProvider() throws Exception {
+        String encoded = new com.fasterxml.jackson.databind.ObjectMapper()
+                .writeValueAsString(answerText());
+        ChatModelProvider provider = answer(encoded);
+
+        var planned = planner(provider).plan(
+                context("read the project"), endpoint(),
+                null, true, "trace");
+
+        assertEquals(Route.PERSISTENT_PLAN_EXECUTE, planned.route());
+        org.mockito.Mockito.verify(provider).chat(any());
+    }
+
     @TestFactory
     java.util.stream.Stream<DynamicTest> mapsEveryPublicAliasExactly() {
         java.util.Map<String, String> expected = java.util.Map.of(

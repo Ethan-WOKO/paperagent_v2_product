@@ -8,6 +8,9 @@ import java.util.Optional;
 
 /** Bounded authoritative receipt facts exposed by one loop cycle. */
 public record PersistentPlanAgentLoopReceiptFacts(
+        String stepId,
+        String toolKind,
+        String authorityScope,
         String toolCallId,
         String status,
         Optional<String> resultCode,
@@ -16,9 +19,20 @@ public record PersistentPlanAgentLoopReceiptFacts(
         String standardError,
         List<String> artifactReferences,
         Optional<String> diffId) {
-    private static final int MAX_CAPTURE = 2_000;
+    private static final String TRUNCATION_MARKER =
+            "\n[OUTPUT_TRUNCATED]";
 
     public PersistentPlanAgentLoopReceiptFacts {
+        if (stepId == null || stepId.isBlank()) {
+            throw new IllegalArgumentException("stepId is required");
+        }
+        if (toolKind == null || toolKind.isBlank()) {
+            throw new IllegalArgumentException("toolKind is required");
+        }
+        if (authorityScope == null || authorityScope.isBlank()) {
+            throw new IllegalArgumentException(
+                    "authorityScope is required");
+        }
         resultCode = Objects.requireNonNull(resultCode, "resultCode");
         exitCode = Objects.requireNonNull(exitCode, "exitCode");
         artifactReferences = List.copyOf(artifactReferences);
@@ -26,8 +40,11 @@ public record PersistentPlanAgentLoopReceiptFacts(
     }
 
     static PersistentPlanAgentLoopReceiptFacts from(
-            ExecutionReceipt receipt) {
+            String stepId, String toolKind, ExecutionReceipt receipt) {
         return new PersistentPlanAgentLoopReceiptFacts(
+                stepId,
+                toolKind,
+                authorityScope(toolKind, receipt),
                 receipt.toolCallId() == null
                         ? "unknown" : receipt.toolCallId().value(),
                 receipt.status() == null
@@ -50,12 +67,31 @@ public record PersistentPlanAgentLoopReceiptFacts(
                                 .map(value -> value.value()));
     }
 
+    private static String authorityScope(
+            String toolKind, ExecutionReceipt receipt) {
+        if (receipt.status()
+                != io.paperagent.v2.contracts.ReceiptStatus.SUCCESS) {
+            return "FAILED_EFFECT_ONLY";
+        }
+        return switch (toolKind) {
+            case "project.read" -> "PROJECT_CONTENT_READ_ONLY";
+            case "project.search" -> "PROJECT_SEARCH_ONLY";
+            case "project.candidate.compose" ->
+                    "REVIEWABLE_CANDIDATE_CREATED";
+            case "sandbox.execute" -> "SANDBOX_EXECUTION_ONLY";
+            case "literature.search" -> "LITERATURE_SEARCH_ONLY";
+            default -> "UNCLASSIFIED_EFFECT";
+        };
+    }
+
     private static String capture(OutputCapture output) {
         String value = output.inlineText().orElseGet(() ->
                 output.artifactRef()
                         .map(ref -> "[artifact:" + ref.value() + "]")
                         .orElse(""));
-        return value.length() <= MAX_CAPTURE
-                ? value : value.substring(0, MAX_CAPTURE);
+        if (!output.truncated()) {
+            return value;
+        }
+        return value + TRUNCATION_MARKER;
     }
 }

@@ -52,7 +52,21 @@ class SandboxLeaseService {
     @Transactional
     boolean terminalSuccessIfNotCancelled(Lease lease,String digest,String receipt){SandboxExecutionEntity e=owned(lease);if(e.cancelRequested())return false;e.terminal("SUCCEEDED",digest,receipt,null,databaseNow(lease.executionId()));executions.saveAndFlush(e);return true;}
     @Transactional
-    Instant now(Lease lease){owned(lease);return databaseNow(lease.executionId()).toInstant(ZoneOffset.UTC);}
+    Instant now(Lease lease){
+        owned(lease);
+        String product = jdbc.execute(
+                (org.springframework.jdbc.core.ConnectionCallback<String>)
+                        connection -> connection.getMetaData()
+                                .getDatabaseProductName());
+        boolean mysql = product != null && product.toLowerCase(
+                java.util.Locale.ROOT).contains("mysql");
+        java.sql.Timestamp current = jdbc.queryForObject(
+                mysql ? "select utc_timestamp(6)" : "select current_timestamp",
+                java.sql.Timestamp.class);
+        if(current==null)throw new IllegalStateException(
+                "broker database time unavailable");
+        return current.toInstant();
+    }
     private LocalDateTime databaseNow(String id){LocalDateTime now=executions.databaseNow(id);if(now==null)throw new IllegalStateException("broker database time unavailable");return now;}
     record Lease(String executionId,String owner,String token,long fence,String previousStatus,boolean recovery){}
 }

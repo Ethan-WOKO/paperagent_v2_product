@@ -970,3 +970,110 @@ Observed final result:
   successful test execution;
 - the UI remained at one pre-existing Candidate and two Project versions, so
   no Candidate was created or applied and no Project file changed.
+
+### 2026-07-31 replan-application loop repair
+
+A signed-in V2 retest in test Project 45 exposed a replan-application loop.
+After the model requested a valid replacement Plan, the coordinator persisted
+and applied it but immediately asked the model to reflect on the
+replan-application cycle itself. The model could request another replan before
+any replacement Step ran, eventually producing `REPLAN_LIMIT_EXCEEDED`.
+
+The minimum repair makes a committed replan transition directly to execution
+of its first replacement Step. Reflection resumes only after that Step has
+produced a real result.
+
+The same retest also showed that reflection Receipt facts silently shortened
+standard output to 2,000 characters. The shortened `Sort.java` ended at
+`retu`, so the model treated display truncation as source corruption. Receipt
+facts now use the existing 6,000-character Step-turn bound and append
+`[OUTPUT_TRUNCATED]` whenever any further shortening occurs.
+
+Focused verification:
+
+- `mvn -pl yanban-api -am
+  "-Dtest=V2AdaptiveExecutionCoordinatorTest,V2AdaptiveExecutionServiceTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 25 tests with 0 failures, 0 errors, and 0 skipped;
+- `mvn -pl yanban-api -am
+  "-Dtest=PersistentPlanAgentLoopReceiptFactsTest,AuthenticatedPersistentPlanAgentLoopComposerTest,V2AdaptiveExecutionCoordinatorTest,V2AdaptiveExecutionServiceTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 43 tests with 0 failures, 0 errors, and 0 skipped;
+- `git diff --check` passed;
+- no legacy Agent, RAG, literature, broad frontend, or full product suite was
+  run.
+
+The final signed-in replay used Project 45 in V2 mode with the same
+`Sort.java` read, repair, and sandbox request. It read the file once and did
+not recur into `REPLAN_LIMIT_EXCEEDED`, confirming the replan loop is fixed.
+The next independent failure is `CYCLE_LOOP_EFFECT_EXCEPTION`, which occurred
+after the successful read and before the sandbox Step. This generic effect
+failure remains to be diagnosed separately; the Kafka duplicate-meter warning
+is unrelated.
+
+### 2026-07-31 Candidate recovery, workspace resume, and E2B completion
+
+The follow-up signed-in V2 journey isolated three defects behind that generic
+effect failure:
+
+- a repeated `project.candidate.compose` call treated an already prepared
+  Candidate as a fatal claim exception, so the model could not recover by
+  selecting a different next action;
+- after asynchronous E2B dispatch, resume created a second Workspace provider.
+  Because the Candidate had legitimately changed the isolated Workspace, that
+  second provider compared it with the original Project baseline and rejected
+  it as `INCONSISTENT_WORKSPACE_AUTHORITY`;
+- a successful current-Step `sandbox.execute` Receipt with exit code 0 was
+  present, but the model's audit could still focus on an earlier failed attempt
+  and return `CONTINUE` until `REFLECTION_NO_PROGRESS` stopped the loop.
+
+The minimum repairs keep model-driven tool choice and do not add a fixed
+backend workflow:
+
+- duplicate Candidate preparation now produces a durable failed Receipt with
+  `CANDIDATE_ALREADY_EXISTS`; the model can see that fact and choose to reuse
+  the existing Candidate;
+- both initial execution and asynchronous resume reuse the same authenticated
+  Workspace provider for the same user and turn, preserving the isolated
+  Candidate state without touching the original Project version;
+- the reflection audit receives an explicit subset of successful Receipts for
+  the active Step and is told that a later success is not cancelled by an
+  earlier failure. Safe diagnostics log only Receipt counts and successful
+  sandbox counts, not file contents, prompts, keys, or provider responses.
+
+The final signed-in replay used test Project 45 in V2 mode. It read
+`src/main/java/Sort.java`, created a reviewable Candidate that added merge sort,
+and compiled and ran that Candidate in E2B. The model recovered from a repeated
+Candidate attempt by selecting `sandbox.execute`. The asynchronous resume kept
+the Workspace authority, the E2B Receipt reported exit code 0, the final audit
+completed the Step, and the Plan reached `PLAN_SUCCEEDED`. Candidate artifact
+42 remained `VALIDATED / NOT_APPLIED`; the Project version count stayed at two,
+so the original Project was not modified. Planner-format repair and
+reflection-audit format repair were also exercised successfully during this
+journey.
+
+Focused verification only:
+
+- `mvn -pl yanban-api -am
+  "-Dtest=AuthenticatedAgentTurnWorkspacePortFactoryTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 6 tests with 0 failures, 0 errors, and 0 skipped;
+- `mvn -pl yanban-api -am
+  "-Dtest=V2ModelReflectionProviderTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 10 tests with 0 failures, 0 errors, and 0 skipped;
+- `mvn -pl yanban-api -am
+  "-Dtest=V2AdaptiveExecutionServiceTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 9 tests with 0 failures, 0 errors, and 0 skipped;
+- the combined focused command for activation, loop, replan, receipt facts,
+  adaptive execution, reflection, Candidate authority, Workspace reuse, and
+  sandbox composition ran 94 tests with 0 failures, 0 errors, and 0 skipped;
+- no legacy Agent, RAG, literature, broad frontend, full product suite, or
+  Candidate apply flow was run.
+
+One non-blocking product gap remains: the successful Agent E2B Receipt is not
+yet attached to the separate manual Candidate-validation record shown by the
+Candidate card. The Agent execution itself is verified, but that card can
+still say that no manual sandbox validation record exists. This was recorded
+without expanding the current repair scope.

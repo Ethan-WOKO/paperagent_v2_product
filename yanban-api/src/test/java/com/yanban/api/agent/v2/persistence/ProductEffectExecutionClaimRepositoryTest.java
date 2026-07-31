@@ -183,8 +183,43 @@ class ProductEffectExecutionClaimRepositoryTest {
                 () -> repository.execute(request(
                         scenario, scenario.lease().expiresAt(),
                         expiredInvocations)));
-        assertEquals("authority.leaseAfterExecution", failure.path());
+        assertEquals("authority.leaseAfterExecution.expired", failure.path());
+        assertEquals(0L, failure.timingDeltaMillis());
         assertEquals(1, expiredInvocations.get());
+        assertAtomicRows(0);
+
+        AtomicInteger retryInvocations = new AtomicInteger();
+        ProductEffectExecutionClaimResult recovered = repository.execute(
+                request(scenario,
+                        scenario.lease().expiresAt().minusSeconds(1),
+                        retryInvocations));
+        assertEquals(false, recovered.replayed());
+        assertEquals(1, retryInvocations.get());
+        assertAtomicRows(1);
+    }
+
+    @Test
+    void pendingExternalExecutionRollsBackClaimAndAllowsRetry() {
+        Scenario scenario = scenario("pending-execution");
+        AtomicInteger pendingInvocations = new AtomicInteger();
+        ProductEffectExecutionClaimRequest valid = request(
+                scenario, scenario.lease().expiresAt().minusSeconds(1),
+                new AtomicInteger());
+        ProductEffectExecutionClaimRequest pending =
+                new ProductEffectExecutionClaimRequest(
+                        valid.recovery(), valid.lease(), valid.intent(),
+                        valid.leaseToken(), valid.fencingToken(),
+                        valid.observedAt(), () -> {
+                            pendingInvocations.incrementAndGet();
+                            throw new com.yanban.api.agent.sandbox
+                                    .V2SandboxEffectPendingException();
+                        });
+
+        assertThrows(
+                com.yanban.api.agent.sandbox
+                        .V2SandboxEffectPendingException.class,
+                () -> repository.execute(pending));
+        assertEquals(1, pendingInvocations.get());
         assertAtomicRows(0);
 
         AtomicInteger retryInvocations = new AtomicInteger();

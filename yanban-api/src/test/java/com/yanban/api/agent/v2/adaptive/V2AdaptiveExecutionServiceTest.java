@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnExecutionStartRecoveryCommand;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnExecutionStartRecoveryComposer;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnPlanExecutionContextComposer;
+import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnPlanExecutionContextCommand;
 import com.yanban.api.agent.v2.effect.project.NaturalLanguageCandidateAuthorityStore;
 import com.yanban.api.agent.v2.effect.project.ProjectCandidateCompositionEffect;
 import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectAuthority;
@@ -15,6 +16,7 @@ import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.providers.*;
 import io.paperagent.v2.runtime.execution.context.composition.PlanExecutionContextReady;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredExecutionStart;
+import io.paperagent.v2.runtime.execution.recovery.composition.ExecutionStartRecoveryResolution;
 import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
@@ -65,6 +67,46 @@ class V2AdaptiveExecutionServiceTest {
                 eq(7L), eq(9L), eq("request-1"), eq("SUCCEEDED"),
                 anyList(), eq("任务完成"), isNull(), eq(List.of()),
                 isNull(), eq(1), eq(0), eq(0));
+    }
+
+    @Test
+    void resumedExecutionReusesConfirmedContextWithoutNewLeaseAttempt() {
+        var fixture = fixture();
+        var recovered = mock(RecoveredExecutionStart.class);
+        when(recovered.planId()).thenReturn(new PlanId("plan-1"));
+        when(recovered.resolution()).thenReturn(
+                ExecutionStartRecoveryResolution.OBSERVED_COMMITTED);
+        when(fixture.starts.recover(eq(7L), eq(11L), any()))
+                .thenReturn(recovered);
+        var context = mock(PlanExecutionContextReady.class);
+        when(context.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.contexts.compose(eq(7L), eq(11L), any()))
+                .thenReturn(context);
+        V2AdaptiveCyclePort port = mock(V2AdaptiveCyclePort.class);
+        when(port.executeOne(any())).thenReturn(
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                        "step-1", "receipt-1", true, null,
+                        List.of("executionReceipt=receipt-1"),
+                        true, false));
+        when(fixture.cycles.create(
+                anyMap(), anyString(), anyString(), any(),
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
+
+        V2AdaptiveExecutionResult result = fixture.service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.read"),
+                        fixture.modelProvider));
+
+        assertEquals("SUCCEEDED", result.status(), result.errorCode());
+        ArgumentCaptor<AuthenticatedAgentTurnPlanExecutionContextCommand>
+                contextCommand = ArgumentCaptor.forClass(
+                        AuthenticatedAgentTurnPlanExecutionContextCommand
+                                .class);
+        verify(fixture.contexts).compose(
+                eq(7L), eq(11L), contextCommand.capture());
+        assertTrue(contextCommand.getValue().attempt().isEmpty());
     }
 
     @Test
@@ -160,7 +202,9 @@ class V2AdaptiveExecutionServiceTest {
     void durableTerminalNaturalCandidatePublishesAndWaitsForConfirmation() {
         var fixture = fixture();
         when(fixture.modelProvider.complete(any()))
-                .thenReturn(complete("candidate ready"));
+                .thenReturn(
+                        complete("candidate ready"),
+                        auditComplete("candidate ready"));
         var recovered = mock(RecoveredExecutionStart.class);
         when(recovered.planId()).thenReturn(new PlanId("plan-1"));
         when(fixture.starts.recover(eq(7L), eq(11L), any()))
@@ -221,7 +265,9 @@ class V2AdaptiveExecutionServiceTest {
     void candidateBindingAuthorityFailureCannotBecomeSucceeded() {
         var fixture = fixture();
         when(fixture.modelProvider.complete(any()))
-                .thenReturn(complete("candidate ready"));
+                .thenReturn(
+                        complete("candidate ready"),
+                        auditComplete("candidate ready"));
         var recovered = mock(RecoveredExecutionStart.class);
         when(recovered.planId()).thenReturn(new PlanId("plan-1"));
         when(fixture.starts.recover(eq(7L), eq(11L), any()))
@@ -278,7 +324,9 @@ class V2AdaptiveExecutionServiceTest {
         var cycles = mock(V2AdaptiveRuntimeCycleFactory.class);
         var modelProvider = mock(ModelProvider.class);
         when(modelProvider.complete(any()))
-                .thenReturn(complete("任务完成"));
+                .thenReturn(
+                        complete("任务完成"),
+                        auditComplete("任务完成"));
         PlanStep step = new PlanStep(
                 new PlanStepId("step-1"), "读取文件", "取得内容",
                 Set.of(), List.of("receipt"),
@@ -345,6 +393,16 @@ class V2AdaptiveExecutionServiceTest {
                         "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
                                 + "\"finalText\":\"" + finalText + "\","
                                 + "\"replacementSteps\":[]}"),
+                List.of(), FinishReason.STOP,
+                new UsageMetadata(1, 1, 0, Map.of()), Map.of());
+    }
+
+    private static ModelResponse auditComplete(String stepResult) {
+        return new ModelResponse(
+                Optional.of(
+                        "{\"complete\":true,\"reason\":\"verified\","
+                                + "\"stepResult\":\"" + stepResult
+                                + "\"}"),
                 List.of(), FinishReason.STOP,
                 new UsageMetadata(1, 1, 0, Map.of()), Map.of());
     }

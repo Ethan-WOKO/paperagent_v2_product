@@ -14,6 +14,7 @@ import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
 import io.paperagent.v2.contracts.EffectIntent;
 import io.paperagent.v2.contracts.ExecutionReceipt;
 import io.paperagent.v2.contracts.ObjectValue;
+import io.paperagent.v2.contracts.OutputCapture;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanRevision;
 import io.paperagent.v2.contracts.PlanRevisionId;
@@ -72,6 +73,57 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                         "sandbox.execute"),
                 requests.getAllValues().get(0).availableTools().stream()
                         .map(value -> value.id().value()).toList());
+        String system = requests.getAllValues().get(0)
+                .messages().get(0).content();
+        assertTrue(system.contains("modification must"));
+        assertTrue(system.contains(
+                "sandbox.execute can run supplied code"));
+        assertTrue(system.contains(
+                "project.read only reads Project content"));
+        assertTrue(system.contains(
+                "requires\ncompiling, running, or testing code"));
+        assertTrue(system.contains(
+                "successful sandbox.execute Receipt"));
+        assertTrue(system.contains(
+                "successful project.candidate.compose Receipt"));
+        assertTrue(system.contains(
+                "Act only on the current Plan Step"));
+        assertTrue(system.contains("Completed Plan Steps"));
+        assertTrue(system.contains(
+                "do not call\nproject.candidate.compose again"));
+    }
+
+    @Test
+    void completedCandidateStepIsVisibleToLaterToolSelection() {
+        Fixture fixture = fixture();
+        PlanRevision revision = fixture.input().plan().latestRevision();
+        PlanStep completed = mock(PlanStep.class);
+        PlanStepId completedId = new PlanStepId("candidate-step");
+        when(completed.id()).thenReturn(completedId);
+        when(completed.intent()).thenReturn(
+                "create the reviewable Candidate");
+        var completedFact = mock(
+                io.paperagent.v2.contracts.CompletionFact.class);
+        when(revision.steps()).thenReturn(List.of(completed));
+        when(revision.completedFacts()).thenReturn(Map.of(
+                completedId, completedFact));
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId()))
+                .thenReturn(List.of());
+        ModelResponse sandboxResponse = response(
+                "sandbox.execute", arguments());
+        when(fixture.provider().complete(any())).thenReturn(
+                sandboxResponse);
+
+        fixture.adapter().decide(fixture.input());
+
+        ArgumentCaptor<ModelRequest> request =
+                ArgumentCaptor.forClass(ModelRequest.class);
+        verify(fixture.provider()).complete(request.capture());
+        String prompt = request.getValue().messages().get(1).content();
+        assertTrue(prompt.contains("Completed Plan Steps"));
+        assertTrue(prompt.contains(
+                "candidate-step: create the reviewable Candidate"));
     }
 
     @Test
@@ -128,6 +180,31 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
 
         assertNotEquals(first, second);
         assertEquals(second, secondReplay);
+    }
+
+    @Test
+    void completeProjectReadOutputReachesTheNextModelTurn() {
+        Fixture fixture = fixture();
+        String completeSource = "class Sort {\n"
+                + "x".repeat(12_000)
+                + "\n// COMPLETE_FILE_END\n}";
+        V2EffectHistorySource.Entry success = completed(
+                fixture, "read-call", "project.read",
+                arguments(), ReceiptStatus.SUCCESS, completeSource);
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId()))
+                .thenReturn(List.of(success));
+        ModelResponse next = response("project.search", arguments());
+        when(fixture.provider().complete(any())).thenReturn(next);
+
+        fixture.adapter().decide(fixture.input());
+
+        ArgumentCaptor<ModelRequest> request =
+                ArgumentCaptor.forClass(ModelRequest.class);
+        verify(fixture.provider()).complete(request.capture());
+        String prompt = request.getValue().messages().get(1).content();
+        assertTrue(prompt.contains(completeSource));
+        assertTrue(prompt.contains("COMPLETE_FILE_END"));
     }
 
     @Test
@@ -273,6 +350,8 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
         when(plan.id()).thenReturn(planId);
         when(plan.latestRevision()).thenReturn(revision);
         when(revision.id()).thenReturn(new PlanRevisionId("revision"));
+        when(revision.steps()).thenReturn(List.of());
+        when(revision.completedFacts()).thenReturn(Map.of());
         when(step.id()).thenReturn(stepId);
         when(step.intent()).thenReturn("inspect the Project");
         when(step.expectedOutcome()).thenReturn("verified answer");
@@ -302,6 +381,13 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
     private static V2EffectHistorySource.Entry completed(
             Fixture fixture, String callId, String kind,
             ObjectValue arguments, ReceiptStatus status) {
+        return completed(
+                fixture, callId, kind, arguments, status, "");
+    }
+
+    private static V2EffectHistorySource.Entry completed(
+            Fixture fixture, String callId, String kind,
+            ObjectValue arguments, ReceiptStatus status, String output) {
         PersistedEffectIntent persisted = mock(PersistedEffectIntent.class);
         when(persisted.intent()).thenReturn(
                 intent(fixture, callId, kind, arguments));
@@ -313,8 +399,9 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                         : Optional.of("FAILED"));
         when(receipt.exitCode()).thenReturn(Optional.of(
                 status == ReceiptStatus.SUCCESS ? 0 : 1));
-        when(receipt.standardOutput()).thenReturn(
-                io.paperagent.v2.contracts.OutputCapture.empty());
+        when(receipt.standardOutput()).thenReturn(output.isEmpty()
+                ? OutputCapture.empty()
+                : OutputCapture.inline(output, false));
         when(receipt.standardError()).thenReturn(
                 io.paperagent.v2.contracts.OutputCapture.empty());
         PersistedEffectResult result = mock(PersistedEffectResult.class);

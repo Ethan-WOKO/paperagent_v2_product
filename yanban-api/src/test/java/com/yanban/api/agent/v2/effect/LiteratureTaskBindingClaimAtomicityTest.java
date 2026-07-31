@@ -120,7 +120,7 @@ class LiteratureTaskBindingClaimAtomicityTest {
                 ProductEffectExecutionClaimException.class,
                 () -> harness.repository.execute(request));
 
-        assertEquals("authority.leaseAfterExecution", failure.path());
+        assertEquals("authority.leaseAfterExecution.expired", failure.path());
         assertEquals(0, harness.literatureTasks.count());
         assertEquals(0, harness.claimRows.count());
         assertEquals(0, harness.receiptRows.count());

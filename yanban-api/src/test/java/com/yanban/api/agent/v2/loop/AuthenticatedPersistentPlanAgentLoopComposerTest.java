@@ -7,6 +7,7 @@ import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.EventEnvelope;
 import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.PlanRevision;
+import io.paperagent.v2.contracts.Checkpoint;
 import io.paperagent.v2.persistence.ActiveStepReplanRequest;
 import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
 import io.paperagent.v2.persistence.PersistedStepRecoverySucceeded;
@@ -17,6 +18,7 @@ import io.paperagent.v2.persistence.PersistedActiveStepReplan;
 import io.paperagent.v2.persistence.VersionedCheckpoint;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionState;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationCommitted;
+import io.paperagent.v2.runtime.execution.activation.composition.ReadyStepActivationCompositionRequest;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnNoEffect;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnPersistenceRejected;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolCode;
@@ -79,6 +81,13 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
                 mock(PersistedStepRecoveryReady.class);
         when(ready.planId()).thenReturn(fixture.planId());
         when(ready.readyStepId()).thenReturn(readyStepId);
+        VersionedCheckpoint readyCheckpoint =
+                mock(VersionedCheckpoint.class);
+        Checkpoint readyHead = mock(Checkpoint.class);
+        when(ready.checkpoint()).thenReturn(readyCheckpoint);
+        when(readyCheckpoint.checkpoint()).thenReturn(readyHead);
+        when(readyHead.createdAt()).thenReturn(
+                PersistentPlanAgentLoopTestSupport.NOW.plusSeconds(10));
         when(fixture.inspections().inspect(fixture.planId()))
                 .thenReturn(PersistenceResult.found(ready));
         StepActivationCommitted committed =
@@ -101,12 +110,22 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
         assertEquals(PersistentPlanAgentLoopState.REPLAN_REQUIRED,
                 outcome.state());
         assertEquals(1, outcome.cyclesAttempted());
+        ArgumentCaptor<ReadyStepActivationCompositionRequest> activation =
+                ArgumentCaptor.forClass(
+                        ReadyStepActivationCompositionRequest.class);
         InOrder order = inOrder(
                 fixture.activation(), fixture.recoverer(),
                 fixture.kernel());
-        order.verify(fixture.activation()).composeReady(any());
+        order.verify(fixture.activation()).composeReady(
+                activation.capture());
         order.verify(fixture.recoverer()).recover(any());
         order.verify(fixture.kernel()).run(any());
+        assertEquals(
+                PersistentPlanAgentLoopTestSupport.NOW.plusSeconds(10),
+                activation.getValue().attempt().eventDraft().occurredAt());
+        assertEquals(
+                PersistentPlanAgentLoopTestSupport.NOW.plusSeconds(10),
+                activation.getValue().attempt().checkpointCreatedAt());
         verifyNoInteractions(
                 fixture.effects(), fixture.progression(),
                 fixture.replans());

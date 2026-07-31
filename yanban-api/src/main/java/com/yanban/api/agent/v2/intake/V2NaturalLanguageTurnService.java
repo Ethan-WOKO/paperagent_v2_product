@@ -13,6 +13,7 @@ import com.yanban.api.agent.AgentExperimentRequest;
 import com.yanban.api.agent.AgentExperimentService;
 import com.yanban.api.agent.AgentLongTermMemoryContext;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
@@ -56,9 +57,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class V2NaturalLanguageTurnService {
+    private static final Logger log = LoggerFactory.getLogger(
+            V2NaturalLanguageTurnService.class);
     private static final String FAILURE_MESSAGE =
             "V2 无法根据本次请求创建有效任务";
 
@@ -357,7 +362,16 @@ public class V2NaturalLanguageTurnService {
                             value, toolBindings, conversation, now,
                             requestScopedProvider(endpoint)));
         } catch (RuntimeException failure) {
-            transactions.saveFailure(intake, failureCode(failure));
+            String code = failureCode(failure);
+            log.warn(
+                    "V2 intake processing failed intakeId={} turnId={} "
+                            + "sessionId={} failureCode={} exceptionType={} "
+                            + "causeType={} origin={}",
+                    intake.id(), intake.turnId(), intake.sessionId(), code,
+                    V2SafeFailureDiagnostics.exceptionType(failure),
+                    V2SafeFailureDiagnostics.causeType(failure),
+                    V2SafeFailureDiagnostics.origin(failure));
+            transactions.saveFailure(intake, code);
             return new ProcessResult(intake, false, true, null);
         }
     }

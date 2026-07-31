@@ -88,6 +88,8 @@ class V2AdaptiveExecutionCoordinatorTest {
             assertEquals(
                     1, Collections.frequency(facts, "receipt"),
                     "base facts must not be duplicated");
+            assertTrue(facts.contains("activeStepId=step-1"));
+            assertTrue(facts.contains("activeStepTitle=step-1"));
             if (call == 1) {
                 assertTrue(facts.contains(
                         "executionReceipt=Receipt-1"));
@@ -113,6 +115,7 @@ class V2AdaptiveExecutionCoordinatorTest {
 
         assertEquals("FAILED", result.status());
         assertEquals("REFLECTION_FAILED", result.errorCode());
+        assertEquals("RUNNING", result.steps().get(0).status());
         assertEquals(2, cycleCalls.get());
         assertEquals(2, reflectionCalls.get());
     }
@@ -324,11 +327,9 @@ class V2AdaptiveExecutionCoordinatorTest {
                        "completionCriteria":["exit code is zero"],
                        "maxAttempts":1,"maxDurationSeconds":120}]}
                     """;
-            case 2 -> """
-                    {"decision":"CONTINUE","reason":"run replacement",
-                     "finalText":null,"replacementSteps":[]}
-                    """;
-            default -> complete();
+            case 2 -> complete();
+            default -> throw new AssertionError(
+                    "persisted replan must execute before another reflection");
         };
         var result = coordinator(cycles, provider).execute(command(
                 Map.of("step-1", "project.read")));
@@ -342,6 +343,8 @@ class V2AdaptiveExecutionCoordinatorTest {
         assertEquals("SUCCEEDED", result.steps().get(1).status());
         assertEquals(1, result.steps().stream()
                 .filter(value -> "step-1".equals(value.title())).count());
+        assertEquals(3, cycle.get());
+        assertEquals(2, reflection.get());
     }
 
     @Test

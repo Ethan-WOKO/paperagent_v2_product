@@ -46,6 +46,7 @@ class NaturalLanguageCandidateAuthorityStoreTest {
                 7L, 9L, 42L, "plan", "step", 8L,
                 "version", "different", arguments,
                 List.of("README.md")));
+        assertFalse(store.hasPreparedCandidate("plan"));
 
         store.bindPrepared(
                 "plan", Map.of("README.md", "new text"),
@@ -55,12 +56,14 @@ class NaturalLanguageCandidateAuthorityStoreTest {
                 "d".repeat(64));
         assertEquals(Map.of("README.md", "new text"),
                 store.requirePrepared("plan").replacements());
+        assertTrue(store.hasPreparedCandidate("plan"));
         store.bindCandidate(
                 "plan", 77L, "c".repeat(64), "d".repeat(64));
         store.bindCandidate(
                 "plan", 77L, "c".repeat(64), "d".repeat(64));
         assertEquals(77L,
                 store.candidateArtifactId("plan").orElseThrow());
+        assertTrue(store.hasPreparedCandidate("plan"));
         assertThrows(IllegalStateException.class, () ->
                 store.bindCandidate(
                         "plan", 78L, "e".repeat(64), "d".repeat(64)));

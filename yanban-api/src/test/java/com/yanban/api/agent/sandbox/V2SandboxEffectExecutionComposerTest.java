@@ -3,6 +3,7 @@ package com.yanban.api.agent.sandbox;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -94,6 +95,9 @@ class V2SandboxEffectExecutionComposerTest {
         assertThat(dispatches)
                 .extracting(SandboxDispatch::requestDigest)
                 .containsOnly(dispatches.get(0).requestDigest());
+        assertThat(dispatches)
+                .extracting(SandboxDispatch::policyDigest)
+                .allMatch(digest -> digest.matches("[0-9a-f]{64}"));
         verify(fixture.broker, times(2)).status("execution-1");
         verify(fixture.claims, times(2)).execute(any());
     }
@@ -128,6 +132,33 @@ class V2SandboxEffectExecutionComposerTest {
                 .extracting(SandboxDispatch::requestDigest)
                 .containsOnly(dispatches.get(0).requestDigest());
         verify(fixture.claims, times(2)).execute(any());
+    }
+
+    @Test
+    void transactionWrapperDoesNotTurnPendingExecutionIntoFailure() {
+        Fixture fixture = new Fixture();
+        List<SandboxDispatch> dispatches = new ArrayList<>();
+        when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            dispatches.add(dispatch);
+            return accepted(dispatch);
+        });
+        when(fixture.broker.status("execution-1"))
+                .thenAnswer(invocation -> running(dispatches.get(0)));
+        doAnswer(invocation -> {
+            ProductEffectExecutionClaimRequest request =
+                    invocation.getArgument(0);
+            try {
+                request.execution().get();
+                throw new AssertionError("pending execution expected");
+            } catch (V2SandboxEffectPendingException pending) {
+                throw new IllegalStateException(
+                        "transaction wrapper", pending);
+            }
+        }).when(fixture.claims).execute(any());
+
+        assertThrows(V2SandboxEffectPendingException.class,
+                fixture::execute);
     }
 
     @Test

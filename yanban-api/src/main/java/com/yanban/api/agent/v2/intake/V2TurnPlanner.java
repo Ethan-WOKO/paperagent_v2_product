@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.AgentContextPackage;
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
 import com.yanban.core.model.ChatMessage;
@@ -32,11 +33,16 @@ import io.paperagent.v2.providers.CorrelationId;
 import io.paperagent.v2.providers.GenerationOptions;
 import io.paperagent.v2.providers.MessageRole;
 import io.paperagent.v2.providers.ModelMessage;
+import io.paperagent.v2.providers.ModelProvider;
 import io.paperagent.v2.providers.ModelRequest;
 import io.paperagent.v2.providers.ModelRequestId;
 import io.paperagent.v2.providers.ModelResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class V2TurnPlanner {
+    private static final Logger log = LoggerFactory.getLogger(
+            V2TurnPlanner.class);
     private static final int MAX_OUTPUT_CHARACTERS = 32_000;
     private static final int MAX_LIST_ITEMS = 16;
     private static final int MAX_TEXT = 2_000;
@@ -112,14 +118,80 @@ final class V2TurnPlanner {
                 Optional.empty(),
                 Optional.empty(),
                 false);
-        io.paperagent.v2.providers.ModelProviderResult result;
+        ModelProvider planningProvider = new V2IntakePlanningProviderAdapter(
+                provider, endpoint);
+        String raw = complete(
+                planningProvider, modelRequest, traceId,
+                projectSession, "initial");
+        PlannedTurn planned;
         try {
-            result = new V2IntakePlanningProviderAdapter(
-                    provider, endpoint).complete(modelRequest);
+            planned = parse(raw).withRawOutput(raw);
+        } catch (V2TurnPlanningException firstFailure) {
+            log.warn(
+                    "V2 intake planner format repair requested traceId={} "
+                            + "projectSession={} diagnostic={} "
+                            + "outputDigest={}",
+                    traceId, projectSession, firstFailure.diagnostic(),
+                    hash(raw).substring(0, 12));
+            ModelRequest repairRequest = formatRepairRequest(
+                    modelRequest, traceId, firstFailure.diagnostic(), raw);
+            raw = complete(
+                    planningProvider, repairRequest, traceId,
+                    projectSession, "format-repair");
+            try {
+                planned = parse(raw).withRawOutput(raw);
+            } catch (V2TurnPlanningException repairFailure) {
+                throw repairFailure.withOutputDigest(hash(raw));
+            }
+        }
+        if (projectSession && planned.route() == Route.DIRECT) {
+            throw new V2TurnPlanningException(
+                    "PROJECT_DIRECT",
+                    "Project turns require a persistent Plan")
+                    .withOutputDigest(hash(raw));
+        }
+        if (!planned.capabilities().isEmpty()
+                && planned.route() != Route.PERSISTENT_PLAN_EXECUTE) {
+            throw new V2TurnPlanningException(
+                    "DIRECT_WITH_CAPABILITY",
+                    "tool use requires a persistent Plan")
+                    .withOutputDigest(hash(raw));
+        }
+        return planned;
+    }
+
+    private String complete(
+            ModelProvider planningProvider, ModelRequest modelRequest,
+            String traceId, boolean projectSession, String phase) {
+        io.paperagent.v2.providers.ModelProviderResult result;
+        long modelStarted = System.nanoTime();
+        log.info(
+                "V2 intake planner model call started traceId={} "
+                        + "projectSession={} phase={}",
+                traceId, projectSession, phase);
+        try {
+            result = planningProvider.complete(modelRequest);
         } catch (RuntimeException failure) {
+            log.warn(
+                    "V2 intake planner model call failed traceId={} "
+                            + "projectSession={} phase={} elapsedMillis={} "
+                            + "exceptionType={} causeType={} origin={}",
+                    traceId, projectSession, phase,
+                    elapsedMillis(modelStarted),
+                    V2SafeFailureDiagnostics.exceptionType(failure),
+                    V2SafeFailureDiagnostics.causeType(failure),
+                    V2SafeFailureDiagnostics.origin(failure));
             throw new V2TurnPlanningException(
                     "MODEL_CALL_FAILED", "planner model call failed");
         }
+        log.info(
+                "V2 intake planner model call completed traceId={} "
+                        + "projectSession={} phase={} elapsedMillis={} "
+                        + "resultType={}",
+                traceId, projectSession, phase,
+                elapsedMillis(modelStarted),
+                result == null ? "null"
+                        : result.getClass().getSimpleName());
         if (!(result instanceof ModelResponse response)
                 || !response.proposedToolCalls().isEmpty()) {
             throw new V2TurnPlanningException(
@@ -136,26 +208,32 @@ final class V2TurnPlanner {
                     "planner response exceeds the limit")
                     .withOutputDigest(hash(raw));
         }
-        PlannedTurn planned;
-        try {
-            planned = parse(raw).withRawOutput(raw);
-        } catch (V2TurnPlanningException failure) {
-            throw failure.withOutputDigest(hash(raw));
-        }
-        if (projectSession && planned.route() == Route.DIRECT) {
-            throw new V2TurnPlanningException(
-                    "PROJECT_DIRECT",
-                    "Project turns require a persistent Plan")
-                    .withOutputDigest(hash(raw));
-        }
-        if (!planned.capabilities().isEmpty()
-                && planned.route() != Route.PERSISTENT_PLAN_EXECUTE) {
-            throw new V2TurnPlanningException(
-                    "DIRECT_WITH_CAPABILITY",
-                    "tool use requires a persistent Plan")
-                    .withOutputDigest(hash(raw));
-        }
-        return planned;
+        return raw;
+    }
+
+    private static ModelRequest formatRepairRequest(
+            ModelRequest source, String traceId, String diagnostic,
+            String previousOutput) {
+        List<ModelMessage> messages = new ArrayList<>(source.messages());
+        messages.add(new ModelMessage(
+                MessageRole.ASSISTANT,
+                previousOutput));
+        messages.add(new ModelMessage(
+                MessageRole.USER,
+                "Your previous planner response failed validation with "
+                        + diagnostic + ". Rewrite that response for the "
+                        + "same request as exactly one top-level "
+                        + "JSON object, never an array, JSON string, prose, "
+                        + "or markdown fence. Include the complete route, "
+                        + "taskFrame, and plan wrapper required by the "
+                        + "original schema."));
+        return new ModelRequest(
+                new ModelRequestId(traceId + "-format-repair-request"),
+                new CorrelationId(traceId + "-format-repair"),
+                List.copyOf(messages), source.availableTools(),
+                source.generationOptions(), source.taskFrameId(),
+                source.planId(), source.planRevisionId(), source.stepId(),
+                source.cancellationRequested());
     }
 
     private static List<ChatMessage> historyWithoutCurrentWorkspaceMessage(
@@ -191,7 +269,7 @@ final class V2TurnPlanner {
 
     PlannedTurn parse(String raw) {
         try {
-            JsonNode root = json.readTree(raw);
+            JsonNode root = normalizeTopLevel(json.readTree(raw));
             requireObject(root, "root");
             String routeText = requiredText(root, "route", 32);
             if ("DIRECT".equals(routeText)) {
@@ -291,6 +369,58 @@ final class V2TurnPlanner {
         } catch (RuntimeException failure) {
             throw invalid("PARSE_RUNTIME");
         }
+    }
+
+    private JsonNode normalizeTopLevel(JsonNode root)
+            throws java.io.IOException {
+        if (root != null && root.isObject()) {
+            return root;
+        }
+        if (root != null && root.isArray()
+                && root.size() == 1 && root.get(0).isObject()) {
+            log.info(
+                    "V2 intake planner normalized provider wrapper "
+                            + "wrapperType=ARRAY elementCount=1");
+            return root.get(0);
+        }
+        if (root != null && root.isTextual()) {
+            JsonNode decoded = json.readTree(root.textValue());
+            if (decoded != null && decoded.isObject()) {
+                log.info(
+                        "V2 intake planner normalized provider wrapper "
+                                + "wrapperType=JSON_STRING");
+                return decoded;
+            }
+        }
+        log.warn(
+                "V2 intake planner rejected non-object provider output "
+                        + "rootType={} arraySize={} arrayShape={}",
+                root == null ? "null" : root.getNodeType(),
+                root != null && root.isArray() ? root.size() : -1,
+                safeArrayShape(root));
+        return root;
+    }
+
+    private static String safeArrayShape(JsonNode root) {
+        if (root == null || !root.isArray()) {
+            return "NOT_ARRAY";
+        }
+        List<String> shapes = new ArrayList<>();
+        for (JsonNode item : root) {
+            if (!item.isObject()) {
+                shapes.add(item.getNodeType().name());
+            } else if (item.has("id") && item.has("intent")
+                    && item.has("expectedOutcome")) {
+                shapes.add("PLAN_STEP");
+            } else if (item.has("route")) {
+                shapes.add("ROUTED_OBJECT");
+            } else if (item.has("objective") && item.has("targets")) {
+                shapes.add("TASK_FRAME");
+            } else {
+                shapes.add("OBJECT_" + item.size());
+            }
+        }
+        return String.join(",", shapes);
     }
 
     private String capabilityCatalog() {
@@ -393,6 +523,11 @@ final class V2TurnPlanner {
     private static String diagnostic(String field) {
         return field.replaceAll("([a-z])([A-Z])", "$1_$2")
                 .toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                Math.max(0L, System.nanoTime() - startedNanos));
     }
 
     private static V2TurnPlanningException invalid(String diagnostic) {

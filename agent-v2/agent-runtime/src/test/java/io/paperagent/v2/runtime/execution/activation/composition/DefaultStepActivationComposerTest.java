@@ -31,6 +31,41 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class DefaultStepActivationComposerTest {
     @Test
+    void readyValidationAndMaterializationUseRegisteredDiagnostics() {
+        StepActivationCompositionTestFixtures.Seeded seeded =
+                StepActivationCompositionTestFixtures.seeded(
+                        "ready-diagnostics", false);
+        DefaultStepActivationComposer composer =
+                StepActivationCompositionTestFixtures.composer(
+                        seeded.persistence());
+
+        StepActivationCompositionValidationException validation =
+                assertThrows(
+                        StepActivationCompositionValidationException.class,
+                        () -> composer.composeReady(null));
+        assertEquals("stepActivationComposition.readyRequest",
+                validation.path());
+
+        StepActivationCompositionProtocolException protocol =
+                StepActivationCompositionValues.protocolFailure(
+                        seeded.committed().planId(),
+                        StepActivationCompositionStage.MATERIALIZE,
+                        StepActivationCompositionProtocolCode
+                                .COLLABORATOR_EXCEPTION,
+                        "stepActivationComposition.readyMaterialization",
+                        StepActivationLeaseDisposition.NO_LEASE_ACTION,
+                        new IllegalStateException("redacted"));
+        assertEquals(StepActivationCompositionStage.MATERIALIZE,
+                protocol.stage());
+        assertEquals(
+                StepActivationCompositionProtocolCode
+                        .COLLABORATOR_EXCEPTION,
+                protocol.code());
+        assertEquals("stepActivationComposition.readyMaterialization",
+                protocol.path());
+    }
+
+    @Test
     void materializesAndAcquiresAndActivatesAtMostOnce() {
         StepActivationCompositionTestFixtures.Seeded seeded =
                 StepActivationCompositionTestFixtures.seeded("unit-applied", false);

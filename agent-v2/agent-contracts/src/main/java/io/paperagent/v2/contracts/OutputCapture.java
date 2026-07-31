@@ -3,7 +3,13 @@ package io.paperagent.v2.contracts;
 import java.util.Optional;
 
 public record OutputCapture(Optional<String> inlineText, Optional<ArtifactRef> artifactRef, boolean truncated) {
-    public static final int MAX_INLINE_CHARACTERS = 8_192;
+    /**
+     * Keeps one ordinary Project text file inline in its durable Receipt.
+     * Project reads are currently limited to 64 KiB; the additional space
+     * covers the normalized path and receipt framing without shortening the
+     * file before the next model turn sees it.
+     */
+    public static final int MAX_INLINE_CHARACTERS = 128 * 1024;
 
     public OutputCapture {
         inlineText = Contracts.required(inlineText, "outputCapture.inlineText");

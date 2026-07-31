@@ -188,6 +188,16 @@ public class NaturalLanguageCandidateAuthorityStore {
                 ? Optional.ofNullable(values.get(0)) : Optional.empty();
     }
 
+    /** True once this Plan already owns prepared or published Candidate data. */
+    public boolean hasPreparedCandidate(String planId) {
+        Integer count = jdbc.queryForObject("""
+                select count(*)
+                from agent_v2_natural_candidate_authorities
+                where plan_id=? and status in ('PREPARED','PUBLISHED')
+                """, Integer.class, planId);
+        return count != null && count > 0;
+    }
+
     private List<String> readPaths(String value) {
         try {
             return json.readValue(value, new TypeReference<>() {});

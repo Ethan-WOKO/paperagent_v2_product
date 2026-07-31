@@ -10,7 +10,13 @@ import shlex
 import signal
 import sys
 
-from e2b import CommandExitException, Sandbox, SandboxQuery
+try:
+    from e2b import CommandExitException, Sandbox, SandboxQuery
+except Exception:
+    # Import failures happen before main() can apply the normal bounded
+    # provider diagnostic. Keep this failure safe and actionable too.
+    print("E2B provider error: SDK_IMPORT_FAILED:", file=sys.stderr)
+    raise SystemExit(70)
 
 
 MANAGED_KEY = "yanban-managed"

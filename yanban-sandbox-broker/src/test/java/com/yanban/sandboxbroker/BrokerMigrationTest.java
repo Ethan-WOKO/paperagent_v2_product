@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.yanban.sandbox.contract.SandboxCanonicalDigest;
 import com.yanban.sandbox.contract.SandboxDispatch;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import javax.sql.DataSource;
@@ -46,6 +47,23 @@ class BrokerMigrationTest {
         assertThat(reclaimed.fence()).isGreaterThan(lease.fence());
         assertThat(reclaimed.recovery()).isTrue();
         assertThatThrownBy(() -> leases.owned(lease)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test void receiptClockPreservesDatabaseInstantAcrossLocalTimeZones() {
+        SandboxDispatch request = signed(new SandboxDispatch(
+                "clock-key", "", 1, 2, 3, 4, 10, 14,
+                "a".repeat(64), "b".repeat(64),
+                Map.of("Main.java", "class Main {}"),
+                List.of("java", "Main.java"), 1, 536_870_912L,
+                60_000, 1_048_576, false));
+        dispatches.dispatch(request);
+        var lease = leases.claim(
+                "clock-worker", Duration.ofMinutes(1)).orElseThrow();
+        Instant before = Instant.now().minusSeconds(2);
+        Instant databaseInstant = leases.now(lease);
+        Instant after = Instant.now().plusSeconds(2);
+
+        assertThat(databaseInstant).isBetween(before, after);
     }
 
     @Test void terminalCancelIsNoOpAndSensitivePayloadIsCleared() {

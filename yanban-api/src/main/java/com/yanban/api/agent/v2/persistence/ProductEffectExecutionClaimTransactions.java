@@ -167,17 +167,28 @@ class ProductEffectExecutionClaimTransactions {
             ProductEffectExecutionClaimRequest request,
             java.time.Instant effectiveAt,
             String path) {
-        if (lease == null || effectiveAt == null
-                || lease.releasedAt() != null
-                || !lease.planId().equals(request.lease().planId().value())
-                || !lease.leaseToken().equals(request.leaseToken())
-                || !lease.leaseToken().equals(request.lease().leaseToken())
-                || !lease.ownerId().equals(request.lease().ownerId())
-                || lease.fencingToken() != request.fencingToken()
-                || lease.fencingToken() != request.lease().fencingToken()
-                || !lease.expiresAt().equals(request.lease().expiresAt())
-                || !effectiveAt.isBefore(lease.expiresAt())) {
-            throw failed(path);
+        if (lease == null) throw failed(path + ".missing");
+        if (effectiveAt == null) throw failed(path + ".effectiveAtMissing");
+        if (lease.releasedAt() != null) throw failed(path + ".released");
+        if (!lease.planId().equals(request.lease().planId().value()))
+            throw failed(path + ".planMismatch");
+        if (!lease.leaseToken().equals(request.leaseToken())
+                || !lease.leaseToken().equals(
+                        request.lease().leaseToken()))
+            throw failed(path + ".tokenMismatch");
+        if (!lease.ownerId().equals(request.lease().ownerId()))
+            throw failed(path + ".ownerMismatch");
+        if (lease.fencingToken() != request.fencingToken()
+                || lease.fencingToken()
+                        != request.lease().fencingToken())
+            throw failed(path + ".fenceMismatch");
+        if (!lease.expiresAt().equals(request.lease().expiresAt()))
+            throw failed(path + ".expiresAtMismatch");
+        if (!effectiveAt.isBefore(lease.expiresAt())) {
+            long timingDeltaMillis = java.time.Duration.between(
+                    lease.expiresAt(), effectiveAt).toMillis();
+            throw new ProductEffectExecutionClaimException(
+                    path + ".expired", timingDeltaMillis);
         }
     }
 

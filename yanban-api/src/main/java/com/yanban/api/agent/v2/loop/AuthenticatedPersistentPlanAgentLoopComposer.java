@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.loop;
 
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.effect.AuthenticatedLiteratureSearchEffectExecutionCommand;
 import com.yanban.api.agent.v2.effect.AuthenticatedLiteratureSearchEffectExecutionComposer;
@@ -34,9 +35,12 @@ import io.paperagent.v2.persistence.VersionedCheckpoint;
 import io.paperagent.v2.runtime.execution.activation.composition.ReadyStepActivationCompositionRequest;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationCommitted;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationComposer;
+import io.paperagent.v2.runtime.execution.activation.composition.StepActivationAttempt;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationCompositionOutcome;
+import io.paperagent.v2.runtime.execution.activation.composition.StepActivationCompositionProtocolException;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationLeaseRejected;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationPersistenceRejected;
+import io.paperagent.v2.runtime.execution.activation.materialization.StepActivationEventDraft;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnIntentPersisted;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnNoEffect;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnPersistenceRejected;
@@ -59,6 +63,8 @@ import io.paperagent.v2.runtime.execution.replan.composition.BoundedStepReplanPe
 import io.paperagent.v2.runtime.execution.replan.composition.BoundedStepReplanReplayed;
 import io.paperagent.v2.providers.ModelProvider;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 
@@ -68,6 +74,8 @@ import java.util.Optional;
  */
 @Service
 public class AuthenticatedPersistentPlanAgentLoopComposer {
+    private static final Logger log = LoggerFactory.getLogger(
+            AuthenticatedPersistentPlanAgentLoopComposer.class);
     private static final String LITERATURE_SEARCH = "literature.search";
     private static final String PROJECT_CANDIDATE_COMPOSE =
             "project.candidate.compose";
@@ -218,6 +226,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             context = contexts.resolve(userId, agentTurnId);
             planId = planIds.derive(context.identity());
         } catch (RuntimeException exception) {
+            logUnexpected("context", exception,
+                    null, null, null, null);
             throw protocol("context");
         }
         requireCommand(command);
@@ -239,8 +249,13 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                     activated = activation.composeReady(
                             new ReadyStepActivationCompositionRequest(
                                     ready,
-                                    command.readyActivationAttempt()));
+                                    alignReadyActivationAttempt(
+                                            ready,
+                                            command.readyActivationAttempt())));
                 } catch (RuntimeException exception) {
+                    logActivationFailure(
+                            exception, planId.value(),
+                            ready.readyStepId().value());
                     throw protocol("activation");
                 }
                 if (!(activated instanceof StepActivationCommitted)) {
@@ -259,6 +274,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                         new StepRecoveryRequest(
                                 planId, recoveryAttempt));
             } catch (RuntimeException exception) {
+                logUnexpected("recovery", exception,
+                        planId.value(), null, null, null);
                 throw protocol("recovery");
             }
             if (!(recovered instanceof RecoveredActiveStep active)) {
@@ -278,6 +295,10 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                 throw new PersistentPlanAgentLoopException(
                         "kernel", exception);
             } catch (RuntimeException exception) {
+                logUnexpected("kernel", exception,
+                        planId.value(),
+                        active.recovery().activation().stepId().value(),
+                        null, null);
                 throw protocol("kernel");
             }
             verifyKernel(active, kernelOutcome);
@@ -373,6 +394,10 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             } catch (ProjectEffectExecutionException exception) {
                 throw protocol("effect." + exception.stage());
             } catch (RuntimeException exception) {
+                logUnexpected("effect", exception,
+                        planId.value(), stepId.value(),
+                        intent.persistedIntent().intent()
+                                .toolCallId().value(), effectKind);
                 throw protocol("effect");
             }
             if (effectResult == null
@@ -389,8 +414,13 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             try {
                 latestReceipt = Optional.of(
                         PersistentPlanAgentLoopReceiptFacts.from(
+                                stepId.value(), effectKind,
                                 effectResult.receipt()));
             } catch (RuntimeException exception) {
+                logUnexpected("effectReceipt", exception,
+                        planId.value(), stepId.value(),
+                        intent.persistedIntent().intent()
+                                .toolCallId().value(), effectKind);
                 throw protocol("effectReceipt");
             }
             if (effectResult.receipt().status()
@@ -438,6 +468,10 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             } catch (EffectDrivenStepProgressionException exception) {
                 throw protocol("progression." + exception.path());
             } catch (RuntimeException exception) {
+                logUnexpected("progression", exception,
+                        planId.value(), stepId.value(),
+                        intent.persistedIntent().intent()
+                                .toolCallId().value(), effectKind);
                 throw protocol("progression");
             }
             if (progressed == null
@@ -487,6 +521,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             context = contexts.resolve(userId, agentTurnId);
             planId = planIds.derive(context.identity());
         } catch (RuntimeException exception) {
+            logUnexpected("context", exception,
+                    null, null, null, null);
             throw protocol("context");
         }
         requireCommand(command);
@@ -512,6 +548,9 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         } catch (EffectDrivenStepProgressionException exception) {
             throw protocol("progression." + exception.path());
         } catch (RuntimeException exception) {
+            logUnexpected("progression", exception,
+                    planId.value(), active.activation().stepId().value(),
+                    null, null);
             throw protocol("progression");
         }
         PersistentPlanAgentLoopState state =
@@ -538,6 +577,10 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             return replanFactory == null
                     ? null : replanFactory.apply(active);
         } catch (RuntimeException exception) {
+            logUnexpected("replanFactory", exception,
+                    active.planId().value(),
+                    active.recovery().activation().stepId().value(),
+                    null, null);
             throw protocol("replanFactory");
         }
     }
@@ -555,6 +598,10 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             composed = replans.composeNoEffect(
                     active, noEffect, request);
         } catch (RuntimeException exception) {
+            logUnexpected("replan", exception,
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    null, null);
             throw protocol("replan");
         }
         return replanOutcome(
@@ -576,6 +623,11 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             composed = replans.compose(
                     active, completedEffect, request);
         } catch (RuntimeException exception) {
+            logUnexpected("replan", exception,
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    intent.intent().kind());
             throw protocol("replan");
         }
         return replanOutcome(
@@ -632,6 +684,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         } catch (PersistentPlanAgentLoopException exception) {
             throw exception;
         } catch (RuntimeException exception) {
+            logUnexpected("inspection", exception,
+                    planId.value(), null, null, null);
             throw protocol("inspection");
         }
     }
@@ -664,6 +718,36 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         return snapshot instanceof PersistedStepRecoveryActive active
                 ? Optional.of(active.activation().stepId())
                 : Optional.empty();
+    }
+
+    /**
+     * A READY cut can be newer than the original adaptive command after an
+     * effect or replan. Keep the caller's event identity and payload, while
+     * deriving monotonic timestamps from the persisted authority head.
+     */
+    private static StepActivationAttempt alignReadyActivationAttempt(
+            PersistedStepRecoveryReady ready,
+            StepActivationAttempt requested) {
+        var headTime = ready.checkpoint().checkpoint().createdAt();
+        var draft = requested.eventDraft();
+        var eventTime = draft.occurredAt().isBefore(headTime)
+                ? headTime : draft.occurredAt();
+        var checkpointTime = requested.checkpointCreatedAt()
+                .isBefore(eventTime)
+                ? eventTime : requested.checkpointCreatedAt();
+        if (eventTime.equals(draft.occurredAt())
+                && checkpointTime.equals(
+                        requested.checkpointCreatedAt())) {
+            return requested;
+        }
+        return new StepActivationAttempt(
+                requested.leaseOwnerId(), requested.leaseToken(),
+                requested.leaseExpiresAt(),
+                new StepActivationEventDraft(
+                        draft.id(), eventTime, draft.type(),
+                        draft.causationId(), draft.correlationId(),
+                        draft.payload()),
+                checkpointTime);
     }
 
     private static PersistenceFailure failure(Object value) {
@@ -767,5 +851,40 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
     private static PersistentPlanAgentLoopException protocol(
             String stage) {
         return new PersistentPlanAgentLoopException(stage);
+    }
+
+    private static void logUnexpected(
+            String stage, RuntimeException failure,
+            String planId, String stepId, String toolCallId,
+            String effectKind) {
+        log.warn(
+                "V2 Agent loop boundary failed stage={} planId={} "
+                        + "stepId={} toolCallId={} kind={} "
+                        + "exceptionType={} causeType={} origin={}",
+                stage, planId, stepId, toolCallId, effectKind,
+                V2SafeFailureDiagnostics.exceptionType(failure),
+                V2SafeFailureDiagnostics.causeType(failure),
+                V2SafeFailureDiagnostics.origin(failure));
+    }
+
+    private static void logActivationFailure(
+            RuntimeException failure, String planId, String stepId) {
+        if (failure
+                instanceof StepActivationCompositionProtocolException
+                        protocol) {
+            log.warn(
+                    "V2 Agent loop activation failed planId={} stepId={} "
+                            + "activationStage={} activationCode={} "
+                            + "activationPath={} leaseDisposition={} "
+                            + "exceptionType={} causeType={} origin={}",
+                    planId, stepId, protocol.stage(), protocol.code(),
+                    protocol.path(), protocol.leaseDisposition(),
+                    V2SafeFailureDiagnostics.exceptionType(failure),
+                    V2SafeFailureDiagnostics.causeType(failure),
+                    V2SafeFailureDiagnostics.origin(failure));
+            return;
+        }
+        logUnexpected(
+                "activation", failure, planId, stepId, null, null);
     }
 }

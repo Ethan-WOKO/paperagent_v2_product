@@ -3,10 +3,13 @@ package com.yanban.api.agent.v2.workspace;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.core.agent.AgentRunIdentity;
 import io.paperagent.v2.contracts.ContentHash;
 import io.paperagent.v2.contracts.ProjectPath;
 import io.paperagent.v2.contracts.ProjectVersionRef;
@@ -27,6 +30,7 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -157,37 +161,32 @@ class AuthenticatedAgentTurnWorkspacePortFactoryTest {
     }
 
     @Test
-    void repeatedCallsShareRootButKeepSourcesIndependentlyBound() {
+    void repeatedCallsReuseTurnBoundProviderAndPreserveWorkspaceMutations() {
         Path root = temp.resolve("shared-root");
-        ProjectVersionRef firstVersion = VERSION;
-        ProjectVersionRef secondVersion =
-                new ProjectVersionRef("84", "b".repeat(64));
-        AtomicInteger firstLoads = new AtomicInteger();
-        AtomicInteger secondLoads = new AtomicInteger();
+        AtomicInteger loads = new AtomicInteger();
         AuthenticatedAgentTurnProjectVersionSourceFactory sources =
                 mock(AuthenticatedAgentTurnProjectVersionSourceFactory.class);
-        when(sources.create(USER_ID, TURN_ID))
-                .thenReturn(
-                        source(firstVersion, firstLoads),
-                        source(secondVersion, secondLoads));
+        VerifiedAgentTurnProductContext context = context();
+        when(sources.create(context)).thenReturn(source(VERSION, loads));
         AuthenticatedAgentTurnWorkspacePortFactory factory =
                 new AuthenticatedAgentTurnWorkspacePortFactory(sources, root.toString());
 
-        WorkspacePort first = factory.create(USER_ID, TURN_ID);
+        WorkspacePort first = factory.create(context);
         WorkspacePort second = factory.create(USER_ID, TURN_ID);
-        first.materialize(spec("bound-first", firstVersion));
-        second.materialize(spec("bound-second", secondVersion));
+        var materialized = first.materialize(spec("bound-turn", VERSION));
+        byte[] replacement = "changed in isolated workspace"
+                .getBytes(StandardCharsets.UTF_8);
+        first.replace(materialized.workspace(),
+                new ProjectPath("paper.txt"), replacement);
 
-        assertThat(firstLoads).hasValue(1);
-        assertThat(secondLoads).hasValue(1);
-        verify(sources, times(2)).create(USER_ID, TURN_ID);
-        assertThatThrownBy(() -> first.materialize(spec("wrong-source", secondVersion)))
-                .isInstanceOfSatisfying(
-                        WorkspaceException.class,
-                        failure -> assertThat(failure.code())
-                                .isEqualTo(WorkspaceErrorCode.SOURCE_REFERENCE_MISMATCH));
-        assertThat(firstLoads).hasValue(2);
-        assertThat(secondLoads).hasValue(1);
+        assertThat(second).isSameAs(first);
+        assertThat(second.inspectMaterialization(
+                spec("bound-turn", VERSION))).isEqualTo(materialized);
+        assertThat(second.read(materialized.workspace(),
+                new ProjectPath("paper.txt"))).isEqualTo(replacement);
+        assertThat(loads).hasValue(1);
+        verify(sources).create(context);
+        verify(sources, never()).create(USER_ID, TURN_ID);
     }
 
     @Test
@@ -201,12 +200,15 @@ class AuthenticatedAgentTurnWorkspacePortFactoryTest {
                 .thenReturn(
                         source(VERSION, firstLoads),
                         source(VERSION, recoveredLoads));
-        AuthenticatedAgentTurnWorkspacePortFactory factory =
+        AuthenticatedAgentTurnWorkspacePortFactory firstFactory =
                 new AuthenticatedAgentTurnWorkspacePortFactory(sources, root.toString());
         WorkspaceMaterializationSpec exact = spec("restart-exact", VERSION);
 
-        var published = factory.create(USER_ID, TURN_ID).materialize(exact);
-        WorkspacePort recreated = factory.create(USER_ID, TURN_ID);
+        var published = firstFactory.create(USER_ID, TURN_ID).materialize(exact);
+        AuthenticatedAgentTurnWorkspacePortFactory restartedFactory =
+                new AuthenticatedAgentTurnWorkspacePortFactory(
+                        sources, root.toString());
+        WorkspacePort recreated = restartedFactory.create(USER_ID, TURN_ID);
         var adopted = recreated.inspectMaterialization(exact);
 
         assertThat(adopted).isEqualTo(published);
@@ -245,6 +247,17 @@ class AuthenticatedAgentTurnWorkspacePortFactoryTest {
                             Map.of())),
                     Map.of());
         };
+    }
+
+    private static VerifiedAgentTurnProductContext context() {
+        return new VerifiedAgentTurnProductContext(
+                new AgentRunIdentity(
+                        "AGENT_TURN",
+                        String.valueOf(TURN_ID),
+                        USER_ID,
+                        11L,
+                        42L),
+                Optional.of(VERSION.versionId()));
     }
 
     private static WorkspaceMaterializationSpec spec(

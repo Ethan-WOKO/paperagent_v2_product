@@ -13,6 +13,7 @@ final class StepActivationCompositionValues {
             "stepActivationComposition.leaseRepository",
             "stepActivationComposition.stepActivationRepository",
             "stepActivationComposition.request",
+            "stepActivationComposition.readyRequest",
             "stepActivationCompositionRequest.committedStart",
             "stepActivationCompositionRequest.stepId",
             "stepActivationCompositionRequest.attempt",
@@ -33,6 +34,7 @@ final class StepActivationCompositionValues {
 
     private static final Set<String> PROTOCOL_BASE_PATHS = Set.of(
             "stepActivationComposition.materializeResult",
+            "stepActivationComposition.readyMaterialization",
             "stepActivationComposition.leaseAcquireResult",
             "stepActivationComposition.activationResult");
 

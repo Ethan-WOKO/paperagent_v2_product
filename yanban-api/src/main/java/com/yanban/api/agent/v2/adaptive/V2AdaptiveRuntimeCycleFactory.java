@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.adaptive;
 
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionOutcome;
 import com.yanban.api.agent.v2.loop.*;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionActivationLeaseAttempt;
@@ -11,9 +12,13 @@ import io.paperagent.v2.providers.ModelProvider;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 public class V2AdaptiveRuntimeCycleFactory {
+    private static final Logger log = LoggerFactory.getLogger(
+            V2AdaptiveRuntimeCycleFactory.class);
     private final AuthenticatedPersistentPlanAgentLoopComposer loop;
     private final NaturalLanguageStepKernelFactory kernels;
     private final V2ReplanRequestMaterializer replans =
@@ -89,9 +94,12 @@ public class V2AdaptiveRuntimeCycleFactory {
                     diagnostics = autonomous.diagnostics();
                 }
             } catch (PersistentPlanAgentLoopException failure) {
+                logCycleFailure(
+                        command, failure.diagnosticStage(), failure);
                 throw new CycleStageException(
                         agentLoopStage(failure.diagnosticStage()));
             } catch (RuntimeException failure) {
+                logCycleFailure(command, "agentLoop", failure);
                 throw new CycleStageException("AGENT_LOOP");
             }
             boolean succeeded =
@@ -135,6 +143,23 @@ public class V2AdaptiveRuntimeCycleFactory {
                             .map(value -> !"SUCCESS".equals(value.status()))
                             .orElse(false));
         };
+    }
+
+    private static void logCycleFailure(
+            V2AdaptiveCyclePort.CycleCommand command,
+            String stage, RuntimeException failure) {
+        log.warn(
+                "V2 adaptive cycle failed stage={} planId={} turnId={} "
+                        + "cycle={} action={} exceptionType={} causeType={} "
+                        + "origin={}",
+                stage,
+                command.planId(),
+                command.turnId(),
+                command.cycle(),
+                command.action(),
+                V2SafeFailureDiagnostics.exceptionType(failure),
+                V2SafeFailureDiagnostics.causeType(failure),
+                V2SafeFailureDiagnostics.origin(failure));
     }
 
     static Map<PlanStepId, ToolId> bindingsForCycle(

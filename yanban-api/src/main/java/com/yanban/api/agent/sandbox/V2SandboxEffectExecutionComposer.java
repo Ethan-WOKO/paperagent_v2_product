@@ -2,8 +2,10 @@ package com.yanban.api.agent.sandbox;
 
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
+import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimException;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimResult;
 import com.yanban.api.agent.v2.workspace
@@ -56,6 +58,8 @@ import java.util.Optional;
 import java.util.Set;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Product adapter from a durable {@code sandbox.execute} EffectIntent to the
@@ -66,6 +70,8 @@ import org.springframework.stereotype.Service;
 @ConditionalOnProperty(
         prefix = "yanban.sandbox", name = "enabled", havingValue = "true")
 public class V2SandboxEffectExecutionComposer {
+    private static final Logger log = LoggerFactory.getLogger(
+            V2SandboxEffectExecutionComposer.class);
     public static final String KIND = "sandbox.execute";
     private static final int MAX_FILES = 32;
     private static final int MAX_FILE_BYTES = 512 * 1024;
@@ -184,6 +190,38 @@ public class V2SandboxEffectExecutionComposer {
         } catch (V2SandboxEffectExecutionException rejected) {
             throw rejected;
         } catch (RuntimeException failure) {
+            V2SandboxEffectPendingException pending = cause(
+                    failure, V2SandboxEffectPendingException.class);
+            if (pending != null) {
+                throw pending;
+            }
+            V2SandboxEffectExecutionException rejected = cause(
+                    failure, V2SandboxEffectExecutionException.class);
+            if (rejected != null) {
+                throw rejected;
+            }
+            ProductEffectExecutionClaimException claimFailure = cause(
+                    failure, ProductEffectExecutionClaimException.class);
+            if (claimFailure != null) {
+                log.warn(
+                        "V2 Sandbox durable claim rejected planId={} "
+                                + "stepId={} toolCallId={} claimPath={} "
+                                + "timingDeltaMillis={}",
+                        planId.value(),
+                        active.recovery().activation().stepId().value(),
+                        toolCallId.value(), claimFailure.path(),
+                        claimFailure.timingDeltaMillis());
+            }
+            log.warn(
+                    "V2 Sandbox claim failed planId={} stepId={} "
+                            + "toolCallId={} exceptionType={} causeType={} "
+                            + "origin={}",
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    toolCallId.value(),
+                    V2SafeFailureDiagnostics.exceptionType(failure),
+                    V2SafeFailureDiagnostics.causeType(failure),
+                    V2SafeFailureDiagnostics.origin(failure));
             throw failed("claim");
         }
         return new V2SandboxEffectExecutionOutcome(
@@ -196,7 +234,8 @@ public class V2SandboxEffectExecutionComposer {
             PersistedEffectIntent intent, Map<String, String> files,
             List<String> argv) {
         String key = intent.intent().toolCallId().value();
-        String policy = "v2-e2b-offline." + hash(String.join("\u0000", argv));
+        String policy = hash("v2-e2b-offline\u0000"
+                + String.join("\u0000", argv));
         SandboxDispatch unsigned = new SandboxDispatch(
                 key, "", userId, projectId, sessionId,
                 stableLong(active.planId().value()),
@@ -219,6 +258,20 @@ public class V2SandboxEffectExecutionComposer {
             broker.requireHealthy();
             accepted = broker.dispatch(dispatch);
         } catch (RuntimeException temporarilyUnknown) {
+            log.warn(
+                    "V2 Sandbox broker dispatch unavailable planId={} "
+                            + "stepId={} toolCallId={} exceptionType={} "
+                            + "causeType={} sandboxCode={} origin={}",
+                    active.planId().value(),
+                    intent.intent().stepId().value(),
+                    intent.intent().toolCallId().value(),
+                    V2SafeFailureDiagnostics.exceptionType(
+                            temporarilyUnknown),
+                    V2SafeFailureDiagnostics.causeType(
+                            temporarilyUnknown),
+                    sandboxCode(temporarilyUnknown),
+                    V2SafeFailureDiagnostics.origin(
+                            temporarilyUnknown));
             throw new V2SandboxEffectPendingException();
         }
         if (accepted == null
@@ -421,6 +474,30 @@ public class V2SandboxEffectExecutionComposer {
 
     private static String hash(String value) {
         return HexFormat.of().formatHex(digest(value));
+    }
+
+    private static String sandboxCode(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof SandboxExecutionException sandbox
+                    && sandbox.code() != null) {
+                return sandbox.code().name();
+            }
+            current = current.getCause();
+        }
+        return "UNAVAILABLE";
+    }
+
+    private static <T extends Throwable> T cause(
+            Throwable failure, Class<T> expected) {
+        Throwable current = failure;
+        while (current != null) {
+            if (expected.isInstance(current)) {
+                return expected.cast(current);
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     private static byte[] digest(String value) {

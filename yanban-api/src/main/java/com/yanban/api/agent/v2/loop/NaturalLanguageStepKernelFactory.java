@@ -102,12 +102,21 @@ public class NaturalLanguageStepKernelFactory {
                             + "\"maxResults\":10}; maxResults is 1-20.";
             case "project.candidate.compose" ->
                     "Prepare reviewed Project changes in the isolated "
-                            + "Workspace. Arguments must be exactly "
+                            + "Workspace and create the only durable source "
+                            + "for a reviewable Candidate. Use this for any "
+                            + "Project file creation or modification; "
+                            + "sandbox.execute cannot create a Candidate. "
+                            + "Arguments must be exactly "
                             + "{\"operation\":\"compose\",\"paths\":["
                             + "\"normalized/existing/path\"]}; "
                             + "include 1-4 paths.";
             case "sandbox.execute" ->
                     "Run Project code in the existing isolated E2B Sandbox. "
+                            + "When a prior completed Plan Step created a "
+                            + "Candidate, run that resulting isolated "
+                            + "Workspace instead of recreating the Candidate. "
+                            + "This proves execution only and cannot create "
+                            + "or update a Project Candidate. "
                             + "Arguments must be exactly "
                             + "{\"paths\":[\"normalized/path\"],"
                             + "\"argv\":[\"yanban-runner\",\"java\","

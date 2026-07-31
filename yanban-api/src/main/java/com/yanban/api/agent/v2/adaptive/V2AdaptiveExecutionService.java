@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.adaptive;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.adaptive.reflection.*;
 import com.yanban.api.agent.v2.bootstrap.*;
 import com.yanban.api.agent.v2.workspace.*;
@@ -17,9 +18,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class V2AdaptiveExecutionService {
+    private static final Logger log = LoggerFactory.getLogger(
+            V2AdaptiveExecutionService.class);
     private final V2AdaptiveExecutionStore store;
     private final AuthenticatedAgentTurnExecutionStartRecoveryComposer starts;
     private final AuthenticatedAgentTurnPlanExecutionContextComposer contexts;
@@ -76,6 +81,7 @@ public class V2AdaptiveExecutionService {
         try {
             result = executeStarted(command, initial);
         } catch (RuntimeException failure) {
+            logFailure(command, "adaptive.execute", failure);
             result = failed(initial, "ADAPTIVE_EXECUTION_FAILED");
         }
         result = publishCandidateIfNeeded(command, result);
@@ -126,12 +132,18 @@ public class V2AdaptiveExecutionService {
             if (published.artifactId() == null) {
                 return candidateFailed(result);
             }
+            log.info(
+                    "V2 Candidate published intakeId={} turnId={} "
+                            + "planId={} artifactId={} pathCount={}",
+                    command.intakeId(), command.turnId(), planId,
+                    published.artifactId(), authority.paths().size());
             return new V2AdaptiveExecutionResult(
                     "WAITING_CONFIRMATION", result.steps(),
                     result.finalText(), null, result.reflections(),
                     result.replans(), result.repairs(),
                     published.artifactId(), authority.paths());
         } catch (RuntimeException failure) {
+            logFailure(command, "candidate.publish", failure);
             return candidateFailed(result);
         }
     }
@@ -182,21 +194,30 @@ public class V2AdaptiveExecutionService {
             return failed(initial, boundedCode(
                     "EXEC_START_VALIDATION_" + failure.code().name()));
         } catch (RuntimeException failure) {
+            logFailure(command, "execution.start", failure);
             return failed(initial, "EXECUTION_START_EXCEPTION");
         }
         if (command.projectVersion() != null) {
             try {
+                Optional<PlanExecutionContextLeaseAttempt> contextAttempt =
+                        recovered.resolution()
+                                == ExecutionStartRecoveryResolution
+                                        .OBSERVED_COMMITTED
+                                ? Optional.empty()
+                                : Optional.of(
+                                        new PlanExecutionContextLeaseAttempt(
+                                                owner, token, expires));
                 var context = contexts.compose(
                         command.userId(), command.turnId(),
                         new AuthenticatedAgentTurnPlanExecutionContextCommand(
-                                Optional.of(
-                                        new PlanExecutionContextLeaseAttempt(
-                                                owner, token, expires))));
+                                contextAttempt));
                 if (!(context instanceof PlanExecutionContextReady ready)
                         || !ready.planId().equals(recovered.planId())) {
                     return failed(initial, "WORKSPACE_CONTEXT_REJECTED");
                 }
             } catch (RuntimeException failure) {
+                logWorkspaceFailure(command, failure);
+                logFailure(command, "workspace.context", failure);
                 return failed(initial, "WORKSPACE_CONTEXT_EXCEPTION");
             }
         }
@@ -206,6 +227,7 @@ public class V2AdaptiveExecutionService {
                     command.bindings(), owner, token, expires,
                     suffix, base, command.modelProvider());
         } catch (RuntimeException failure) {
+            logFailure(command, "cycle.setup", failure);
             return failed(initial, "CYCLE_SETUP_EXCEPTION");
         }
         var coordinator = new V2AdaptiveExecutionCoordinator(
@@ -233,7 +255,48 @@ public class V2AdaptiveExecutionService {
                                     List.of(), List.of(),
                                     unfinished(initial))));
         } catch (RuntimeException failure) {
+            logFailure(command, "coordination", failure);
             return failed(initial, "COORDINATION_EXCEPTION");
+        }
+    }
+
+    private static void logFailure(
+            Command command, String stage, RuntimeException failure) {
+        log.warn(
+                "V2 adaptive boundary failed stage={} intakeId={} "
+                        + "turnId={} planId={} exceptionType={} "
+                        + "causeType={} origin={}",
+                stage,
+                command.intakeId(),
+                command.turnId(),
+                command.bootstrap().plan().id().value(),
+                V2SafeFailureDiagnostics.exceptionType(failure),
+                V2SafeFailureDiagnostics.causeType(failure),
+                V2SafeFailureDiagnostics.origin(failure));
+    }
+
+    private static void logWorkspaceFailure(
+            Command command, RuntimeException failure) {
+        if (failure
+                instanceof PlanExecutionContextCompositionValidationException
+                        validation) {
+            log.warn(
+                    "V2 workspace context validation failed intakeId={} "
+                            + "turnId={} planId={} validationCode={} "
+                            + "validationPath={}",
+                    command.intakeId(), command.turnId(),
+                    command.bootstrap().plan().id().value(),
+                    validation.code(), validation.path());
+        } else if (failure
+                instanceof PlanExecutionContextCompositionProtocolException
+                        protocol) {
+            log.warn(
+                    "V2 workspace context protocol failed intakeId={} "
+                            + "turnId={} planId={} protocolStage={} "
+                            + "protocolCode={} protocolPath={}",
+                    command.intakeId(), command.turnId(),
+                    command.bootstrap().plan().id().value(),
+                    protocol.stage(), protocol.code(), protocol.path());
         }
     }
 
