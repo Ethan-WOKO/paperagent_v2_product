@@ -905,6 +905,10 @@ Focused verification only:
   "-Dtest=V2TurnPlannerTest,V2NaturalLanguageTurnServiceTest,NaturalLanguageEffectAuthoritySourceTest,NaturalLanguageStepKernelFactoryTest,AutonomousNaturalLanguageStepTurnAdapterTest,AuthenticatedPersistentPlanAgentLoopComposerTest,V2AdaptiveExecutionCoordinatorTest,V2AdaptiveExecutionServiceTest,V2SandboxEffectExecutionComposerTest,V2ModelReflectionProviderTest,StrictReflectionDecisionParserTest"
   "-Dsurefire.failIfNoSpecifiedTests=false" test`
   ran 88 tests with 0 failures, 0 errors, and 0 skipped;
+- `mvn -pl yanban-api -am
+  "-Dtest=AuthenticatedEffectDrivenStepProgressionComposerTest,EffectDrivenStepProgressionDraftsCompatibilityTest,PersistentPlanAgentLoopVerticalTest"
+  "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  ran 24 tests with 0 failures, 0 errors, and 0 skipped;
 - `npx vitest run src/utils/__tests__/v2NaturalLanguageTurn.test.ts
   src/views/__tests__/ProjectPreviewPageV2Conversation.test.ts
   tests/v2ProjectModeSwitch.test.ts`
