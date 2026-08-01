@@ -81,6 +81,8 @@ public record PersistentPlanAgentLoopReceiptFacts(
         return switch (toolKind) {
             case "project.read" -> "PROJECT_CONTENT_READ_ONLY";
             case "project.search" -> "PROJECT_SEARCH_ONLY";
+            case "project.bibtex.audit" ->
+                    "PROJECT_BIBLIOGRAPHY_READ_ONLY";
             case "project.candidate.compose" ->
                     "REVIEWABLE_CANDIDATE_CREATED";
             case "sandbox.execute" -> "SANDBOX_EXECUTION_ONLY";

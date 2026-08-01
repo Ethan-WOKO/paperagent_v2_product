@@ -479,7 +479,8 @@ public class V2NaturalLanguageTurnService {
                     values.add(RoutingRequirement.NETWORK);
                     values.add(RoutingRequirement.EXTERNAL_OBSERVATION);
                 }
-                case "project_read", "project_search" ->
+                case "project_read", "project_search",
+                        "project_bibtex_audit" ->
                         values.add(RoutingRequirement.PROJECT_FILE_ACCESS);
                 case "project_candidate" -> {
                     values.add(RoutingRequirement.PROJECT_FILE_ACCESS);
@@ -504,7 +505,8 @@ public class V2NaturalLanguageTurnService {
                     capabilities.add(Capability.ACCESS_NETWORK);
                     capabilities.add(Capability.INVOKE_EXTERNAL_TOOL);
                 }
-                case "project_read", "project_search" ->
+                case "project_read", "project_search",
+                        "project_bibtex_audit" ->
                         capabilities.add(Capability.READ_PROJECT);
                 case "project_candidate" -> {
                     capabilities.add(Capability.READ_PROJECT);

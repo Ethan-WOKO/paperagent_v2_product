@@ -95,8 +95,11 @@ final class V2ToolArgumentSchemaValidator {
     private static boolean string(ObjectValue schema, TextValue value) {
         Integer minimum = integerKeyword(schema.values(), "minLength");
         Integer maximum = integerKeyword(schema.values(), "maxLength");
+        String pattern = text(schema.values(), "pattern");
         return (minimum == null || value.value().length() >= minimum)
-                && (maximum == null || value.value().length() <= maximum);
+                && (maximum == null || value.value().length() <= maximum)
+                && (pattern == null
+                || java.util.regex.Pattern.matches(pattern, value.value()));
     }
 
     private static boolean integer(ObjectValue schema, NumberValue value) {

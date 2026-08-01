@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.tool;
 
 import io.paperagent.v2.contracts.BooleanValue;
+import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.ContractValue;
 import io.paperagent.v2.contracts.ListValue;
 import io.paperagent.v2.contracts.NumberValue;
@@ -24,6 +25,7 @@ class V2ProductToolCatalogTest {
                         "literature.search",
                         "project.read",
                         "project.search",
+                        "project.bibtex.audit",
                         "project.candidate.compose",
                         "sandbox.execute"),
                 V2ProductToolCatalog.descriptors().stream()
@@ -33,6 +35,7 @@ class V2ProductToolCatalogTest {
                         "literature_search",
                         "project_read",
                         "project_search",
+                        "project_bibtex_audit",
                         "project_candidate",
                         "sandbox_execute"),
                 V2ProductToolCatalog.entries().stream()
@@ -47,6 +50,13 @@ class V2ProductToolCatalogTest {
         assertTrue(V2ProductToolCatalog.entries().stream()
                 .allMatch(entry -> !entry.publicDescription().isBlank()
                         && !entry.descriptor().description().isBlank()));
+        assertEquals(
+                java.util.Set.of(Capability.READ_PROJECT),
+                V2ProductToolCatalog.requireDescriptor(
+                        id("project.bibtex.audit")).requiredCapabilities());
+        assertTrue(V2ProductToolCatalog.requireDescriptor(
+                id("project.bibtex.audit")).description().contains(
+                        "Example input"));
     }
 
     @Test
@@ -96,6 +106,29 @@ class V2ProductToolCatalogTest {
                 "paths", list(
                         text("paper/main.tex"),
                         text("paper/main.tex"))))));
+    }
+
+    @Test
+    void acceptsAndRejectsBibtexAuditArgumentsWithoutExecution() {
+        ToolId tool = id("project.bibtex.audit");
+        assertTrue(accepts(tool, object(Map.of(
+                "paths", list(
+                        text("paper/references.bib"),
+                        text("paper/main.tex")),
+                "includeUnusedEntries", bool(true)))));
+        assertTrue(accepts(tool, object(Map.of(
+                "paths", list(text("paper/references.bib"))))));
+        assertFalse(accepts(tool, object(Map.of(
+                "paths", list()))));
+        assertFalse(accepts(tool, object(Map.of(
+                "paths", list(
+                        text("paper/references.bib"),
+                        text("paper/references.bib"))))));
+        assertFalse(accepts(tool, object(Map.of(
+                "paths", list(text("paper/references.csv"))))));
+        assertFalse(accepts(tool, object(Map.of(
+                "paths", list(text("paper/references.bib")),
+                "unexpected", text("not allowed")))));
     }
 
     @Test

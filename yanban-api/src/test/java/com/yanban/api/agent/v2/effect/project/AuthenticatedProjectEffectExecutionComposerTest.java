@@ -163,6 +163,71 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     @Test
+    void bibtexAuditExecutesThroughFrozenWorkspaceClaimAndReturnsReceipt() {
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        ProjectPath bib = new ProjectPath("paper/references.bib");
+        ProjectPath tex = new ProjectPath("paper/main.tex");
+        when(workspace.read(ref(), bib)).thenReturn("""
+                @article{used,
+                  author = {Ada Author},
+                  title = {A Result},
+                  year = {2026}
+                }
+                """.getBytes(StandardCharsets.UTF_8));
+        when(workspace.read(ref(), tex)).thenReturn(
+                "See \\cite{used,missing}.".getBytes(StandardCharsets.UTF_8));
+        var arguments = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "paths", new io.paperagent.v2.contracts.ListValue(List.of(
+                        new io.paperagent.v2.contracts.TextValue(
+                                "paper/references.bib"),
+                        new io.paperagent.v2.contracts.TextValue(
+                                "paper/main.tex"))),
+                "includeUnusedEntries",
+                new io.paperagent.v2.contracts.BooleanValue(true)));
+
+        var outcome = executeSuccess(
+                "project.bibtex.audit", arguments,
+                "{\"includeUnusedEntries\":true,\"paths\":["
+                        + "\"paper/references.bib\",\"paper/main.tex\"]}",
+                workspace);
+
+        var receipt = outcome.result().receipt();
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
+                receipt.status());
+        assertFalse(receipt.standardOutput().truncated());
+        String output = receipt.standardOutput().inlineText().orElseThrow();
+        assertTrue(output.contains("\"tool\":\"project.bibtex.audit\""));
+        assertTrue(output.contains("\"code\":\"MISSING_CITATION_KEY\""));
+        assertTrue(output.contains("\"citationKey\":\"missing\""));
+        assertFalse(output.contains(rootPath()));
+    }
+
+    @Test
+    void malformedBibtexReturnsSanitizedToolSpecificFailureReceipt() {
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        ProjectPath bib = new ProjectPath("paper/references.bib");
+        when(workspace.read(ref(), bib)).thenReturn(
+                "@article{unfinished,".getBytes(StandardCharsets.UTF_8));
+        var arguments = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "paths", new io.paperagent.v2.contracts.ListValue(List.of(
+                        new io.paperagent.v2.contracts.TextValue(
+                                "paper/references.bib")))));
+
+        var outcome = executeSuccess(
+                "project.bibtex.audit", arguments,
+                "{\"paths\":[\"paper/references.bib\"]}", workspace);
+
+        var receipt = outcome.result().receipt();
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.FAILURE,
+                receipt.status());
+        assertEquals("PROJECT_BIBTEX_AUDIT_FAILED",
+                receipt.resultCode().orElseThrow());
+        assertEquals("Project BibTeX audit failed",
+                receipt.standardError().inlineText().orElseThrow());
+        assertTrue(receipt.standardOutput().inlineText().isEmpty());
+    }
+
+    @Test
     void exact64KiBReadExecutesSuccessfullyWithCompleteReceipt() {
         WorkspacePort workspace = mock(WorkspacePort.class);
         WorkspaceRef ref = ref();

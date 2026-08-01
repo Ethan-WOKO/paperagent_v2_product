@@ -63,7 +63,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private static final Logger log = LoggerFactory.getLogger(
             AuthenticatedProjectEffectExecutionComposer.class);
     private static final Set<String> KINDS =
-            Set.of("project.read", "project.search");
+            Set.of("project.read", "project.search",
+                    V2ProjectBibtexAuditTool.KIND);
     private static final int MAX_FILE_BYTES = 64 * 1024;
     private static final int MAX_CAPTURE_CHARS = 256 * 1024;
 
@@ -80,6 +81,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final ObjectMapper json;
     private final NaturalLanguageEffectAuthoritySource naturalAuthorities;
     private final NaturalLanguageCandidateAuthorityStore naturalCandidates;
+    private final V2ProjectBibtexAuditTool bibtexAudit;
 
     public AuthenticatedProjectEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
@@ -159,6 +161,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
         this.json = json;
         this.naturalAuthorities = naturalAuthorities;
         this.naturalCandidates = naturalCandidates;
+        this.bibtexAudit = new V2ProjectBibtexAuditTool(json);
     }
 
     public AuthenticatedProjectEffectExecutionOutcome execute(
@@ -472,13 +475,19 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     OutputCapture.empty(), List.of(), java.util.Optional.empty(), List.of());
         }
         boolean success = true;
+        String failureCode = "PROJECT_EVIDENCE_FAILED";
+        String failureMessage = "Project evidence operation failed";
         String output;
         try {
             ObjectNode arguments = (ObjectNode) json.readTree(
                     canonical(intent.intent().arguments()));
-            output = "project.read".equals(intent.intent().kind())
-                    ? read(workspace, ref, arguments)
-                    : search(workspace, ref, arguments);
+            output = switch (intent.intent().kind()) {
+                case "project.read" -> read(workspace, ref, arguments);
+                case "project.search" -> search(workspace, ref, arguments);
+                case V2ProjectBibtexAuditTool.KIND ->
+                        bibtexAudit.execute(workspace, ref, arguments);
+                default -> throw failed("unsupported_project_effect");
+            };
         } catch (RuntimeException | java.io.IOException exception) {
             log.warn(
                     "V2 Project evidence failed planId={} stepId={} "
@@ -493,6 +502,11 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     V2SafeFailureDiagnostics.origin(exception));
             success = false;
             output = "";
+            if (V2ProjectBibtexAuditTool.KIND.equals(
+                    intent.intent().kind())) {
+                failureCode = "PROJECT_BIBTEX_AUDIT_FAILED";
+                failureMessage = "Project BibTeX audit failed";
+            }
         }
         Instant ended = Instant.now();
         return new ExecutionReceipt(
@@ -502,12 +516,12 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 success ? ReceiptStatus.SUCCESS : ReceiptStatus.FAILURE,
                 started, ended, java.util.Optional.of(success ? 0 : 1),
                 success ? java.util.Optional.empty()
-                        : java.util.Optional.of("PROJECT_EVIDENCE_FAILED"),
+                        : java.util.Optional.of(failureCode),
                 success ? capture(output)
                         : OutputCapture.empty(),
                 success ? OutputCapture.empty()
                         : OutputCapture.inline(
-                                "Project evidence operation failed", false),
+                                failureMessage, false),
                 List.of(), java.util.Optional.empty(), List.of());
     }
 

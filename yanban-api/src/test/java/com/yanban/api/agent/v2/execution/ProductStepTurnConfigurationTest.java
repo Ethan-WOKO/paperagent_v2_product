@@ -60,8 +60,12 @@ class ProductStepTurnConfigurationTest {
         assertEquals("literature.search", tools.get(0).id().value());
         assertEquals("project.read", tools.get(1).id().value());
         assertEquals("project.search", tools.get(2).id().value());
-        assertEquals("project.candidate.compose", tools.get(3).id().value());
-        assertEquals("sandbox.execute", tools.get(4).id().value());
+        assertEquals("project.bibtex.audit", tools.get(3).id().value());
+        assertEquals(
+                java.util.Set.of(io.paperagent.v2.contracts.Capability.READ_PROJECT),
+                tools.get(3).requiredCapabilities());
+        assertEquals("project.candidate.compose", tools.get(4).id().value());
+        assertEquals("sandbox.execute", tools.get(5).id().value());
     }
 
     @Test

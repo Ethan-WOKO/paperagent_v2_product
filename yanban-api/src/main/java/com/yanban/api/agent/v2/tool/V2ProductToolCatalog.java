@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.tool;
 
 import io.paperagent.v2.contracts.BooleanValue;
+import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.ContractValue;
 import io.paperagent.v2.contracts.ListValue;
 import io.paperagent.v2.contracts.NumberValue;
@@ -27,6 +28,7 @@ public final class V2ProductToolCatalog {
             literatureSearch(),
             projectRead(),
             projectSearch(),
+            projectBibtexAudit(),
             projectCandidateCompose(),
             sandboxExecute());
     private static final Map<String, Entry> BY_ALIAS = indexByAlias();
@@ -129,6 +131,34 @@ public final class V2ProductToolCatalog {
                         List.of("query", "maxResults")));
     }
 
+    private static Entry projectBibtexAudit() {
+        return entry(
+                "project_bibtex_audit",
+                "Audit BibTeX entries and LaTeX citation usage in the frozen Project.",
+                "project.bibtex.audit",
+                "Audit one to twenty exact .bib or .tex files in the "
+                        + "authenticated frozen Project Workspace. Detect "
+                        + "duplicate citation keys, missing title/author/year "
+                        + "fields, missing cited keys, and optionally unused "
+                        + "entries. This is a bounded first-version syntax "
+                        + "audit; it does not verify DOI metadata, citation "
+                        + "quality, compilation, or modify any file. Example "
+                        + "input: {\"paths\":[\"paper/references.bib\","
+                        + "\"paper/main.tex\"],\"includeUnusedEntries\":true}. "
+                        + "A successful Receipt returns summary counts and "
+                        + "issue locations only.",
+                objectSchema(
+                        Map.of(
+                                "paths", arraySchema(
+                                        stringSchema(
+                                                1, 1_024,
+                                                "(?i).+\\.(bib|tex)"),
+                                        1, 20, true),
+                                "includeUnusedEntries", booleanSchema()),
+                        List.of("paths")),
+                Set.of(Capability.READ_PROJECT));
+    }
+
     private static Entry projectCandidateCompose() {
         return entry(
                 "project_candidate",
@@ -183,11 +213,28 @@ public final class V2ProductToolCatalog {
             String id,
             String modelDescription,
             ObjectValue schema) {
+        return entry(
+                alias,
+                publicDescription,
+                id,
+                modelDescription,
+                schema,
+                Set.of());
+    }
+
+    private static Entry entry(
+            String alias,
+            String publicDescription,
+            String id,
+            String modelDescription,
+            ObjectValue schema,
+            Set<Capability> requiredCapabilities) {
         return new Entry(
                 alias,
                 publicDescription,
                 new ToolDescriptor(
-                        new ToolId(id), modelDescription, Set.of(), schema));
+                        new ToolId(id), modelDescription,
+                        requiredCapabilities, schema));
     }
 
     private static ObjectValue objectSchema(
@@ -208,6 +255,15 @@ public final class V2ProductToolCatalog {
                 "type", text("string"),
                 "minLength", number(minimum),
                 "maxLength", number(maximum)));
+    }
+
+    private static ObjectValue stringSchema(
+            int minimum, int maximum, String pattern) {
+        return object(Map.of(
+                "type", text("string"),
+                "minLength", number(minimum),
+                "maxLength", number(maximum),
+                "pattern", text(pattern)));
     }
 
     private static ObjectValue constantStringSchema(String value) {

@@ -71,8 +71,8 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
         assertEquals(
                 List.of(
                         "literature.search", "project.read",
-                        "project.search", "project.candidate.compose",
-                        "sandbox.execute"),
+                        "project.search", "project.bibtex.audit",
+                        "project.candidate.compose", "sandbox.execute"),
                 requests.getAllValues().get(0).availableTools().stream()
                         .map(value -> value.id().value()).toList());
         String system = requests.getAllValues().get(0)
@@ -377,6 +377,8 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                                 new ToolId("project.read")),
                         NaturalLanguageStepKernelFactory.descriptor(
                                 new ToolId("project.search")),
+                        NaturalLanguageStepKernelFactory.descriptor(
+                                new ToolId("project.bibtex.audit")),
                         NaturalLanguageStepKernelFactory.descriptor(
                                 new ToolId("project.candidate.compose")),
                         NaturalLanguageStepKernelFactory.descriptor(

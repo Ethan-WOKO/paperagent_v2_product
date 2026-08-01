@@ -420,3 +420,31 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
 - Excluded: new paper tools, public debug endpoints, V1 tool-loop migration or
   deletion, database changes, effect semantic changes, real Provider/E2B
   calls, Candidate apply, and frontend changes.
+
+## V2 Project BibTeX audit
+
+- Issue: `#114`.
+- Status: `REUSE_BEHAVIOR_WITH_WORKSPACE_ADAPTER`.
+- Assessed entry: `ProjectBibtexAuditToolExecutor` and the frozen
+  `project_bibtex_audit` research contract.
+- Reuse decision: preserve the existing first-version issue taxonomy
+  (`DUPLICATE_KEY`, `MISSING_REQUIRED_FIELD`, `UNUSED_ENTRY`, and
+  `MISSING_CITATION_KEY`) and its bounded, deterministic parsing policy. Do
+  not invoke the old executor from V2 because it depends on
+  `ToolExecutionContext`, `ToolRegistry`, and current `ProjectService` reads.
+- V2 identity: `project.bibtex.audit`, with public planner alias
+  `project_bibtex_audit`. The strict schema accepts one to twenty unique
+  normalized Project-relative `.bib` or `.tex` paths and an optional
+  `includeUnusedEntries` boolean.
+- Authority: the natural-language persistent Plan, current ACTIVE Step,
+  ToolCall, fenced lease, frozen ProjectVersion, confirmed execution context,
+  and authenticated Workspace are revalidated before any read. Model paths
+  carry no user, Project, version, Workspace, or host-path authority.
+- Result: one bounded structured Receipt contains parser metadata, inspected
+  Project-relative paths, summary counts, and issue locations. It never
+  returns host paths or complete source files and performs no Workspace or
+  Project mutation.
+- Excluded: document/PDF/DOCX extraction, table or image inspection, DOI or
+  citation-network verification, Project/Candidate writes, frontend changes,
+  database schema, V1 tool-loop restoration, and LangChain4j annotation
+  registration. Each later academic capability requires its own Issue/PR.
