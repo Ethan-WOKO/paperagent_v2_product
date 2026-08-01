@@ -5,10 +5,10 @@ import com.yanban.agent.v2.adapter.provider.DeterministicProductStepTurnAdapter;
 import com.yanban.agent.v2.adapter.provider.ProductChatModelProviderAdapter;
 import com.yanban.agent.v2.adapter.provider.ProductModelEndpointResolver;
 import com.yanban.agent.v2.adapter.provider.ProductStepToolSelector;
+import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.model.ChatModelProvider;
 import io.paperagent.v2.contracts.ToolDescriptor;
-import io.paperagent.v2.contracts.ToolId;
 import io.paperagent.v2.persistence.EffectIntentRepository;
 import io.paperagent.v2.providers.ModelProvider;
 import io.paperagent.v2.runtime.execution.kernel.DefaultSingleTurnStepKernel;
@@ -21,7 +21,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
-import java.util.Set;
 import java.util.Map;
 
 /** Product wiring for one owner-resolved provider-backed V2 Step turn. */
@@ -46,23 +45,7 @@ public class ProductStepTurnConfiguration {
 
     @Bean("agentV2AllowedTools")
     List<ToolDescriptor> agentV2AllowedTools() {
-        return List.of(
-                new ToolDescriptor(
-                        new ToolId("literature.search"),
-                        "Search the product literature index using structured criteria.",
-                        Set.of()),
-                new ToolDescriptor(
-                        new ToolId("project.read"),
-                        "Read one exact frozen Project text path.",
-                        Set.of()),
-                new ToolDescriptor(
-                        new ToolId("project.search"),
-                        "Search one literal query in the frozen Project Workspace.",
-                        Set.of()),
-                new ToolDescriptor(
-                        new ToolId("project.candidate.compose"),
-                        "Create bounded full-text replacements for the exact frozen Project targets in an isolated Workspace.",
-                        Set.of()));
+        return V2ProductToolCatalog.descriptors();
     }
 
     @Bean

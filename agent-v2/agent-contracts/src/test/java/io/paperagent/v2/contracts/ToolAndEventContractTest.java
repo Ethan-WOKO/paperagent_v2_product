@@ -5,6 +5,7 @@ import static io.paperagent.v2.contracts.ContractFixtures.STEP_1;
 import static io.paperagent.v2.contracts.ContractFixtures.T0;
 import static io.paperagent.v2.contracts.ContractFixtures.TASK_ID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -51,6 +52,26 @@ class ToolAndEventContractTest {
         assertEquals(call.id(), result.toolCallId());
         assertEquals("tool.completed", event.type().value());
         assertEquals(1, event.sequence());
+        assertEquals("object", ((TextValue) descriptor.parameterSchema()
+                .values().get("type")).value());
+        assertTrue(((BooleanValue) descriptor.parameterSchema().values()
+                .get("additionalProperties")).value());
+    }
+
+    @Test
+    void rejectsToolParameterSchemaWithoutObjectRoot() {
+        ContractViolationException exception = ContractFixtures.violation(
+                () -> new ToolDescriptor(
+                        new ToolId("workspace.read"),
+                        "Read one workspace file",
+                        Set.of(Capability.READ_PROJECT),
+                        new ObjectValue(Map.of(
+                                "type", new TextValue("string")))));
+
+        assertEquals(
+                ViolationCode.INCONSISTENT_REFERENCE,
+                exception.primaryCode());
+        assertFalse(exception.getMessage().contains("workspace.read"));
     }
 
     @Test

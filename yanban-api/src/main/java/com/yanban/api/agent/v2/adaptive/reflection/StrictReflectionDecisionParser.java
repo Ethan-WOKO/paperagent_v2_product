@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.adaptive.reflection;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.PlanStep;
 import io.paperagent.v2.contracts.PlanStepId;
@@ -13,7 +14,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -26,13 +26,6 @@ public final class StrictReflectionDecisionParser {
     private static final int MAX_TEXT_CHARACTERS = 2_000;
     private static final int MAX_LIST_ITEMS = 16;
     private static final int MAX_STEPS = 8;
-    private static final Map<String, String> CAPABILITIES = Map.of(
-            "literature_search", "literature.search",
-            "project_read", "project.read",
-            "project_search", "project.search",
-            "project_candidate", "project.candidate.compose",
-            "sandbox_execute", "sandbox.execute");
-
     private final ObjectMapper json;
 
     public StrictReflectionDecisionParser(ObjectMapper json) {
@@ -154,11 +147,12 @@ public final class StrictReflectionDecisionParser {
                     throw invalid();
                 }
                 publicAlias = bounded(capability.textValue(), 64);
-                String internal = CAPABILITIES.get(publicAlias);
-                if (publicAlias.contains(".") || internal == null) {
+                var internal = V2ProductToolCatalog
+                        .toolIdForPublicAlias(publicAlias);
+                if (publicAlias.contains(".") || internal.isEmpty()) {
                     throw invalid();
                 }
-                internalToolId = new ToolId(internal);
+                internalToolId = internal.orElseThrow();
             }
             result.add(new ReflectionReplacementStep(
                     planStep, publicAlias, internalToolId));

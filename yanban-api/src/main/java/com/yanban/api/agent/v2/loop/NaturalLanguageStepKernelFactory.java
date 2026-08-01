@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.loop;
 
 import com.yanban.agent.v2.adapter.provider.DeterministicProductStepTurnAdapter;
 import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
+import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ToolDescriptor;
 import io.paperagent.v2.contracts.ToolId;
@@ -11,7 +12,6 @@ import io.paperagent.v2.runtime.execution.kernel.DefaultSingleTurnStepKernel;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernel;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -76,67 +76,11 @@ public class NaturalLanguageStepKernelFactory {
     }
 
     private static List<ToolDescriptor> autonomousTools() {
-        return List.of(
-                descriptor(new ToolId("literature.search")),
-                descriptor(new ToolId("project.read")),
-                descriptor(new ToolId("project.search")),
-                descriptor(new ToolId("project.candidate.compose")),
-                descriptor(new ToolId("sandbox.execute")));
+        return V2ProductToolCatalog.descriptors();
     }
 
     static ToolDescriptor descriptor(ToolId id) {
-        if (!Set.of("literature.search", "project.read", "project.search",
-                "project.candidate.compose", "sandbox.execute")
-                .contains(id.value())) {
-            throw new IllegalArgumentException(
-                    "NATURAL_LANGUAGE_CAPABILITY_UNAVAILABLE");
-        }
-        String description = switch (id.value()) {
-            case "project.read" ->
-                    "Read one UTF-8 Project file. Arguments must be exactly "
-                            + "{\"path\":\"normalized/existing/path\"}.";
-            case "project.search" ->
-                    "Search all Project text files for one literal string. "
-                            + "Arguments must be exactly "
-                            + "{\"query\":\"literal text up to 256 chars\","
-                            + "\"maxResults\":10}; maxResults is 1-20.";
-            case "project.candidate.compose" ->
-                    "Prepare reviewed Project changes in the isolated "
-                            + "Workspace and create the only durable source "
-                            + "for a reviewable Candidate. Use this for any "
-                            + "Project file creation or modification; "
-                            + "sandbox.execute cannot create a Candidate. "
-                            + "Arguments must be exactly "
-                            + "{\"operation\":\"compose\",\"paths\":["
-                            + "\"normalized/existing/path\"]}; "
-                            + "include 1-4 paths.";
-            case "sandbox.execute" ->
-                    "Run Project code in the existing isolated E2B Sandbox. "
-                            + "When a prior completed Plan Step created a "
-                            + "Candidate, run that resulting isolated "
-                            + "Workspace instead of recreating the Candidate. "
-                            + "This proves execution only and cannot create "
-                            + "or update a Project Candidate. "
-                            + "Arguments must be exactly "
-                            + "{\"paths\":[\"normalized/path\"],"
-                            + "\"argv\":[\"yanban-runner\",\"java\","
-                            + "\"normalized/path.java\"]}. Supported argv "
-                            + "profiles include yanban-runner java/python/c/"
-                            + "cpp, Maven test/verify, direct Java source "
-                            + "launch, direct javac, and bounded git checks. "
-                            + "Prefer yanban-runner java path.java for Java "
-                            + "compile-and-run. Direct javac accepts only one "
-                            + "or more normalized .java source paths and no "
-                            + "flags. Direct java accepts only -version or "
-                            + "one normalized .java source path; it does not "
-                            + "accept a compiled class name. Java runner "
-                            + "arguments may "
-                            + "append --dependency=group:artifact:version; "
-                            + "dependencies are prepared before offline run.";
-            default ->
-                    "Execute the exact frozen V2 capability for this Step.";
-        };
-        return new ToolDescriptor(id, description, Set.of());
+        return V2ProductToolCatalog.requireDescriptor(id);
     }
 
     public record AutonomousKernel(

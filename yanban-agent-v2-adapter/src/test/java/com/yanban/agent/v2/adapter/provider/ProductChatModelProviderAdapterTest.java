@@ -7,6 +7,11 @@ import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ToolCall;
+import io.paperagent.v2.contracts.BooleanValue;
+import io.paperagent.v2.contracts.ContractValue;
+import io.paperagent.v2.contracts.ListValue;
+import io.paperagent.v2.contracts.ObjectValue;
+import io.paperagent.v2.contracts.TextValue;
 import io.paperagent.v2.contracts.ToolDescriptor;
 import io.paperagent.v2.contracts.ToolId;
 import io.paperagent.v2.providers.CorrelationId;
@@ -72,6 +77,12 @@ class ProductChatModelProviderAdapterTest {
         assertEquals(512, mapped.maxTokens());
         assertEquals("literature_search",
                 mapped.tools().get(0).function().name());
+        var parameters = mapped.tools().get(0).function().parameters();
+        assertEquals("object", parameters.path("type").textValue());
+        assertFalse(parameters.path("additionalProperties").booleanValue());
+        assertEquals("query", parameters.path("required").get(0).textValue());
+        assertEquals(2_000, parameters.path("properties")
+                .path("query").path("maxLength").intValue());
         assertEquals("correlation-1", mapped.traceId());
         assertEquals("owner-api-key", mapped.apiKey());
         assertEquals("https://owner.example/v1", mapped.apiUrl());
@@ -214,7 +225,17 @@ class ProductChatModelProviderAdapterTest {
                 List.of(new ToolDescriptor(
                         new ToolId("literature.search"),
                         "search",
-                        Set.of())),
+                        Set.of(),
+                        new ObjectValue(Map.of(
+                                "type", new TextValue("object"),
+                                "properties", new ObjectValue(Map.of(
+                                        "query", new ObjectValue(Map.of(
+                                                "type", new TextValue("string"),
+                                                "maxLength", new io.paperagent.v2.contracts.NumberValue(
+                                                        java.math.BigDecimal.valueOf(2_000)))))),
+                                "required", new ListValue(List.of(
+                                        (ContractValue) new TextValue("query"))),
+                                "additionalProperties", new BooleanValue(false))))),
                 new GenerationOptions(
                         512, 1, 0.25d, OptionalLong.empty(), Map.of()),
                 Optional.of(input.taskFrame().id()),

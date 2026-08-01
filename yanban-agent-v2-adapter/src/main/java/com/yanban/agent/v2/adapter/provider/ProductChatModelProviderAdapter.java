@@ -134,11 +134,41 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
 
     private ToolSpec tool(
             ToolDescriptor descriptor, String providerName) {
-        ObjectNode schema = json.createObjectNode();
-        schema.put("type", "object");
-        schema.put("additionalProperties", true);
         return ToolSpec.function(
-                providerName, descriptor.description(), schema);
+                providerName,
+                descriptor.description(),
+                jsonNode(descriptor.parameterSchema()));
+    }
+
+    private JsonNode jsonNode(ContractValue value) {
+        if (value instanceof NullValue) {
+            return json.nullNode();
+        }
+        if (value instanceof TextValue text) {
+            return json.getNodeFactory().textNode(text.value());
+        }
+        if (value instanceof BooleanValue bool) {
+            return json.getNodeFactory().booleanNode(bool.value());
+        }
+        if (value instanceof NumberValue number) {
+            return json.getNodeFactory().numberNode(number.value());
+        }
+        if (value instanceof ListValue list) {
+            var array = json.createArrayNode();
+            list.values().forEach(item -> array.add(jsonNode(item)));
+            return array;
+        }
+        if (value instanceof ObjectValue object) {
+            ObjectNode node = json.createObjectNode();
+            object.values().entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(entry -> node.set(
+                            entry.getKey(), jsonNode(entry.getValue())));
+            return node;
+        }
+        throw new ProductStepTurnException(
+                ProductStepTurnError.INVALID_CONFIGURATION,
+                "productModelProvider.tools.parameterSchema");
     }
 
     private ModelResponse mapResponse(

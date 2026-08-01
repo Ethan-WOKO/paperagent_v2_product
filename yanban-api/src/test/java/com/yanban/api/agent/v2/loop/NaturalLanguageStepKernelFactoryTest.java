@@ -1,24 +1,35 @@
 package com.yanban.api.agent.v2.loop;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.paperagent.v2.contracts.BooleanValue;
+import io.paperagent.v2.contracts.NumberValue;
+import io.paperagent.v2.contracts.ObjectValue;
 import io.paperagent.v2.contracts.ToolId;
 import org.junit.jupiter.api.Test;
 
 class NaturalLanguageStepKernelFactoryTest {
     @Test
     void projectToolsExposeTheirExactStrictArgumentShapes() {
-        String read = NaturalLanguageStepKernelFactory.descriptor(
-                new ToolId("project.read")).description();
-        String search = NaturalLanguageStepKernelFactory.descriptor(
-                new ToolId("project.search")).description();
+        ObjectValue read = NaturalLanguageStepKernelFactory.descriptor(
+                new ToolId("project.read")).parameterSchema();
+        ObjectValue search = NaturalLanguageStepKernelFactory.descriptor(
+                new ToolId("project.search")).parameterSchema();
 
-        assertTrue(read.contains(
-                "{\"path\":\"normalized/existing/path\"}"));
-        assertTrue(search.contains(
-                "{\"query\":\"literal text up to 256 chars\","
-                        + "\"maxResults\":10}"));
-        assertTrue(search.contains("maxResults is 1-20"));
+        assertFalse(((BooleanValue) read.values()
+                .get("additionalProperties")).value());
+        assertTrue(((ObjectValue) read.values().get("properties"))
+                .values().containsKey("path"));
+        ObjectValue searchProperties = (ObjectValue) search.values()
+                .get("properties");
+        assertEquals(256, ((NumberValue) ((ObjectValue) searchProperties
+                .values().get("query")).values().get("maxLength"))
+                .value().intValueExact());
+        assertEquals(20, ((NumberValue) ((ObjectValue) searchProperties
+                .values().get("maxResults")).values().get("maximum"))
+                .value().intValueExact());
     }
 
     @Test

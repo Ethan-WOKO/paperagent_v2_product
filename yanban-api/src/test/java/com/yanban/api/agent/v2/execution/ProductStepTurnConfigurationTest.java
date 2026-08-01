@@ -61,6 +61,7 @@ class ProductStepTurnConfigurationTest {
         assertEquals("project.read", tools.get(1).id().value());
         assertEquals("project.search", tools.get(2).id().value());
         assertEquals("project.candidate.compose", tools.get(3).id().value());
+        assertEquals("sandbox.execute", tools.get(4).id().value());
     }
 
     @Test

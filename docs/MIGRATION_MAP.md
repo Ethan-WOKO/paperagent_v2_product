@@ -331,3 +331,33 @@ It must also verify that no controller, WebSocket registration, scheduled
 worker, Spring bean, or frontend client still calls the removed path. Use
 focused compile and behavior tests for the affected boundary; do not treat a
 class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
+
+## Unified V2 product tool catalog and parameter schemas
+
+- Status: `V2_PRODUCT_CONTRACT`.
+- Assessed entries: the stable V2 `ToolDescriptor`, product provider adapter,
+  natural-language planner aliases, autonomous Step tool selection, and the
+  product effect allowlist.
+- Catalog: one product-owned ordered catalog defines the five current tools:
+  `literature.search`, `project.read`, `project.search`,
+  `project.candidate.compose`, and `sandbox.execute`. It is the single source
+  for internal IDs, public planner aliases, model descriptions, required
+  capabilities, and machine-readable parameter schemas.
+- Provider boundary: the provider adapter maps the framework-neutral schema
+  into the existing product `ToolSpec`. Product tools use strict object
+  schemas with explicit required fields, types, sizes/ranges, and
+  `additionalProperties: false`; the former arbitrary-object placeholder is
+  no longer sent to the model.
+- Compatibility: the stable descriptor retains its three-argument constructor
+  with an explicit permissive object schema for existing non-product callers.
+  No reverse dependency from `agent-v2` to product/Jackson code is added.
+- Verification: a pure in-memory catalog harness checks valid and invalid
+  arguments for every current tool. Provider, planner, autonomous-loop, and
+  effect-allowlist tests need no frontend, real model, Project, or Sandbox.
+- Authority: schemas guide model output and enable fast contract testing; they
+  are not identity or permission authority. Existing authenticated Plan/Step,
+  ToolCall, lease/fence, Workspace, Candidate, ProjectVersion, and executor
+  validation remains the final deterministic boundary.
+- Excluded: new paper tools, public debug endpoints, V1 tool-loop migration or
+  deletion, database changes, effect semantic changes, real Provider/E2B
+  calls, Candidate apply, and frontend changes.

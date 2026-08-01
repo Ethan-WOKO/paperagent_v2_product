@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.effect;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -37,10 +38,7 @@ public class NaturalLanguageEffectAuthoritySource {
             return false;
         }
         if (stepId == null || stepId.isBlank()
-                || !java.util.Set.of(
-                        "literature.search", "project.read",
-                        "project.search", "project.candidate.compose",
-                        "sandbox.execute").contains(toolId)) {
+                || !V2ProductToolCatalog.supports(toolId)) {
             return false;
         }
         try {
