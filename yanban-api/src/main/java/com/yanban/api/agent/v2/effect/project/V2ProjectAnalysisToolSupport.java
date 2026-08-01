@@ -11,6 +11,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -169,6 +170,47 @@ final class V2ProjectAnalysisToolSupport {
         return separator < 0
                 ? ""
                 : path.substring(separator + 1).toLowerCase(Locale.ROOT);
+    }
+
+    static String withoutLatexComment(String line) {
+        if (line == null || line.isEmpty()) {
+            return "";
+        }
+        for (int index = 0; index < line.length(); index++) {
+            if (line.charAt(index) != '%') {
+                continue;
+            }
+            int slashes = 0;
+            for (int cursor = index - 1;
+                    cursor >= 0 && line.charAt(cursor) == '\\'; cursor--) {
+                slashes++;
+            }
+            if (slashes % 2 == 0) {
+                return line.substring(0, index);
+            }
+        }
+        return line;
+    }
+
+    static int lineNumber(String content, int offset) {
+        int line = 1;
+        int limit = Math.min(Math.max(offset, 0), content.length());
+        for (int index = 0; index < limit; index++) {
+            if (content.charAt(index) == '\n') {
+                line++;
+            }
+        }
+        return line;
+    }
+
+    static String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(
+                            value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 unavailable");
+        }
     }
 
     static String utf8(byte[] bytes) {

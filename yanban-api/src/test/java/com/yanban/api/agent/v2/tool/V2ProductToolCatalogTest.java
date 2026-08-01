@@ -27,6 +27,11 @@ class V2ProductToolCatalogTest {
                         "project.read",
                         "project.search",
                         "project.latex.outline",
+                        "project.latex.crossref.audit",
+                        "project.latex.float.audit",
+                        "project.latex.protected.inventory",
+                        "project.paper.acronym.audit",
+                        "project.paper.language.stats",
                         "project.bibtex.audit",
                         "project.code.symbols",
                         "project.experiment.summary",
@@ -41,6 +46,11 @@ class V2ProductToolCatalogTest {
                         "project_read",
                         "project_search",
                         "project_latex_outline",
+                        "project_latex_crossref_audit",
+                        "project_latex_float_audit",
+                        "project_latex_protected_inventory",
+                        "project_paper_acronym_audit",
+                        "project_paper_language_stats",
                         "project_bibtex_audit",
                         "project_code_symbols",
                         "project_experiment_summary",
@@ -196,6 +206,46 @@ class V2ProductToolCatalogTest {
                 object(Map.of(
                         "query", text("accuracy"),
                         "maxMatches", number(101)))));
+    }
+
+    @Test
+    void acceptsAndRejectsPaperQualityAuditBundleArguments() {
+        assertTrue(accepts(id("project.latex.crossref.audit"), object(Map.of(
+                "relativePaths", list(text("paper/main.tex")),
+                "includeUnreferencedLabels", bool(true)))));
+        assertFalse(accepts(id("project.latex.crossref.audit"), object(Map.of(
+                "relativePaths", list(text("paper/main.md"))))));
+
+        assertTrue(accepts(id("project.latex.float.audit"), object(Map.of(
+                "relativePaths", list(text("paper/main.tex")),
+                "checkAssetExistence", bool(true)))));
+        assertFalse(accepts(id("project.latex.float.audit"), object(Map.of(
+                "relativePaths", list(text("paper/main.tex")),
+                "checkAssetExistence", text("yes")))));
+
+        assertTrue(accepts(id("project.latex.protected.inventory"),
+                object(Map.of(
+                        "relativePaths", list(text("paper/main.tex")),
+                        "includeMathHashes", bool(false)))));
+        assertFalse(accepts(id("project.latex.protected.inventory"),
+                object(Map.of("relativePaths", list()))));
+
+        assertTrue(accepts(id("project.paper.acronym.audit"), object(Map.of(
+                "relativePaths", list(text("paper/main.tex")),
+                "minimumAcronymLength", number(2)))));
+        assertFalse(accepts(id("project.paper.acronym.audit"), object(Map.of(
+                "relativePaths", list(text("paper/main.pdf"))))));
+        assertFalse(accepts(id("project.paper.acronym.audit"), object(Map.of(
+                "relativePaths", list(text("paper/main.tex")),
+                "minimumAcronymLength", number(1)))));
+
+        assertTrue(accepts(id("project.paper.language.stats"), object(Map.of(
+                "relativePaths", list(text("paper/main.md")),
+                "longSentenceWordLikeUnits", number(35),
+                "includeSections", bool(true)))));
+        assertFalse(accepts(id("project.paper.language.stats"), object(Map.of(
+                "relativePaths", list(text("paper/main.md")),
+                "longSentenceWordLikeUnits", number(201)))));
     }
 
     @Test

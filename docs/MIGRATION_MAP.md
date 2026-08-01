@@ -496,3 +496,49 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   network access, Project/Candidate writes, Sandbox execution, frontend
   changes, schema changes, V1 orchestration restoration, and LangChain4j
   annotation registration.
+
+## V2 read-only paper-quality audit tool bundle
+
+- Issue: `#118`.
+- Status: `REFERENCE_BEHAVIOR_WITH_WORKSPACE_ADAPTER`.
+- Grouping decision: five tools share one authenticated frozen-Workspace,
+  read-only, deterministic parser, structured Receipt, and focused verification
+  boundary. They retain separate schemas, parser identities, budgets, failure
+  codes, and behavior tests.
+- Assessed product entries: `LatexParserService`, `LatexMaskingService`,
+  `PaperFinalAuditService`, and the protected-token checks in
+  `PaperSectionPolishService`. Their useful concepts are conservative LaTeX
+  token recognition, float metadata, and preservation checks. The V2 tools do
+  not invoke or copy their paper-task orchestration, task entities, model calls,
+  repair flow, or direct source-storage path.
+- New V2-only behavior: acronym definition/casing observations and descriptive
+  prose statistics have no legacy executor to migrate. They are implemented as
+  bounded product tools over the same V2 Workspace authority and make no
+  semantic correctness, grammar, or publication-quality claim.
+- V2 identities: `project.latex.crossref.audit`,
+  `project.latex.float.audit`, `project.latex.protected.inventory`,
+  `project.paper.acronym.audit`, and `project.paper.language.stats`, with
+  matching underscore planner aliases. All require `READ_PROJECT`, `TOOL_USE`,
+  and `PROJECT_FILE_ACCESS`, and dispatch through the catalog's Project target.
+- Cross-reference audit reports duplicate labels, unresolved references, and
+  optional unreferenced labels. Float audit reports figure/table captions,
+  labels, references, and existence of normalized local graphics paths; it
+  does not expand includes, macros, or `graphicspath`, or inspect image bytes.
+- Protected inventory returns citation/reference/label/environment identifiers
+  plus optional hashes and lengths for line-local math, never math content.
+  Its deterministic inventory fingerprint is suitable for comparing accepted
+  facts across Plan Steps, but it does not itself decide whether a Candidate is
+  safe or apply one.
+- Acronym audit reports local definitions, uppercase use before definition,
+  undefined uppercase uses, differing local definitions, and observed casing
+  variants. Language statistics report character, word-like-unit, sentence,
+  paragraph, section, and long-sentence location facts after conservative
+  markup removal. Both explicitly remain heuristics.
+- Authority: authenticated user/turn, persistent Plan, current ACTIVE Step,
+  ToolCall, fenced lease, frozen ProjectVersion, confirmed execution context,
+  and Workspace are revalidated before reading. Model paths and options carry
+  no identity, permission, or host-path authority.
+- Excluded: semantic peer review, grammar rewriting, novelty assessment,
+  PDF/DOCX/OCR or image-content analysis, network/RAG/literature retrieval,
+  Workspace writes, Candidate creation/apply, ProjectVersion mutation, Sandbox
+  execution, schema/frontend changes, V2 core changes, and V1 orchestration.

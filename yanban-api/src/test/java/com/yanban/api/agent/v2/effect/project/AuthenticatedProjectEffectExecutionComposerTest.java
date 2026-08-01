@@ -218,6 +218,55 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 "{\"relativePaths\":[\"paper/main.tex\"]}",
                 latexWorkspace);
 
+        assertSuccessfulToolReceipt(
+                "project.latex.crossref.audit",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "paper/main.tex"))))),
+                "{\"relativePaths\":[\"paper/main.tex\"]}",
+                latexWorkspace);
+        assertSuccessfulToolReceipt(
+                "project.latex.float.audit",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "paper/main.tex"))),
+                        "checkAssetExistence",
+                        new io.paperagent.v2.contracts.BooleanValue(false))),
+                "{\"checkAssetExistence\":false,\"relativePaths\":["
+                        + "\"paper/main.tex\"]}",
+                latexWorkspace);
+        assertSuccessfulToolReceipt(
+                "project.latex.protected.inventory",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "paper/main.tex"))))),
+                "{\"relativePaths\":[\"paper/main.tex\"]}",
+                latexWorkspace);
+        assertSuccessfulToolReceipt(
+                "project.paper.acronym.audit",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "paper/main.tex"))))),
+                "{\"relativePaths\":[\"paper/main.tex\"]}",
+                latexWorkspace);
+        assertSuccessfulToolReceipt(
+                "project.paper.language.stats",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "paper/main.tex"))))),
+                "{\"relativePaths\":[\"paper/main.tex\"]}",
+                latexWorkspace);
+
         WorkspacePort codeWorkspace = mock(WorkspacePort.class);
         when(codeWorkspace.read(ref(), new ProjectPath("src/Main.java")))
                 .thenReturn("class Main {}".getBytes(StandardCharsets.UTF_8));
@@ -277,6 +326,21 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         assertFailureReceipt("project.latex.outline", emptyPaths,
                 "{\"relativePaths\":[]}",
                 "PROJECT_LATEX_OUTLINE_FAILED", workspace);
+        assertFailureReceipt("project.latex.crossref.audit", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_LATEX_CROSSREF_AUDIT_FAILED", workspace);
+        assertFailureReceipt("project.latex.float.audit", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_LATEX_FLOAT_AUDIT_FAILED", workspace);
+        assertFailureReceipt("project.latex.protected.inventory", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_LATEX_PROTECTED_INVENTORY_FAILED", workspace);
+        assertFailureReceipt("project.paper.acronym.audit", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_PAPER_ACRONYM_AUDIT_FAILED", workspace);
+        assertFailureReceipt("project.paper.language.stats", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_PAPER_LANGUAGE_STATS_FAILED", workspace);
         assertFailureReceipt("project.code.symbols", emptyPaths,
                 "{\"relativePaths\":[]}",
                 "PROJECT_CODE_SYMBOLS_FAILED", workspace);
