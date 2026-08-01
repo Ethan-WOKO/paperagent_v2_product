@@ -81,7 +81,9 @@ dependency is a stop condition, not a reason to weaken the core.
 
 ## Migration sequence
 
-Each later capability uses a separate Issue and Draft PR:
+Each later coherent capability bundle uses a separate Issue and Draft PR.
+Closely related tools may be grouped four to five at a time only when they
+share one authority, side-effect, runtime, and verification boundary:
 
 1. product identity, session, Project, and TaskFrame adapters;
 2. persistence, Workspace, Provider, and Sandbox adapters;

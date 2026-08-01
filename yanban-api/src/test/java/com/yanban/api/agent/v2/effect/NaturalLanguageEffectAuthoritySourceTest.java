@@ -27,6 +27,16 @@ class NaturalLanguageEffectAuthoritySourceTest {
         assertTrue(source.authorizes(
                 7L, 11L, "plan-1", "read-1", "project.bibtex.audit"));
         assertTrue(source.authorizes(
+                7L, 11L, "plan-1", "read-1", "project.latex.outline"));
+        assertTrue(source.authorizes(
+                7L, 11L, "plan-1", "read-1", "project.code.symbols"));
+        assertTrue(source.authorizes(
+                7L, 11L, "plan-1", "read-1",
+                "project.experiment.summary"));
+        assertTrue(source.authorizes(
+                7L, 11L, "plan-1", "read-1",
+                "project.cross-material.search"));
+        assertTrue(source.authorizes(
                 7L, 11L, "plan-1", "read-1", "sandbox.execute"));
         assertFalse(source.authorizes(
                 7L, 11L, "plan-1", "read-1", "host.shell"));

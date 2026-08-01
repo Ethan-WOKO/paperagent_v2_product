@@ -8,6 +8,7 @@ import io.paperagent.v2.contracts.NumberValue;
 import io.paperagent.v2.contracts.ObjectValue;
 import io.paperagent.v2.contracts.TextValue;
 import io.paperagent.v2.contracts.ToolId;
+import io.paperagent.v2.runtime.routing.RoutingRequirement;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +26,11 @@ class V2ProductToolCatalogTest {
                         "literature.search",
                         "project.read",
                         "project.search",
+                        "project.latex.outline",
                         "project.bibtex.audit",
+                        "project.code.symbols",
+                        "project.experiment.summary",
+                        "project.cross-material.search",
                         "project.candidate.compose",
                         "sandbox.execute"),
                 V2ProductToolCatalog.descriptors().stream()
@@ -35,7 +40,11 @@ class V2ProductToolCatalogTest {
                         "literature_search",
                         "project_read",
                         "project_search",
+                        "project_latex_outline",
                         "project_bibtex_audit",
+                        "project_code_symbols",
+                        "project_experiment_summary",
+                        "project_cross_material_search",
                         "project_candidate",
                         "sandbox_execute"),
                 V2ProductToolCatalog.entries().stream()
@@ -57,6 +66,26 @@ class V2ProductToolCatalogTest {
         assertTrue(V2ProductToolCatalog.requireDescriptor(
                 id("project.bibtex.audit")).description().contains(
                         "Example input"));
+        assertTrue(V2ProductToolCatalog.entries().stream()
+                .allMatch(entry -> entry.routingRequirements().contains(
+                        RoutingRequirement.TOOL_USE)));
+        assertTrue(V2ProductToolCatalog.entries().stream()
+                .allMatch(entry -> !entry.descriptor()
+                        .requiredCapabilities().isEmpty()));
+        assertTrue(V2ProductToolCatalog.entries().stream()
+                .filter(entry -> entry.publicAlias().startsWith("project_"))
+                .allMatch(entry -> entry.routingRequirements().contains(
+                        RoutingRequirement.PROJECT_FILE_ACCESS)));
+        assertTrue(V2ProductToolCatalog.entries().stream()
+                .filter(entry -> entry.publicAlias().startsWith("project_"))
+                .allMatch(entry -> entry.executionTarget()
+                        == V2ProductToolCatalog.ExecutionTarget.PROJECT));
+        assertEquals(V2ProductToolCatalog.ExecutionTarget.LITERATURE,
+                V2ProductToolCatalog.entry(id("literature.search"))
+                        .orElseThrow().executionTarget());
+        assertEquals(V2ProductToolCatalog.ExecutionTarget.SANDBOX,
+                V2ProductToolCatalog.entry(id("sandbox.execute"))
+                        .orElseThrow().executionTarget());
     }
 
     @Test
@@ -129,6 +158,44 @@ class V2ProductToolCatalogTest {
         assertFalse(accepts(tool, object(Map.of(
                 "paths", list(text("paper/references.bib")),
                 "unexpected", text("not allowed")))));
+    }
+
+    @Test
+    void acceptsAndRejectsReadOnlyProjectAnalysisBundleArguments() {
+        assertTrue(accepts(id("project.latex.outline"), object(Map.of(
+                "relativePaths", list(text("paper/main.tex")),
+                "includeFormulaReferences", bool(true)))));
+        assertFalse(accepts(id("project.latex.outline"), object(Map.of(
+                "relativePaths", list(text("paper/main.md"))))));
+
+        assertTrue(accepts(id("project.code.symbols"), object(Map.of(
+                "relativePaths", list(text("src/Main.java")),
+                "symbolQuery", text("main"),
+                "includeDependencies", bool(true)))));
+        assertFalse(accepts(id("project.code.symbols"), object(Map.of(
+                "relativePaths", list(text("src/Main.class"))))));
+
+        assertTrue(accepts(id("project.experiment.summary"), object(Map.of(
+                "relativePaths", list(text("results/metrics.csv")),
+                "metricNames", list(text("accuracy")),
+                "maxRowsPerFile", number(100)))));
+        assertFalse(accepts(id("project.experiment.summary"), object(Map.of(
+                "relativePaths", list(text("results/metrics.csv")),
+                "maxRowsPerFile", number(501)))));
+
+        assertTrue(accepts(id("project.cross-material.search"),
+                object(Map.of(
+                        "query", text("accuracy"),
+                        "relativePaths", list(
+                                text("paper/main.tex"),
+                                text("results/metrics.csv")),
+                        "maxMatches", number(20)))));
+        assertTrue(accepts(id("project.cross-material.search"),
+                object(Map.of("query", text("accuracy")))));
+        assertFalse(accepts(id("project.cross-material.search"),
+                object(Map.of(
+                        "query", text("accuracy"),
+                        "maxMatches", number(101)))));
     }
 
     @Test

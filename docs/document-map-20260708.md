@@ -134,7 +134,8 @@ Current repository context as of 2026-07-27:
 
 1. Start from the active Issue's exact base commit in an independent worktree.
 2. Treat legacy Agent code as `UNASSESSED`; do not copy it into V2 without an
-   independent review.
+   independent review. Group four to five closely related tools only when they
+   share one authority, side-effect, runtime, and verification boundary.
 3. Keep V2-to-product dependency checks in every Agent integration PR.
 4. Preserve the existing product features and run focused tests for only the
    directly affected boundary.

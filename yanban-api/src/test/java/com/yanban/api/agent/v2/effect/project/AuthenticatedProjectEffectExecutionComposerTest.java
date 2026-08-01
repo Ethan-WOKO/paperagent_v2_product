@@ -203,6 +203,94 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     @Test
+    void readOnlyAnalysisBundleDispatchesThroughFrozenWorkspaceClaims() {
+        WorkspacePort latexWorkspace = mock(WorkspacePort.class);
+        when(latexWorkspace.read(ref(), new ProjectPath("paper/main.tex")))
+                .thenReturn("\\section{Method}".getBytes(
+                        StandardCharsets.UTF_8));
+        assertSuccessfulToolReceipt(
+                "project.latex.outline",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "paper/main.tex"))))),
+                "{\"relativePaths\":[\"paper/main.tex\"]}",
+                latexWorkspace);
+
+        WorkspacePort codeWorkspace = mock(WorkspacePort.class);
+        when(codeWorkspace.read(ref(), new ProjectPath("src/Main.java")))
+                .thenReturn("class Main {}".getBytes(StandardCharsets.UTF_8));
+        assertSuccessfulToolReceipt(
+                "project.code.symbols",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "src/Main.java"))))),
+                "{\"relativePaths\":[\"src/Main.java\"]}",
+                codeWorkspace);
+
+        WorkspacePort experimentWorkspace = mock(WorkspacePort.class);
+        when(experimentWorkspace.read(
+                ref(), new ProjectPath("results/metrics.csv")))
+                .thenReturn("epoch,accuracy\n1,0.9".getBytes(
+                        StandardCharsets.UTF_8));
+        assertSuccessfulToolReceipt(
+                "project.experiment.summary",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "results/metrics.csv"))))),
+                "{\"relativePaths\":[\"results/metrics.csv\"]}",
+                experimentWorkspace);
+
+        WorkspacePort crossWorkspace = mock(WorkspacePort.class);
+        when(crossWorkspace.read(ref(), new ProjectPath("paper/main.tex")))
+                .thenReturn("accuracy".getBytes(StandardCharsets.UTF_8));
+        when(crossWorkspace.read(
+                ref(), new ProjectPath("results/metrics.csv")))
+                .thenReturn("accuracy,0.9".getBytes(StandardCharsets.UTF_8));
+        assertSuccessfulToolReceipt(
+                "project.cross-material.search",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "query", new io.paperagent.v2.contracts.TextValue(
+                                "accuracy"),
+                        "relativePaths",
+                        new io.paperagent.v2.contracts.ListValue(List.of(
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "paper/main.tex"),
+                                new io.paperagent.v2.contracts.TextValue(
+                                        "results/metrics.csv"))))),
+                "{\"query\":\"accuracy\",\"relativePaths\":["
+                        + "\"paper/main.tex\",\"results/metrics.csv\"]}",
+                crossWorkspace);
+    }
+
+    @Test
+    void readOnlyAnalysisBundleReturnsToolSpecificFailureReceipts() {
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        var emptyPaths = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "relativePaths",
+                new io.paperagent.v2.contracts.ListValue(List.of())));
+        assertFailureReceipt("project.latex.outline", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_LATEX_OUTLINE_FAILED", workspace);
+        assertFailureReceipt("project.code.symbols", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_CODE_SYMBOLS_FAILED", workspace);
+        assertFailureReceipt("project.experiment.summary", emptyPaths,
+                "{\"relativePaths\":[]}",
+                "PROJECT_EXPERIMENT_SUMMARY_FAILED", workspace);
+        var emptyQuery = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "query", new io.paperagent.v2.contracts.TextValue("")));
+        assertFailureReceipt("project.cross-material.search", emptyQuery,
+                "{\"query\":\"\"}",
+                "PROJECT_CROSS_MATERIAL_SEARCH_FAILED", workspace);
+    }
+
+    @Test
     void malformedBibtexReturnsSanitizedToolSpecificFailureReceipt() {
         WorkspacePort workspace = mock(WorkspacePort.class);
         ProjectPath bib = new ProjectPath("paper/references.bib");
@@ -777,6 +865,37 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                                 .composition.StepRecoveryLeaseAttempt(
                                         "owner", "token",
                                         lease.expiresAt())));
+    }
+
+    private void assertSuccessfulToolReceipt(
+            String kind,
+            io.paperagent.v2.contracts.ObjectValue arguments,
+            String canonicalArguments,
+            WorkspacePort workspace) {
+        var outcome = executeSuccess(
+                kind, arguments, canonicalArguments, workspace);
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
+                outcome.result().receipt().status());
+        String output = outcome.result().receipt().standardOutput()
+                .inlineText().orElseThrow();
+        assertTrue(output.contains("\"tool\":\"" + kind + "\""));
+        assertFalse(output.contains(rootPath()));
+    }
+
+    private void assertFailureReceipt(
+            String kind,
+            io.paperagent.v2.contracts.ObjectValue arguments,
+            String canonicalArguments,
+            String expectedCode,
+            WorkspacePort workspace) {
+        var outcome = executeSuccess(
+                kind, arguments, canonicalArguments, workspace);
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.FAILURE,
+                outcome.result().receipt().status());
+        assertEquals(expectedCode,
+                outcome.result().receipt().resultCode().orElseThrow());
+        assertTrue(outcome.result().receipt().standardOutput()
+                .inlineText().isEmpty());
     }
 
     private static String sha256(String value) {

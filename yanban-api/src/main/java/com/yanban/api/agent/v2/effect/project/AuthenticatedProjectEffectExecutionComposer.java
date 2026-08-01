@@ -13,6 +13,7 @@ import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimResult;
 import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
+import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
 import com.yanban.api.agent.v2.workspace
         .AuthenticatedAgentTurnWorkspaceConfigurationException;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnWorkspacePortFactory;
@@ -28,6 +29,7 @@ import io.paperagent.v2.contracts.ProjectPath;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.ReceiptStatus;
 import io.paperagent.v2.contracts.TextValue;
+import io.paperagent.v2.contracts.ToolId;
 import io.paperagent.v2.persistence.EffectIntentRepository;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedPlanExecutionContextConfirmed;
@@ -51,7 +53,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.LinkedHashSet;
 import io.paperagent.v2.providers.ModelProvider;
 import org.slf4j.Logger;
@@ -62,9 +63,6 @@ import org.springframework.stereotype.Service;
 public class AuthenticatedProjectEffectExecutionComposer {
     private static final Logger log = LoggerFactory.getLogger(
             AuthenticatedProjectEffectExecutionComposer.class);
-    private static final Set<String> KINDS =
-            Set.of("project.read", "project.search",
-                    V2ProjectBibtexAuditTool.KIND);
     private static final int MAX_FILE_BYTES = 64 * 1024;
     private static final int MAX_CAPTURE_CHARS = 256 * 1024;
 
@@ -82,6 +80,10 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final NaturalLanguageEffectAuthoritySource naturalAuthorities;
     private final NaturalLanguageCandidateAuthorityStore naturalCandidates;
     private final V2ProjectBibtexAuditTool bibtexAudit;
+    private final V2ProjectLatexOutlineTool latexOutline;
+    private final V2ProjectCodeSymbolsTool codeSymbols;
+    private final V2ProjectExperimentSummaryTool experimentSummary;
+    private final V2ProjectCrossMaterialSearchTool crossMaterialSearch;
 
     public AuthenticatedProjectEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
@@ -162,6 +164,12 @@ public class AuthenticatedProjectEffectExecutionComposer {
         this.naturalAuthorities = naturalAuthorities;
         this.naturalCandidates = naturalCandidates;
         this.bibtexAudit = new V2ProjectBibtexAuditTool(json);
+        this.latexOutline = new V2ProjectLatexOutlineTool(json);
+        this.codeSymbols = new V2ProjectCodeSymbolsTool(json);
+        this.experimentSummary =
+                new V2ProjectExperimentSummaryTool(json);
+        this.crossMaterialSearch =
+                new V2ProjectCrossMaterialSearchTool(json);
     }
 
     public AuthenticatedProjectEffectExecutionOutcome execute(
@@ -204,9 +212,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                                 .activationEvent().id())
                 || !intent.leaseOwnerId().equals(active.lease().ownerId())
                 || intent.fencingToken() != active.lease().fencingToken()
-                || !KINDS.contains(intent.intent().kind())
-                        && !ProjectCandidateCompositionEffect.KIND.equals(
-                                intent.intent().kind())) {
+                || !isProjectKind(intent.intent().kind())) {
             throw failed("intent_authority");
         }
         boolean naturalCandidate =
@@ -486,6 +492,15 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 case "project.search" -> search(workspace, ref, arguments);
                 case V2ProjectBibtexAuditTool.KIND ->
                         bibtexAudit.execute(workspace, ref, arguments);
+                case V2ProjectLatexOutlineTool.KIND ->
+                        latexOutline.execute(workspace, ref, arguments);
+                case V2ProjectCodeSymbolsTool.KIND ->
+                        codeSymbols.execute(workspace, ref, arguments);
+                case V2ProjectExperimentSummaryTool.KIND ->
+                        experimentSummary.execute(workspace, ref, arguments);
+                case V2ProjectCrossMaterialSearchTool.KIND ->
+                        crossMaterialSearch.execute(
+                                workspace, ref, arguments);
                 default -> throw failed("unsupported_project_effect");
             };
         } catch (RuntimeException | java.io.IOException exception) {
@@ -502,11 +517,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     V2SafeFailureDiagnostics.origin(exception));
             success = false;
             output = "";
-            if (V2ProjectBibtexAuditTool.KIND.equals(
-                    intent.intent().kind())) {
-                failureCode = "PROJECT_BIBTEX_AUDIT_FAILED";
-                failureMessage = "Project BibTeX audit failed";
-            }
+            failureCode = failureCode(intent.intent().kind());
+            failureMessage = failureMessage(intent.intent().kind());
         }
         Instant ended = Instant.now();
         return new ExecutionReceipt(
@@ -681,6 +693,49 @@ public class AuthenticatedProjectEffectExecutionComposer {
 
     private static IllegalStateException failed() {
         return failed("operation");
+    }
+
+    private static boolean isProjectKind(String kind) {
+        try {
+            return V2ProductToolCatalog.entry(new ToolId(kind))
+                    .filter(entry -> entry.executionTarget()
+                            == V2ProductToolCatalog.ExecutionTarget.PROJECT)
+                    .isPresent();
+        } catch (RuntimeException invalid) {
+            return false;
+        }
+    }
+
+    private static String failureCode(String kind) {
+        return switch (kind) {
+            case V2ProjectBibtexAuditTool.KIND ->
+                    "PROJECT_BIBTEX_AUDIT_FAILED";
+            case V2ProjectLatexOutlineTool.KIND ->
+                    "PROJECT_LATEX_OUTLINE_FAILED";
+            case V2ProjectCodeSymbolsTool.KIND ->
+                    "PROJECT_CODE_SYMBOLS_FAILED";
+            case V2ProjectExperimentSummaryTool.KIND ->
+                    "PROJECT_EXPERIMENT_SUMMARY_FAILED";
+            case V2ProjectCrossMaterialSearchTool.KIND ->
+                    "PROJECT_CROSS_MATERIAL_SEARCH_FAILED";
+            default -> "PROJECT_EVIDENCE_FAILED";
+        };
+    }
+
+    private static String failureMessage(String kind) {
+        return switch (kind) {
+            case V2ProjectBibtexAuditTool.KIND ->
+                    "Project BibTeX audit failed";
+            case V2ProjectLatexOutlineTool.KIND ->
+                    "Project LaTeX outline failed";
+            case V2ProjectCodeSymbolsTool.KIND ->
+                    "Project code symbol extraction failed";
+            case V2ProjectExperimentSummaryTool.KIND ->
+                    "Project experiment summary failed";
+            case V2ProjectCrossMaterialSearchTool.KIND ->
+                    "Project cross-material search failed";
+            default -> "Project evidence operation failed";
+        };
     }
 
     private static ProjectEffectExecutionException failed(String stage) {

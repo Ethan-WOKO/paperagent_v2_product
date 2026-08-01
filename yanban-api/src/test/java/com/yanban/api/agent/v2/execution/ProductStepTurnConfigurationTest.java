@@ -57,15 +57,17 @@ class ProductStepTurnConfigurationTest {
         assertNotNull(provider);
         assertNotNull(turn);
         assertNotNull(kernel);
-        assertEquals("literature.search", tools.get(0).id().value());
-        assertEquals("project.read", tools.get(1).id().value());
-        assertEquals("project.search", tools.get(2).id().value());
-        assertEquals("project.bibtex.audit", tools.get(3).id().value());
+        assertEquals(
+                com.yanban.api.agent.v2.tool.V2ProductToolCatalog
+                        .descriptors(),
+                tools);
+        var bibtex = tools.stream()
+                .filter(tool -> "project.bibtex.audit".equals(
+                        tool.id().value()))
+                .findFirst().orElseThrow();
         assertEquals(
                 java.util.Set.of(io.paperagent.v2.contracts.Capability.READ_PROJECT),
-                tools.get(3).requiredCapabilities());
-        assertEquals("project.candidate.compose", tools.get(4).id().value());
-        assertEquals("sandbox.execute", tools.get(5).id().value());
+                bibtex.requiredCapabilities());
     }
 
     @Test

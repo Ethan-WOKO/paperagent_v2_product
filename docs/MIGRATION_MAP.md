@@ -447,4 +447,52 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
 - Excluded: document/PDF/DOCX extraction, table or image inspection, DOI or
   citation-network verification, Project/Candidate writes, frontend changes,
   database schema, V1 tool-loop restoration, and LangChain4j annotation
-  registration. Each later academic capability requires its own Issue/PR.
+  registration. Later tools require an explicitly scoped Issue/PR; four to
+  five closely related tools may share one when their authority, side-effect,
+  runtime, and verification boundaries are identical.
+
+## V2 read-only Project analysis tool bundle
+
+- Issue: `#116`.
+- Status: `REUSE_BEHAVIOR_WITH_WORKSPACE_ADAPTER`.
+- Grouping decision: this Issue contains four capabilities because they share
+  the same read-only frozen-Workspace authority, catalog, Receipt, and test
+  boundary. Each capability retains its own descriptor, strict schema,
+  implementation, parser identity, budgets, failure behavior, and tests.
+- `ProjectLatexOutlineToolExecutor`: reuse the conservative line-oriented
+  extraction semantics for sections, labels, citations, floats, and optional
+  formula references. Do not invoke the old executor because it depends on
+  `AbstractResearchProjectToolExecutor`, `ToolExecutionContext`, and
+  `ProjectService`; the V2 implementation reads only the confirmed Workspace
+  and explicitly does not expand includes or claim a complete LaTeX AST.
+- `ProjectCodeSymbolsToolExecutor`: reuse the conservative Java, Python, and
+  MATLAB symbol/dependency parsing policy. Do not reuse its V1 execution
+  context or claim type inference or a complete call graph. The V2 Receipt
+  reports bounded symbol, parameter, dependency, path, and line facts.
+- `ProjectExperimentSummaryToolExecutor`: reuse the observation-only policy
+  for simple CSV, top-level JSON, simple top-level YAML, and bounded text
+  reports. The V2 adapter distinguishes parse failure from valid observed
+  values and never presents malformed structured input as a valid summary.
+- `ProjectCrossMaterialSearchToolExecutor`: reuse deterministic literal
+  matching and the rule that a cross-material link requires matching evidence
+  from at least two distinct Project-relative paths. The V2 implementation is
+  not semantic/vector/RAG/network search and exposes no host paths.
+- V2 identities: `project.latex.outline`, `project.code.symbols`,
+  `project.experiment.summary`, and `project.cross-material.search`, with the
+  existing public underscore aliases. All require `READ_PROJECT`, `TOOL_USE`,
+  and `PROJECT_FILE_ACCESS` through the unified product catalog.
+- Catalog adaptation: routing requirements, execution capabilities, and the
+  effect target are catalog metadata. Natural-language bootstrap and loop
+  dispatch derive from that metadata so a newly registered alias cannot be
+  rejected solely because a second hardcoded switch was not updated.
+- Authority: authenticated user/turn, persistent Plan, current ACTIVE Step,
+  ToolCall, fenced lease, frozen ProjectVersion, confirmed execution context,
+  and Workspace are revalidated before reading. Model arguments never carry
+  identity, Project, version, lease, Workspace, or host-path authority.
+- Result: each successful effect produces a bounded deterministic structured
+  Receipt suitable for reflection and final synthesis. No tool mutates the
+  Workspace, Candidate, ProjectVersion, revision, or database.
+- Excluded: PDF/DOCX/OCR/chart extraction, DOI verification, semantic search,
+  network access, Project/Candidate writes, Sandbox execution, frontend
+  changes, schema changes, V1 orchestration restoration, and LangChain4j
+  annotation registration.

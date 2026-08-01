@@ -42,7 +42,10 @@ Before changing the repository, read:
 ## Migration rules
 
 - Legacy agent code is `UNASSESSED` until independently reviewed.
-- Migrate one capability per Issue and PR.
+- Migrate closely related tools in coherent bundles of four to five per Issue
+  and PR when they share one authority, side-effect, runtime, and verification
+  boundary. Keep unrelated capabilities or different mutation/network/
+  execution boundaries in separate Issues.
 - Do not copy the legacy `PlanAgentService`, planner, completion verifier, or
   fixed candidate execution chain into V2.
 - Do not weaken V2 contracts to support legacy Plan data.
