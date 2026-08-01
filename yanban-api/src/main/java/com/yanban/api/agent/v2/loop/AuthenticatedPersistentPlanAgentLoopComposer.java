@@ -16,6 +16,10 @@ import com.yanban.api.agent.v2.progression.EffectDrivenStepCompletionCommand;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionException;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionOutcome;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionState;
+import com.yanban.api.agent.v2.progression.AuthenticatedResultDrivenStepProgressionComposer;
+import com.yanban.api.agent.v2.result.V2StepResultService;
+import com.yanban.api.agent.v2.result.V2StepResultSnapshot;
+import com.yanban.api.agent.v2.result.V2StepResultSource;
 import com.yanban.api.agent.sandbox.V2SandboxEffectExecutionComposer;
 import com.yanban.api.agent.sandbox.V2SandboxEffectExecutionException;
 import com.yanban.api.agent.sandbox.V2SandboxEffectPendingException;
@@ -46,6 +50,7 @@ import io.paperagent.v2.runtime.execution.kernel.SingleTurnNoEffect;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnPersistenceRejected;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernel;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelOutcome;
+import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepResultProposed;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelProtocolException;
 import io.paperagent.v2.runtime.execution.kernel.SingleTurnStepKernelRequest;
 import io.paperagent.v2.runtime.execution.loop.BoundedStepAgentLoopNoEffect;
@@ -92,6 +97,9 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
     private final AuthenticatedEffectDrivenStepProgressionComposer progression;
     private final BoundedStepReplanComposer replans;
     private final V2SandboxEffectExecutionComposer sandboxEffects;
+    private final V2StepResultService stepResults;
+    private final AuthenticatedResultDrivenStepProgressionComposer
+            resultProgression;
 
     public AuthenticatedPersistentPlanAgentLoopComposer(
             AgentTurnProductContextResolver contexts,
@@ -106,7 +114,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             BoundedStepReplanComposer replans) {
         this(contexts, planIds, inspections, recoverer, activation, kernel,
                 effects, projectEffects, progression, replans,
-                (V2SandboxEffectExecutionComposer) null);
+                (V2SandboxEffectExecutionComposer) null, null, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -122,10 +130,14 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             AuthenticatedEffectDrivenStepProgressionComposer progression,
             BoundedStepReplanComposer replans,
             org.springframework.beans.factory.ObjectProvider<
-                    V2SandboxEffectExecutionComposer> sandboxEffects) {
+                    V2SandboxEffectExecutionComposer> sandboxEffects,
+            V2StepResultService stepResults,
+            AuthenticatedResultDrivenStepProgressionComposer
+                    resultProgression) {
         this(contexts, planIds, inspections, recoverer, activation, kernel,
                 effects, projectEffects, progression, replans,
-                sandboxEffects.getIfAvailable());
+                sandboxEffects.getIfAvailable(), stepResults,
+                resultProgression);
     }
 
     private AuthenticatedPersistentPlanAgentLoopComposer(
@@ -139,7 +151,10 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             AuthenticatedProjectEffectExecutionComposer projectEffects,
             AuthenticatedEffectDrivenStepProgressionComposer progression,
             BoundedStepReplanComposer replans,
-            V2SandboxEffectExecutionComposer sandboxEffects) {
+            V2SandboxEffectExecutionComposer sandboxEffects,
+            V2StepResultService stepResults,
+            AuthenticatedResultDrivenStepProgressionComposer
+                    resultProgression) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.inspections = inspections;
@@ -151,6 +166,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         this.progression = progression;
         this.replans = replans;
         this.sandboxEffects = sandboxEffects;
+        this.stepResults = stepResults;
+        this.resultProgression = resultProgression;
     }
 
     public PersistentPlanAgentLoopOutcome execute(
@@ -287,6 +304,32 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                         Optional.ofNullable(failure(recovered)));
             }
 
+            if (stepResults != null) {
+                Optional<V2StepResultSnapshot> durableResult;
+                try {
+                    durableResult = stepResults.recoverableForActive(active);
+                } catch (RuntimeException exception) {
+                    logUnexpected("stepResult.recovery", exception,
+                            planId.value(),
+                            active.recovery().activation()
+                                    .stepId().value(),
+                            null, null);
+                    throw protocol("stepResult.recovery");
+                }
+                if (durableResult.isPresent()) {
+                    PlanStepId durableStepId = active.recovery()
+                            .activation().stepId();
+                    return outcome(
+                            planId, cycle,
+                            PersistentPlanAgentLoopState
+                                    .STEP_RESULT_PROPOSED_AWAITING_REFLECTION,
+                            Optional.of(durableStepId),
+                            Optional.of(active.recovery()),
+                            Optional.empty(), Optional.empty(),
+                            Optional.empty(), durableResult);
+                }
+            }
+
             SingleTurnStepKernelOutcome kernelOutcome;
             try {
                 kernelOutcome = turnKernel.run(
@@ -316,6 +359,37 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                         Optional.of(stepId),
                         Optional.of(active.recovery()),
                         Optional.empty(), Optional.empty());
+            }
+            if (kernelOutcome
+                    instanceof SingleTurnStepResultProposed proposed) {
+                io.paperagent.v2.persistence.ActiveStepReplanRequest
+                        replan = replanProposal(active, replanFactory);
+                if (replan != null) {
+                    return replanNoEffect(
+                            planId, cycle, active, replan);
+                }
+                if (stepResults == null) {
+                    throw protocol("stepResult.persistence");
+                }
+                V2StepResultSnapshot persisted;
+                try {
+                    persisted = stepResults.propose(
+                            active, V2StepResultSource.MODEL,
+                            proposed.resultText(),
+                            proposed.evidenceReceiptIds());
+                } catch (RuntimeException exception) {
+                    logUnexpected("stepResult.persistence", exception,
+                            planId.value(), stepId.value(), null, null);
+                    throw protocol("stepResult.persistence");
+                }
+                return outcome(
+                        planId, cycle,
+                        PersistentPlanAgentLoopState
+                                .STEP_RESULT_PROPOSED_AWAITING_REFLECTION,
+                        Optional.of(stepId),
+                        Optional.of(active.recovery()),
+                        Optional.empty(), Optional.empty(),
+                        Optional.empty(), Optional.of(persisted));
             }
             if (kernelOutcome
                     instanceof SingleTurnPersistenceRejected rejected) {
@@ -536,6 +610,43 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         }
         if (!(cut instanceof PersistedStepRecoveryActive active)) {
             throw protocol("completion.activeStep");
+        }
+        V2StepResultSnapshot accepted = stepResults == null
+                ? null : stepResults.acceptedForActive(active)
+                        .orElse(null);
+        boolean modelOnly = accepted != null
+                && accepted.source() == V2StepResultSource.MODEL
+                && accepted.evidenceReceiptIds().isEmpty();
+        if (modelOnly) {
+            if (resultProgression == null) {
+                throw protocol("progression.stepResult");
+            }
+            com.yanban.api.agent.v2.progression
+                    .ResultDrivenStepProgressionOutcome progressed;
+            try {
+                progressed = resultProgression.complete(
+                        userId, agentTurnId, planId,
+                        active.activation().stepId(), accepted,
+                        command.currentRecoveryAttempt(),
+                        command.nextStepActivationAttempt());
+            } catch (RuntimeException exception) {
+                logUnexpected("progression.stepResult", exception,
+                        planId.value(),
+                        active.activation().stepId().value(), null, null);
+                throw protocol("progression.stepResult");
+            }
+            PersistentPlanAgentLoopState state =
+                    progressed.state()
+                            == EffectDrivenStepProgressionState.PLAN_SUCCEEDED
+                            ? PersistentPlanAgentLoopState.PLAN_SUCCEEDED
+                            : PersistentPlanAgentLoopState
+                                    .EFFECT_SUCCEEDED_AWAITING_REFLECTION;
+            return outcome(
+                    planId, 0, state,
+                    Optional.of(progressed.completedStepId()),
+                    Optional.of(progressed.snapshot()),
+                    Optional.empty(), Optional.empty(),
+                    Optional.empty(), Optional.of(accepted));
         }
         EffectDrivenStepProgressionOutcome progressed;
         try {
@@ -776,7 +887,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         return new PersistentPlanAgentLoopOutcome(
                 planId, cycles, state, stepId,
                 cut(snapshot), replanEvidence(replan), failure,
-                Optional.empty());
+                Optional.empty(), Optional.empty());
     }
 
     private static PersistentPlanAgentLoopOutcome outcome(
@@ -790,7 +901,22 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
         return new PersistentPlanAgentLoopOutcome(
                 planId, cycles, state, stepId,
                 cut(snapshot), replanEvidence(replan), failure,
-                receiptFacts);
+                receiptFacts, Optional.empty());
+    }
+
+    private static PersistentPlanAgentLoopOutcome outcome(
+            PlanId planId, int cycles,
+            PersistentPlanAgentLoopState state,
+            Optional<PlanStepId> stepId,
+            Optional<StepRecoverySnapshot> snapshot,
+            Optional<PersistedActiveStepReplan> replan,
+            Optional<PersistenceFailure> failure,
+            Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts,
+            Optional<V2StepResultSnapshot> stepResult) {
+        return new PersistentPlanAgentLoopOutcome(
+                planId, cycles, state, stepId,
+                cut(snapshot), replanEvidence(replan), failure,
+                receiptFacts, stepResult);
     }
 
     private static Optional<PersistentPlanAgentLoopCut> cut(

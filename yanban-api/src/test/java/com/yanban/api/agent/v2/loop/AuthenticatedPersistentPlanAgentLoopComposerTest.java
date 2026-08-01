@@ -32,6 +32,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.mockito.ArgumentCaptor;
 
+import java.util.List;
+import java.util.Optional;
+
 import static com.yanban.api.agent.v2.loop.PersistentPlanAgentLoopTestSupport.TURN_ID;
 import static com.yanban.api.agent.v2.loop.PersistentPlanAgentLoopTestSupport.USER_ID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -48,6 +51,59 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AuthenticatedPersistentPlanAgentLoopComposerTest {
+    @Test
+    void durableStepResultRecoveryBypassesKernelAndModelWork() {
+        var fixture = PersistentPlanAgentLoopTestSupport.fixture();
+        var active = activeFixture(fixture, "step-a");
+        var stepResults = mock(
+                com.yanban.api.agent.v2.result.V2StepResultService.class);
+        var durable = new com.yanban.api.agent.v2.result
+                .V2StepResultSnapshot(
+                "step-result.recovered", fixture.planId(),
+                new io.paperagent.v2.contracts.PlanRevisionId(
+                        "revision-recovered"),
+                active.stepId(), new EventId("activation-recovered"),
+                com.yanban.api.agent.v2.result.V2StepResultSource.MODEL,
+                "persisted reasoning result", "a".repeat(64), List.of(),
+                com.yanban.api.agent.v2.result.V2StepResultStatus.PROPOSED,
+                Optional.empty(), Optional.empty(),
+                PersistentPlanAgentLoopTestSupport.NOW,
+                PersistentPlanAgentLoopTestSupport.NOW);
+        when(stepResults.recoverableForActive(active.active()))
+                .thenReturn(Optional.of(durable));
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<
+                com.yanban.api.agent.sandbox
+                        .V2SandboxEffectExecutionComposer> sandbox =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(sandbox.getIfAvailable()).thenReturn(null);
+        var composer = new AuthenticatedPersistentPlanAgentLoopComposer(
+                fixture.contexts(),
+                new com.yanban.agent.v2.adapter.bootstrap
+                        .ProductPlanIdDerivation(),
+                fixture.inspections(), fixture.recoverer(),
+                fixture.activation(), fixture.kernel(), fixture.effects(),
+                fixture.projectEffects(), fixture.progression(),
+                fixture.replans(), sandbox, stepResults,
+                mock(com.yanban.api.agent.v2.progression
+                        .AuthenticatedResultDrivenStepProgressionComposer
+                        .class));
+
+        PersistentPlanAgentLoopOutcome outcome = composer.execute(
+                USER_ID, TURN_ID,
+                PersistentPlanAgentLoopTestSupport.command(1));
+
+        assertEquals(
+                PersistentPlanAgentLoopState
+                        .STEP_RESULT_PROPOSED_AWAITING_REFLECTION,
+                outcome.state());
+        assertSame(durable, outcome.stepResult().orElseThrow());
+        verify(fixture.kernel(), never()).run(any());
+        verifyNoInteractions(
+                fixture.effects(), fixture.projectEffects(),
+                fixture.progression(), fixture.replans());
+    }
+
     @Test
     void terminalCutReturnsWithoutProviderToolOrWrites() {
         var fixture = PersistentPlanAgentLoopTestSupport.fixture();
@@ -352,6 +408,9 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
                 "literature.search");
         when(fixture.kernel().run(any())).thenReturn(intent.outcome());
         var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(
+                new io.paperagent.v2.contracts.ReceiptId(
+                        "receipt-failed-a"));
         when(receipt.toolCallId()).thenReturn(intent.toolCallId());
         when(receipt.status()).thenReturn(
                 io.paperagent.v2.contracts.ReceiptStatus.FAILURE);
@@ -391,6 +450,9 @@ class AuthenticatedPersistentPlanAgentLoopComposerTest {
                 "literature.search");
         when(fixture.kernel().run(any())).thenReturn(intent.outcome());
         var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(
+                new io.paperagent.v2.contracts.ReceiptId(
+                        "receipt-failed-replan-a"));
         when(receipt.toolCallId()).thenReturn(intent.toolCallId());
         when(receipt.status()).thenReturn(
                 io.paperagent.v2.contracts.ReceiptStatus.FAILURE);

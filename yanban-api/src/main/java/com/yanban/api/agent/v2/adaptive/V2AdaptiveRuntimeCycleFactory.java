@@ -113,6 +113,10 @@ public class V2AdaptiveRuntimeCycleFactory {
                 state = V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED;
             } else if (result.state()
                     == PersistentPlanAgentLoopState
+                            .STEP_RESULT_PROPOSED_AWAITING_REFLECTION) {
+                state = V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED;
+            } else if (result.state()
+                    == PersistentPlanAgentLoopState
                             .EFFECT_RECOVERY_PENDING) {
                 state = V2AdaptiveCyclePort.CycleResult.State
                         .RECOVERY_PENDING;
@@ -141,7 +145,12 @@ public class V2AdaptiveRuntimeCycleFactory {
                     result.receiptFacts().isPresent(),
                     result.receiptFacts()
                             .map(value -> !"SUCCESS".equals(value.status()))
-                            .orElse(false));
+                            .orElse(false),
+                    result.receiptFacts()
+                            .map(value -> List.of(
+                                    new ReceiptId(value.receiptId())))
+                            .orElse(List.of()),
+                    result.stepResult());
         };
     }
 
@@ -184,8 +193,17 @@ public class V2AdaptiveRuntimeCycleFactory {
                 facts.add("completionCut=" + value));
         result.replan().ifPresent(value ->
                 facts.add("persistedReplan=" + value));
-        result.receiptFacts().ifPresent(value ->
-                facts.add("executionReceipt=" + value));
+        result.receiptFacts().ifPresent(value -> {
+            facts.add("executionReceipt=" + value);
+            facts.add("executionReceiptId=" + value.receiptId());
+        });
+        result.stepResult().ifPresent(value -> {
+            facts.add("stepResultId=" + value.resultId());
+            facts.add("stepResultStatus=" + value.status().name());
+            facts.add("stepResultSource=" + value.source().name());
+            facts.add("stepResultEvidenceCount="
+                    + value.evidenceReceiptIds().size());
+        });
         return List.copyOf(facts);
     }
 

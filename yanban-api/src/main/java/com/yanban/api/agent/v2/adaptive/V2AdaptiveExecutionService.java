@@ -7,6 +7,7 @@ import com.yanban.api.agent.v2.bootstrap.*;
 import com.yanban.api.agent.v2.workspace.*;
 import com.yanban.api.agent.v2.effect.project.NaturalLanguageCandidateAuthorityStore;
 import com.yanban.api.agent.v2.effect.project.ProjectCandidateCompositionEffect;
+import com.yanban.api.agent.v2.result.V2StepResultService;
 import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.providers.ModelProvider;
@@ -32,6 +33,7 @@ public class V2AdaptiveExecutionService {
     private final ObjectMapper json;
     private final ProjectCandidateCompositionEffect candidates;
     private final NaturalLanguageCandidateAuthorityStore candidateAuthorities;
+    private final V2StepResultService stepResults;
 
     public V2AdaptiveExecutionService(
             V2AdaptiveExecutionStore store,
@@ -40,7 +42,19 @@ public class V2AdaptiveExecutionService {
             V2AdaptiveRuntimeCycleFactory cycles,
             ObjectMapper json) {
         this(store, starts, contexts, cycles, json,
-                null, null);
+                null, null, null);
+    }
+
+    public V2AdaptiveExecutionService(
+            V2AdaptiveExecutionStore store,
+            AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
+            AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
+            V2AdaptiveRuntimeCycleFactory cycles,
+            ObjectMapper json,
+            ProjectCandidateCompositionEffect candidates,
+            NaturalLanguageCandidateAuthorityStore candidateAuthorities) {
+        this(store, starts, contexts, cycles, json,
+                candidates, candidateAuthorities, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -51,7 +65,8 @@ public class V2AdaptiveExecutionService {
             V2AdaptiveRuntimeCycleFactory cycles,
             ObjectMapper json,
             ProjectCandidateCompositionEffect candidates,
-            NaturalLanguageCandidateAuthorityStore candidateAuthorities) {
+            NaturalLanguageCandidateAuthorityStore candidateAuthorities,
+            V2StepResultService stepResults) {
         this.store = store;
         this.starts = starts;
         this.contexts = contexts;
@@ -59,6 +74,7 @@ public class V2AdaptiveExecutionService {
         this.json = json;
         this.candidates = candidates;
         this.candidateAuthorities = candidateAuthorities;
+        this.stepResults = stepResults;
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
@@ -238,7 +254,8 @@ public class V2AdaptiveExecutionService {
                         command.bootstrap().plan().id(),
                         command.bootstrap().plan()
                                 .latestRevision().id()),
-                new StrictReflectionDecisionParser(json));
+                new StrictReflectionDecisionParser(json),
+                stepResults);
         try {
             return coordinator.execute(
                     new V2AdaptiveExecutionCoordinator.Command(

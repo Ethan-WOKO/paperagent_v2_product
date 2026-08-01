@@ -1,8 +1,21 @@
 package com.yanban.api.agent.v2.adaptive;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.adaptive.reflection.*;
+import com.yanban.api.agent.v2.result.V2StepResultSnapshot;
+import com.yanban.api.agent.v2.result.V2StepResultSource;
+import com.yanban.api.agent.v2.result.V2StepResultStatus;
+import com.yanban.api.agent.v2.result.V2StepResultService;
+import io.paperagent.v2.contracts.EventId;
+import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.PlanRevisionId;
+import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.ReceiptId;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -70,6 +83,169 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void acceptedModelProposalIsPersistedBeforeStepCompletion() {
+        AtomicInteger calls = new AtomicInteger();
+        V2AdaptiveCyclePort cycle = command -> {
+            if (calls.incrementAndGet() == 1) {
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "MODEL_PROPOSED_STEP_RESULT",
+                        false, null, List.of(), false, false,
+                        Optional.of(proposedStepResult()));
+            }
+            assertEquals(
+                    V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                    "step-1", "completed", true, null);
+        };
+        V2StepResultService results = mock(V2StepResultService.class);
+        when(results.acceptedCompletedFacts(new PlanId("plan-1")))
+                .thenReturn(List.of());
+        when(results.accept(
+                "step-result.test", "proposed result"))
+                .thenReturn(acceptedProposedStepResult());
+        var coordinator = new V2AdaptiveExecutionCoordinator(
+                cycle, ignored -> complete(),
+                new StrictReflectionDecisionParser(new ObjectMapper()),
+                results);
+
+        var result = coordinator.execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals("proposed result", result.finalText());
+        assertEquals("proposed result", result.steps().get(0).detail());
+        verify(results).accept(
+                "step-result.test", "proposed result");
+    }
+
+    @Test
+    void receiptOnlyResultPersistsAllCurrentStepReceiptReferences() {
+        ReceiptId firstReceipt = new ReceiptId("receipt-first");
+        ReceiptId secondReceipt = new ReceiptId("receipt-second");
+        AtomicInteger cycleCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = command -> {
+            int call = cycleCalls.incrementAndGet();
+            if (call <= 2) {
+                ReceiptId receipt = call == 1
+                        ? firstReceipt : secondReceipt;
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "receipt available", false, null,
+                        List.of("executionReceipt=stepId=step-1,"
+                                + "status=SUCCESS,"),
+                        true, false, List.of(receipt), Optional.empty());
+            }
+            assertEquals(V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                    "step-1", "completed", true, null);
+        };
+        AtomicInteger reflectionCalls = new AtomicInteger();
+        ReflectionProvider reflections = context -> {
+            int call = reflectionCalls.incrementAndGet();
+            if (call == 1) {
+                return """
+                        {"decision":"CONTINUE","reason":"more evidence",
+                         "finalText":null,"replacementSteps":[]}
+                        """;
+            }
+            assertTrue(context.recentExecutionFacts().contains(
+                    "activeStepReceiptId=receipt-first"));
+            assertTrue(context.recentExecutionFacts().contains(
+                    "activeStepReceiptId=receipt-second"));
+            return complete();
+        };
+        V2StepResultService results = mock(V2StepResultService.class);
+        when(results.acceptedCompletedFacts(new PlanId("plan-1")))
+                .thenReturn(List.of());
+        var proposal = reflectionStepResult(
+                V2StepResultStatus.PROPOSED,
+                List.of(firstReceipt, secondReceipt));
+        var accepted = reflectionStepResult(
+                V2StepResultStatus.ACCEPTED,
+                List.of(firstReceipt, secondReceipt));
+        when(results.proposeCurrent(
+                new PlanId("plan-1"), new PlanStepId("step-1"),
+                V2StepResultSource.REFLECTION, "完成",
+                List.of(firstReceipt, secondReceipt)))
+                .thenReturn(proposal);
+        when(results.accept("step-result.reflection", "完成"))
+                .thenReturn(accepted);
+
+        var result = new V2AdaptiveExecutionCoordinator(
+                cycles, reflections,
+                new StrictReflectionDecisionParser(new ObjectMapper()),
+                results).execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals("完成", result.finalText());
+        verify(results).proposeCurrent(
+                new PlanId("plan-1"), new PlanStepId("step-1"),
+                V2StepResultSource.REFLECTION, "完成",
+                List.of(firstReceipt, secondReceipt));
+    }
+
+    @Test
+    void terminalPlanRecoversFinalTextFromAcceptedStepResult() {
+        V2StepResultService results = mock(V2StepResultService.class);
+        when(results.latestAcceptedCompleted(new PlanId("plan-1")))
+                .thenReturn(Optional.of(acceptedStepResult()));
+        var coordinator = new V2AdaptiveExecutionCoordinator(
+                ignored -> new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .PLAN_SUCCEEDED,
+                        null, "persisted terminal cut", true, null),
+                ignored -> {
+                    throw new AssertionError(
+                            "terminal recovery must not call reflection");
+                },
+                new StrictReflectionDecisionParser(new ObjectMapper()),
+                results);
+
+        var result = coordinator.execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals("persisted final answer", result.finalText());
+        assertEquals("SUCCEEDED", result.steps().get(0).status());
+    }
+
+    @Test
+    void acceptedActiveStepResultResumesCompletionWithoutReflection() {
+        AtomicInteger calls = new AtomicInteger();
+        var coordinator = coordinator(command -> {
+            if (calls.incrementAndGet() == 1) {
+                assertEquals(V2AdaptiveCyclePort.Action.EXECUTE,
+                        command.action());
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "accepted result recovered",
+                        false, null, List.of(), false, false,
+                        Optional.of(acceptedStepResult()));
+            }
+            assertEquals(V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                    "step-1", "completed", true, null);
+        }, ignored -> {
+            throw new AssertionError(
+                    "accepted Step result must not be reflected again");
+        });
+
+        var result = coordinator.execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals("persisted final answer", result.finalText());
+        assertEquals(2, calls.get());
+    }
+
+    @Test
     void laterReflectionRetainsFactsFromEarlierToolSlots() {
         AtomicInteger cycleCalls = new AtomicInteger();
         V2AdaptiveCyclePort cycles = ignored -> {
@@ -115,7 +291,7 @@ class V2AdaptiveExecutionCoordinatorTest {
 
         assertEquals("FAILED", result.status());
         assertEquals("REFLECTION_FAILED", result.errorCode());
-        assertEquals("RUNNING", result.steps().get(0).status());
+        assertEquals("FAILED", result.steps().get(0).status());
         assertEquals(2, cycleCalls.get());
         assertEquals(2, reflectionCalls.get());
     }
@@ -135,8 +311,20 @@ class V2AdaptiveExecutionCoordinatorTest {
                         "step-1", "reflection selected", false, null,
                         List.of(
                                 "executionReceipt=status=SUCCESS",
-                                "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS"),
-                        true, false);
+                                "MODEL_PROPOSED_STEP_RESULT"),
+                        true, false, Optional.of(proposedStepResult()));
+            }
+            if (call == 2) {
+                assertEquals(
+                        V2AdaptiveCyclePort.Action.EXECUTE,
+                        command.action());
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "same proposal", false, null,
+                        List.of("MODEL_PROPOSED_STEP_RESULT"),
+                        false, false,
+                        Optional.of(rejectedStepResult()));
             }
             assertEquals(
                     V2AdaptiveCyclePort.Action.COMPLETE_STEP,
@@ -151,7 +339,7 @@ class V2AdaptiveExecutionCoordinatorTest {
             boolean guarded = reflectionContext.recentExecutionFacts()
                     .stream().anyMatch(value ->
                             value.startsWith("noProgressGuard="));
-            if (call == 1) {
+            if (call <= 2) {
                 assertFalse(guarded);
                 return """
                         {"decision":"CONTINUE","reason":"continue",
@@ -166,31 +354,33 @@ class V2AdaptiveExecutionCoordinatorTest {
                 .execute(command(Map.of()));
 
         assertEquals("SUCCEEDED", result.status());
-        assertEquals(2, cycleCalls.get());
-        assertEquals(2, reflectionCalls.get());
+        assertEquals(3, cycleCalls.get());
+        assertEquals(3, reflectionCalls.get());
     }
 
     @Test
     void repeatedContinueAfterNoProgressGuardFailsWithoutReplayingTool() {
         AtomicInteger cycleCalls = new AtomicInteger();
         V2AdaptiveCyclePort cycles = ignored -> {
-            cycleCalls.incrementAndGet();
+            int call = cycleCalls.incrementAndGet();
             return new V2AdaptiveCyclePort.CycleResult(
                     V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED,
                     "step-1", "reflection selected", false, null,
                     List.of(
                             "executionReceipt=status=SUCCESS",
-                            "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS"),
-                    true, false);
+                            "MODEL_PROPOSED_STEP_RESULT"),
+                    true, false, Optional.of(call == 1
+                            ? proposedStepResult()
+                            : rejectedStepResult()));
         };
         AtomicInteger reflectionCalls = new AtomicInteger();
         ReflectionProvider provider = reflectionContext -> {
             int call = reflectionCalls.incrementAndGet();
-            if (call == 2) {
+            if (call == 3) {
                 assertTrue(reflectionContext.recentExecutionFacts()
                         .stream().anyMatch(value ->
                                 value.contains(
-                                        "CONTINUE would replay the same")));
+                                        "persisted a Step-result")));
             }
             return """
                     {"decision":"CONTINUE","reason":"continue",
@@ -203,8 +393,8 @@ class V2AdaptiveExecutionCoordinatorTest {
 
         assertEquals("FAILED", result.status());
         assertEquals("REFLECTION_NO_PROGRESS", result.errorCode());
-        assertEquals(1, cycleCalls.get());
-        assertEquals(2, reflectionCalls.get());
+        assertEquals(2, cycleCalls.get());
+        assertEquals(3, reflectionCalls.get());
     }
 
     @Test
@@ -533,5 +723,71 @@ class V2AdaptiveExecutionCoordinatorTest {
     private static String complete() {
         return "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
                 + "\"finalText\":\"完成\",\"replacementSteps\":[]}";
+    }
+
+    private static V2StepResultSnapshot proposedStepResult() {
+        return stepResult(V2StepResultStatus.PROPOSED);
+    }
+
+    private static V2StepResultSnapshot rejectedStepResult() {
+        return stepResult(V2StepResultStatus.REJECTED);
+    }
+
+    private static V2StepResultSnapshot acceptedStepResult() {
+        return new V2StepResultSnapshot(
+                "step-result.accepted", new PlanId("plan-1"),
+                new PlanRevisionId("revision-1"),
+                new PlanStepId("step-1"),
+                new EventId("activation-1"),
+                V2StepResultSource.MODEL,
+                "persisted final answer", "a".repeat(64), List.of(),
+                V2StepResultStatus.ACCEPTED,
+                Optional.of("persisted final answer"),
+                Optional.of("b".repeat(64)),
+                Instant.EPOCH, Instant.EPOCH);
+    }
+
+    private static V2StepResultSnapshot acceptedProposedStepResult() {
+        return new V2StepResultSnapshot(
+                "step-result.test", new PlanId("plan-1"),
+                new PlanRevisionId("revision-1"),
+                new PlanStepId("step-1"),
+                new EventId("activation-1"),
+                V2StepResultSource.MODEL,
+                "proposed result", "a".repeat(64), List.of(),
+                V2StepResultStatus.ACCEPTED,
+                Optional.of("proposed result"),
+                Optional.of("c".repeat(64)),
+                Instant.EPOCH, Instant.EPOCH);
+    }
+
+    private static V2StepResultSnapshot reflectionStepResult(
+            V2StepResultStatus status, List<ReceiptId> receipts) {
+        return new V2StepResultSnapshot(
+                "step-result.reflection", new PlanId("plan-1"),
+                new PlanRevisionId("revision-1"),
+                new PlanStepId("step-1"),
+                new EventId("activation-1"),
+                V2StepResultSource.REFLECTION,
+                "完成", "d".repeat(64), receipts, status,
+                status == V2StepResultStatus.ACCEPTED
+                        ? Optional.of("完成") : Optional.empty(),
+                status == V2StepResultStatus.ACCEPTED
+                        ? Optional.of("e".repeat(64)) : Optional.empty(),
+                Instant.EPOCH, Instant.EPOCH);
+    }
+
+    private static V2StepResultSnapshot stepResult(
+            V2StepResultStatus status) {
+        return new V2StepResultSnapshot(
+                "step-result.test", new PlanId("plan-1"),
+                new PlanRevisionId("revision-1"),
+                new PlanStepId("step-1"),
+                new EventId("activation-1"),
+                V2StepResultSource.MODEL,
+                "proposed result", "a".repeat(64), List.of(),
+                status,
+                Optional.empty(), Optional.empty(),
+                Instant.EPOCH, Instant.EPOCH);
     }
 }

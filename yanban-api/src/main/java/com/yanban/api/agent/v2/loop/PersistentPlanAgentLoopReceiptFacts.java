@@ -9,6 +9,7 @@ import java.util.Optional;
 /** Bounded authoritative receipt facts exposed by one loop cycle. */
 public record PersistentPlanAgentLoopReceiptFacts(
         String stepId,
+        String receiptId,
         String toolKind,
         String authorityScope,
         String toolCallId,
@@ -25,6 +26,9 @@ public record PersistentPlanAgentLoopReceiptFacts(
     public PersistentPlanAgentLoopReceiptFacts {
         if (stepId == null || stepId.isBlank()) {
             throw new IllegalArgumentException("stepId is required");
+        }
+        if (receiptId == null || receiptId.isBlank()) {
+            throw new IllegalArgumentException("receiptId is required");
         }
         if (toolKind == null || toolKind.isBlank()) {
             throw new IllegalArgumentException("toolKind is required");
@@ -43,6 +47,7 @@ public record PersistentPlanAgentLoopReceiptFacts(
             String stepId, String toolKind, ExecutionReceipt receipt) {
         return new PersistentPlanAgentLoopReceiptFacts(
                 stepId,
+                receipt.id().value(),
                 toolKind,
                 authorityScope(toolKind, receipt),
                 receipt.toolCallId() == null

@@ -18,6 +18,7 @@ import io.paperagent.v2.providers.ModelResponse;
 import io.paperagent.v2.providers.ProposedToolCall;
 import io.paperagent.v2.runtime.execution.kernel.EffectIntentDecision;
 import io.paperagent.v2.runtime.execution.kernel.NoEffectDecision;
+import io.paperagent.v2.runtime.execution.kernel.StepResultDecision;
 import io.paperagent.v2.runtime.execution.kernel.StepTurnDecision;
 import io.paperagent.v2.runtime.execution.kernel.StepTurnInput;
 import io.paperagent.v2.runtime.execution.kernel.StepTurnPort;
@@ -154,23 +155,21 @@ final class AutonomousNaturalLanguageStepTurnAdapter
             return new NoEffectDecision();
         }
         if (response.proposedToolCalls().isEmpty()) {
-            boolean choseReflection = response.assistantText()
-                    .filter(value -> !value.isBlank()).isPresent();
-            Optional<V2EffectHistorySource.Entry> latestSuccess =
+            Optional<String> proposedResult = response.assistantText()
+                    .map(String::strip)
+                    .filter(value -> !value.isBlank());
+            if (proposedResult.isEmpty()) {
+                diagnostics.add("MODEL_OUTPUT_EMPTY");
+                return new NoEffectDecision();
+            }
+            diagnostics.add("MODEL_PROPOSED_STEP_RESULT");
+            return new StepResultDecision(
+                    proposedResult.orElseThrow(),
                     history.stream()
                             .filter(V2EffectHistorySource.Entry::successful)
-                            .reduce((ignored, latest) -> latest);
-            if (choseReflection && latestSuccess.isPresent()) {
-                diagnostics.add(
-                        "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS");
-                return new EffectIntentDecision(
-                        latestSuccess.orElseThrow()
-                                .intent().intent());
-            }
-            diagnostics.add(choseReflection
-                    ? "MODEL_CHOSE_REFLECTION_WITHOUT_SUCCESS"
-                    : "MODEL_OUTPUT_EMPTY");
-            return new NoEffectDecision();
+                            .map(entry -> entry.result().receipt().id())
+                            .distinct()
+                            .toList());
         }
         if (response.proposedToolCalls().size() > 1) {
             diagnostics.add(

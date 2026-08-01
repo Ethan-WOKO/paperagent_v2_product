@@ -26,7 +26,8 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             that the active Step is complete.
             decision is CONTINUE, REPLAN, COMPLETE, or FAIL.
             COMPLETE means the current active Step's completion criteria are
-            satisfied by the supplied durable Receipts and facts, even when
+            satisfied by the supplied persisted Step result, durable Receipts
+            and facts, even when
             the Plan has later Steps. The coordinator then persists this Step
             completion and advances the Plan. It exposes finalText as the
             user's final answer only when the completed Step makes the whole
@@ -58,6 +59,13 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             active Step. Treat PROJECT_CONTENT_READ_ONLY and PROJECT_SEARCH_ONLY
             as read-only evidence, SANDBOX_EXECUTION_ONLY as execution-only
             evidence, and REVIEWABLE_CANDIDATE_CREATED as Candidate evidence.
+            A persisted currentStepResult may satisfy a reasoning-only or
+            synthesis-only Step without a current Receipt. It never proves a
+            Project read, mutable Project state, Candidate, tool execution,
+            sandbox result, retrieval, or network fact unless matching
+            authoritative Receipts or artifacts are also supplied. Accepted
+            completedFacts may be used as dependencies, but are not evidence
+            that the current Step performed a new external action.
             CONTINUE, FAIL, and REPLAN require finalText:null. COMPLETE
             requires a nonblank finalText. Only REPLAN may have nonempty
             replacementSteps.
@@ -102,6 +110,11 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             successful sandbox.execute Receipt with exitCode 0 completes the
             Step unless the criteria explicitly require another assertion
             that the Receipt does not establish. Example complete response:
+            A nonblank currentStepResult may complete a reasoning-only or
+            synthesis-only Step when it satisfies the Step and its claims are
+            supported by completedFacts. It cannot replace required tool,
+            Project, Candidate, sandbox, retrieval, or network evidence.
+            Example complete response:
             {"complete":true,"reason":"receipt proves the step",
             "stepResult":"verified result"}. Example incomplete response:
             {"complete":false,"reason":"required evidence is missing",
@@ -291,6 +304,15 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                         .filter(value -> value.contains(
                                 "exitCode=Optional[0],"))
                         .count();
+        List<String> currentStepReceiptIds = context
+                .recentExecutionFacts().stream()
+                .filter(value -> value.startsWith(
+                        "activeStepReceiptId="))
+                .map(value -> value.substring(
+                        "activeStepReceiptId=".length()))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
         log.info(
                 "V2 reflection audit evidence planId={} activeStepId={} "
                         + "receiptCount={} successfulReceiptCount={} "
@@ -316,8 +338,14 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             }
             bounded.set("currentStepReceipts",
                     json.valueToTree(currentStepReceipts));
+            bounded.set("currentStepReceiptIds",
+                    json.valueToTree(currentStepReceiptIds));
             bounded.set("successfulCurrentStepReceipts",
                     json.valueToTree(successfulCurrentStepReceipts));
+            bounded.set("completedFacts",
+                    json.valueToTree(context.completedFacts()));
+            bounded.set("currentStepResult",
+                    json.valueToTree(context.currentStepResult()));
             bounded.set("unfinishedSteps",
                     json.valueToTree(context.unfinishedSteps()));
             return json.writeValueAsString(bounded);

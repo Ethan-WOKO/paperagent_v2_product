@@ -208,6 +208,9 @@ final class PersistentPlanAgentLoopTestSupport {
     static AuthenticatedLiteratureSearchEffectExecutionOutcome
             successfulEffect(ToolCallId toolCallId) {
         var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(
+                new io.paperagent.v2.contracts.ReceiptId(
+                        "receipt-" + toolCallId.value()));
         when(receipt.toolCallId()).thenReturn(toolCallId);
         when(receipt.status()).thenReturn(
                 io.paperagent.v2.contracts.ReceiptStatus.SUCCESS);
@@ -221,6 +224,9 @@ final class PersistentPlanAgentLoopTestSupport {
             .AuthenticatedProjectEffectExecutionOutcome
             successfulProjectEffect(ToolCallId toolCallId) {
         var receipt = mock(io.paperagent.v2.contracts.ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(
+                new io.paperagent.v2.contracts.ReceiptId(
+                        "receipt-" + toolCallId.value()));
         when(receipt.toolCallId()).thenReturn(toolCallId);
         when(receipt.status()).thenReturn(
                 io.paperagent.v2.contracts.ReceiptStatus.SUCCESS);

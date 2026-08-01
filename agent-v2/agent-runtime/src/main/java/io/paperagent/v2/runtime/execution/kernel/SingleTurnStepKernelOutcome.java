@@ -6,7 +6,8 @@ import io.paperagent.v2.contracts.PlanStepId;
 public sealed interface SingleTurnStepKernelOutcome
         permits SingleTurnNoEffect,
                 SingleTurnIntentPersisted,
-                SingleTurnPersistenceRejected {
+                SingleTurnPersistenceRejected,
+                SingleTurnStepResultProposed {
     PlanId planId();
 
     PlanStepId stepId();

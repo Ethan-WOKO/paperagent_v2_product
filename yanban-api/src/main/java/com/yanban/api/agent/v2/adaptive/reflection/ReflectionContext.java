@@ -12,7 +12,8 @@ public record ReflectionContext(
         List<String> conversationContext,
         List<String> completedFacts,
         List<String> recentExecutionFacts,
-        List<String> unfinishedSteps) {
+        List<String> unfinishedSteps,
+        ReflectionStepResult currentStepResult) {
 
     public ReflectionContext {
         taskFrame = requireText(taskFrame, "taskFrame");
@@ -21,6 +22,17 @@ public record ReflectionContext(
         completedFacts = immutable(completedFacts);
         recentExecutionFacts = immutable(recentExecutionFacts);
         unfinishedSteps = immutable(unfinishedSteps);
+    }
+
+    public ReflectionContext(
+            String taskFrame,
+            String currentPlan,
+            List<String> conversationContext,
+            List<String> completedFacts,
+            List<String> recentExecutionFacts,
+            List<String> unfinishedSteps) {
+        this(taskFrame, currentPlan, conversationContext, completedFacts,
+                recentExecutionFacts, unfinishedSteps, null);
     }
 
     private static String requireText(String value, String field) {

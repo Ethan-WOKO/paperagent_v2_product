@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import io.paperagent.v2.contracts.ExecutionReceipt;
 import io.paperagent.v2.contracts.OutputCapture;
+import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.ReceiptStatus;
 import org.junit.jupiter.api.Test;
 
@@ -15,6 +16,7 @@ class PersistentPlanAgentLoopReceiptFactsTest {
     @Test
     void completeOutputIsNotShortenedBeforeReflection() {
         ExecutionReceipt receipt = mock(ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(new ReceiptId("receipt-output"));
         String complete = "x".repeat(64 * 1024);
         when(receipt.standardOutput()).thenReturn(
                 OutputCapture.inline(complete, false));
@@ -34,6 +36,7 @@ class PersistentPlanAgentLoopReceiptFactsTest {
     @Test
     void upstreamTruncationRemainsVisibleEvenForShortInlineText() {
         ExecutionReceipt receipt = mock(ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(new ReceiptId("receipt-truncated"));
         when(receipt.standardOutput()).thenReturn(
                 OutputCapture.inline("partial", true));
         when(receipt.standardError()).thenReturn(OutputCapture.empty());
@@ -51,6 +54,7 @@ class PersistentPlanAgentLoopReceiptFactsTest {
     @Test
     void missingToolKindIsRejectedBeforeReflection() {
         ExecutionReceipt receipt = mock(ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(new ReceiptId("receipt-invalid-kind"));
 
         org.junit.jupiter.api.Assertions.assertThrows(
                 IllegalArgumentException.class,
@@ -61,6 +65,7 @@ class PersistentPlanAgentLoopReceiptFactsTest {
     @Test
     void candidateReceiptCarriesCandidateAuthorityScope() {
         ExecutionReceipt receipt = mock(ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(new ReceiptId("receipt-candidate"));
         when(receipt.standardOutput()).thenReturn(OutputCapture.empty());
         when(receipt.standardError()).thenReturn(OutputCapture.empty());
         when(receipt.status()).thenReturn(ReceiptStatus.SUCCESS);
@@ -76,6 +81,8 @@ class PersistentPlanAgentLoopReceiptFactsTest {
     @Test
     void failedCandidateReceiptDoesNotClaimCandidateCreation() {
         ExecutionReceipt receipt = mock(ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(
+                new ReceiptId("receipt-candidate-failed"));
         when(receipt.status()).thenReturn(ReceiptStatus.FAILURE);
         when(receipt.standardOutput()).thenReturn(OutputCapture.empty());
         when(receipt.standardError()).thenReturn(OutputCapture.inline(

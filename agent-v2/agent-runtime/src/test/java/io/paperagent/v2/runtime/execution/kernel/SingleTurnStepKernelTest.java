@@ -3,6 +3,7 @@ package io.paperagent.v2.runtime.execution.kernel;
 import io.paperagent.v2.contracts.EffectIntent;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.persistence.PersistenceErrorCode;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredActiveStep;
@@ -18,6 +19,37 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class SingleTurnStepKernelTest {
+
+    @Test
+    void modelStepResultIsReturnedWithoutWritingAnEffectIntent() {
+        RecoveredActiveStep recovered =
+                SingleTurnStepKernelTestFixtures.recovered("step-result");
+        var repository = new SingleTurnStepKernelTestFixtures
+                .RecordingEffectIntentRepository(request -> {
+                    throw new AssertionError(
+                            "a model Step result is not an effect intent");
+                });
+
+        SingleTurnStepResultProposed proposed = assertInstanceOf(
+                SingleTurnStepResultProposed.class,
+                new DefaultSingleTurnStepKernel(
+                        input -> new StepResultDecision(
+                                "verified analysis",
+                                java.util.List.of(
+                                        new ReceiptId("receipt-1"))),
+                        repository)
+                        .run(new SingleTurnStepKernelRequest(recovered)));
+
+        assertEquals(recovered.planId(), proposed.planId());
+        assertEquals(
+                recovered.recovery().activation().stepId(),
+                proposed.stepId());
+        assertEquals("verified analysis", proposed.resultText());
+        assertEquals(
+                java.util.List.of(new ReceiptId("receipt-1")),
+                proposed.evidenceReceiptIds());
+        assertEquals(0, repository.persistCalls());
+    }
 
     @Test
     void noEffectInvokesOneTurnAndWritesNoIntent() {

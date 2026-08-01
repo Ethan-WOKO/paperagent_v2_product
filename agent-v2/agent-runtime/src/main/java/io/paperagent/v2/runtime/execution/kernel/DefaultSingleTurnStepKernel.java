@@ -49,6 +49,12 @@ public final class DefaultSingleTurnStepKernel implements SingleTurnStepKernel {
         if (decision instanceof EffectIntentDecision effectIntentDecision) {
             return persistIntent(authority, effectIntentDecision.intent());
         }
+        if (decision instanceof StepResultDecision stepResultDecision) {
+            return new SingleTurnStepResultProposed(
+                    authority.planId(), authority.stepId(),
+                    stepResultDecision.resultText(),
+                    stepResultDecision.evidenceReceiptIds());
+        }
         throw protocol(
                 authority,
                 SingleTurnStepKernelStage.TURN_DECISION,

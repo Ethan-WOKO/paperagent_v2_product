@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.loop;
 
+import com.yanban.api.agent.v2.result.V2StepResultSnapshot;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.persistence.PersistenceFailure;
@@ -16,7 +17,8 @@ public record PersistentPlanAgentLoopOutcome(
         Optional<PersistentPlanAgentLoopCut> cut,
         Optional<PersistentPlanAgentLoopReplanEvidence> replan,
         Optional<PersistenceFailure> failure,
-        Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts) {
+        Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts,
+        Optional<V2StepResultSnapshot> stepResult) {
 
     public PersistentPlanAgentLoopOutcome {
         Objects.requireNonNull(planId, "planId");
@@ -31,6 +33,20 @@ public record PersistentPlanAgentLoopOutcome(
         failure = Objects.requireNonNull(failure, "failure");
         receiptFacts = Objects.requireNonNull(
                 receiptFacts, "receiptFacts");
+        stepResult = Objects.requireNonNull(stepResult, "stepResult");
+    }
+
+    public PersistentPlanAgentLoopOutcome(
+            PlanId planId,
+            int cyclesAttempted,
+            PersistentPlanAgentLoopState state,
+            Optional<PlanStepId> stepId,
+            Optional<PersistentPlanAgentLoopCut> cut,
+            Optional<PersistentPlanAgentLoopReplanEvidence> replan,
+            Optional<PersistenceFailure> failure,
+            Optional<PersistentPlanAgentLoopReceiptFacts> receiptFacts) {
+        this(planId, cyclesAttempted, state, stepId, cut, replan, failure,
+                receiptFacts, Optional.empty());
     }
 
     public PersistentPlanAgentLoopOutcome(
@@ -42,7 +58,7 @@ public record PersistentPlanAgentLoopOutcome(
             Optional<PersistentPlanAgentLoopReplanEvidence> replan,
             Optional<PersistenceFailure> failure) {
         this(planId, cyclesAttempted, state, stepId, cut, replan, failure,
-                Optional.empty());
+                Optional.empty(), Optional.empty());
     }
 
     @Override

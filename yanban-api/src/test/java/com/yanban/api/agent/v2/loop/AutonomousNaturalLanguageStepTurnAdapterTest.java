@@ -21,6 +21,7 @@ import io.paperagent.v2.contracts.PlanRevisionId;
 import io.paperagent.v2.contracts.PlanStep;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ReceiptStatus;
+import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.TaskFrame;
 import io.paperagent.v2.contracts.TaskFrameId;
 import io.paperagent.v2.contracts.TextValue;
@@ -34,6 +35,7 @@ import io.paperagent.v2.providers.ModelResponse;
 import io.paperagent.v2.providers.ProposedToolCall;
 import io.paperagent.v2.runtime.execution.kernel.EffectIntentDecision;
 import io.paperagent.v2.runtime.execution.kernel.NoEffectDecision;
+import io.paperagent.v2.runtime.execution.kernel.StepResultDecision;
 import io.paperagent.v2.runtime.execution.kernel.StepTurnInput;
 import java.util.List;
 import java.util.Map;
@@ -286,7 +288,7 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
     }
 
     @Test
-    void assistantCompletionWithDurableSuccessReplaysSuccessfulIntent() {
+    void assistantCompletionWithDurableSuccessProposesStepResult() {
         Fixture fixture = fixture();
         V2EffectHistorySource.Entry success = completed(
                 fixture, "successful-call", "project.read",
@@ -300,18 +302,22 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                 Optional.of("the durable facts satisfy this goal"));
         when(fixture.provider().complete(any())).thenReturn(response);
 
-        EffectIntentDecision decision = assertInstanceOf(
-                EffectIntentDecision.class,
+        StepResultDecision decision = assertInstanceOf(
+                StepResultDecision.class,
                 fixture.adapter().decide(fixture.input()));
 
         assertEquals(
-                success.intent().intent(), decision.intent());
+                "the durable facts satisfy this goal",
+                decision.resultText());
+        assertEquals(
+                List.of(success.result().receipt().id()),
+                decision.evidenceReceiptIds());
         assertTrue(fixture.adapter().diagnostics().contains(
-                "MODEL_CHOSE_REFLECTION_WITH_DURABLE_SUCCESS"));
+                "MODEL_PROPOSED_STEP_RESULT"));
     }
 
     @Test
-    void noToolWithoutDurableSuccessRemainsNoEffect() {
+    void noToolWithoutDurableSuccessProposesReasoningResult() {
         Fixture fixture = fixture();
         when(fixture.history().inspect(
                 fixture.planId(), fixture.stepId()))
@@ -322,11 +328,13 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                 Optional.of("done"));
         when(fixture.provider().complete(any())).thenReturn(response);
 
-        assertInstanceOf(
-                NoEffectDecision.class,
+        StepResultDecision decision = assertInstanceOf(
+                StepResultDecision.class,
                 fixture.adapter().decide(fixture.input()));
+        assertEquals("done", decision.resultText());
+        assertEquals(List.of(), decision.evidenceReceiptIds());
         assertTrue(fixture.adapter().diagnostics().contains(
-                "MODEL_CHOSE_REFLECTION_WITHOUT_SUCCESS"));
+                "MODEL_PROPOSED_STEP_RESULT"));
     }
 
     private static Fixture fixture() {
@@ -392,6 +400,7 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
         when(persisted.intent()).thenReturn(
                 intent(fixture, callId, kind, arguments));
         ExecutionReceipt receipt = mock(ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(new ReceiptId("receipt-" + callId));
         when(receipt.status()).thenReturn(status);
         when(receipt.resultCode()).thenReturn(
                 status == ReceiptStatus.SUCCESS
