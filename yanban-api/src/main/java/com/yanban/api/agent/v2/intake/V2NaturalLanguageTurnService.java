@@ -471,54 +471,19 @@ public class V2NaturalLanguageTurnService {
         if (verified.projectVersionId().isPresent()) {
             values.add(RoutingRequirement.PROJECT_FILE_ACCESS);
         }
-        for (var capability
-                : V2PlannerCapabilityCatalog.publicCapabilities()) {
-            values.add(RoutingRequirement.TOOL_USE);
-            switch (capability.name()) {
-                case "literature_search" -> {
-                    values.add(RoutingRequirement.NETWORK);
-                    values.add(RoutingRequirement.EXTERNAL_OBSERVATION);
-                }
-                case "project_read", "project_search",
-                        "project_bibtex_audit" ->
-                        values.add(RoutingRequirement.PROJECT_FILE_ACCESS);
-                case "project_candidate" -> {
-                    values.add(RoutingRequirement.PROJECT_FILE_ACCESS);
-                    values.add(RoutingRequirement.MODIFICATION);
-                    values.add(RoutingRequirement.CONFIRMATION);
-                }
-                case "sandbox_execute" ->
-                        values.add(RoutingRequirement.EXECUTION);
-                default -> throw new V2TurnPlanningException(
-                        "planner capability is unsupported");
-            }
+        for (var entry : com.yanban.api.agent.v2.tool
+                .V2ProductToolCatalog.entries()) {
+            values.addAll(entry.routingRequirements());
         }
         return Set.copyOf(values);
     }
 
     private ExecutionProfile executionProfile() {
         Set<Capability> capabilities = new LinkedHashSet<>();
-        for (var capability
-                : V2PlannerCapabilityCatalog.publicCapabilities()) {
-            switch (capability.name()) {
-                case "literature_search" -> {
-                    capabilities.add(Capability.ACCESS_NETWORK);
-                    capabilities.add(Capability.INVOKE_EXTERNAL_TOOL);
-                }
-                case "project_read", "project_search",
-                        "project_bibtex_audit" ->
-                        capabilities.add(Capability.READ_PROJECT);
-                case "project_candidate" -> {
-                    capabilities.add(Capability.READ_PROJECT);
-                    capabilities.add(Capability.WRITE_WORKSPACE);
-                }
-                case "sandbox_execute" -> {
-                    capabilities.add(Capability.EXECUTE_COMMAND);
-                    capabilities.add(Capability.INSTALL_DEPENDENCY);
-                }
-                default -> throw new V2TurnPlanningException(
-                        "planner capability is unsupported");
-            }
+        for (var entry : com.yanban.api.agent.v2.tool
+                .V2ProductToolCatalog.entries()) {
+            capabilities.addAll(
+                    entry.descriptor().requiredCapabilities());
         }
         boolean network = capabilities.contains(Capability.ACCESS_NETWORK);
         return new ExecutionProfile(

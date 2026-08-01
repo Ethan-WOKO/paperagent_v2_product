@@ -20,12 +20,14 @@ import com.yanban.api.agent.v2.progression.AuthenticatedResultDrivenStepProgress
 import com.yanban.api.agent.v2.result.V2StepResultService;
 import com.yanban.api.agent.v2.result.V2StepResultSnapshot;
 import com.yanban.api.agent.v2.result.V2StepResultSource;
+import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
 import com.yanban.api.agent.sandbox.V2SandboxEffectExecutionComposer;
 import com.yanban.api.agent.sandbox.V2SandboxEffectExecutionException;
 import com.yanban.api.agent.sandbox.V2SandboxEffectPendingException;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ReceiptStatus;
+import io.paperagent.v2.contracts.ToolId;
 import io.paperagent.v2.persistence.PersistedActiveStepReplan;
 import io.paperagent.v2.persistence.PersistedStepRecoveryActive;
 import io.paperagent.v2.persistence.PersistedStepRecoveryReady;
@@ -81,13 +83,6 @@ import java.util.Optional;
 public class AuthenticatedPersistentPlanAgentLoopComposer {
     private static final Logger log = LoggerFactory.getLogger(
             AuthenticatedPersistentPlanAgentLoopComposer.class);
-    private static final String LITERATURE_SEARCH = "literature.search";
-    private static final String PROJECT_CANDIDATE_COMPOSE =
-            "project.candidate.compose";
-    private static final String PROJECT_BIBTEX_AUDIT =
-            "project.bibtex.audit";
-    private static final String SANDBOX_EXECUTE = "sandbox.execute";
-
     private final AgentTurnProductContextResolver contexts;
     private final ProductPlanIdDerivation planIds;
     private final StepRecoveryRepository inspections;
@@ -408,12 +403,15 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
                 throw protocol("kernelOutcome");
             }
             String effectKind = intent.persistedIntent().intent().kind();
-            if (!LITERATURE_SEARCH.equals(effectKind)
-                    && !"project.read".equals(effectKind)
-                    && !"project.search".equals(effectKind)
-                    && !PROJECT_BIBTEX_AUDIT.equals(effectKind)
-                    && !PROJECT_CANDIDATE_COMPOSE.equals(effectKind)
-                    && !SANDBOX_EXECUTE.equals(effectKind)) {
+            V2ProductToolCatalog.Entry toolEntry;
+            try {
+                toolEntry = V2ProductToolCatalog.entry(
+                                new ToolId(effectKind))
+                        .orElse(null);
+            } catch (RuntimeException invalidToolId) {
+                toolEntry = null;
+            }
+            if (toolEntry == null) {
                 return outcome(planId, cycle,
                         PersistentPlanAgentLoopState
                                 .UNSUPPORTED_INTENT,
@@ -424,40 +422,35 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
 
             io.paperagent.v2.persistence.PersistedEffectResult effectResult;
             try {
-                if (LITERATURE_SEARCH.equals(effectKind)) {
-                    AuthenticatedLiteratureSearchEffectExecutionOutcome effect =
-                            effects.execute(
-                                    userId, agentTurnId,
-                                    new AuthenticatedLiteratureSearchEffectExecutionCommand(
-                                            planId,
-                                            intent.persistedIntent().intent()
-                                                    .toolCallId(),
-                                            recoveryAttempt));
-                    effectResult = effect.result();
-                } else if (SANDBOX_EXECUTE.equals(effectKind)) {
-                    if (sandboxEffects == null) {
-                        return outcome(
-                                planId, cycle,
-                                PersistentPlanAgentLoopState
-                                        .EFFECT_REJECTED,
-                                Optional.of(stepId),
-                                Optional.of(active.recovery()),
-                                Optional.empty(), Optional.empty());
+                effectResult = switch (toolEntry.executionTarget()) {
+                    case LITERATURE -> {
+                        AuthenticatedLiteratureSearchEffectExecutionOutcome effect =
+                                effects.execute(
+                                        userId, agentTurnId,
+                                        new AuthenticatedLiteratureSearchEffectExecutionCommand(
+                                                planId,
+                                                intent.persistedIntent().intent()
+                                                        .toolCallId(),
+                                                recoveryAttempt));
+                        yield effect.result();
                     }
-                    effectResult = sandboxEffects.execute(
-                            userId, agentTurnId, planId,
-                            intent.persistedIntent().intent().toolCallId(),
-                            recoveryAttempt).result();
-                } else {
-                    var effect = projectEffects.execute(
+                    case SANDBOX -> {
+                        if (sandboxEffects == null) {
+                            yield null;
+                        }
+                        yield sandboxEffects.execute(
+                                userId, agentTurnId, planId,
+                                intent.persistedIntent().intent().toolCallId(),
+                                recoveryAttempt).result();
+                    }
+                    case PROJECT -> projectEffects.execute(
                             userId, agentTurnId,
                             new AuthenticatedProjectEffectExecutionCommand(
                                     planId,
                                     intent.persistedIntent().intent()
                                             .toolCallId(),
-                                    recoveryAttempt, requestProvider));
-                    effectResult = effect.result();
-                }
+                                    recoveryAttempt, requestProvider)).result();
+                };
             } catch (V2SandboxEffectPendingException pending) {
                 return outcome(
                         planId, cycle,
