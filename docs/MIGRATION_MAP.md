@@ -250,3 +250,84 @@
   separate read/Candidate forms or internal tool identifiers.
 - Excluded: legacy Agent orchestration, V2 core changes, automatic Candidate
   apply, a new Sandbox protocol or schema, and unrelated RAG/paper behavior.
+
+## Legacy V1 Agent orchestration retirement audit
+
+- Issue: `#106`.
+- Status: `ASSESSED_FOR_STAGED_RETIREMENT`.
+- Scope: call-graph and ownership audit only. This assessment does not delete
+  production code, database rows, migrations, or stored user messages.
+- Baseline: the Project page cutover in `codex/v2-baseline-20260801` makes the
+  visible Project conversation V2-only, but the branch still contains the
+  workspace `ChatPage`, its `/chat` route and WebSocket, legacy REST clients,
+  and dead V1 state and handlers in `ProjectPreviewPage.vue`. Backend removal
+  must therefore follow, not precede, the frontend entry-point cleanup.
+
+### Dependency finding
+
+The V2 production package has no direct reference to `PlanAgentService`,
+`PlanningAgentPlanner`, `CompletionVerifier`, `AgentRuntimeCoordinator`,
+`AgentRuntimeService`, `AgentStrategySelector`, `PlanRuntimeAdapter`,
+`PlanReflectionRuntimeAdapter`, `LangChain4jToolCallingStrategy`,
+`LangChain4jToolProvider`, or `AgentLangChain4jTools`. Those classes are not
+part of the V2 runtime contract.
+
+V2 does, however, directly reuse the following product capabilities that
+currently live in legacy-named packages. Their package name is not evidence
+that they are safe to delete:
+
+- session/message persistence, summaries, context snapshots, long-term
+  memory, RAG experiment context, and `AgentContextBuilder` contracts;
+- `LiteratureSearchStartToolExecutor` and the existing literature task
+  implementation;
+- `CandidateChangeArtifactService`, `ProjectRuntimeContext`, Candidate
+  contracts, Candidate validation/apply gates, and Project revision services;
+- `V2SandboxEffectExecutionComposer` and the shared E2B broker/client
+  infrastructure;
+- `ChatModelProvider`, provider settings and user-key resolution, and
+  `LangChain4jChatModelAdapter`. The latter is also used by paper workflows and
+  `AgentExperimentService` independently of the old tool-calling loop.
+
+### Retirement classification
+
+| Classification | Components | Decision and prerequisite |
+| --- | --- | --- |
+| `DELETE_AFTER_CUTOVER` | `PlanAgentController`, `PlanAgentService`, `PlanningAgentPlanner`, `CompletionVerifier`, `PlanRuntimeAdapter`, `PlanReflectionRuntimeAdapter`, `PlanStepVerifier`, and the legacy `FinalSynthesisService` | These implement the old Plan lifecycle and are not V2 dependencies. Delete only after all REST, Project-runtime, and internal callers are removed. Preserve V2's separate `V2AdaptiveFinalSynthesisService`. |
+| `DELETE_AFTER_CUTOVER` | `AgentRuntimeCoordinator`, `AgentRuntimeService`, `AgentStrategySelector`, `AgentLlmRouter`, `LangChain4jRuntimeAdapter`, and the legacy controlled-worker orchestration | These form the old chat/Plan runtime. Delete after the V1 message endpoint and both V1 WebSockets no longer have production callers. |
+| `DELETE_AFTER_CUTOVER` | `SandboxPlanAuthorityResolver`, `SandboxPlanConfirmationService`, `SandboxExecutionOutboxService`, `SandboxOutboxDispatcher`, `SandboxReceiptProjectionService`, and `SandboxOutputAnalysisProjectionService` | These are coupled to the old `AgentPlan` authority/outbox projection. Delete only after the old Plan endpoints and background beans are gone. Do not remove the E2B broker, V2 sandbox composer, Candidate validation sandbox, or shared sandbox contracts. |
+| `SPLIT_BEFORE_DELETE` | `AgentController` and `AgentService` | `AgentController` mixes V2 endpoints and shared session/context APIs with the V1 `sendMessage` endpoint. `AgentService` mixes reusable session/title/message/summary/memory work with old runtime dispatch. Extract stable session/context services and remove only the V1 dispatch path; the whole classes are not deletion-ready. |
+| `SPLIT_BEFORE_DELETE` | `ProjectController`, `ProjectAgentRuntimeService`, `ProjectChatWebSocketHandler`, and `ChatWebSocketHandler` | Keep Project/version/Candidate APIs, but remove old Project Plan/message adapters and V1 WebSockets after frontend callers are deleted. `ProjectController` itself is shared and must not be deleted wholesale. |
+| `MIGRATE_ONE_CAPABILITY_AT_A_TIME` | `LangChain4jToolCallingStrategy`, `LangChain4jToolProvider`, `AgentLangChain4jTools`, `AgentToolPolicyEngine`, and reusable tool executors | The old binding/loop can retire only after required executors are assessed and registered through the V2 tool contract. Reuse executor logic where justified; do not migrate the V1 planner or fixed execution chain. `ToolRegistry` is not deletion evidence by association. |
+| `KEEP_SHARED` | session/message entities and repositories, summary/memory/RAG/context services, settings/provider/user-key services, Project/version/Candidate/revision services, literature and paper services, model transport, and E2B/V2 Workspace infrastructure | These are product capabilities or explicit V2 dependencies. They remain even if they are later moved from a legacy-named package. |
+| `RETAIN_DATA_SCHEMA` | legacy Agent Plan tables, migrations, stored messages, Receipts, and event data | Code retirement does not authorize destructive schema migration or historical-data deletion. A later data-retention Issue must make that decision explicitly. |
+
+### Required retirement order
+
+1. Merge or otherwise accept the V2 Project baseline and remove the remaining
+   V1 frontend entry points: `ChatPage`, `/chat` default navigation, V1
+   WebSocket usage, legacy REST clients, and dead Project-page V1 handlers.
+2. Split `AgentController`/`AgentService` so V2 intake/history and stable
+   session/context capabilities no longer require construction of the V1
+   runtime. Split legacy Project message/Plan endpoints from shared
+   `ProjectController` APIs.
+3. Define one V2 tool descriptor, argument, result, Receipt, and registry
+   contract. Assess and migrate each required paper, Project, literature, and
+   sandbox capability in a separate Issue/PR with success and failure tests.
+4. Remove old Plan REST endpoints, Project Plan adapters, WebSockets, runtime
+   coordinators, planner/reflection/verifier chain, and Plan-specific sandbox
+   outbox workers after call-graph and Spring-bean checks show no production
+   callers.
+5. Remove now-unreferenced legacy tool bindings and orchestration tests. Keep
+   shared executors and model transport until their independent consumers are
+   migrated or retired.
+6. Leave historical tables and rows intact. Any later schema cleanup requires
+   a separate retention and rollback plan.
+
+### Deletion gates
+
+Every deletion PR must stop if any candidate is imported by V2, paper,
+literature, Candidate/revision, settings/provider, or Project/version code.
+It must also verify that no controller, WebSocket registration, scheduled
+worker, Spring bean, or frontend client still calls the removed path. Use
+focused compile and behavior tests for the affected boundary; do not treat a
+class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
