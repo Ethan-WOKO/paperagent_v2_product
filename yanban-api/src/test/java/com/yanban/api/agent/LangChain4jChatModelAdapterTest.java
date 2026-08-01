@@ -109,31 +109,12 @@ class LangChain4jChatModelAdapterTest {
                 .build();
     }
 
-    private AgentRuntimeRequest runtimeRequest() {
-        return new AgentRuntimeRequest(
-                AgentStrategy.DIRECT,
-                1L,
-                List.of(),
-                2L,
-                "hello",
+    private ModelInvocationContext runtimeRequest() {
+        return new ModelInvocationContext(
                 "deepseek",
-                "deepseek-v4-flash",
                 null,
                 null,
-                3,
-                false,
-                null,
-                null,
-                null,
-                null,
-                AgentRuntimeMode.LANGCHAIN4J,
-                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
-                List.of(),
-                0,
-                0,
-                "trace-stream-fallback",
-                null,
-                null
+                "trace-stream-fallback"
         );
     }
 }

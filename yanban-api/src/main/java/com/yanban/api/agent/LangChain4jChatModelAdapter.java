@@ -16,7 +16,6 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
 import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
@@ -58,14 +57,14 @@ public class LangChain4jChatModelAdapter implements ChatModel {
     }
 
     public dev.langchain4j.model.chat.response.ChatResponse chat(dev.langchain4j.model.chat.request.ChatRequest request,
-                                                                 AgentRuntimeRequest runtimeRequest) {
-        ChatResponse response = chatModelProvider.chat(toCoreChatRequest(request, runtimeRequest));
+                                                                 ModelInvocationContext context) {
+        ChatResponse response = chatModelProvider.chat(toCoreChatRequest(request, context));
         return toLangChain4jResponse(request, response);
     }
 
     public Flux<ChatChunk> stream(dev.langchain4j.model.chat.request.ChatRequest request,
-                                  AgentRuntimeRequest runtimeRequest) {
-        ChatRequest coreRequest = toCoreChatRequest(request, runtimeRequest);
+                                  ModelInvocationContext context) {
+        ChatRequest coreRequest = toCoreChatRequest(request, context);
         AtomicBoolean emitted = new AtomicBoolean(false);
         return chatModelProvider.streamChat(coreRequest)
                 .doOnNext(chunk -> {
@@ -83,20 +82,19 @@ public class LangChain4jChatModelAdapter implements ChatModel {
     }
 
     private ChatRequest toCoreChatRequest(dev.langchain4j.model.chat.request.ChatRequest request,
-                                          AgentRuntimeRequest runtimeRequest) {
-        ChatRequestParameters parameters = request == null ? null : request.parameters();
+                                          ModelInvocationContext context) {
         return new ChatRequest(
-                runtimeRequest == null ? null : runtimeRequest.provider(),
+                context == null ? null : context.provider(),
                 request == null ? null : request.modelName(),
                 toCoreMessages(request == null ? List.of() : request.messages()),
                 request == null ? null : request.temperature(),
                 request == null ? null : request.maxOutputTokens(),
                 toCoreToolSpecs(request == null ? List.of() : request.toolSpecifications()),
-                runtimeRequest == null ? null : runtimeRequest.apiKey(),
-                runtimeRequest == null ? null : runtimeRequest.apiUrl(),
+                context == null ? null : context.apiKey(),
+                context == null ? null : context.apiUrl(),
                 null,
                 null,
-                runtimeRequest == null ? null : runtimeRequest.traceId()
+                context == null ? null : context.traceId()
         );
     }
 

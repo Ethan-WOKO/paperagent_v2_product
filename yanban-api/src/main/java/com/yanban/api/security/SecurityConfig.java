@@ -44,7 +44,6 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/demo/config").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/paper/events").permitAll()
-                        .requestMatchers("/api/v1/ws/**").permitAll()
                         .requestMatchers("/api/v1/admin/**", "/api/v1/observability/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/**").authenticated()
                         .anyRequest().permitAll()

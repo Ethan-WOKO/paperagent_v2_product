@@ -1,15 +1,9 @@
 package com.yanban.api.project;
 
 import java.util.List;
-import com.yanban.api.agent.ProjectAgentRuntimeService;
-import com.yanban.api.agent.SendMessageRequest;
-import com.yanban.api.agent.SendMessageResponse;
-import com.yanban.api.agent.AgentPlanResponse;
-import com.yanban.api.agent.CreateAgentPlanRequest;
-import com.yanban.api.agent.ProjectEvidenceResponse;
+import com.yanban.api.agent.ProjectSessionService;
 import com.yanban.api.agent.AgentSessionResponse;
 import com.yanban.api.agent.CreateSessionRequest;
-import com.yanban.api.agent.AgentContextSnapshotResponse;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisRequest;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisResponse;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisService;
@@ -43,7 +37,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class ProjectController {
 
     private final ProjectService projectService;
-    private final ProjectAgentRuntimeService projectAgentRuntimeService;
+    private final ProjectSessionService projectSessions;
     private final ProjectUploadService projectUploadService;
     private final ProjectRevisionWorkflowService revisionWorkflow;
     private final CandidateSandboxValidationService candidateValidations;
@@ -58,67 +52,67 @@ public class ProjectController {
                 V2ProductAvailability.enabledByDefault());
     }
 
-    public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService) {
-        this(projectService, projectAgentRuntimeService, null, null,
+    public ProjectController(ProjectService projectService, ProjectSessionService projectSessions) {
+        this(projectService, projectSessions, null, null,
                 java.util.Optional.empty(), java.util.Optional.empty(),
                 java.util.Optional.empty(),
                 V2ProductAvailability.enabledByDefault());
     }
 
-    public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
+    public ProjectController(ProjectService projectService, ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService) {
-        this(projectService, projectAgentRuntimeService, projectUploadService,
+        this(projectService, projectSessions, projectUploadService,
                 null, java.util.Optional.empty(), java.util.Optional.empty(),
                 java.util.Optional.empty(),
                 V2ProductAvailability.enabledByDefault());
     }
 
-    public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
+    public ProjectController(ProjectService projectService, ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow) {
-        this(projectService, projectAgentRuntimeService, projectUploadService,
+        this(projectService, projectSessions, projectUploadService,
                 revisionWorkflow, java.util.Optional.empty(),
                 java.util.Optional.empty(), java.util.Optional.empty(),
                 V2ProductAvailability.enabledByDefault());
     }
 
-    public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
+    public ProjectController(ProjectService projectService, ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow,
                              java.util.Optional<CandidateSandboxValidationService> candidateValidations) {
-        this(projectService, projectAgentRuntimeService, projectUploadService,
+        this(projectService, projectSessions, projectUploadService,
                 revisionWorkflow, candidateValidations,
                 java.util.Optional.empty(), java.util.Optional.empty(),
                 V2ProductAvailability.enabledByDefault());
     }
 
     public ProjectController(ProjectService projectService,
-                             ProjectAgentRuntimeService projectAgentRuntimeService,
+                             ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow,
                              java.util.Optional<CandidateSandboxValidationService> candidateValidations,
                              java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis) {
-        this(projectService, projectAgentRuntimeService, projectUploadService,
+        this(projectService, projectSessions, projectUploadService,
                 revisionWorkflow, candidateValidations, v2ProjectAnalysis,
                 java.util.Optional.empty(),
                 V2ProductAvailability.enabledByDefault());
     }
 
     public ProjectController(ProjectService projectService,
-                             ProjectAgentRuntimeService projectAgentRuntimeService,
+                             ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow,
                              java.util.Optional<CandidateSandboxValidationService> candidateValidations,
                              java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis,
                              java.util.Optional<V2ProjectCandidateService> v2ProjectCandidate) {
-        this(projectService, projectAgentRuntimeService, projectUploadService,
+        this(projectService, projectSessions, projectUploadService,
                 revisionWorkflow, candidateValidations, v2ProjectAnalysis,
                 v2ProjectCandidate, V2ProductAvailability.enabledByDefault());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectController(ProjectService projectService,
-                             ProjectAgentRuntimeService projectAgentRuntimeService,
+                             ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow,
                              java.util.Optional<CandidateSandboxValidationService> candidateValidations,
@@ -126,7 +120,7 @@ public class ProjectController {
                              java.util.Optional<V2ProjectCandidateService> v2ProjectCandidate,
                              V2ProductAvailability v2Availability) {
         this.projectService = projectService;
-        this.projectAgentRuntimeService = projectAgentRuntimeService;
+        this.projectSessions = projectSessions;
         this.projectUploadService = projectUploadService;
         this.revisionWorkflow = revisionWorkflow;
         this.candidateValidations = candidateValidations.orElse(null);
@@ -253,18 +247,8 @@ public class ProjectController {
     @GetMapping("/{projectId}/agent/sessions")
     public List<AgentSessionResponse> listProjectSessions(@AuthenticationPrincipal(expression = "id") Long userId,
                                                           @PathVariable Long projectId) {
-        if (projectAgentRuntimeService == null) throw new IllegalStateException("Project runtime is not configured");
-        return projectAgentRuntimeService.listSessions(userId, projectId);
-    }
-
-    @GetMapping("/{projectId}/agent/sessions/{sessionId}/context-snapshots")
-    public List<AgentContextSnapshotResponse> listProjectContextSnapshots(
-            @AuthenticationPrincipal(expression = "id") Long userId,
-            @PathVariable Long projectId,
-            @PathVariable Long sessionId,
-            @RequestParam(defaultValue = "20") Integer limit) {
-        if (projectAgentRuntimeService == null) throw new IllegalStateException("Project runtime is not configured");
-        return projectAgentRuntimeService.listContextSnapshots(userId, projectId, sessionId, limit);
+        if (projectSessions == null) throw new IllegalStateException("Project sessions are not configured");
+        return projectSessions.listSessions(userId, projectId);
     }
 
     @org.springframework.web.bind.annotation.PostMapping("/{projectId}/agent/sessions")
@@ -272,8 +256,8 @@ public class ProjectController {
     public AgentSessionResponse createProjectSession(@AuthenticationPrincipal(expression = "id") Long userId,
                                                      @PathVariable Long projectId,
                                                      @Valid @org.springframework.web.bind.annotation.RequestBody CreateSessionRequest request) {
-        if (projectAgentRuntimeService == null) throw new IllegalStateException("Project runtime is not configured");
-        return projectAgentRuntimeService.createSession(userId, projectId, request);
+        if (projectSessions == null) throw new IllegalStateException("Project sessions are not configured");
+        return projectSessions.createSession(userId, projectId, request);
     }
 
     @GetMapping("/{projectId}/files/read")
@@ -289,18 +273,6 @@ public class ProjectController {
                                           @RequestParam String query,
                                           @RequestParam(required = false) Integer maxResults) {
         return projectService.search(userId, projectId, query, maxResults);
-    }
-
-    /** Project binding comes from this authenticated route, never from chat JSON or model content. */
-    @org.springframework.web.bind.annotation.PostMapping("/{projectId}/agent/sessions/{sessionId}/messages")
-    public SendMessageResponse sendProjectMessage(@AuthenticationPrincipal(expression = "id") Long userId,
-                                                  @PathVariable Long projectId,
-                                                  @PathVariable Long sessionId,
-                                                  @Valid @org.springframework.web.bind.annotation.RequestBody SendMessageRequest request) {
-        if (projectAgentRuntimeService == null) {
-            throw new IllegalStateException("Project runtime is not configured");
-        }
-        return projectAgentRuntimeService.send(userId, projectId, sessionId, request);
     }
 
     @PostMapping("/{projectId}/agent/sessions/{sessionId}/v2/read-analysis-turns")
@@ -361,23 +333,6 @@ public class ProjectController {
             throw new IllegalStateException("V2 Project Candidate is not configured");
         }
         return v2ProjectCandidate.read(userId, projectId, sessionId, clientRequestId);
-    }
-
-    @org.springframework.web.bind.annotation.PostMapping("/{projectId}/agent/sessions/{sessionId}/plans")
-    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
-    public AgentPlanResponse createProjectPlan(@AuthenticationPrincipal(expression = "id") Long userId,
-                                               @PathVariable Long projectId, @PathVariable Long sessionId,
-                                               @Valid @org.springframework.web.bind.annotation.RequestBody CreateAgentPlanRequest request) {
-        if (projectAgentRuntimeService == null) throw new IllegalStateException("Project runtime is not configured");
-        return projectAgentRuntimeService.createPlan(userId, projectId, sessionId, request);
-    }
-
-    @GetMapping("/{projectId}/agent/plans/{planId}/evidence")
-    public List<ProjectEvidenceResponse> listProjectPlanEvidence(@AuthenticationPrincipal(expression = "id") Long userId,
-                                                                  @PathVariable Long projectId,
-                                                                  @PathVariable Long planId) {
-        if (projectAgentRuntimeService == null) throw new IllegalStateException("Project runtime is not configured");
-        return projectAgentRuntimeService.listPlanEvidence(userId, projectId, planId);
     }
 
     private void requireRevisionWorkflow() {

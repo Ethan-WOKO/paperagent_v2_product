@@ -22,12 +22,12 @@ class AgentControllerV2AvailabilityTest {
 
     @Test
     void capabilityDocumentIsAuthenticatedBoundedAndDoesNotReadServices() {
-        AgentService legacy = mock(AgentService.class);
+        AgentSessionService sessions = mock(AgentSessionService.class);
         V2LiteratureTurnService turns = mock(V2LiteratureTurnService.class);
         V2LiteratureOutcomeService outcomes =
                 mock(V2LiteratureOutcomeService.class);
         AgentController controller = controller(
-                legacy, turns, outcomes, false);
+                sessions, turns, outcomes, false);
 
         var document = controller.v2Capabilities(USER);
 
@@ -38,17 +38,17 @@ class AgentControllerV2AvailabilityTest {
                 "project.read-analysis",
                 "project.candidate",
                 "agent.turn");
-        verifyNoInteractions(legacy, turns, outcomes);
+        verifyNoInteractions(sessions, turns, outcomes);
     }
 
     @Test
     void disabledLiteratureStartReadAndCancelFailBeforeDelegation() {
-        AgentService legacy = mock(AgentService.class);
+        AgentSessionService sessions = mock(AgentSessionService.class);
         V2LiteratureTurnService turns = mock(V2LiteratureTurnService.class);
         V2LiteratureOutcomeService outcomes =
                 mock(V2LiteratureOutcomeService.class);
         AgentController controller = controller(
-                legacy, turns, outcomes, false);
+                sessions, turns, outcomes, false);
         V2LiteratureTurnRequest request = new V2LiteratureTurnRequest(
                 "agents", 10, null, true, "request-1");
 
@@ -58,17 +58,17 @@ class AgentControllerV2AvailabilityTest {
                 USER, 9L, "request-1"));
         assertUnavailable(() -> controller.cancelV2LiteratureTurn(
                 USER, 9L, "request-1"));
-        verifyNoInteractions(legacy, turns, outcomes);
+        verifyNoInteractions(sessions, turns, outcomes);
     }
 
     @Test
     void enabledLiteratureEndpointsDelegateExactlyOnce() {
-        AgentService legacy = mock(AgentService.class);
+        AgentSessionService sessions = mock(AgentSessionService.class);
         V2LiteratureTurnService turns = mock(V2LiteratureTurnService.class);
         V2LiteratureOutcomeService outcomes =
                 mock(V2LiteratureOutcomeService.class);
         AgentController controller = controller(
-                legacy, turns, outcomes, true);
+                sessions, turns, outcomes, true);
         V2LiteratureTurnRequest request = new V2LiteratureTurnRequest(
                 "agents", 10, null, true, "request-1");
 
@@ -79,36 +79,17 @@ class AgentControllerV2AvailabilityTest {
         verify(turns).execute(7L, 9L, request);
         verify(outcomes).get(7L, 9L, "request-1");
         verify(outcomes).cancel(7L, 9L, "request-1");
-        verifyNoInteractions(legacy);
-    }
-
-    @Test
-    void disabledV2DoesNotGateOrdinaryLegacyMessages() {
-        AgentService legacy = mock(AgentService.class);
-        V2LiteratureTurnService turns = mock(V2LiteratureTurnService.class);
-        V2LiteratureOutcomeService outcomes =
-                mock(V2LiteratureOutcomeService.class);
-        AgentController controller = controller(
-                legacy, turns, outcomes, false);
-        SendMessageRequest request = new SendMessageRequest(
-                "ordinary", false, null, "legacy-request", null);
-        SendMessageResponse expected = mock(SendMessageResponse.class);
-        when(legacy.sendMessage(7L, 9L, request)).thenReturn(expected);
-
-        assertThat(controller.sendMessage(USER, 9L, request))
-                .isSameAs(expected);
-        verify(legacy).sendMessage(7L, 9L, request);
-        verifyNoInteractions(turns, outcomes);
+        verifyNoInteractions(sessions);
     }
 
     private static AgentController controller(
-            AgentService legacy,
+            AgentSessionService sessions,
             V2LiteratureTurnService turns,
             V2LiteratureOutcomeService outcomes,
             boolean enabled) {
         return new AgentController(
-                legacy, mock(AgentContextSnapshotService.class),
-                turns, outcomes, new V2ProductAvailability(enabled));
+                sessions, turns, outcomes,
+                new V2ProductAvailability(enabled), null, null, null);
     }
 
     private static void assertUnavailable(Runnable invocation) {

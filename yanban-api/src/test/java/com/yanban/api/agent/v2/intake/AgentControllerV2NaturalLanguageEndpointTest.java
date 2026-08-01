@@ -7,9 +7,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.yanban.api.agent.AgentContextSnapshotService;
 import com.yanban.api.agent.AgentController;
-import com.yanban.api.agent.AgentService;
+import com.yanban.api.agent.AgentSessionService;
 import com.yanban.api.agent.v2.compatibility.V2ProductAvailability;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureOutcomeService;
 import com.yanban.api.agent.v2.compatibility.literature.V2LiteratureTurnService;
@@ -122,12 +121,11 @@ class AgentControllerV2NaturalLanguageEndpointTest {
             V2ProductAvailability availability,
             V2NaturalLanguageTurnService turns) {
         return new AgentController(
-                mock(AgentService.class),
-                mock(AgentContextSnapshotService.class),
+                mock(AgentSessionService.class),
                 mock(V2LiteratureTurnService.class),
                 mock(V2LiteratureOutcomeService.class),
                 availability,
-                turns);
+                turns, null, null);
     }
 
     private AgentController controller(
@@ -135,11 +133,10 @@ class AgentControllerV2NaturalLanguageEndpointTest {
             V2NaturalLanguageTurnService turns,
             V2AdaptiveTurnQueryService outcomes) {
         return new AgentController(
-                mock(AgentService.class),
-                mock(AgentContextSnapshotService.class),
+                mock(AgentSessionService.class),
                 mock(V2LiteratureTurnService.class),
                 mock(V2LiteratureOutcomeService.class),
-                availability, turns, outcomes);
+                availability, turns, outcomes, null);
     }
 
     private AgentController controller(
@@ -148,8 +145,7 @@ class AgentControllerV2NaturalLanguageEndpointTest {
             V2AdaptiveTurnQueryService outcomes,
             V2TurnHistoryQueryService history) {
         return new AgentController(
-                mock(AgentService.class),
-                mock(AgentContextSnapshotService.class),
+                mock(AgentSessionService.class),
                 mock(V2LiteratureTurnService.class),
                 mock(V2LiteratureOutcomeService.class),
                 availability, turns, outcomes, history);

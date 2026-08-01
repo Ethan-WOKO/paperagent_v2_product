@@ -28,10 +28,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.mock.web.MockMultipartFile;
 import com.yanban.api.security.JwtUser;
-import com.yanban.api.agent.ProjectAgentRuntimeService;
-import com.yanban.api.agent.SendMessageResponse;
-import com.yanban.api.agent.AgentPlanResponse;
-import com.yanban.api.agent.ProjectEvidenceResponse;
+import com.yanban.api.agent.ProjectSessionService;
 import com.yanban.api.agent.AgentSessionResponse;
 import com.yanban.core.agent.AgentSessionScope;
 
@@ -124,35 +121,9 @@ class ProjectControllerIntegrationTest {
     }
 
     @Test
-    void authenticatedProjectRoutesBindProjectIdFromPathAndDelegateToFacade() throws Exception {
-        ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
-        ProjectAgentRuntimeService facade = mock(ProjectAgentRuntimeService.class);
-        when(facade.send(7L, 42L, 8L, new com.yanban.api.agent.SendMessageRequest("read notes", null, null, null, null)))
-                .thenReturn(null);
-        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service, facade))
-                .setControllerAdvice(new ProjectExceptionHandler()).setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
-
-        mockMvc.perform(post("/api/v1/projects/42/agent/sessions/8/messages")
-                        .contentType("application/json").content("{\"content\":\"read notes\",\"projectId\":99}"))
-                .andExpect(status().isOk());
-        org.mockito.Mockito.verify(facade).send(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(42L),
-                org.mockito.ArgumentMatchers.eq(8L), org.mockito.ArgumentMatchers.any());
-
-        mockMvc.perform(post("/api/v1/projects/42/agent/sessions/8/plans")
-                        .contentType("application/json").content("{\"content\":\"compare files\",\"ragDisabled\":true,\"autoExecute\":true}"))
-                .andExpect(status().isCreated());
-        org.mockito.ArgumentCaptor<com.yanban.api.agent.CreateAgentPlanRequest> planRequest =
-                org.mockito.ArgumentCaptor.forClass(com.yanban.api.agent.CreateAgentPlanRequest.class);
-        org.mockito.Mockito.verify(facade).createPlan(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(42L),
-                org.mockito.ArgumentMatchers.eq(8L), planRequest.capture());
-        org.assertj.core.api.Assertions.assertThat(planRequest.getValue()).isEqualTo(
-                new com.yanban.api.agent.CreateAgentPlanRequest("compare files", true, null, true));
-    }
-
-    @Test
     void projectSessionHistoryRoutesUseAuthenticatedUserAndPathProjectId() throws Exception {
         ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
-        ProjectAgentRuntimeService facade = mock(ProjectAgentRuntimeService.class);
+        ProjectSessionService facade = mock(ProjectSessionService.class);
         AgentSessionResponse session = new AgentSessionResponse(8L, 7L, AgentSessionScope.PROJECT, 42L,
                 "Study conversation", "deepseek", "deepseek-v4-flash", 20, true, null, null);
         when(facade.listSessions(7L, 42L)).thenReturn(List.of(session));
@@ -177,34 +148,6 @@ class ProjectControllerIntegrationTest {
                 org.mockito.ArgumentMatchers.eq(42L), org.mockito.ArgumentMatchers.any());
     }
 
-    @Test
-    void projectPlanFailureReturnsDiagnosticJsonInsteadOfBareBadGateway() throws Exception {
-        ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
-        ProjectAgentRuntimeService facade = mock(ProjectAgentRuntimeService.class);
-        when(facade.createPlan(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(42L),
-                org.mockito.ArgumentMatchers.eq(8L), org.mockito.ArgumentMatchers.any()))
-                .thenThrow(new org.springframework.web.server.ResponseStatusException(
-                        org.springframework.http.HttpStatus.BAD_GATEWAY,
-                        "Project Plan creation failed [traceId=plan-create-test]: Planner failed [MODEL_CALL_FAILED]: upstream timeout"));
-        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service, facade))
-                .setControllerAdvice(new ProjectExceptionHandler())
-                .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
-                .build();
-
-        mockMvc.perform(post("/api/v1/projects/42/agent/sessions/8/plans")
-                        .contentType("application/json")
-                        .content("{\"content\":\"compare files\",\"ragDisabled\":true,\"autoExecute\":true}"))
-                .andExpect(status().isBadGateway())
-                .andExpect(jsonPath("$.code").value("PROJECT_PLAN_FAILED"))
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("plan-create-test")))
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("MODEL_CALL_FAILED")))
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("upstream timeout")));
-        org.mockito.Mockito.verify(facade).createPlan(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(42L),
-                org.mockito.ArgumentMatchers.eq(8L), org.mockito.ArgumentMatchers.any());
-    }
-
-    @Test
-    @org.junit.jupiter.api.Disabled("Legacy absolute-path creation endpoint was removed")
     void createUsesAuthenticatedOwnerAndNeverAcceptsCallerSelectedOwnership() throws Exception {
         ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
         ProjectProvisioningService provisioning = mock(ProjectProvisioningService.class);
@@ -305,35 +248,6 @@ class ProjectControllerIntegrationTest {
         org.mockito.Mockito.verify(projects).findByIdAndUserId(99L, 7L);
         org.mockito.Mockito.verify(projects, org.mockito.Mockito.never())
                 .delete(org.mockito.ArgumentMatchers.any(Project.class));
-    }
-
-    @Test
-    void evidenceProjectionDelegatesOnlyTheAuthenticatedProjectAndPlanRoute() throws Exception {
-        ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
-        ProjectAgentRuntimeService facade = mock(ProjectAgentRuntimeService.class);
-        when(facade.listPlanEvidence(7L, 42L, 13L)).thenReturn(List.of(
-                new ProjectEvidenceResponse("trusted-plan:42:notes.txt:h:1", "notes.txt", "h", "h", "tool:1", true, true)));
-        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service, facade))
-                .setControllerAdvice(new ProjectExceptionHandler()).setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
-
-        mockMvc.perform(get("/api/v1/projects/42/agent/plans/13/evidence"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].relativePath").value("notes.txt"))
-                .andExpect(jsonPath("$[0].current").value(true));
-        org.mockito.Mockito.verify(facade).listPlanEvidence(7L, 42L, 13L);
-    }
-
-    @Test
-    void projectRoutesRejectNonOwnerBeforeFacadeCanBindCapability() throws Exception {
-        ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
-        ProjectAgentRuntimeService facade = new ProjectAgentRuntimeService(service,
-                mock(com.yanban.api.agent.AgentService.class), mock(com.yanban.api.agent.PlanAgentService.class));
-        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service, facade))
-                .setControllerAdvice(new ProjectExceptionHandler()).setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
-
-        mockMvc.perform(post("/api/v1/projects/99/agent/sessions/8/messages")
-                        .contentType("application/json").content("{\"content\":\"read notes\"}"))
-                .andExpect(status().isNotFound());
     }
 
     @Test

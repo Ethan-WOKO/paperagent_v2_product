@@ -356,6 +356,41 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   message, Plan, Receipt, or user data. Backend retirement remains a separate
   call-graph-gated change.
 
+## V1 backend orchestration retirement
+
+- Issue: `#112`.
+- Status: `RETIRED_AFTER_V2_CUTOVER`.
+- Removed entry points: the legacy session-message REST endpoints, Project
+  message/Plan/evidence endpoints, the old Plan controller, and both V1 chat
+  WebSockets. The remaining `/api/v1` URI prefix is the public API version and
+  does not imply that the retired Agent runtime is still active.
+- Removed orchestration: the old planner, strategy/router/runtime coordinator,
+  completion/reflection/verifier/final-synthesis chain, controlled-worker
+  runtime, Project runtime facade, legacy LangChain4j tool-calling binding,
+  and Plan-owned sandbox authority/outbox/projection workers.
+- Split stable capabilities: `AgentSessionService` now owns authenticated
+  session persistence and deletion; `ProjectSessionService` binds Project
+  ownership to session creation/listing; `ModelInvocationContext` carries only
+  provider endpoint credentials and trace metadata for shared model transport.
+  These replacements do not dispatch V1 messages or construct a legacy Plan.
+- Preserved product capabilities: V2 intake/history/adaptive execution and
+  final synthesis; session/message entities needed by V2; summaries, memory,
+  RAG/context, settings/provider/user-key resolution; Project files, versions,
+  Candidate validation/apply and revisions; paper/literature services; reusable
+  capability executors; and the shared E2B broker, V2 Workspace and sandbox
+  composer.
+- Preserved data: all migrations, legacy Plan/message/Receipt/event tables and
+  existing user rows remain intact. No cleanup migration or bulk data deletion
+  is part of this retirement.
+- Verification boundary: production and test compilation must succeed with no
+  reference to the removed runtime or WebSocket package; V2 controller,
+  intake/history/adaptive execution, Candidate, Project, provider, and sandbox
+  focused tests remain the regression authority. The deterministic release-gate
+  list now names V2/shared tests rather than deleted V1 tests.
+- Excluded: adding or migrating tools, changing V2 routing/reflection semantics,
+  changing Candidate apply authority, deleting historical schema/data, and
+  unrelated frontend layout changes.
+
 ## Unified V2 product tool catalog and parameter schemas
 
 - Status: `V2_PRODUCT_CONTRACT`.

@@ -1,11 +1,7 @@
 package com.yanban.api.paper;
 
-import com.yanban.api.agent.AgentRuntimeMode;
-import com.yanban.api.agent.AgentRuntimeRequest;
-import com.yanban.api.agent.AgentStrategy;
-import com.yanban.api.agent.AgentToolCallingMode;
 import com.yanban.api.agent.LangChain4jChatModelAdapter;
-import com.yanban.api.agent.ResolvedToolPolicy;
+import com.yanban.api.agent.ModelInvocationContext;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.quota.UserQuotaService;
 import com.yanban.paper.service.PaperModelExecutionContext;
@@ -75,11 +71,11 @@ public class PaperModelClientConfig {
             if (endpoint != null) {
                 log.info("Paper model call provider={} model={} sourceType={} sourceLabel={}",
                         endpoint.providerKey(), endpoint.modelName(), endpoint.sourceType(), endpoint.sourceLabel());
-                response = chatModel.chat(request, runtimeRequest(endpoint, temperature, maxTokens));
+                response = chatModel.chat(request, runtimeRequest(endpoint));
             } else if (StringUtils.hasText(properties.getProvider())) {
                 log.info("Paper model call provider={} model={} sourceType=paper-properties sourceLabel=yanban.paper.model",
                         properties.getProvider(), modelName);
-                response = chatModel.chat(request, runtimeRequest(properties, temperature, maxTokens));
+                response = chatModel.chat(request, runtimeRequest(properties));
             } else {
                 log.info("Paper model call provider=default model={} sourceType=chat-model-bean sourceLabel=default", modelName);
                 response = chatModel.chat(request);
@@ -108,32 +104,13 @@ public class PaperModelClientConfig {
         return userSettingsService.resolveModelEndpoint(userId, null, null);
     }
 
-    private AgentRuntimeRequest runtimeRequest(PaperModelProperties properties, Double temperature, Integer maxTokens) {
+    private ModelInvocationContext runtimeRequest(PaperModelProperties properties) {
         validateConfiguredPaperProvider(properties);
-        return new AgentRuntimeRequest(
-                AgentStrategy.DIRECT,
-                null,
-                List.of(),
-                null,
-                "paper-model-call",
+        return new ModelInvocationContext(
                 normalizeProvider(properties.getProvider()),
-                resolveModel(properties),
-                temperature,
-                maxTokens,
-                1,
-                true,
-                null,
                 blankToNull(properties.getApiKey()),
                 resolveApiUrl(properties),
-                null,
-                AgentRuntimeMode.LANGCHAIN4J,
-                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
-                ResolvedToolPolicy.denyAll(0, 0, "paper_model_no_tools"),
-                null,
-                null,
-                null,
-                null,
-                null
+                "paper-model-call"
         );
     }
 
@@ -202,31 +179,12 @@ public class PaperModelClientConfig {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
-    private AgentRuntimeRequest runtimeRequest(UserSettingsService.ModelEndpoint endpoint, Double temperature, Integer maxTokens) {
-        return new AgentRuntimeRequest(
-                AgentStrategy.DIRECT,
-                null,
-                List.of(),
-                null,
-                "paper-model-call",
+    private ModelInvocationContext runtimeRequest(UserSettingsService.ModelEndpoint endpoint) {
+        return new ModelInvocationContext(
                 endpoint.providerKey(),
-                endpoint.modelName(),
-                temperature,
-                maxTokens,
-                1,
-                true,
-                null,
                 endpoint.apiKey(),
                 endpoint.apiUrl(),
-                null,
-                AgentRuntimeMode.LANGCHAIN4J,
-                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
-                ResolvedToolPolicy.denyAll(0, 0, "paper_model_no_tools"),
-                null,
-                null,
-                null,
-                null,
-                null
+                "paper-model-call"
         );
     }
 

@@ -7,9 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.yanban.api.agent.SendMessageRequest;
-import com.yanban.api.agent.SendMessageResponse;
-import com.yanban.api.agent.ProjectAgentRuntimeService;
+import com.yanban.api.agent.ProjectSessionService;
 import com.yanban.api.agent.v2.compatibility.V2ProductAvailability;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisRequest;
 import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisService;
@@ -29,10 +27,10 @@ class ProjectControllerV2AvailabilityTest {
                 mock(V2ProjectAnalysisService.class);
         V2ProjectCandidateService candidate =
                 mock(V2ProjectCandidateService.class);
-        ProjectAgentRuntimeService legacy =
-                mock(ProjectAgentRuntimeService.class);
+        ProjectSessionService sessions =
+                mock(ProjectSessionService.class);
         ProjectController controller = controller(
-                legacy, analysis, candidate, null, false);
+                sessions, analysis, candidate, null, false);
         V2ProjectAnalysisRequest analysisRequest =
                 new V2ProjectAnalysisRequest(
                         "summarize", List.of("paper.md"),
@@ -50,7 +48,7 @@ class ProjectControllerV2AvailabilityTest {
                 7L, 8L, 9L, candidateRequest));
         assertUnavailable(() -> controller.readV2ProjectCandidate(
                 7L, 8L, 9L, "candidate-1"));
-        verifyNoInteractions(legacy, analysis, candidate);
+        verifyNoInteractions(sessions, analysis, candidate);
     }
 
     @Test
@@ -97,24 +95,15 @@ class ProjectControllerV2AvailabilityTest {
     }
 
     @Test
-    void disabledV2DoesNotGateProjectMessageOrCandidateApply() {
+    void disabledV2DoesNotGateCandidateApply() {
         V2ProjectAnalysisService analysis =
                 mock(V2ProjectAnalysisService.class);
         V2ProjectCandidateService candidate =
                 mock(V2ProjectCandidateService.class);
-        ProjectAgentRuntimeService legacy =
-                mock(ProjectAgentRuntimeService.class);
         ProjectRevisionWorkflowService revisions =
                 mock(ProjectRevisionWorkflowService.class);
         ProjectController controller = controller(
-                legacy, analysis, candidate, revisions, false);
-        SendMessageRequest message = new SendMessageRequest(
-                "legacy project", false, null,
-                "legacy-request", null);
-        SendMessageResponse expectedMessage =
-                mock(SendMessageResponse.class);
-        when(legacy.send(7L, 8L, 9L, message))
-                .thenReturn(expectedMessage);
+                null, analysis, candidate, revisions, false);
         ApplyCandidateRequest apply = mock(ApplyCandidateRequest.class);
         ProjectRevisionOperationResponse expectedApply =
                 mock(ProjectRevisionOperationResponse.class);
@@ -122,25 +111,22 @@ class ProjectControllerV2AvailabilityTest {
                 7L, 8L, 10L, "key", "version", apply))
                 .thenReturn(expectedApply);
 
-        assertThat(controller.sendProjectMessage(
-                7L, 8L, 9L, message)).isSameAs(expectedMessage);
         assertThat(controller.applyCandidate(
                 7L, 8L, 10L, "key", "version", apply))
                 .isSameAs(expectedApply);
-        verify(legacy).send(7L, 8L, 9L, message);
         verify(revisions).applyCandidate(
                 7L, 8L, 10L, "key", "version", apply);
         verifyNoInteractions(analysis, candidate);
     }
 
     private static ProjectController controller(
-            ProjectAgentRuntimeService legacy,
+            ProjectSessionService sessions,
             V2ProjectAnalysisService analysis,
             V2ProjectCandidateService candidate,
             ProjectRevisionWorkflowService revisions,
             boolean enabled) {
         return new ProjectController(
-                mock(ProjectService.class), legacy, null, revisions,
+                mock(ProjectService.class), sessions, null, revisions,
                 Optional.empty(), Optional.ofNullable(analysis),
                 Optional.ofNullable(candidate),
                 new V2ProductAvailability(enabled));

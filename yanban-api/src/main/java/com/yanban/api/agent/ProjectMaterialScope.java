@@ -147,14 +147,6 @@ public final class ProjectMaterialScope {
                 Set.copyOf(resolved), Set.copyOf(missing), Map.copyOf(aliases), Map.copyOf(ambiguities));
     }
 
-    static boolean hasDeterministicMissingTarget(AgentRuntimeResult result) {
-        if (result == null || result.fallbacks() == null) return false;
-        return result.fallbacks().stream()
-                .filter(java.util.Objects::nonNull)
-                .map(String::trim)
-                .anyMatch(value -> value.startsWith(MISSING_TARGET_PREFIX));
-    }
-
     public static String normalize(String path) {
         if (path == null) return "";
         return path.trim().replace('\\', '/').toLowerCase(Locale.ROOT);
