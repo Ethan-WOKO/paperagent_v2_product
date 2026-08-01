@@ -70,6 +70,50 @@ class V2AdaptiveExecutionServiceTest {
     }
 
     @Test
+    void successfulPlanPersistsTheFinalSynthesisInsteadOfStepFallback() {
+        var fixture = fixture();
+        var recovered = mock(RecoveredExecutionStart.class);
+        when(recovered.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.starts.recover(eq(7L), eq(11L), any()))
+                .thenReturn(recovered);
+        var context = mock(PlanExecutionContextReady.class);
+        when(context.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.contexts.compose(eq(7L), eq(11L), any()))
+                .thenReturn(context);
+        V2AdaptiveCyclePort port = mock(V2AdaptiveCyclePort.class);
+        when(port.executeOne(any())).thenReturn(
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                        "step-1", "receipt-1", true, null,
+                        List.of("executionReceipt=receipt-1"),
+                        true, false));
+        when(fixture.cycles.create(
+                anyMap(), anyString(), anyString(), any(),
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
+        V2AdaptiveFinalSynthesisService synthesis = mock(
+                V2AdaptiveFinalSynthesisService.class);
+        when(synthesis.synthesize(any())).thenReturn(
+                Optional.of("final synthesized answer"));
+        var service = new V2AdaptiveExecutionService(
+                fixture.store, fixture.starts, fixture.contexts,
+                fixture.cycles, new ObjectMapper(), null, null,
+                null, synthesis);
+
+        V2AdaptiveExecutionResult result = service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.read"),
+                        fixture.modelProvider));
+
+        assertEquals("SUCCEEDED", result.status(), result.errorCode());
+        assertEquals("final synthesized answer", result.finalText());
+        verify(fixture.store).finish(
+                eq(7L), eq(9L), eq("request-1"), eq("SUCCEEDED"),
+                anyList(), eq("final synthesized answer"), isNull(),
+                eq(List.of()), isNull(), eq(1), eq(0), eq(0));
+    }
+
+    @Test
     void resumedExecutionReusesConfirmedContextWithoutNewLeaseAttempt() {
         var fixture = fixture();
         var recovered = mock(RecoveredExecutionStart.class);

@@ -34,6 +34,7 @@ public class V2AdaptiveExecutionService {
     private final ProjectCandidateCompositionEffect candidates;
     private final NaturalLanguageCandidateAuthorityStore candidateAuthorities;
     private final V2StepResultService stepResults;
+    private final V2AdaptiveFinalSynthesisService finalSynthesis;
 
     public V2AdaptiveExecutionService(
             V2AdaptiveExecutionStore store,
@@ -42,7 +43,7 @@ public class V2AdaptiveExecutionService {
             V2AdaptiveRuntimeCycleFactory cycles,
             ObjectMapper json) {
         this(store, starts, contexts, cycles, json,
-                null, null, null);
+                null, null, null, null);
     }
 
     public V2AdaptiveExecutionService(
@@ -54,7 +55,20 @@ public class V2AdaptiveExecutionService {
             ProjectCandidateCompositionEffect candidates,
             NaturalLanguageCandidateAuthorityStore candidateAuthorities) {
         this(store, starts, contexts, cycles, json,
-                candidates, candidateAuthorities, null);
+                candidates, candidateAuthorities, null, null);
+    }
+
+    public V2AdaptiveExecutionService(
+            V2AdaptiveExecutionStore store,
+            AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
+            AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
+            V2AdaptiveRuntimeCycleFactory cycles,
+            ObjectMapper json,
+            ProjectCandidateCompositionEffect candidates,
+            NaturalLanguageCandidateAuthorityStore candidateAuthorities,
+            V2StepResultService stepResults) {
+        this(store, starts, contexts, cycles, json, candidates,
+                candidateAuthorities, stepResults, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -66,7 +80,8 @@ public class V2AdaptiveExecutionService {
             ObjectMapper json,
             ProjectCandidateCompositionEffect candidates,
             NaturalLanguageCandidateAuthorityStore candidateAuthorities,
-            V2StepResultService stepResults) {
+            V2StepResultService stepResults,
+            V2AdaptiveFinalSynthesisService finalSynthesis) {
         this.store = store;
         this.starts = starts;
         this.contexts = contexts;
@@ -75,6 +90,7 @@ public class V2AdaptiveExecutionService {
         this.candidates = candidates;
         this.candidateAuthorities = candidateAuthorities;
         this.stepResults = stepResults;
+        this.finalSynthesis = finalSynthesis;
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
@@ -101,6 +117,7 @@ public class V2AdaptiveExecutionService {
             result = failed(initial, "ADAPTIVE_EXECUTION_FAILED");
         }
         result = publishCandidateIfNeeded(command, result);
+        result = synthesizeFinalAnswer(command, result);
         if ("RUNNING".equals(result.status())) {
             store.progress(
                     command.userId(), command.sessionId(),
@@ -117,6 +134,30 @@ public class V2AdaptiveExecutionService {
                     result.repairs());
         }
         return result;
+    }
+
+    private V2AdaptiveExecutionResult synthesizeFinalAnswer(
+            Command command, V2AdaptiveExecutionResult result) {
+        if (finalSynthesis == null
+                || !("SUCCEEDED".equals(result.status())
+                || "WAITING_CONFIRMATION".equals(result.status()))) {
+            return result;
+        }
+        Optional<String> synthesized = finalSynthesis.synthesize(
+                new V2AdaptiveFinalSynthesisService.Request(
+                        command.bootstrap().taskFrame(),
+                        command.bootstrap().plan(),
+                        result.candidateArtifactId(),
+                        result.outputPaths(), command.modelProvider()));
+        if (synthesized.isEmpty()) {
+            return result;
+        }
+        return new V2AdaptiveExecutionResult(
+                result.status(), result.steps(),
+                synthesized.orElseThrow(), result.errorCode(),
+                result.reflections(), result.replans(),
+                result.repairs(), result.candidateArtifactId(),
+                result.outputPaths());
     }
 
     public boolean canResume(
