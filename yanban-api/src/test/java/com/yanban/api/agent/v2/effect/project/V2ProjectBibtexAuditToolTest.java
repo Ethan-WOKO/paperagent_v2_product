@@ -83,6 +83,17 @@ class V2ProjectBibtexAuditToolTest {
                 "MISSING_REQUIRED_FIELD",
                 "UNUSED_ENTRY",
                 "MISSING_CITATION_KEY")));
+        JsonNode missingFields = issue(
+                result, "MISSING_REQUIRED_FIELD", "missing")
+                .path("missingFields");
+        assertEquals(List.of("author", "year"),
+                java.util.stream.StreamSupport.stream(
+                        missingFields.spliterator(), false)
+                        .map(JsonNode::asText)
+                        .toList());
+        assertEquals("missing required fields: author, year",
+                issue(result, "MISSING_REQUIRED_FIELD", "missing")
+                        .path("detail").asText());
         assertTrue(result.path("issues").toString().contains(
                 "paper/references.bib"));
         assertTrue(result.path("issues").toString().contains(
@@ -173,5 +184,16 @@ class V2ProjectBibtexAuditToolTest {
         result.path("issues").forEach(
                 issue -> codes.add(issue.path("code").asText()));
         return List.copyOf(codes);
+    }
+
+    private static JsonNode issue(
+            JsonNode result, String code, String key) {
+        return java.util.stream.StreamSupport.stream(
+                        result.path("issues").spliterator(), false)
+                .filter(issue -> code.equals(issue.path("code").asText()))
+                .filter(issue -> key.equals(
+                        issue.path("citationKey").asText()))
+                .findFirst()
+                .orElseThrow();
     }
 }

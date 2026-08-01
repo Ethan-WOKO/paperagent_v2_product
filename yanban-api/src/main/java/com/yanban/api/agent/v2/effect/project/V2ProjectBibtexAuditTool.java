@@ -31,6 +31,8 @@ final class V2ProjectBibtexAuditTool {
     static final int MAX_ISSUES = 50;
     private static final int MAX_KEYS = 10_000;
     private static final int MAX_KEY_CHARACTERS = 256;
+    private static final List<String> REQUIRED_FIELDS =
+            List.of("title", "author", "year");
     private static final Pattern ENTRY = Pattern.compile(
             "^\\s*@[A-Za-z]+\\s*\\{\\s*([^,\\s]+)\\s*,");
     private static final Pattern FIELD = Pattern.compile(
@@ -80,12 +82,16 @@ final class V2ProjectBibtexAuditTool {
             }
         }
         for (Occurrence occurrence : entries.values()) {
-            if (!occurrence.fields().containsAll(
-                    Set.of("title", "author", "year"))) {
+            List<String> missingFields = REQUIRED_FIELDS.stream()
+                    .filter(field -> !occurrence.fields().contains(field))
+                    .toList();
+            if (!missingFields.isEmpty()) {
                 add(issues, counts, new Issue(
                         "MISSING_REQUIRED_FIELD", occurrence.key(),
                         occurrence.path(), occurrence.line(),
-                        "title, author, and year are required"));
+                        "missing required fields: "
+                                + String.join(", ", missingFields),
+                        missingFields));
             }
         }
         if (request.includeUnusedEntries()) {
@@ -94,7 +100,8 @@ final class V2ProjectBibtexAuditTool {
                     add(issues, counts, new Issue(
                             "UNUSED_ENTRY", occurrence.key(),
                             occurrence.path(), occurrence.line(),
-                            "entry is not cited by supplied LaTeX files"));
+                            "entry is not cited by supplied LaTeX files",
+                            List.of()));
                 }
             }
         }
@@ -103,7 +110,8 @@ final class V2ProjectBibtexAuditTool {
                 add(issues, counts, new Issue(
                         "MISSING_CITATION_KEY", citation.key(),
                         citation.path(), citation.line(),
-                        "citation key is absent from supplied BibTeX files"));
+                        "citation key is absent from supplied BibTeX files",
+                        List.of()));
             }
         }
 
@@ -132,6 +140,10 @@ final class V2ProjectBibtexAuditTool {
             item.put("path", issue.path());
             item.put("line", issue.line());
             item.put("detail", issue.detail());
+            if (!issue.missingFields().isEmpty()) {
+                ArrayNode missingFields = item.putArray("missingFields");
+                issue.missingFields().forEach(missingFields::add);
+            }
         });
         try {
             String encoded = json.writeValueAsString(output);
@@ -222,7 +234,8 @@ final class V2ProjectBibtexAuditTool {
                 if (previous != null) {
                     add(issues, counts, new Issue(
                             "DUPLICATE_KEY", key, source.path(),
-                            index + 1, "duplicate citation key"));
+                            index + 1, "duplicate citation key",
+                            List.of()));
                 }
                 continue;
             }
@@ -358,7 +371,8 @@ final class V2ProjectBibtexAuditTool {
             String key,
             String path,
             int line,
-            String detail) {
+            String detail,
+            List<String> missingFields) {
     }
 
     private static final class MutableCounts {
