@@ -169,7 +169,19 @@ public class V2SandboxEffectExecutionComposer {
         Arguments arguments = arguments(intent);
         Map<String, String> files = files(
                 workspace, verified.workspace(), arguments.paths());
-        commands.validate(arguments.argv(), Map.of());
+        SandboxExecutionException commandFailure = null;
+        try {
+            commands.validate(arguments.argv(), Map.of());
+        } catch (SandboxExecutionException rejected) {
+            commandFailure = rejected;
+            log.warn(
+                    "V2 Sandbox command rejected planId={} stepId={} "
+                            + "toolCallId={} sandboxCode={}",
+                    planId.value(),
+                    active.recovery().activation().stepId().value(),
+                    toolCallId.value(), rejected.code());
+        }
+        SandboxExecutionException rejectedCommand = commandFailure;
         Instant observed = Instant.now();
         ProductEffectExecutionClaimResult claimed;
         try {
@@ -178,13 +190,18 @@ public class V2SandboxEffectExecutionComposer {
                             active.recovery(), active.lease(), intent,
                             attempt.leaseToken(),
                             active.lease().fencingToken(), observed,
-                            () -> executeBroker(
-                                    context.identity().userId(),
-                                    context.identity().projectId(),
-                                    context.identity().sessionId(),
-                                    context.projectVersionId().orElseThrow(),
-                                    active, intent, files,
-                                    arguments.argv())));
+                            () -> rejectedCommand == null
+                                    ? executeBroker(
+                                            context.identity().userId(),
+                                            context.identity().projectId(),
+                                            context.identity().sessionId(),
+                                            context.projectVersionId()
+                                                    .orElseThrow(),
+                                            active, intent, files,
+                                            arguments.argv())
+                                    : commandPolicyReceipt(
+                                            toolCallId, rejectedCommand,
+                                            observed)));
         } catch (V2SandboxEffectPendingException pending) {
             throw pending;
         } catch (V2SandboxEffectExecutionException rejected) {
@@ -226,6 +243,28 @@ public class V2SandboxEffectExecutionComposer {
         }
         return new V2SandboxEffectExecutionOutcome(
                 claimed.result(), claimed.replayed());
+    }
+
+    private static ExecutionReceipt commandPolicyReceipt(
+            ToolCallId toolCallId,
+            SandboxExecutionException failure,
+            Instant observed) {
+        return new ExecutionReceipt(
+                new ReceiptId("sandbox-receipt." + hash(
+                        toolCallId.value())),
+                toolCallId,
+                ReceiptStatus.FAILURE,
+                observed,
+                observed,
+                Optional.empty(),
+                Optional.of(failure.code().name()),
+                OutputCapture.empty(),
+                OutputCapture.inline(
+                        "Server sandbox policy rejected the command. "
+                                + "Use an exact argv shape from the "
+                                + "sandbox.execute tool description.",
+                        false),
+                List.of(), Optional.empty(), List.of());
     }
 
     private ExecutionReceipt executeBroker(

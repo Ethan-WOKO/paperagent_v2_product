@@ -62,6 +62,8 @@ import org.slf4j.LoggerFactory;
 
 @Service
 public class V2NaturalLanguageTurnService {
+    private static final int INTAKE_MAX_RECENT_MESSAGES = 12;
+    private static final int INTAKE_MAX_CONTEXT_CHARACTERS = 12_000;
     private static final Logger log = LoggerFactory.getLogger(
             V2NaturalLanguageTurnService.class);
     private static final String FAILURE_MESSAGE =
@@ -299,12 +301,14 @@ public class V2NaturalLanguageTurnService {
                                     ? null
                                     : experiment.ragResult().ragContext(),
                             null,
-                            null,
-                            null,
+                            INTAKE_MAX_RECENT_MESSAGES,
+                            INTAKE_MAX_CONTEXT_CHARACTERS,
                             null,
                             List.of(),
                             intake.content(),
                             projectState(verified)));
+            logPlannerContext(
+                    session, intake, endpoint, context, projectSession);
             V2TurnPlanner.PlannedTurn planned = planner.plan(
                     context,
                     endpoint,
@@ -312,6 +316,13 @@ public class V2NaturalLanguageTurnService {
                     projectSession,
                     "v2-intake-" + shortHash(
                             intake.userId() + "\0" + intake.turnId()));
+            log.info(
+                    "V2 intake planner decision intakeId={} turnId={} "
+                            + "sessionId={} route={} requirementsAny={} "
+                            + "capabilityCount={}",
+                    intake.id(), intake.turnId(), intake.sessionId(),
+                    planned.route(), planned.requirements().any(),
+                    planned.capabilities().size());
             if (planned.route() == Route.DIRECT) {
                 AgentMessage assistant = transactions.saveAssistant(
                         intake, planned.answer(), planned.rawOutput());
@@ -374,6 +385,39 @@ public class V2NaturalLanguageTurnService {
             transactions.saveFailure(intake, code);
             return new ProcessResult(intake, false, true, null);
         }
+    }
+
+    private static void logPlannerContext(
+            AgentSession session,
+            V2TurnIntakeEntity intake,
+            UserSettingsService.ModelEndpoint endpoint,
+            AgentContextPackage context,
+            boolean projectSession) {
+        int messageCharacters = context.messages().stream()
+                .map(message -> message.content())
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(String::length)
+                .sum();
+        int currentMessageCharacters = context.currentUserMessage() == null
+                || context.currentUserMessage().content() == null
+                ? 0 : context.currentUserMessage().content().length();
+        log.info(
+                "V2 intake planner context intakeId={} turnId={} "
+                        + "sessionId={} projectSession={} "
+                        + "snapshotProvider={} snapshotModel={} "
+                        + "resolvedProvider={} resolvedModel={} "
+                        + "messageCount={} messageCharacters={} "
+                        + "sectionCount={} currentMessageCharacters={} "
+                        + "recentMessageLimit={} contextCharacterLimit={}",
+                intake.id(), intake.turnId(), intake.sessionId(),
+                projectSession,
+                session.getModelProviderSnapshot(),
+                session.getModelSnapshot(),
+                endpoint.providerKey(), endpoint.modelName(),
+                context.messages().size(), messageCharacters,
+                context.sections().size(), currentMessageCharacters,
+                INTAKE_MAX_RECENT_MESSAGES,
+                INTAKE_MAX_CONTEXT_CHARACTERS);
     }
 
     private ProductPersistentPlanBootstrapCommand bootstrap(

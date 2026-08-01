@@ -1,5 +1,6 @@
 import type {
   V2NaturalLanguageStepStatus,
+  V2NaturalLanguageTurnHistoryItem,
   V2NaturalLanguageTurnRequest,
   V2NaturalLanguageTurnResponse,
   V2NaturalLanguageTurnStartResponse,
@@ -71,6 +72,13 @@ export function isCurrentV2NaturalLanguageRequest(
 
 export function isV2NaturalLanguageTerminal(outcome: V2NaturalLanguageTurnResponse) {
   return ['WAITING_CONFIRMATION', 'SUCCEEDED', 'FAILED'].includes(outcome.status);
+}
+
+export function isV2CandidateApplied(
+  outcome: Pick<V2NaturalLanguageTurnHistoryItem, 'confirmationValidation'>,
+) {
+  return outcome.confirmationValidation?.decisionStatus === 'APPLIED'
+    && Boolean(outcome.confirmationValidation.appliedRevisionId);
 }
 
 export function v2NaturalLanguageStatusLabel(statusValue: V2NaturalLanguageTurnStatus) {

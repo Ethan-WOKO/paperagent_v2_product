@@ -1,9 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { V2NaturalLanguageTurnResponse } from '@/api/agent';
+import type {
+  V2NaturalLanguageTurnHistoryItem,
+  V2NaturalLanguageTurnResponse,
+} from '@/api/agent';
 import {
   isCurrentV2NaturalLanguageRequest,
+  isV2CandidateApplied,
   isV2NaturalLanguageTerminal,
   newV2NaturalLanguageClientRequestId,
   normalizeV2NaturalLanguageRequest,
@@ -182,6 +186,31 @@ describe('V2 自然语言请求', () => {
     expect(isV2NaturalLanguageTerminal(outcome('WAITING_CONFIRMATION'))).toBe(true);
     expect(isV2NaturalLanguageTerminal(outcome('RUNNING'))).toBe(false);
   });
+
+  it('只有确认验证已应用且绑定 revision 时才视为已创建新版本', () => {
+    const applied = {
+      confirmationValidation: {
+        status: 'SUCCEEDED',
+        decisionStatus: 'APPLIED',
+        applicationOperationId: 101,
+        appliedRevisionId: 29,
+        appliedProjectVersion: 'f'.repeat(64),
+      },
+    } as Pick<V2NaturalLanguageTurnHistoryItem, 'confirmationValidation'>;
+    expect(isV2CandidateApplied(applied)).toBe(true);
+    expect(isV2CandidateApplied({
+      confirmationValidation: {
+        ...applied.confirmationValidation!,
+        decisionStatus: 'PENDING',
+      },
+    })).toBe(false);
+    expect(isV2CandidateApplied({
+      confirmationValidation: {
+        ...applied.confirmationValidation!,
+        appliedRevisionId: null,
+      },
+    })).toBe(false);
+  });
 });
 
 describe('V2 自然语言 API 与页面接入', () => {
@@ -219,6 +248,8 @@ describe('V2 自然语言 API 与页面接入', () => {
     expect(page).toContain('结果：{{ step.detail }}');
     expect(page).toContain('生成内容位置');
     expect(page).toContain('原项目尚未修改');
+    expect(page).toContain('已确认应用，已创建项目版本');
+    expect(page).toContain("task.confirmationValidation?.appliedRevisionId");
     expect(page).toContain('打开修改与验证');
     expect(page).toContain('@click="openV2CandidateReview(task.candidateArtifactId)"');
   });

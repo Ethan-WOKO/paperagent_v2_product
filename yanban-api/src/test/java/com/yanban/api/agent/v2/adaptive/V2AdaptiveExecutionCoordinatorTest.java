@@ -414,6 +414,25 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void reflectionAuditFormatFailureHasItsOwnTerminalCode() {
+        AtomicInteger providerCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycle = ignored ->
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.FAILED,
+                        "step-1", "EFFECT_REJECTED", false, null,
+                        List.of("failed receipt"), true, true);
+
+        var result = coordinator(cycle, ignored -> {
+            providerCalls.incrementAndGet();
+            throw new ReflectionAuditFormatException();
+        }).execute(command(Map.of("step-1", "project.search")));
+
+        assertEquals("REFLECTION_AUDIT_FORMAT_INVALID",
+                result.errorCode());
+        assertEquals(1, providerCalls.get());
+    }
+
+    @Test
     void agentLoopExceptionHasExplicitCycleStageCode() {
         var coordinator = coordinator(command -> {
             throw new V2AdaptiveRuntimeCycleFactory.CycleStageException(

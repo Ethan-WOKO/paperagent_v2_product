@@ -36,6 +36,9 @@ public record V2TurnHistoryResponse(
 
     public record ConfirmationValidation(
             String status,
-            String decisionStatus) {
+            String decisionStatus,
+            Long applicationOperationId,
+            Long appliedRevisionId,
+            String appliedProjectVersion) {
     }
 }

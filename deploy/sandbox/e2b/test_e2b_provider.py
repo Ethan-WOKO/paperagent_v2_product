@@ -59,7 +59,44 @@ class E2bProviderCommandTest(unittest.TestCase):
         self.assertEqual("compile failed\n", stderr.getvalue())
         self.assertNotIn("E2B provider error", stderr.getvalue())
 
-    def test_maven_uses_only_the_fixed_non_sensitive_temurin_environment(self):
+    def test_java_commands_use_only_the_fixed_non_sensitive_temurin_environment(self):
+        provider = self.load_provider()
+        provider.exact = lambda _name: types.SimpleNamespace(sandbox_id="sandbox-1")
+        observed = []
+
+        class Commands:
+            def run(self, *_args, **kwargs):
+                observed.append(kwargs)
+                return types.SimpleNamespace(stdout="", stderr="", exit_code=0)
+
+        provider.Sandbox = types.SimpleNamespace(
+            connect=lambda _sandbox_id: types.SimpleNamespace(commands=Commands())
+        )
+
+        commands = (
+            ["java", "Sort"],
+            ["javac", "Sort.java"],
+            ["mvn", "-B", "-ntp", "dependency:go-offline"],
+            ["yanban-runner", "java", "Sort.java"],
+            ["yanban-java-dependencies", "g:a:1"],
+        )
+        for argv in commands:
+            code = provider.command_exec(types.SimpleNamespace(
+                name="test", argv=argv))
+            self.assertEqual(0, code)
+
+        expected = {
+            "JAVA_HOME": "/opt/yanban/temurin-17",
+            "PATH": (
+                "/opt/yanban/temurin-17/bin:/usr/local/sbin:"
+                "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ),
+        }
+        self.assertEqual(len(commands), len(observed))
+        for call in observed:
+            self.assertEqual(expected, call["envs"])
+
+    def test_non_java_command_does_not_receive_java_environment(self):
         provider = self.load_provider()
         provider.exact = lambda _name: types.SimpleNamespace(sandbox_id="sandbox-1")
         observed = {}
@@ -74,13 +111,10 @@ class E2bProviderCommandTest(unittest.TestCase):
         )
 
         code = provider.command_exec(types.SimpleNamespace(
-            name="test", argv=["mvn", "-B", "-ntp", "dependency:go-offline"]))
+            name="test", argv=["git", "status", "--short"]))
 
         self.assertEqual(0, code)
-        self.assertEqual(
-            {"JAVA_HOME": "/opt/yanban/temurin-17"},
-            observed["envs"],
-        )
+        self.assertEqual({}, observed["envs"])
 
     def test_dependency_network_uploads_only_poms_then_closes_before_full_sync(self):
         provider = self.load_provider()

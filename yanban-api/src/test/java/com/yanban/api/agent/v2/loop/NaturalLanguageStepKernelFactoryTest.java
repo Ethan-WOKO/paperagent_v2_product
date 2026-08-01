@@ -39,5 +39,13 @@ class NaturalLanguageStepKernelFactoryTest {
                 "prior completed Plan Step created a Candidate"));
         assertTrue(sandbox.contains(
                 "run that resulting isolated Workspace"));
+        assertTrue(sandbox.contains(
+                "Prefer yanban-runner java path.java"));
+        assertTrue(sandbox.contains(
+                "Direct javac accepts only one"));
+        assertTrue(sandbox.contains(
+                "Direct java accepts only -version"));
+        assertTrue(sandbox.contains(
+                "does not accept a compiled class name"));
     }
 }

@@ -361,6 +361,9 @@ export interface V2AgentAutomaticValidation {
 export interface V2CandidateConfirmationValidation {
   status: string;
   decisionStatus: string;
+  applicationOperationId: number | null;
+  appliedRevisionId: number | null;
+  appliedProjectVersion: string | null;
 }
 
 export interface V2NaturalLanguageTurnHistoryItem extends Omit<V2NaturalLanguageTurnResponse, 'route'> {

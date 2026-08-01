@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.adaptive.reflection.ReflectionAuditFormatException;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionContext;
 import io.paperagent.v2.providers.FinishReason;
 import io.paperagent.v2.providers.ModelRequest;
@@ -303,11 +304,104 @@ class V2ModelReflectionProviderTest {
                             + "\"unexpected\":true}");
         }, new ObjectMapper(), null, null, null);
 
-        assertThrows(IllegalStateException.class, () -> provider.reflect(
+        assertThrows(ReflectionAuditFormatException.class,
+                () -> provider.reflect(
                 new ReflectionContext(
                         "task", "plan", List.of(), List.of(),
                         List.of("activeStepId=step-1"),
                         List.of("read project"))));
+        assertTrue(calls.get() == 3);
+    }
+
+    @Test
+    void malformedAuditGetsOneStrictFormatRepair() {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<ModelRequest> repair = new AtomicReference<>();
+        var provider = new V2ModelReflectionProvider(request -> {
+            int call = calls.incrementAndGet();
+            if (call == 3) {
+                repair.set(request);
+            }
+            return response(switch (call) {
+                case 1 -> "{\"decision\":\"CONTINUE\","
+                        + "\"reason\":\"check\",\"finalText\":null,"
+                        + "\"replacementSteps\":[]}";
+                case 2 -> "```json\n{\"complete\":true}\n```";
+                default -> "{\"complete\":true,"
+                        + "\"reason\":\"sandbox receipt proves success\","
+                        + "\"stepResult\":\"compiled and ran\"}";
+            });
+        }, new ObjectMapper(), null, null, null);
+
+        String result = provider.reflect(new ReflectionContext(
+                "task", "plan", List.of(), List.of(),
+                List.of("activeStepId=step-1"),
+                List.of("compile and run")));
+
+        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
+        assertTrue(result.contains("\"finalText\":\"compiled and ran\""));
+        assertTrue(calls.get() == 3);
+        assertTrue(repair.get().messages().get(0).content().contains(
+                "exactly three fields"));
+        assertTrue(repair.get().messages().get(0).content().contains(
+                "Do not add fields"));
+    }
+
+    @Test
+    void replanStepIdsAreNamespacedWithDependenciesPreserved() throws Exception {
+        var provider = new V2ModelReflectionProvider(request -> response("""
+                {"decision":"REPLAN","reason":"change approach",
+                 "finalText":null,"replacementSteps":[
+                   {"id":"step-1","intent":"prepare source",
+                    "expectedOutcome":"source ready","dependencies":[],
+                    "completionCriteria":["source exists"],
+                    "maxAttempts":1,"maxDurationSeconds":60},
+                   {"id":"step-2","intent":"compile source",
+                    "expectedOutcome":"exit code 0",
+                    "dependencies":["step-1"],
+                    "completionCriteria":["compiles"],
+                    "maxAttempts":1,"maxDurationSeconds":60}]}
+                """), new ObjectMapper(), null, null, null);
+
+        String result = provider.reflect(new ReflectionContext(
+                "task", "plan", List.of(), List.of(),
+                List.of("activeStepId=step-2"), List.of("compile")));
+        var root = new ObjectMapper().readTree(result);
+        String first = root.path("replacementSteps").get(0)
+                .path("id").asText();
+        String second = root.path("replacementSteps").get(1)
+                .path("id").asText();
+
+        assertTrue(first.startsWith("replan-step-"));
+        assertTrue(second.startsWith("replan-step-"));
+        assertFalse(first.equals(second));
+        assertTrue(root.path("replacementSteps").get(1)
+                .path("dependencies").get(0).asText().equals(first));
+        assertFalse(result.contains("\"id\":\"step-1\""));
+    }
+
+    @Test
+    void reflectionShapedAuditIsMechanicallyNormalized() {
+        AtomicInteger calls = new AtomicInteger();
+        var provider = new V2ModelReflectionProvider(request -> response(
+                calls.incrementAndGet() == 1
+                        ? "{\"decision\":\"CONTINUE\","
+                                + "\"reason\":\"check\","
+                                + "\"finalText\":null,"
+                                + "\"replacementSteps\":[]}"
+                        : "{\"decision\":\"COMPLETE\","
+                                + "\"reason\":\"receipt proves success\","
+                                + "\"finalText\":\"exit code 0\","
+                                + "\"replacementSteps\":[]}"),
+                new ObjectMapper(), null, null, null);
+
+        String result = provider.reflect(new ReflectionContext(
+                "task", "plan", List.of(), List.of(),
+                List.of("activeStepId=step-2"), List.of("compile")));
+
+        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
+        assertTrue(result.contains("\"finalText\":\"exit code 0\""));
+        assertTrue(calls.get() == 2);
     }
 
     private static String captureSystemPrompt() {

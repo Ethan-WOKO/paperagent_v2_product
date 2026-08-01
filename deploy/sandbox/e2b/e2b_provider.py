@@ -23,7 +23,17 @@ MANAGED_KEY = "yanban-managed"
 NAME_KEY = "yanban-name"
 REMOTE_ROOT = PurePosixPath("/home/user/project")
 TEMURIN_HOME = "/opt/yanban/temurin-17"
-MAVEN_ENV = {"JAVA_HOME": TEMURIN_HOME}
+JAVA_ENV = {
+    "JAVA_HOME": TEMURIN_HOME,
+    "PATH": (
+        f"{TEMURIN_HOME}/bin:/usr/local/sbin:/usr/local/bin:"
+        "/usr/sbin:/usr/bin:/sbin:/bin"
+    ),
+}
+JAVA_COMMANDS = frozenset((
+    "java", "javac", "mvn", "yanban-runner",
+    "yanban-java-dependencies",
+))
 active_sandbox_id = None
 
 
@@ -176,7 +186,7 @@ def command_exec(args):
     sandbox = Sandbox.connect(item.sandbox_id)
     active_sandbox_id = item.sandbox_id
     try:
-        command_env = MAVEN_ENV if argv[0] in ("mvn", "yanban-java-dependencies") else {}
+        command_env = JAVA_ENV if argv[0] in JAVA_COMMANDS else {}
         try:
             result = sandbox.commands.run(
                 shlex.join(argv),

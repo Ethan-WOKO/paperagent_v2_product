@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.adaptive;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
+import com.yanban.api.agent.v2.adaptive.reflection.ReflectionAuditFormatException;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionContext;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionProvider;
 import io.paperagent.v2.contracts.PlanId;
@@ -100,7 +101,22 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             completion criteria require compilation or execution, a
             successful sandbox.execute Receipt with exitCode 0 completes the
             Step unless the criteria explicitly require another assertion
-            that the Receipt does not establish. No markdown.
+            that the Receipt does not establish. Example complete response:
+            {"complete":true,"reason":"receipt proves the step",
+            "stepResult":"verified result"}. Example incomplete response:
+            {"complete":false,"reason":"required evidence is missing",
+            "stepResult":null}. No markdown.
+            """;
+    private static final String STEP_STATE_AUDIT_REPAIR_PROMPT = """
+            Repair only the response format of a V2 step-state audit.
+            Re-evaluate the supplied authoritative bounded facts and return
+            exactly one strict JSON object with exactly three fields:
+            complete, reason, and stepResult. complete must be a boolean.
+            reason must be a concise nonblank string. stepResult must be a
+            concise nonblank verified Step-result string when complete is
+            true, and null when complete is false. Do not add fields, prose,
+            markdown, or code fences. Do not return decision, finalText, or
+            replacementSteps. Do not change tools or permissions.
             """;
     private static final int MAX_AUDIT_REASON_CHARACTERS = 1_000;
     private static final int MAX_AUDIT_RESULT_CHARACTERS = 20_000;
@@ -180,8 +196,11 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                 .filter(value -> !value.isBlank())
                 .orElseThrow(() -> new IllegalStateException(
                         "reflection provider returned no decision"));
-        if (Set.of("COMPLETE", "CONTINUE").contains(
-                safeDecision(decision))) {
+        String proposedAction = safeDecision(decision);
+        if ("REPLAN".equals(proposedAction)) {
+            decision = namespaceReplanStepIds(decision, suffix);
+        } else if (Set.of("COMPLETE", "CONTINUE").contains(
+                proposedAction)) {
             decision = auditStepState(
                     auditFacts(context), decision, suffix);
         }
@@ -192,6 +211,60 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                 revisionId.map(PlanRevisionId::value).orElse("none"),
                 safeDecision(decision));
         return decision;
+    }
+
+    private String namespaceReplanStepIds(String raw, String suffix) {
+        try {
+            var root = json.readTree(raw);
+            if (root == null || !root.isObject()
+                    || !"REPLAN".equals(
+                            root.path("decision").asText())
+                    || !root.path("replacementSteps").isArray()) {
+                return raw;
+            }
+            Map<String, String> replacements = new LinkedHashMap<>();
+            int ordinal = 0;
+            for (var step : root.path("replacementSteps")) {
+                if (!step.isObject() || !step.path("id").isTextual()
+                        || !step.path("dependencies").isArray()) {
+                    return raw;
+                }
+                String previousId = step.path("id").textValue();
+                if (previousId == null || previousId.isBlank()
+                        || replacements.containsKey(previousId)) {
+                    return raw;
+                }
+                String namespaced = "replan-step-"
+                        + suffix.substring(0, 12)
+                        + "-" + ++ordinal;
+                replacements.put(previousId, namespaced);
+                ((com.fasterxml.jackson.databind.node.ObjectNode) step)
+                        .put("id", namespaced);
+                var dependencies =
+                        (com.fasterxml.jackson.databind.node.ArrayNode)
+                                step.path("dependencies");
+                for (int index = 0; index < dependencies.size(); index++) {
+                    if (!dependencies.get(index).isTextual()) {
+                        return raw;
+                    }
+                    String replacement = replacements.get(
+                            dependencies.get(index).textValue());
+                    if (replacement != null) {
+                        dependencies.set(index,
+                                json.getNodeFactory().textNode(replacement));
+                    }
+                }
+            }
+            log.info(
+                    "V2 reflection replan identities namespaced planId={} "
+                            + "revisionId={} replacementCount={}",
+                    planId.map(PlanId::value).orElse("none"),
+                    revisionId.map(PlanRevisionId::value).orElse("none"),
+                    replacements.size());
+            return json.writeValueAsString(root);
+        } catch (Exception invalid) {
+            return raw;
+        }
     }
 
     private String auditFacts(ReflectionContext context) {
@@ -305,16 +378,22 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                     V2SafeFailureDiagnostics.origin(failure));
             throw failure;
         }
-        if (!(result instanceof ModelResponse response)
-                || !response.proposedToolCalls().isEmpty()) {
-            throw new IllegalStateException(
-                    "reflection step-state audit rejected");
+        String audited = "";
+        StepStateAudit audit;
+        try {
+            audited = auditText(result);
+            audit = parseStepStateAudit(audited);
+        } catch (ReflectionAuditFormatException invalid) {
+            log.warn(
+                    "V2 reflection step-state audit format invalid "
+                            + "planId={} revisionId={} elapsedMillis={} "
+                            + "outputDigest={}",
+                    planId.map(PlanId::value).orElse("none"),
+                    revisionId.map(PlanRevisionId::value).orElse("none"),
+                    elapsedMillis(modelStarted), digest(audited));
+            audit = repairStepStateAudit(
+                    facts, proposedDecision, audited, suffix);
         }
-        String audited = response.assistantText()
-                .filter(value -> !value.isBlank())
-                .orElseThrow(() -> new IllegalStateException(
-                        "reflection step-state audit returned no decision"));
-        StepStateAudit audit = parseStepStateAudit(audited);
         String action = audit.complete() ? "COMPLETE" : "CONTINUE";
         log.info(
                 "V2 reflection step-state audit completed planId={} "
@@ -339,6 +418,78 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
         }
     }
 
+    private StepStateAudit repairStepStateAudit(
+            String facts, String proposedDecision, String invalidAudit,
+            String suffix) {
+        String repairSuffix = hash(
+                suffix + "\n" + proposedDecision + "\n" + invalidAudit)
+                .substring(0, 32);
+        ModelRequest request = new ModelRequest(
+                new ModelRequestId(
+                        "adaptive-step-state-audit-repair-" + repairSuffix),
+                new CorrelationId(
+                        "adaptive-step-state-audit-repair-" + repairSuffix),
+                List.of(
+                        new ModelMessage(
+                                MessageRole.SYSTEM,
+                                STEP_STATE_AUDIT_REPAIR_PROMPT),
+                        new ModelMessage(
+                                MessageRole.USER,
+                                "Authoritative bounded facts:\n" + facts
+                                        + "\nProposed decision:\n"
+                                        + proposedDecision
+                                        + "\nPrevious invalid audit output:\n"
+                                        + boundedRepairInput(invalidAudit))),
+                List.of(),
+                new GenerationOptions(
+                        4096, 0, 0.1d, OptionalLong.empty(), Map.of()),
+                taskFrameId, planId, revisionId,
+                Optional.empty(), false);
+        long modelStarted = System.nanoTime();
+        log.info(
+                "V2 reflection step-state audit format repair started "
+                        + "planId={} revisionId={} invalidOutputDigest={}",
+                planId.map(PlanId::value).orElse("none"),
+                revisionId.map(PlanRevisionId::value).orElse("none"),
+                digest(invalidAudit));
+        ModelProviderResult result;
+        try {
+            result = provider.complete(request);
+        } catch (RuntimeException failure) {
+            log.warn(
+                    "V2 reflection step-state audit format repair failed "
+                            + "planId={} revisionId={} elapsedMillis={} "
+                            + "exceptionType={} causeType={} origin={}",
+                    planId.map(PlanId::value).orElse("none"),
+                    revisionId.map(PlanRevisionId::value).orElse("none"),
+                    elapsedMillis(modelStarted),
+                    V2SafeFailureDiagnostics.exceptionType(failure),
+                    V2SafeFailureDiagnostics.causeType(failure),
+                    V2SafeFailureDiagnostics.origin(failure));
+            throw failure;
+        }
+        String repaired = auditText(result);
+        StepStateAudit audit = parseStepStateAudit(repaired);
+        log.info(
+                "V2 reflection step-state audit format repair completed "
+                        + "planId={} revisionId={} elapsedMillis={} decision={}",
+                planId.map(PlanId::value).orElse("none"),
+                revisionId.map(PlanRevisionId::value).orElse("none"),
+                elapsedMillis(modelStarted),
+                audit.complete() ? "COMPLETE" : "CONTINUE");
+        return audit;
+    }
+
+    private static String auditText(ModelProviderResult result) {
+        if (!(result instanceof ModelResponse response)
+                || !response.proposedToolCalls().isEmpty()) {
+            throw new ReflectionAuditFormatException();
+        }
+        return response.assistantText()
+                .filter(value -> !value.isBlank())
+                .orElseThrow(ReflectionAuditFormatException::new);
+    }
+
     private StepStateAudit parseStepStateAudit(String raw) {
         try {
             var root = json.readTree(raw);
@@ -347,6 +498,11 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             }
             Set<String> fields = new HashSet<>();
             root.fieldNames().forEachRemaining(fields::add);
+            if (fields.equals(Set.of(
+                    "decision", "reason", "finalText",
+                    "replacementSteps"))) {
+                return reflectionShapedStepStateAudit(root);
+            }
             if (!fields.equals(Set.of("complete", "reason", "stepResult"))
                     || !root.path("complete").isBoolean()
                     || !root.path("reason").isTextual()) {
@@ -376,10 +532,55 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             }
             return new StepStateAudit(
                     complete, reason.trim(), stepResult);
+        } catch (ReflectionAuditFormatException failure) {
+            throw failure;
         } catch (Exception failure) {
-            throw new IllegalStateException(
-                    "reflection step-state audit returned invalid result");
+            throw new ReflectionAuditFormatException();
         }
+    }
+
+    private StepStateAudit reflectionShapedStepStateAudit(
+            com.fasterxml.jackson.databind.JsonNode root) {
+        if (!root.path("decision").isTextual()
+                || !root.path("reason").isTextual()
+                || !root.path("replacementSteps").isArray()
+                || !root.path("replacementSteps").isEmpty()) {
+            throw new ReflectionAuditFormatException();
+        }
+        String decision = root.path("decision").textValue();
+        String reason = root.path("reason").textValue();
+        if (reason == null || reason.isBlank()
+                || reason.length() > MAX_AUDIT_REASON_CHARACTERS) {
+            throw new ReflectionAuditFormatException();
+        }
+        if ("COMPLETE".equals(decision)
+                && root.path("finalText").isTextual()) {
+            String result = root.path("finalText").textValue();
+            if (result == null || result.isBlank()
+                    || result.length() > MAX_AUDIT_RESULT_CHARACTERS) {
+                throw new ReflectionAuditFormatException();
+            }
+            return new StepStateAudit(
+                    true, reason.trim(), result.trim());
+        }
+        if ("CONTINUE".equals(decision)
+                && root.path("finalText").isNull()) {
+            return new StepStateAudit(false, reason.trim(), null);
+        }
+        throw new ReflectionAuditFormatException();
+    }
+
+    private static String boundedRepairInput(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= 12_000
+                ? value : value.substring(0, 12_000);
+    }
+
+    private static String digest(String value) {
+        return value == null || value.isEmpty()
+                ? "empty" : hash(value).substring(0, 16);
     }
 
     private String safeDecision(String raw) {

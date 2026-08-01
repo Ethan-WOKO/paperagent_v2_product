@@ -8,10 +8,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CandidateValidationStatusProjectionService {
     private final CandidateSandboxValidationRepository validations;
+    private final ProjectRevisionOperationRepository operations;
 
     public CandidateValidationStatusProjectionService(
-            CandidateSandboxValidationRepository validations) {
+            CandidateSandboxValidationRepository validations,
+            ProjectRevisionOperationRepository operations) {
         this.validations = validations;
+        this.operations = operations;
     }
 
     @Transactional(readOnly = true)
@@ -23,10 +26,48 @@ public class CandidateValidationStatusProjectionService {
         return validations
                 .findFirstByUserIdAndSessionIdAndArtifactIdOrderByCreatedAtDescIdDesc(
                         userId, sessionId, artifactId)
-                .map(value -> new Status(
-                        value.status(), value.decisionStatus()));
+                .map(value -> status(userId, artifactId, value));
     }
 
-    public record Status(String status, String decisionStatus) {
+    private Status status(
+            Long userId,
+            Long artifactId,
+            CandidateSandboxValidation value) {
+        if (!"APPLIED".equals(value.decisionStatus())) {
+            return new Status(
+                    value.status(), value.decisionStatus(),
+                    null, null, null);
+        }
+        if (value.applicationOperationId() == null
+                || value.appliedRevisionId() == null) {
+            throw new IllegalStateException(
+                    "Applied Candidate validation is incomplete");
+        }
+        ProjectRevisionOperation operation = operations
+                .findByIdAndUserIdAndProjectId(
+                        value.applicationOperationId(), userId,
+                        value.projectId())
+                .filter(candidate -> candidate.getOperationType()
+                        == ProjectRevisionOperation.Type.APPLICATION)
+                .filter(candidate -> candidate.getOutcome()
+                        == ProjectRevisionOperation.Outcome.SUCCEEDED)
+                .filter(candidate -> artifactId.equals(
+                        candidate.getCandidateArtifactId()))
+                .filter(candidate -> value.appliedRevisionId().equals(
+                        candidate.getResultRevisionId()))
+                .orElseThrow(() -> new IllegalStateException(
+                        "Applied Candidate operation is inconsistent"));
+        return new Status(
+                value.status(), value.decisionStatus(),
+                operation.getId(), operation.getResultRevisionId(),
+                operation.getResultVersion());
+    }
+
+    public record Status(
+            String status,
+            String decisionStatus,
+            Long applicationOperationId,
+            Long appliedRevisionId,
+            String appliedProjectVersion) {
     }
 }

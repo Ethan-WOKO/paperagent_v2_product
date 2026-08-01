@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.intake;
 
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
@@ -18,6 +19,8 @@ import io.paperagent.v2.providers.UsageMetadata;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Credential-confined adapter for the pre-bootstrap planning call.
@@ -28,6 +31,8 @@ import java.util.Optional;
  * ModelRequest with no TaskFrame or Plan references.
  */
 final class V2IntakePlanningProviderAdapter implements ModelProvider {
+    private static final Logger log = LoggerFactory.getLogger(
+            V2IntakePlanningProviderAdapter.class);
     private final ChatModelProvider delegate;
     private final UserSettingsService.ModelEndpoint endpoint;
 
@@ -72,10 +77,27 @@ final class V2IntakePlanningProviderAdapter implements ModelProvider {
             if (response == null || response.message() == null
                     || response.toolCalls() != null
                     && !response.toolCalls().isEmpty()) {
+                log.warn(
+                        "V2 intake provider response rejected "
+                                + "responsePresent={} messagePresent={} "
+                                + "toolCallCount={}",
+                        response != null,
+                        response != null && response.message() != null,
+                        response == null || response.toolCalls() == null
+                                ? 0 : response.toolCalls().size());
                 return failure(ProviderFailureCode.PROTOCOL_VIOLATION);
             }
             String text = response.assistantText();
             if (text == null || text.isBlank()) {
+                ChatResponse.Usage usage = response.usage();
+                log.warn(
+                        "V2 intake provider response rejected "
+                                + "reason=EMPTY_ASSISTANT_TEXT "
+                                + "finishReason={} promptTokens={} "
+                                + "completionTokens={}",
+                        response.finishReason(),
+                        usage == null ? null : usage.promptTokens(),
+                        usage == null ? null : usage.completionTokens());
                 return failure(ProviderFailureCode.PROTOCOL_VIOLATION);
             }
             ChatResponse.Usage usage = response.usage();
@@ -92,6 +114,12 @@ final class V2IntakePlanningProviderAdapter implements ModelProvider {
                             Map.of()),
                     Map.of());
         } catch (RuntimeException failure) {
+            log.warn(
+                    "V2 intake provider call failed "
+                            + "exceptionType={} causeType={} origin={}",
+                    V2SafeFailureDiagnostics.exceptionType(failure),
+                    V2SafeFailureDiagnostics.causeType(failure),
+                    V2SafeFailureDiagnostics.origin(failure));
             return failure(ProviderFailureCode.UNAVAILABLE);
         }
     }

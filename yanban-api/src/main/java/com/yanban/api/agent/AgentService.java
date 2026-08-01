@@ -2,6 +2,7 @@ package com.yanban.api.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.intake.V2SessionDeletionService;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.observability.TraceIdFilter;
 import com.yanban.api.quota.UserQuotaService;
@@ -89,6 +90,7 @@ public class AgentService {
     private final AgentRequestDedupService requestDedupService;
     private final AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver;
     private final UserQuotaService quotaService;
+    private final V2SessionDeletionService v2SessionDeletionService;
 
     @Autowired
     public AgentService(AgentSessionRepository sessions,
@@ -112,7 +114,8 @@ public class AgentService {
                         UserAccountPolicy accountPolicy,
                         AgentRequestDedupService requestDedupService,
                         AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver,
-                        UserQuotaService quotaService) {
+                        UserQuotaService quotaService,
+                        V2SessionDeletionService v2SessionDeletionService) {
         this.sessions = sessions;
         this.messages = messages;
         this.turns = turns;
@@ -135,6 +138,7 @@ public class AgentService {
         this.requestDedupService = requestDedupService;
         this.runtimeTokenBudgetResolver = runtimeTokenBudgetResolver;
         this.quotaService = quotaService;
+        this.v2SessionDeletionService = v2SessionDeletionService;
     }
 
     /** Compatibility constructor retained for focused unit tests. */
@@ -163,7 +167,7 @@ public class AgentService {
                 conversationIntentRouterService, skillsService, toolPolicyEngine, agentExperimentService,
                 agentMemoryExperimentService, agentExperimentRecordService, agentContextBuilder, contextSnapshotService,
                 sessionSummaryService, longTermMemoryRetrievalService, titleModelProvider, accountPolicy,
-                requestDedupService, runtimeTokenBudgetResolver, null);
+                requestDedupService, runtimeTokenBudgetResolver, null, null);
     }
 
     @Transactional
@@ -260,6 +264,10 @@ public class AgentService {
     @Transactional
     public void deleteSession(Long userId, Long sessionId) {
         AgentSession session = getOwnedSession(userId, sessionId);
+        if (v2SessionDeletionService != null) {
+            v2SessionDeletionService.deleteOwnedSessionData(
+                    userId, session.getId());
+        }
         turns.deleteBySessionId(session.getId());
         messages.deleteBySessionId(session.getId());
         messageCache.evictSession(userId, session.getId());

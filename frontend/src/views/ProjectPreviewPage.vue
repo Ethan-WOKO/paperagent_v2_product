@@ -250,9 +250,9 @@
                             ? `已通过（${selectedCandidateAutomaticValidation.provider}，退出码 ${selectedCandidateAutomaticValidation.exitCode}）`
                             : '尚无通过记录' }}
                         </NAlert>
-                        <NAlert :type="selectedCandidateConfirmationValidation?.status === 'SUCCEEDED' ? 'success' : 'info'" :show-icon="false">
+                        <NAlert :type="candidateConfirmationAlertType(selectedCandidateConfirmationValidation)" :show-icon="false">
                           创建新版本前的确认验证：{{ selectedCandidateConfirmationValidation
-                            ? technicalStatusLabel(selectedCandidateConfirmationValidation.status)
+                            ? candidateConfirmationLabel(selectedCandidateConfirmationValidation)
                             : '尚未执行' }}
                         </NAlert>
                       </div>
@@ -410,15 +410,22 @@
                     <small>你的问题</small>
                     <p>{{ task.question }}</p>
                   </div>
-                  <NTag size="small" :type="v2TurnStatusType(task.status)">
-                    {{ v2NaturalLanguageStatusLabel(task.status) }}
+                  <NTag size="small" :type="v2TaskStatusType(task)">
+                    {{ v2TaskStatusLabel(task) }}
                   </NTag>
                 </header>
 
                 <section class="v2-task-card__result">
                   <strong>Agent 结果</strong>
+                  <NAlert v-if="v2TaskApplied(task)" type="success" :show-icon="false">
+                    候选修改 #{{ task.candidateArtifactId }} 已确认应用，已创建项目版本
+                    revision #{{ task.confirmationValidation?.appliedRevisionId }}
+                    <template v-if="task.confirmationValidation?.appliedProjectVersion">
+                      （{{ shortHash(task.confirmationValidation.appliedProjectVersion) }}）
+                    </template>。旧项目版本仍然保留。
+                  </NAlert>
                   <MarkdownMessage
-                    v-if="task.status === 'SUCCEEDED' && task.finalText"
+                    v-else-if="task.status === 'SUCCEEDED' && task.finalText"
                     :content="task.finalText"
                     variant="project"
                   />
@@ -451,7 +458,7 @@
                       : '尚无通过记录' }}</dd>
                     <dt>创建新版本前的确认验证</dt>
                     <dd>{{ task.confirmationValidation
-                      ? technicalStatusLabel(task.confirmationValidation.status)
+                      ? candidateConfirmationLabel(task.confirmationValidation)
                       : '尚未执行' }}</dd>
                   </dl>
                 </div>
@@ -682,6 +689,7 @@ import {
 } from '@/utils/v2ProductAvailability';
 import {
   V2NaturalLanguageTurnNotCreatedError,
+  isV2CandidateApplied,
   isCurrentV2NaturalLanguageRequest,
   isDefinitiveV2NaturalLanguageStartRejection,
   newV2NaturalLanguageClientRequestId,
@@ -1393,6 +1401,44 @@ function v2TurnStatusType(status: V2NaturalLanguageTurnHistoryItem['status']) {
   if (status === 'FAILED') return 'error';
   if (status === 'WAITING_CONFIRMATION') return 'warning';
   if (status === 'SUCCEEDED') return 'success';
+  return 'info';
+}
+
+function v2TaskApplied(task: V2NaturalLanguageTurnHistoryItem) {
+  return isV2CandidateApplied(task);
+}
+
+function v2TaskStatusType(task: V2NaturalLanguageTurnHistoryItem): 'error' | 'warning' | 'success' | 'info' {
+  return v2TaskApplied(task) ? 'success' : v2TurnStatusType(task.status);
+}
+
+function v2TaskStatusLabel(task: V2NaturalLanguageTurnHistoryItem) {
+  return v2TaskApplied(task)
+    ? '已创建新版本'
+    : v2NaturalLanguageStatusLabel(task.status);
+}
+
+function candidateConfirmationLabel(validation: {
+  status: string;
+  decisionStatus: string;
+  appliedRevisionId?: number | null;
+}) {
+  if (validation.decisionStatus === 'APPLIED') {
+    return validation.appliedRevisionId
+      ? `已应用（revision #${validation.appliedRevisionId}）`
+      : '已应用';
+  }
+  if (validation.decisionStatus === 'REJECTED') return '已拒绝';
+  return technicalStatusLabel(validation.status);
+}
+
+function candidateConfirmationAlertType(validation: {
+  status: string;
+  decisionStatus: string;
+} | null): 'success' | 'warning' | 'info' {
+  if (validation?.decisionStatus === 'APPLIED'
+      || validation?.status === 'SUCCEEDED') return 'success';
+  if (validation?.decisionStatus === 'REJECTED') return 'warning';
   return 'info';
 }
 

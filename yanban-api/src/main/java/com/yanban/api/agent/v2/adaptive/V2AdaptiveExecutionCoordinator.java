@@ -293,6 +293,11 @@ public final class V2AdaptiveExecutionCoordinator {
             String raw;
             try {
                 raw = reflections.reflect(context);
+            } catch (ReflectionAuditFormatException auditFormatFailure) {
+                logFailure("reflection.audit-format", planId,
+                        attempt, auditFormatFailure);
+                return new ReflectionResolution(
+                        null, "REFLECTION_AUDIT_FORMAT_INVALID");
             } catch (RuntimeException providerFailure) {
                 logFailure("reflection.provider", planId,
                         attempt, providerFailure);

@@ -140,7 +140,7 @@ class V2NaturalLanguageTurnServiceTest {
     void directUsesBoundedProductContextAndPersistsOneAssistant() throws Exception {
         when(model.chat(any())).thenReturn(new ChatResponse(
                 ChatMessage.assistant(
-                        "{\"route\":\"DIRECT\",\"answer\":\"answer\"}"),
+                        directAnswer("answer")),
                 "stop", null));
         when(transactions.saveAssistant(
                 eq(intake), eq("answer"), any())).thenAnswer(invocation -> {
@@ -170,6 +170,9 @@ class V2NaturalLanguageTurnServiceTest {
                 .isEqualTo("confirmed memory");
         assertThat(context.getValue().ragContext())
                 .isEqualTo("relevant RAG evidence");
+        assertThat(context.getValue().maxRecentMessages()).isEqualTo(12);
+        assertThat(context.getValue().maxContextCharacters())
+                .isEqualTo(12_000);
 
         ArgumentCaptor<ChatRequest> provider =
                 ArgumentCaptor.forClass(ChatRequest.class);
@@ -191,6 +194,11 @@ class V2NaturalLanguageTurnServiceTest {
         when(model.chat(any())).thenReturn(new ChatResponse(
                 ChatMessage.assistant("""
                         {"route":"PERSISTENT_PLAN_EXECUTE",
+                         "requirements":{"projectEvidence":true,
+                           "toolUse":true,"retrieval":false,
+                           "networkAccess":false,"execution":false,
+                           "durableModification":false,
+                           "durableProgress":true},
                          "taskFrame":{"objective":"Inspect","targets":["project"],
                            "deliverables":["report"],"constraints":["read only"]},
                          "plan":{"reason":"Need evidence","steps":[{
@@ -407,7 +415,7 @@ class V2NaturalLanguageTurnServiceTest {
     }
 
     @Test
-    void projectVersionComesFromAuthenticatedContextAndDirectIsForbidden() {
+    void projectVersionContextStillAllowsAuditedDirect() {
         when(contexts.resolve(7L, 12L)).thenReturn(
                 new VerifiedAgentTurnProductContext(
                         new AgentRunIdentity(
@@ -415,15 +423,20 @@ class V2NaturalLanguageTurnServiceTest {
                         Optional.of("server-manifest-v8")));
         when(model.chat(any())).thenReturn(new ChatResponse(
                 ChatMessage.assistant(
-                        "{\"route\":\"DIRECT\",\"answer\":\"answer\"}"),
+                        directAnswer("2")),
                 "stop", null));
         org.mockito.Mockito.doAnswer(invocation -> {
-            intake.fail(invocation.getArgument(1), Instant.now());
-            return null;
-        }).when(transactions).saveFailure(eq(intake), any());
+            AgentMessage message = new AgentMessage(
+                    9L, 7L, "assistant", "2", null, null);
+            setId(message, 13L);
+            intake.completeDirect(
+                    13L, invocation.getArgument(2), Instant.now());
+            when(transactions.message(13L)).thenReturn(message);
+            return message;
+        }).when(transactions).saveAssistant(
+                eq(intake), eq("2"), any());
 
-        assertThrows(org.springframework.web.server.ResponseStatusException.class,
-                () -> service().execute(7L, 9L, request()));
+        var response = service().execute(7L, 9L, request());
 
         ArgumentCaptor<AgentContextBuildRequest> context =
                 ArgumentCaptor.forClass(AgentContextBuildRequest.class);
@@ -432,8 +445,10 @@ class V2NaturalLanguageTurnServiceTest {
                 .isEqualTo(91L);
         assertThat(context.getValue().projectState().projectVersion())
                 .isEqualTo("server-manifest-v8");
+        assertThat(response.route()).isEqualTo("DIRECT");
+        assertThat(response.answer()).isEqualTo("2");
         verify(bootstraps, never()).bootstrap(any(), any(), any());
-        verify(transactions, never()).saveAssistant(any(), any(), any());
+        verify(transactions).saveAssistant(eq(intake), eq("2"), any());
     }
 
     @Test
@@ -473,6 +488,11 @@ class V2NaturalLanguageTurnServiceTest {
         when(model.chat(any())).thenReturn(new ChatResponse(
                 ChatMessage.assistant("""
                         {"route":"PERSISTENT_PLAN_EXECUTE",
+                         "requirements":{"projectEvidence":true,
+                           "toolUse":true,"retrieval":false,
+                           "networkAccess":false,"execution":false,
+                           "durableModification":false,
+                           "durableProgress":true},
                          "taskFrame":{"objective":"Inspect","targets":["project"],
                            "deliverables":["report"],"constraints":["read only"]},
                          "plan":{"reason":"Need evidence","steps":[{
@@ -509,6 +529,16 @@ class V2NaturalLanguageTurnServiceTest {
                 sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
                 model);
+    }
+
+    private static String directAnswer(String answer) {
+        return """
+                {"route":"DIRECT","requirements":{
+                  "projectEvidence":false,"toolUse":false,
+                  "retrieval":false,"networkAccess":false,
+                  "execution":false,"durableModification":false,
+                  "durableProgress":false},"answer":"%s"}
+                """.formatted(answer);
     }
 
     private V2NaturalLanguageTurnService service(

@@ -18,6 +18,8 @@ interface V2TurnIntakeJpaRepository
             findByUserIdAndSessionIdAndHistoryVisibleTrueOrderByCreatedAtDescIdDesc(
                     Long userId, Long sessionId, Pageable pageable);
 
+    long deleteByUserIdAndSessionId(Long userId, Long sessionId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select intake from V2TurnIntakeEntity intake "
             + "where intake.userId = :userId "

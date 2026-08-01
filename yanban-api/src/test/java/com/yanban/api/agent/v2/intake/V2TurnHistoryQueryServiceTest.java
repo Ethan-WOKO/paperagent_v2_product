@@ -118,7 +118,7 @@ class V2TurnHistoryQueryServiceTest {
                 .thenReturn(List.of(successful));
         when(validations.latest(7L, 9L, 42L)).thenReturn(Optional.of(
                 new CandidateValidationStatusProjectionService.Status(
-                        "QUEUED", "PENDING")));
+                        "QUEUED", "PENDING", null, null, null)));
 
         V2TurnHistoryResponse result = service.list(7L, 9L).get(0);
 
@@ -131,9 +131,47 @@ class V2TurnHistoryQueryServiceTest {
                         "PASSED", "E2B", 0, "receipt-1"));
         assertThat(result.confirmationValidation())
                 .isEqualTo(new V2TurnHistoryResponse.ConfirmationValidation(
-                        "QUEUED", "PENDING"));
+                        "QUEUED", "PENDING", null, null, null));
         assertThat(result.updatedAt()).isEqualTo(
                 Instant.parse("2026-07-31T00:00:04Z"));
+    }
+
+    @Test
+    void projectsAppliedCandidateRevisionWithoutMutatingAdaptiveTurn() {
+        V2TurnIntakeEntity intake = intake("applied", "change code");
+        intake.completePersistent(
+                "plan-1", "{}", "[]",
+                Instant.parse("2026-07-31T00:00:02Z"));
+        when(intakes
+                .findByUserIdAndSessionIdAndHistoryVisibleTrueOrderByCreatedAtDescIdDesc(
+                        eq(7L), eq(9L), any(Pageable.class)))
+                .thenReturn(List.of(intake));
+        when(adaptive.find(7L, 9L, "applied")).thenReturn(Optional.of(
+                new V2AdaptiveTurnSnapshot(
+                        new V2AdaptiveTurnResponse(
+                                "WAITING_CONFIRMATION",
+                                "PERSISTENT_PLAN_EXECUTE", "plan-1",
+                                "version-1", List.of(), "done", 42L,
+                                List.of("src/Main.java"), null),
+                        Instant.EPOCH, Instant.EPOCH)));
+        when(artifacts.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(
+                new AgentArtifact(
+                        7L, 9L, "candidate.json", "TEXT", "{}",
+                        "CANDIDATE_CHANGESET", null)));
+        when(history.inspect(new PlanId("plan-1")))
+                .thenReturn(List.of());
+        when(validations.latest(7L, 9L, 42L)).thenReturn(Optional.of(
+                new CandidateValidationStatusProjectionService.Status(
+                        "SUCCEEDED", "APPLIED", 101L, 29L,
+                        "f".repeat(64))));
+
+        V2TurnHistoryResponse result = service.list(7L, 9L).get(0);
+
+        assertThat(result.status()).isEqualTo("WAITING_CONFIRMATION");
+        assertThat(result.confirmationValidation())
+                .isEqualTo(new V2TurnHistoryResponse.ConfirmationValidation(
+                        "SUCCEEDED", "APPLIED", 101L, 29L,
+                        "f".repeat(64)));
     }
 
     @Test

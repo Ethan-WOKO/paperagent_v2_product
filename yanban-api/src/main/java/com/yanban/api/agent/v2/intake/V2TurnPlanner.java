@@ -34,6 +34,8 @@ import io.paperagent.v2.providers.GenerationOptions;
 import io.paperagent.v2.providers.MessageRole;
 import io.paperagent.v2.providers.ModelMessage;
 import io.paperagent.v2.providers.ModelProvider;
+import io.paperagent.v2.providers.ProviderFailure;
+import io.paperagent.v2.providers.ProviderFailureCode;
 import io.paperagent.v2.providers.ModelRequest;
 import io.paperagent.v2.providers.ModelRequestId;
 import io.paperagent.v2.providers.ModelResponse;
@@ -49,8 +51,51 @@ final class V2TurnPlanner {
     private static final int MAX_STEPS = 8;
     private static final String SYSTEM_PROMPT = """
             You are the V2 intake planner. Return exactly one JSON object and no markdown.
-            Choose route DIRECT only for an answer that needs no Project, tool, execution,
-            network access, or modification. A Project session must be persistent.
+            Choose the route from the work required by the current request, not from
+            whether a Project happens to be attached to the session.
+
+            Choose DIRECT only when all of the following are true:
+            1. The answer can be produced entirely from the user's supplied text,
+               general reasoning, or already-completed authoritative facts.
+            2. No current Project file, Candidate, revision, evidence, or mutable
+               Project state must be inspected.
+            3. No tool, retrieval, network access, execution, sandbox, compilation,
+               test, or validation is required.
+            4. No file, Candidate, Project version, or other durable state will change.
+            5. No multi-step progress must survive refresh or recovery.
+
+            Choose PERSISTENT_PLAN_EXECUTE when any of the following is required:
+            - inspect, search, quote, compare, or reason from current Project content;
+            - inspect a Candidate, validation, revision, or current Project status;
+            - create, edit, delete, apply, or otherwise modify durable content;
+            - call a tool, retrieve evidence, access the network, or use RAG;
+            - compile, run, test, validate, or use a sandbox;
+            - preserve multi-step progress across refresh or recovery.
+
+            The presence of a Project alone does not require a persistent Plan.
+            Conversation history is not proof of current mutable Project state.
+            If uncertain whether current Project evidence or an external capability is
+            required, choose PERSISTENT_PLAN_EXECUTE.
+
+            Always include requirements with exactly these boolean fields:
+            projectEvidence, toolUse, retrieval, networkAccess, execution,
+            durableModification, durableProgress.
+            DIRECT requires every requirements field to be false.
+            PERSISTENT_PLAN_EXECUTE requires at least one requirements field to be true.
+
+            Routing examples:
+            - "What is 1+1?" -> DIRECT with every requirement false.
+            - "Explain merge sort in general." -> DIRECT with every requirement false.
+            - "Does the current Sort.java contain merge sort?" ->
+              PERSISTENT_PLAN_EXECUTE with projectEvidence true.
+            - "Remove merge sort from Sort.java and compile it." ->
+              PERSISTENT_PLAN_EXECUTE with projectEvidence, execution, and
+              durableModification true.
+            - "Has Candidate 43 been applied?" -> PERSISTENT_PLAN_EXECUTE with
+              projectEvidence true.
+            - "Search the literature and summarize the results." ->
+              PERSISTENT_PLAN_EXECUTE with retrieval and networkAccess true.
+
             Otherwise choose PERSISTENT_PLAN_EXECUTE and author a bounded TaskFrame and Plan.
             Do not call tools while planning. Plan steps describe goals,
             dependencies and completion criteria only.
@@ -58,14 +103,44 @@ final class V2TurnPlanner {
             The execution model will select tools
             dynamically from the task-level catalog after the Plan is stored.
             DIRECT schema:
-            {"route":"DIRECT","answer":"nonblank"}
+            {"route":"DIRECT","requirements":{"projectEvidence":false,
+             "toolUse":false,"retrieval":false,"networkAccess":false,
+             "execution":false,"durableModification":false,
+             "durableProgress":false},"answer":"nonblank"}
             Persistent schema:
             {"route":"PERSISTENT_PLAN_EXECUTE",
+             "requirements":{"projectEvidence":true,"toolUse":true,
+              "retrieval":false,"networkAccess":false,"execution":false,
+              "durableModification":false,"durableProgress":true},
              "taskFrame":{"objective":"...","targets":["..."],"deliverables":["..."],"constraints":["..."]},
              "plan":{"reason":"...","steps":[{"id":"step-1","intent":"...",
                "expectedOutcome":"...","dependencies":[],"completionCriteria":["..."],
                "maxAttempts":1,"maxDurationSeconds":120}]}}
             Use 1-8 ordered steps.
+            """;
+    private static final String PROTOCOL_RETRY_PROMPT = """
+            Return exactly one JSON object and no markdown.
+            Route DIRECT only when the current request needs no current
+            Project evidence or state, no tool, retrieval, network,
+            execution, sandbox, test, validation, durable modification, or
+            durable multi-step progress. A Project being attached does not by
+            itself prevent DIRECT. Otherwise route
+            PERSISTENT_PLAN_EXECUTE.
+            Always include requirements with exactly these booleans:
+            projectEvidence, toolUse, retrieval, networkAccess, execution,
+            durableModification, durableProgress. Every value must be false
+            for DIRECT; at least one must be true for persistent execution.
+            For example, for "What is 1+1?" return exactly:
+            {"route":"DIRECT","requirements":{"projectEvidence":false,
+             "toolUse":false,"retrieval":false,"networkAccess":false,
+             "execution":false,"durableModification":false,
+             "durableProgress":false},"answer":"2"}
+            DIRECT must include a nonblank answer. Persistent execution must
+            include taskFrame with objective, targets, deliverables and
+            constraints, plus plan with reason and 1-8 ordered steps. Every
+            step has id, intent, expectedOutcome, dependencies,
+            completionCriteria, maxAttempts and maxDurationSeconds. Steps
+            describe goals, not tool bindings. Do not call tools.
             """;
 
     private final ChatModelProvider provider;
@@ -87,11 +162,12 @@ final class V2TurnPlanner {
         prompt.add(ChatMessage.system(capabilityCatalog()));
         if (projectSession) {
             prompt.add(ChatMessage.system("""
-                    This authenticated turn is bound to a Project.
-                    You MUST return PERSISTENT_PLAN_EXECUTE, even when the
-                    request looks conversational. Use project_read or
-                    project_search when Project evidence is required.
-                    Do not answer from conversation context alone.
+                    An authenticated Project is available to this turn.
+                    Project availability alone does not determine the route.
+                    If the answer depends on current Project evidence or state,
+                    choose PERSISTENT_PLAN_EXECUTE so execution can obtain an
+                    authoritative result. Do not treat conversation history as
+                    proof of current mutable Project state.
                     """));
         }
         if (skill != null) {
@@ -120,9 +196,26 @@ final class V2TurnPlanner {
                 false);
         ModelProvider planningProvider = new V2IntakePlanningProviderAdapter(
                 provider, endpoint);
-        String raw = complete(
-                planningProvider, modelRequest, traceId,
-                projectSession, "initial");
+        String raw;
+        try {
+            raw = complete(
+                    planningProvider, modelRequest, traceId,
+                    projectSession, "initial");
+        } catch (V2TurnPlanningException failure) {
+            if (!"MODEL_RESULT_INVALID".equals(failure.diagnostic())) {
+                throw failure;
+            }
+            log.warn(
+                    "V2 intake planner protocol retry requested "
+                            + "traceId={} projectSession={} diagnostic={}",
+                    traceId, projectSession, failure.diagnostic());
+            raw = complete(
+                    planningProvider,
+                    protocolRetryRequest(
+                            modelRequest, traceId, projectSession,
+                            skill != null),
+                    traceId, projectSession, "protocol-retry");
+        }
         PlannedTurn planned;
         try {
             planned = parse(raw).withRawOutput(raw);
@@ -144,12 +237,7 @@ final class V2TurnPlanner {
                 throw repairFailure.withOutputDigest(hash(raw));
             }
         }
-        if (projectSession && planned.route() == Route.DIRECT) {
-            throw new V2TurnPlanningException(
-                    "PROJECT_DIRECT",
-                    "Project turns require a persistent Plan")
-                    .withOutputDigest(hash(raw));
-        }
+        auditRouteRequirements(planned, raw);
         if (!planned.capabilities().isEmpty()
                 && planned.route() != Route.PERSISTENT_PLAN_EXECUTE) {
             throw new V2TurnPlanningException(
@@ -192,6 +280,13 @@ final class V2TurnPlanner {
                 elapsedMillis(modelStarted),
                 result == null ? "null"
                         : result.getClass().getSimpleName());
+        if (result instanceof ProviderFailure failure) {
+            String diagnostic = failure.code()
+                    == ProviderFailureCode.PROTOCOL_VIOLATION
+                    ? "MODEL_RESULT_INVALID" : "MODEL_CALL_FAILED";
+            throw new V2TurnPlanningException(
+                    diagnostic, "planner provider call failed");
+        }
         if (!(result instanceof ModelResponse response)
                 || !response.proposedToolCalls().isEmpty()) {
             throw new V2TurnPlanningException(
@@ -211,6 +306,48 @@ final class V2TurnPlanner {
         return raw;
     }
 
+    private static ModelRequest protocolRetryRequest(
+            ModelRequest source, String traceId,
+            boolean projectSession, boolean skillSelected) {
+        List<ModelMessage> messages = new ArrayList<>();
+        messages.add(new ModelMessage(
+                MessageRole.SYSTEM, PROTOCOL_RETRY_PROMPT));
+        int selectedSystemMessages = 2;
+        if (projectSession) {
+            source.messages().stream()
+                    .filter(message -> message.role() == MessageRole.SYSTEM)
+                    .skip(selectedSystemMessages)
+                    .findFirst()
+                    .ifPresent(messages::add);
+            selectedSystemMessages++;
+        }
+        if (skillSelected) {
+            source.messages().stream()
+                    .filter(message -> message.role() == MessageRole.SYSTEM)
+                    .skip(selectedSystemMessages)
+                    .findFirst()
+                    .ifPresent(messages::add);
+        }
+        messages.add(new ModelMessage(
+                MessageRole.SYSTEM,
+                "The previous provider response contained no usable "
+                        + "assistant JSON. Apply the same routing rules and "
+                        + "return exactly one complete JSON object now."));
+        List<ModelMessage> conversational = source.messages().stream()
+                .filter(message -> message.role() != MessageRole.SYSTEM)
+                .toList();
+        int first = Math.max(0, conversational.size() - 4);
+        messages.addAll(conversational.subList(
+                first, conversational.size()));
+        return new ModelRequest(
+                new ModelRequestId(traceId + "-protocol-retry-request"),
+                new CorrelationId(traceId + "-protocol-retry"),
+                List.copyOf(messages), source.availableTools(),
+                source.generationOptions(), source.taskFrameId(),
+                source.planId(), source.planRevisionId(), source.stepId(),
+                source.cancellationRequested());
+    }
+
     private static ModelRequest formatRepairRequest(
             ModelRequest source, String traceId, String diagnostic,
             String previousOutput) {
@@ -224,8 +361,9 @@ final class V2TurnPlanner {
                         + diagnostic + ". Rewrite that response for the "
                         + "same request as exactly one top-level "
                         + "JSON object, never an array, JSON string, prose, "
-                        + "or markdown fence. Include the complete route, "
-                        + "taskFrame, and plan wrapper required by the "
+                        + "or markdown fence. Include the complete route and "
+                        + "requirements wrapper, plus either answer or the "
+                        + "taskFrame and plan wrapper required by the "
                         + "original schema."));
         return new ModelRequest(
                 new ModelRequestId(traceId + "-format-repair-request"),
@@ -273,15 +411,19 @@ final class V2TurnPlanner {
             requireObject(root, "root");
             String routeText = requiredText(root, "route", 32);
             if ("DIRECT".equals(routeText)) {
-                exactFields(root, Set.of("route", "answer"),
+                exactFields(root, Set.of("route", "requirements", "answer"),
                         "DIRECT_FIELDS");
-                return PlannedTurn.direct(requiredText(root, "answer", 20_000));
+                return PlannedTurn.direct(
+                        routeRequirements(root),
+                        requiredText(root, "answer", 20_000));
             }
             if (!"PERSISTENT_PLAN_EXECUTE".equals(routeText)) {
                 throw invalid("ROUTE_VALUE");
             }
-            exactFields(root, Set.of("route", "taskFrame", "plan"),
+            exactFields(root, Set.of(
+                            "route", "requirements", "taskFrame", "plan"),
                     "PERSISTENT_FIELDS");
+            RouteRequirements requirements = routeRequirements(root);
             JsonNode frame = requiredObject(root, "taskFrame");
             exactFields(frame, Set.of(
                     "objective", "targets", "deliverables", "constraints"),
@@ -358,6 +500,7 @@ final class V2TurnPlanner {
                 }
             }
             return PlannedTurn.persistent(
+                    requirements,
                     taskFrame,
                     new InitialPlanDraft(
                             requiredText(plan, "reason", MAX_TEXT), steps),
@@ -520,6 +663,48 @@ final class V2TurnPlanner {
         return value;
     }
 
+    private static RouteRequirements routeRequirements(JsonNode root) {
+        JsonNode requirements = requiredObject(root, "requirements");
+        exactFields(requirements, Set.of(
+                "projectEvidence", "toolUse", "retrieval",
+                "networkAccess", "execution", "durableModification",
+                "durableProgress"), "REQUIREMENTS_FIELDS");
+        return new RouteRequirements(
+                requiredBoolean(requirements, "projectEvidence"),
+                requiredBoolean(requirements, "toolUse"),
+                requiredBoolean(requirements, "retrieval"),
+                requiredBoolean(requirements, "networkAccess"),
+                requiredBoolean(requirements, "execution"),
+                requiredBoolean(requirements, "durableModification"),
+                requiredBoolean(requirements, "durableProgress"));
+    }
+
+    private static boolean requiredBoolean(JsonNode parent, String field) {
+        JsonNode node = parent.get(field);
+        if (node == null || !node.isBoolean()) {
+            throw invalid("BOOLEAN_" + diagnostic(field));
+        }
+        return node.booleanValue();
+    }
+
+    private static void auditRouteRequirements(
+            PlannedTurn planned, String raw) {
+        if (planned.route() == Route.DIRECT
+                && planned.requirements().any()) {
+            throw new V2TurnPlanningException(
+                    "DIRECT_REQUIREMENTS",
+                    "DIRECT cannot require Project or external work")
+                    .withOutputDigest(hash(raw));
+        }
+        if (planned.route() == Route.PERSISTENT_PLAN_EXECUTE
+                && !planned.requirements().any()) {
+            throw new V2TurnPlanningException(
+                    "PERSISTENT_REQUIREMENTS",
+                    "Persistent execution requires declared work")
+                    .withOutputDigest(hash(raw));
+        }
+    }
+
     private static String diagnostic(String field) {
         return field.replaceAll("([a-z])([A-Z])", "$1_$2")
                 .toUpperCase(java.util.Locale.ROOT);
@@ -549,30 +734,49 @@ final class V2TurnPlanner {
             PlanStepId stepId, String publicAlias, ToolId internalToolId) {
     }
 
+    record RouteRequirements(
+            boolean projectEvidence,
+            boolean toolUse,
+            boolean retrieval,
+            boolean networkAccess,
+            boolean execution,
+            boolean durableModification,
+            boolean durableProgress) {
+        boolean any() {
+            return projectEvidence || toolUse || retrieval || networkAccess
+                    || execution || durableModification || durableProgress;
+        }
+    }
+
     record PlannedTurn(
             Route route,
+            RouteRequirements requirements,
             String answer,
             TaskFrameDraft taskFrame,
             InitialPlanDraft plan,
             List<PlannedCapability> capabilities,
             String rawOutput) {
         PlannedTurn {
+            java.util.Objects.requireNonNull(requirements, "requirements");
             capabilities = capabilities == null
                     ? List.of() : List.copyOf(capabilities);
         }
 
-        static PlannedTurn direct(String answer) {
+        static PlannedTurn direct(
+                RouteRequirements requirements, String answer) {
             return new PlannedTurn(
-                    Route.DIRECT, answer, null, null, List.of(), null);
+                    Route.DIRECT, requirements, answer,
+                    null, null, List.of(), null);
         }
 
         static PlannedTurn persistent(
+                RouteRequirements requirements,
                 TaskFrameDraft taskFrame,
                 InitialPlanDraft plan,
                 List<PlannedCapability> capabilities) {
             return new PlannedTurn(
                     Route.PERSISTENT_PLAN_EXECUTE,
-                    null,
+                    requirements, null,
                     taskFrame,
                     plan,
                     capabilities,
@@ -581,7 +785,8 @@ final class V2TurnPlanner {
 
         PlannedTurn withRawOutput(String value) {
             return new PlannedTurn(
-                    route, answer, taskFrame, plan, capabilities, value);
+                    route, requirements, answer, taskFrame, plan,
+                    capabilities, value);
         }
     }
 }

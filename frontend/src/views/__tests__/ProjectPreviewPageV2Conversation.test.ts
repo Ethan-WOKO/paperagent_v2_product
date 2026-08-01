@@ -34,6 +34,9 @@ describe('ProjectPreviewPage V2-only 中文任务界面', () => {
     expect(source).toContain('结果：{{ step.detail }}');
     expect(source).toContain('生成内容位置');
     expect(source).toContain('原项目尚未修改');
+    expect(source).toContain('已确认应用，已创建项目版本');
+    expect(source).toContain("v2TaskApplied(task)");
+    expect(source).toContain("candidateConfirmationLabel(task.confirmationValidation)");
     expect(source).toContain('打开修改与验证');
     expect(source).toContain('Agent 自动验证');
     expect(source).toContain('创建新版本前的确认验证');

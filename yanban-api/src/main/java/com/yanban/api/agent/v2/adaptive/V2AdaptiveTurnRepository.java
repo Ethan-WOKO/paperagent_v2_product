@@ -7,4 +7,6 @@ interface V2AdaptiveTurnRepository
         extends JpaRepository<V2AdaptiveTurnEntity, Long> {
     Optional<V2AdaptiveTurnEntity> findByUserIdAndSessionIdAndClientRequestId(
             Long userId, Long sessionId, String clientRequestId);
+
+    long deleteByUserIdAndSessionId(Long userId, Long sessionId);
 }

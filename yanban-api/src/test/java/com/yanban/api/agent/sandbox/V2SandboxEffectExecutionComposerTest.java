@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
@@ -204,6 +206,27 @@ class V2SandboxEffectExecutionComposerTest {
     }
 
     @Test
+    void commandPolicyRejectionBecomesDurableFailureReceipt() {
+        Fixture fixture = new Fixture();
+        doThrow(new SandboxExecutionException(
+                SandboxFailureCode.COMMAND_NOT_ALLOWED,
+                "command profile is not server-allowlisted"))
+                .when(fixture.commands).validate(any(), any());
+
+        V2SandboxEffectExecutionOutcome result = fixture.execute();
+
+        assertThat(result.result().receipt().status())
+                .isEqualTo(ReceiptStatus.FAILURE);
+        assertThat(result.result().receipt().resultCode())
+                .contains("COMMAND_NOT_ALLOWED");
+        assertThat(result.result().receipt().standardError().inlineText())
+                .hasValueSatisfying(value -> assertThat(value)
+                        .contains("exact argv shape"));
+        verifyNoInteractions(fixture.broker);
+        verify(fixture.claims).execute(any());
+    }
+
+    @Test
     void timeoutAndCancellationRemainDistinctReceiptStatuses() {
         Fixture timedOut = new Fixture();
         List<SandboxDispatch> timedOutDispatches = new ArrayList<>();
@@ -337,6 +360,8 @@ class V2SandboxEffectExecutionComposerTest {
                 mock(SandboxBrokerClient.class);
         private final ProductEffectExecutionClaimRepository claims =
                 mock(ProductEffectExecutionClaimRepository.class);
+        private final SandboxCommandPolicy commands =
+                mock(SandboxCommandPolicy.class);
         private final V2SandboxEffectExecutionComposer composer;
 
         @SuppressWarnings("unchecked")
@@ -357,8 +382,6 @@ class V2SandboxEffectExecutionComposerTest {
             SandboxExecutionProperties properties =
                     new SandboxExecutionProperties();
             properties.setProvider("e2b");
-            SandboxCommandPolicy commands =
-                    mock(SandboxCommandPolicy.class);
             V2SandboxPollWaiter waiter =
                     mock(V2SandboxPollWaiter.class);
             when(waiter.maximumPolls()).thenReturn(1);

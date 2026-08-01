@@ -27,6 +27,10 @@ class V2TurnPlannerTest {
         var planned = planner(answer("""
                 {
                   "route":"PERSISTENT_PLAN_EXECUTE",
+                  "requirements":{"projectEvidence":true,"toolUse":true,
+                    "retrieval":false,"networkAccess":false,
+                    "execution":false,"durableModification":false,
+                    "durableProgress":true},
                   "taskFrame":{
                     "objective":"Inspect the project",
                     "targets":["current project"],
@@ -69,7 +73,11 @@ class V2TurnPlannerTest {
     @Test
     void acceptsDirectWithoutPlan() {
         var planned = planner(answer("unused")).parse("""
-                {"route":"DIRECT","answer":"A concise answer"}
+                {"route":"DIRECT","requirements":{
+                  "projectEvidence":false,"toolUse":false,
+                  "retrieval":false,"networkAccess":false,
+                  "execution":false,"durableModification":false,
+                  "durableProgress":false},"answer":"A concise answer"}
                 """);
 
         assertEquals(Route.DIRECT, planned.route());
@@ -128,25 +136,82 @@ class V2TurnPlannerTest {
     }
 
     @Test
-    void projectSessionCannotBecomeDirect() {
-        var failure = assertThrows(V2TurnPlanningException.class,
-                () -> planner(answer(
-                        "{\"route\":\"DIRECT\",\"answer\":\"x\"}"))
-                        .plan(
-                                new com.yanban.api.agent.AgentContextPackage(
-                                        java.util.List.of(
-                                                ChatMessage.user("x")),
-                                        java.util.List.of(),
-                                        java.util.List.of(),
-                                        1, 1, 1),
-                                new com.yanban.api.settings.UserSettingsService.ModelEndpoint(
-                                        "deepseek", "model", null, null,
-                                        "builtin", "DeepSeek"),
-                                null,
-                                true,
-                                "trace"));
-        assertTrue(failure.failureCode().matches(
-                "PLANNER_PROJECT_DIRECT_[0-9a-f]{12}"));
+    void projectSessionAllowsAuditedDirect() {
+        var planned = planner(answer(direct("2"))).plan(
+                new com.yanban.api.agent.AgentContextPackage(
+                        java.util.List.of(ChatMessage.user("1+1?")),
+                        java.util.List.of(), java.util.List.of(), 1, 1, 1),
+                new com.yanban.api.settings.UserSettingsService.ModelEndpoint(
+                        "deepseek", "model", null, null,
+                        "builtin", "DeepSeek"),
+                null, true, "trace");
+
+        assertEquals(Route.DIRECT, planned.route());
+        assertEquals("2", planned.answer());
+        assertTrue(!planned.requirements().any());
+    }
+
+    @Test
+    void retriesOneCompactProtocolResponseForEmptyAssistantText() {
+        ChatModelProvider provider = mock(ChatModelProvider.class);
+        when(provider.chat(any())).thenReturn(
+                new ChatResponse(
+                        ChatMessage.assistant(""), "stop",
+                        new ChatResponse.Usage(4_000, 1, 4_001)),
+                new ChatResponse(
+                        ChatMessage.assistant(direct("23")),
+                        "stop", null));
+
+        var planned = planner(provider).plan(
+                context("16+7?"), endpoint(),
+                null, true, "trace");
+
+        assertEquals(Route.DIRECT, planned.route());
+        assertEquals("23", planned.answer());
+        ArgumentCaptor<ChatRequest> requests =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        org.mockito.Mockito.verify(provider,
+                org.mockito.Mockito.times(2)).chat(requests.capture());
+        ChatRequest retry = requests.getAllValues().get(1);
+        assertTrue(retry.messages().stream()
+                .anyMatch(message -> message.content().contains(
+                        "previous provider response contained no usable")));
+        assertTrue(retry.messages().stream()
+                .anyMatch(message -> "16+7?".equals(message.content())));
+    }
+
+    @Test
+    void auditsRequirementsWithoutAutomaticSemanticRepair() {
+        ChatModelProvider directProvider = answer("""
+                {"route":"DIRECT","requirements":{
+                  "projectEvidence":true,"toolUse":false,
+                  "retrieval":false,"networkAccess":false,
+                  "execution":false,"durableModification":false,
+                  "durableProgress":false},"answer":"unsafe"}
+                """);
+        var directFailure = assertThrows(V2TurnPlanningException.class,
+                () -> planner(directProvider).plan(
+                        context("inspect the project"), endpoint(),
+                        null, true, "trace"));
+        assertTrue(directFailure.failureCode().matches(
+                "PLANNER_DIRECT_REQUIREMENTS_[0-9a-f]{12}"));
+        org.mockito.Mockito.verify(directProvider,
+                org.mockito.Mockito.times(1)).chat(any());
+
+        ChatModelProvider persistentProvider = answer(answerText()
+                .replace("\"projectEvidence\":true",
+                        "\"projectEvidence\":false")
+                .replace("\"toolUse\":true", "\"toolUse\":false")
+                .replace("\"durableProgress\":true",
+                        "\"durableProgress\":false"));
+        var persistentFailure = assertThrows(V2TurnPlanningException.class,
+                () -> planner(persistentProvider).plan(
+                        context("inspect the project"), endpoint(),
+                        null, true, "trace"));
+        assertTrue(persistentFailure.failureCode().matches(
+                "PLANNER_PERSISTENT_REQUIREMENTS_[0-9a-f]{12}"));
+        org.mockito.Mockito.verify(persistentProvider,
+                org.mockito.Mockito.times(1)).chat(any());
     }
 
     @Test
@@ -168,7 +233,7 @@ class V2TurnPlannerTest {
     }
 
     @Test
-    void projectTurnExplicitlyTellsModelToCreatePersistentPlan() {
+    void projectTurnExplainsSemanticRoutingAndExamples() {
         ChatModelProvider provider = answer(answerText());
 
         planner(provider).plan(
@@ -183,7 +248,13 @@ class V2TurnPlannerTest {
         org.mockito.Mockito.verify(provider).chat(request.capture());
         assertTrue(request.getValue().messages().stream()
                 .anyMatch(message -> message.content().contains(
-                        "authenticated turn is bound to a Project")));
+                        "Project availability alone does not determine the route")));
+        assertTrue(request.getValue().messages().stream()
+                .anyMatch(message -> message.content().contains(
+                        "What is 1+1?")));
+        assertTrue(request.getValue().messages().stream()
+                .anyMatch(message -> message.content().contains(
+                        "Remove merge sort from Sort.java and compile it")));
         assertTrue(request.getValue().messages().stream()
                 .anyMatch(message -> message.content().contains(
                         "Do not assign a tool or capability to a step")));
@@ -265,6 +336,10 @@ class V2TurnPlannerTest {
     void rejectsDuplicateStepIdsAndOversizedModelOutput() {
         String duplicate = """
                 {"route":"PERSISTENT_PLAN_EXECUTE",
+                 "requirements":{"projectEvidence":true,"toolUse":true,
+                   "retrieval":false,"networkAccess":false,
+                   "execution":false,"durableModification":false,
+                   "durableProgress":true},
                  "taskFrame":{"objective":"x","targets":["x"],
                    "deliverables":["x"],"constraints":["x"]},
                  "plan":{"reason":"x","steps":[
@@ -293,6 +368,10 @@ class V2TurnPlannerTest {
         return """
                 {
                   "route":"PERSISTENT_PLAN_EXECUTE",
+                  "requirements":{"projectEvidence":true,"toolUse":true,
+                    "retrieval":false,"networkAccess":false,
+                    "execution":false,"durableModification":false,
+                    "durableProgress":true},
                   "taskFrame":{
                     "objective":"Inspect the project",
                     "targets":["current project"],
@@ -318,6 +397,10 @@ class V2TurnPlannerTest {
     private String persistent(String capability, String dependencies) {
         return """
                 {"route":"PERSISTENT_PLAN_EXECUTE",
+                 "requirements":{"projectEvidence":true,"toolUse":true,
+                   "retrieval":false,"networkAccess":false,
+                   "execution":false,"durableModification":false,
+                   "durableProgress":true},
                  "taskFrame":{"objective":"x","targets":["x"],
                    "deliverables":["x"],"constraints":["x"]},
                  "plan":{"reason":"x","steps":[{
@@ -325,6 +408,16 @@ class V2TurnPlannerTest {
                    %s,"completionCriteria":["x"],
                    "maxAttempts":1,"maxDurationSeconds":1,%s}]}}
                 """.formatted(dependencies, capability);
+    }
+
+    private String direct(String answer) {
+        return """
+                {"route":"DIRECT","requirements":{
+                  "projectEvidence":false,"toolUse":false,
+                  "retrieval":false,"networkAccess":false,
+                  "execution":false,"durableModification":false,
+                  "durableProgress":false},"answer":"%s"}
+                """.formatted(answer);
     }
 
     private V2TurnPlanner planner(ChatModelProvider provider) {

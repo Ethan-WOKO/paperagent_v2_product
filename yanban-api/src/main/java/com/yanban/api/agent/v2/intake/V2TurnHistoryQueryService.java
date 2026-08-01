@@ -133,7 +133,10 @@ public class V2TurnHistoryQueryService {
                                 userId, sessionId, candidateArtifactId)
                         .map(value -> new V2TurnHistoryResponse
                                 .ConfirmationValidation(
-                                value.status(), value.decisionStatus()))
+                                value.status(), value.decisionStatus(),
+                                value.applicationOperationId(),
+                                value.appliedRevisionId(),
+                                value.appliedProjectVersion()))
                         .orElse(null)
                 : null;
         return new V2TurnHistoryResponse(

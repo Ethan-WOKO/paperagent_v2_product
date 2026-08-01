@@ -122,8 +122,15 @@ public class NaturalLanguageStepKernelFactory {
                             + "\"argv\":[\"yanban-runner\",\"java\","
                             + "\"normalized/path.java\"]}. Supported argv "
                             + "profiles include yanban-runner java/python/c/"
-                            + "cpp, Maven test/verify, java, javac, and "
-                            + "bounded git checks. Java runner arguments may "
+                            + "cpp, Maven test/verify, direct Java source "
+                            + "launch, direct javac, and bounded git checks. "
+                            + "Prefer yanban-runner java path.java for Java "
+                            + "compile-and-run. Direct javac accepts only one "
+                            + "or more normalized .java source paths and no "
+                            + "flags. Direct java accepts only -version or "
+                            + "one normalized .java source path; it does not "
+                            + "accept a compiled class name. Java runner "
+                            + "arguments may "
                             + "append --dependency=group:artifact:version; "
                             + "dependencies are prepared before offline run.";
             default ->
