@@ -1,0 +1,22 @@
+package com.yanban.api.agent;
+
+/** Bounded, non-narrative task signals retained for strategy audit. */
+public enum AgentStrategySignal {
+    PROJECT_SCOPE,
+    PROJECT_READ_REQUIRED,
+    TOOLS_AVAILABLE,
+    TOOLS_DENIED,
+    TOOL_USE_REQUESTED,
+    SIMPLE_QUESTION,
+    MULTI_STAGE_TASK,
+    VERIFICATION_REQUIRED,
+    MATERIAL_PAPER_LATEX,
+    MATERIAL_CODE,
+    MATERIAL_EXPERIMENT_CONFIG,
+    MATERIAL_BIBTEX,
+    CROSS_MATERIAL_TASK,
+    SANDBOX_EXECUTION_REQUIRED,
+    PLAN_BUDGET_AVAILABLE,
+    PLAN_BUDGET_INSUFFICIENT,
+    REFLECTION_COMMAND
+}
