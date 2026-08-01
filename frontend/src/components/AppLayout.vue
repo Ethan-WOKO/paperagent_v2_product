@@ -4,6 +4,7 @@
     :class="{
       'app-frame--chat': route.path.startsWith('/chat'),
       'app-frame--paper': route.path.startsWith('/paper'),
+      'app-frame--project': route.path.startsWith('/projects'),
       'app-frame--settings': route.path.startsWith('/settings'),
       'app-frame--non-chat': !route.path.startsWith('/chat'),
     }"

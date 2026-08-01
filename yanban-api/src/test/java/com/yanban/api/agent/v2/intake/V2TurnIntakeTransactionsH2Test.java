@@ -50,12 +50,16 @@ class V2TurnIntakeTransactionsH2Test {
 
         V2TurnIntakeEntity first = transactions.open(
                 7L, session.getId(), "request-1", digest,
-                "question", false, null, null);
+                "question", false, null, null,
+                "deepseek", "deepseek-v4-flash");
         V2TurnIntakeEntity replay = transactions.open(
                 7L, session.getId(), "request-1", digest,
-                "question", false, null, null);
+                "question", false, null, null,
+                "deepseek", "deepseek-v4-pro");
 
         assertThat(first.historyVisible()).isTrue();
+        assertThat(first.modelProviderSnapshot()).isEqualTo("deepseek");
+        assertThat(first.modelSnapshot()).isEqualTo("deepseek-v4-flash");
         assertThat(intakes
                 .findByUserIdAndSessionIdAndHistoryVisibleTrueOrderByCreatedAtDescIdDesc(
                         7L, session.getId(), PageRequest.of(0, 50)))
@@ -63,9 +67,11 @@ class V2TurnIntakeTransactionsH2Test {
                 .containsExactly("request-1");
         assertThat(replay.turnId()).isEqualTo(first.turnId());
         assertThat(replay.userMessageId()).isEqualTo(first.userMessageId());
+        assertThat(replay.modelSnapshot()).isEqualTo("deepseek-v4-flash");
         assertThatThrownBy(() -> transactions.open(
                 7L, session.getId(), "request-1", "b".repeat(64),
-                "changed", false, null, null))
+                "changed", false, null, null,
+                "deepseek", "deepseek-v4-pro"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "clientRequestId was already used for another payload");
@@ -78,7 +84,8 @@ class V2TurnIntakeTransactionsH2Test {
             for (int index = 0; index < contenders; index++) {
                 futures.add(pool.submit(() -> transactions.open(
                         7L, session.getId(), "request-2", digest,
-                        "parallel", false, null, null)));
+                        "parallel", false, null, null,
+                        "deepseek", "deepseek-v4-flash")));
             }
             List<Long> turnIds = new ArrayList<>();
             for (var future : futures) {
@@ -104,7 +111,8 @@ class V2TurnIntakeTransactionsH2Test {
                 AgentSessionScope.PROJECT, 91L));
         V2TurnIntakeEntity intake = transactions.open(
                 8L, session.getId(), "request-final", "c".repeat(64),
-                "question", false, null, null);
+                "question", false, null, null,
+                "deepseek", "deepseek-v4-flash");
         transactions.locked(intake, locked -> {
             transactions.savePersistent(
                     locked, "plan-final", "{}", "[]");

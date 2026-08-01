@@ -207,7 +207,7 @@ class AuthenticatedAgentTurnPlanExecutionContextCompositionTest {
     }
 
     @Test
-    void firstCompositionIsReadyThenRestartAdoptsPersistedSpecAcrossChangedLimits() {
+    void replayAdoptsPersistedSpecAndReusesWorkspaceAcrossChangedLimits() {
         assertEquals(
                 PersistenceOutcome.APPLIED,
                 bootstrap.bootstrap(USER_ID, TURN_ID, bootstrapCommand())
@@ -257,7 +257,7 @@ class AuthenticatedAgentTurnPlanExecutionContextCompositionTest {
         assertEquals(1024, replay.persistedContext()
                 .materializationSpec().limits().maxFileBytes());
         assertEquals(1, rowCount("agent_v2_plan_execution_contexts"));
-        assertEquals(2, sourceLoads.get());
+        assertEquals(1, sourceLoads.get());
     }
 
     private int rowCount(String table) {

@@ -146,17 +146,17 @@ describe('V2 Project analysis polling and isolation', () => {
   });
 });
 
-describe('Project page explicit V2 analysis integration', () => {
+describe('Project page V2 analysis compatibility', () => {
   const source = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
   const api = readFileSync(new URL('../src/api/project.ts', import.meta.url), 'utf8');
 
-  it('uses only explicit start/read endpoints and does not reroute ordinary messages', () => {
+  it('keeps explicit start/read endpoints for recovery but exposes only the unified V2 composer', () => {
     expect(api).toContain('/v2/read-analysis-turns');
     expect(api).toContain('/v2/read-analysis-turns/${encodeURIComponent(clientRequestId)}');
-    expect(source).toContain('@click="startProjectAnalysis"');
+    expect(source).not.toContain('@click="startProjectAnalysis"');
     expect(source).toContain('await startV2ProjectReadAnalysisTurn(projectId, sessionId, request)');
-    expect(source).toContain('async function sendChat()');
-    expect(source).toContain('await sendProjectWithFallback(projectId, sessionId, content, requestId)');
+    expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
+    expect(source).toContain('startV2NaturalLanguageTurn(sessionId, request, controller.signal)');
     expect(source).not.toContain("chatInput.value.startsWith('/analyze')");
   });
 
@@ -169,7 +169,8 @@ describe('Project page explicit V2 analysis integration', () => {
     expect(source).toContain('onUnmounted(() =>');
   });
 
-  it('renders the final text through the existing safe markdown component', () => {
-    expect(source).toContain(':content="projectAnalysisOutcome.finalText" variant="project"');
+  it('renders the persisted final text through the existing safe markdown component', () => {
+    expect(source).toContain(':content="task.finalText"');
+    expect(source).toContain('variant="project"');
   });
 });

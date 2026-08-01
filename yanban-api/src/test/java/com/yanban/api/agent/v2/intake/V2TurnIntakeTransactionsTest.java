@@ -36,10 +36,11 @@ class V2TurnIntakeTransactionsTest {
 
         assertThat(transactions.open(
                 7L, 9L, "request-1", digest, "question",
-                false, null, null)).isSameAs(existing);
+                false, null, null, "deepseek", "flash"))
+                .isSameAs(existing);
         assertThatThrownBy(() -> transactions.open(
                 7L, 9L, "request-1", "b".repeat(64), "changed",
-                false, null, null))
+                false, null, null, "deepseek", "flash"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "clientRequestId was already used for another payload");

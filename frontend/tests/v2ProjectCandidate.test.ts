@@ -87,11 +87,13 @@ describe('Project page Candidate handoff', () => {
   const source = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
   const api = readFileSync(new URL('../src/api/project.ts', import.meta.url), 'utf8');
 
-  it('uses explicit candidate endpoints and never routes ordinary chat or calls apply', () => {
+  it('keeps the compatibility endpoint but exposes Candidate creation only through the unified V2 composer', () => {
     expect(api).toContain('/v2/candidate-turns');
-    expect(source).toContain('@click="startProjectCandidate"');
+    expect(source).not.toContain('@click="startProjectCandidate"');
     expect(source).toContain('await startV2ProjectCandidateTurn(projectId, sessionId, request)');
-    expect(source).toContain('async function sendChat()');
+    expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
+    expect(source).toContain('v-for="task in v2TurnHistory"');
+    expect(source).toContain('@click="openV2CandidateReview(task.candidateArtifactId)"');
     expect(source).not.toContain('await applyProjectCandidate(projectId, outcome.candidateArtifactId');
   });
 

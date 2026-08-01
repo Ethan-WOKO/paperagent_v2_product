@@ -7,13 +7,16 @@
             <div v-if="useCanvasScale" class="app-scale-root app-scale-root--canvas">
               <RouterView />
             </div>
+            <template v-else-if="isAuthenticatedRoute">
+              <RouterView />
+            </template>
             <div v-else class="public-page">
               <div class="app-scale-root">
                 <RouterView />
               </div>
               <SiteFilingFooter />
             </div>
-            <LanguageToggle v-if="!useCanvasScale" class="app-guest-language-toggle" />
+            <LanguageToggle v-if="!isAuthenticatedRoute" class="app-guest-language-toggle" />
           </NMessageProvider>
         </NNotificationProvider>
       </NDialogProvider>
@@ -60,11 +63,32 @@ const MAX_SCALE = 3.0;
 const naiveTheme = computed(() => (isDark.value ? darkTheme : lightTheme));
 const naiveLocale = computed(() => (locale.value === 'zh-CN' ? zhCN : enUS));
 const naiveDateLocale = computed(() => (locale.value === 'zh-CN' ? dateZhCN : dateEnUS));
-const useCanvasScale = computed(() => route.meta.requiresAuth === true);
+const isAuthenticatedRoute = computed(() => route.meta.requiresAuth === true);
+const isProjectRoute = computed(() => route.path.startsWith('/projects'));
+// Project workspaces reflow as a real responsive interface. Every other
+// authenticated route retains the established fixed-canvas behavior.
+const useCanvasScale = computed(() => isAuthenticatedRoute.value && !isProjectRoute.value);
 const canvasWidth = computed(() => (route.path.startsWith('/chat') ? CHAT_CANVAS_WIDTH : DEFAULT_CANVAS_WIDTH));
 
 function updateCanvasScale() {
   if (typeof window === 'undefined') return;
+  const root = document.documentElement;
+
+  if (isProjectRoute.value) {
+    // The Project workspace deliberately opts out of the fixed canvas. Reset
+    // every canvas dimension so the global non-canvas rules remain viewport
+    // sized instead of inheriting a pixel width from a previous route.
+    root.style.setProperty('--yb-ui-scale', '1');
+    root.style.setProperty('--yb-canvas-width', '100%');
+    root.style.setProperty('--yb-canvas-min-height', '100dvh');
+    root.style.setProperty('--yb-canvas-height', '100dvh');
+    root.style.setProperty('--yb-canvas-vh', '100dvh');
+    root.style.setProperty('--yb-canvas-scaled-width', '100%');
+    root.style.setProperty('--yb-canvas-scaled-min-height', '100dvh');
+    root.style.setProperty('--yb-canvas-scaled-height', '100dvh');
+    return;
+  }
+
   const designWidth = canvasWidth.value;
   const viewportWidth = Math.max(320, window.innerWidth || designWidth);
   const viewportHeight = Math.max(320, window.innerHeight || 720);
@@ -78,7 +102,6 @@ function updateCanvasScale() {
     Math.max(MIN_SCALE, viewportWidth / designWidth)
   );
   const canvasHeight = viewportHeight / scale;
-  const root = document.documentElement;
   root.style.setProperty('--yb-ui-scale', scale.toFixed(4));
   root.style.setProperty('--yb-canvas-width', `${designWidth}px`);
   root.style.setProperty('--yb-canvas-height', `${canvasHeight}px`);

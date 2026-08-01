@@ -142,6 +142,8 @@ public class V2NaturalLanguageTurnService {
             V2NaturalLanguageTurnRequest input) {
         AgentSession session = requireRequest(userId, sessionId, input);
         NormalizedRequest request = normalize(session, input);
+        UserSettingsService.ModelEndpoint currentEndpoint =
+                settings.resolveModelEndpoint(userId, null, null);
         V2TurnIntakeEntity intake = transactions.open(
                 userId,
                 sessionId,
@@ -150,7 +152,9 @@ public class V2NaturalLanguageTurnService {
                 request.content(),
                 request.ragDisabled(),
                 request.skillId(),
-                request.experimentJson());
+                request.experimentJson(),
+                currentEndpoint.providerKey(),
+                currentEndpoint.modelName());
         ProcessResult result = transactions.locked(
                 intake, locked -> processLocked(session, locked, request));
         if (result.failed()) {
@@ -202,10 +206,7 @@ public class V2NaturalLanguageTurnService {
                 .orElseThrow(() -> new IllegalStateException(
                         "V2 persistent bootstrap disappeared"));
         UserSettingsService.ModelEndpoint endpoint =
-                settings.resolveModelEndpoint(
-                        intake.userId(),
-                        session.getModelProviderSnapshot(),
-                        session.getModelSnapshot());
+                resolveTurnEndpoint(intake, session);
         ResolvedSkill skill = StringUtils.hasText(request.skillId())
                 ? skills.resolveEnabledSkill(
                         intake.userId(), request.skillId())
@@ -285,10 +286,7 @@ public class V2NaturalLanguageTurnService {
                             request.content(),
                             request.experiment());
             UserSettingsService.ModelEndpoint endpoint =
-                    settings.resolveModelEndpoint(
-                            intake.userId(),
-                            session.getModelProviderSnapshot(),
-                            session.getModelSnapshot());
+                    resolveTurnEndpoint(intake, session);
             AgentContextPackage context = contextBuilder.build(
                     new AgentContextBuildRequest(
                             intake.sessionId(),
@@ -404,7 +402,8 @@ public class V2NaturalLanguageTurnService {
         log.info(
                 "V2 intake planner context intakeId={} turnId={} "
                         + "sessionId={} projectSession={} "
-                        + "snapshotProvider={} snapshotModel={} "
+                        + "sessionProvider={} sessionModel={} "
+                        + "turnProvider={} turnModel={} "
                         + "resolvedProvider={} resolvedModel={} "
                         + "messageCount={} messageCharacters={} "
                         + "sectionCount={} currentMessageCharacters={} "
@@ -413,11 +412,33 @@ public class V2NaturalLanguageTurnService {
                 projectSession,
                 session.getModelProviderSnapshot(),
                 session.getModelSnapshot(),
+                intake.modelProviderSnapshot(),
+                intake.modelSnapshot(),
                 endpoint.providerKey(), endpoint.modelName(),
                 context.messages().size(), messageCharacters,
                 context.sections().size(), currentMessageCharacters,
                 INTAKE_MAX_RECENT_MESSAGES,
                 INTAKE_MAX_CONTEXT_CHARACTERS);
+    }
+
+    private UserSettingsService.ModelEndpoint resolveTurnEndpoint(
+            V2TurnIntakeEntity intake,
+            AgentSession session) {
+        boolean hasProvider = StringUtils.hasText(
+                intake.modelProviderSnapshot());
+        boolean hasModel = StringUtils.hasText(intake.modelSnapshot());
+        if (hasProvider && hasModel) {
+            return settings.resolveModelEndpoint(
+                    intake.userId(), intake.modelProviderSnapshot(),
+                    intake.modelSnapshot());
+        }
+        if (!hasProvider && !hasModel) {
+            return settings.resolveModelEndpoint(
+                    intake.userId(), session.getModelProviderSnapshot(),
+                    session.getModelSnapshot());
+        }
+        throw new IllegalStateException(
+                "V2 turn model snapshot is incomplete");
     }
 
     private ProductPersistentPlanBootstrapCommand bootstrap(

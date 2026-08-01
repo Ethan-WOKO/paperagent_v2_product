@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 
 import type { AgentPlanResponse, SendMessageResponse } from '../src/api/agent';
 import {
@@ -147,7 +146,5 @@ describe('Project Plan server-owned terminal projection', () => {
     expect(projectPlanExecutionOutcome(plan)).toBe('TIMED_OUT');
     expect(projectPlanDisplayStatus(plan, false)).toBe('已超时');
     expect(projectPlanDisplayStatus(plan, true)).toBe('Timed out');
-    const source = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
-    expect(source).toContain('planExecutionResult(item.plan).tone');
   });
 });

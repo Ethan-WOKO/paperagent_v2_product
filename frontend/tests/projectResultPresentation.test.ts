@@ -137,20 +137,20 @@ describe('Project result Evidence grouping', () => {
 describe('Project result page contract', () => {
   const source = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
 
-  it('keeps terminal Plan cards collapsed while auto-opening confirmation and preserving actions', () => {
-    expect(source).toContain(':open="requiresSandboxConfirmation(item.plan) || undefined"');
-    expect(source).not.toContain('class="project-execution-card__details" open');
-    expect(source).toContain("t('project.result.confirm')");
-    expect(source).toContain("t('project.result.reject')");
+  it('keeps execution details collapsed while confirmation and applied states stay visible', () => {
+    expect(source).toContain('class="v2-conversation__process"');
+    expect(source).not.toContain('class="v2-conversation__process" open');
+    expect(source).toContain("task.status === 'WAITING_CONFIRMATION'");
+    expect(source).toContain('v2TaskApplied(task)');
+    expect(source).toContain('@click="openV2CandidateReview(task.candidateArtifactId)"');
   });
 
-  it('keeps raw output and internal identifiers behind execution details', () => {
-    expect(source).toContain("t('project.result.technicalDetails')");
-    expect(source).toContain("t('project.result.rawStdout')");
-    expect(source).toContain('entry.executionFact.stdout');
-    expect(source).toContain("t('project.result.rawStderr')");
-    expect(source).toContain('entry.executionFact.stderr');
-    expect(source).not.toContain('class="project-execution-card__failure"');
+  it('keeps bounded Step results behind execution details', () => {
+    expect(source).toContain('v-for="step in task.steps"');
+    expect(source).toContain('v-if="step.detail"');
+    expect(source).toContain('{{ step.detail }}');
+    expect(source).not.toContain('task.executionReceipt.standardOutput');
+    expect(source).not.toContain('task.executionReceipt.standardError');
   });
 
   it('keeps internal planner and domain codes out of assistant body text', () => {
@@ -229,11 +229,10 @@ describe('Project result page contract', () => {
     });
   });
 
-  it('renders the three result layers but never renders Plan finalAnswer as a second answer', () => {
-    expect(source).toContain('class="project-result-layers"');
-    expect(source).toContain('planExecutionResult(item.plan)');
-    expect(source).toContain('planTaskResult(item.plan)');
-    expect(source).toContain('planAnswerResult(item.plan)');
+  it('renders one persisted Agent result and never renders Plan finalAnswer as a second answer', () => {
+    expect(source).toContain('class="v2-task-card__result"');
+    expect(source).toContain(':content="task.finalText"');
+    expect(source).toContain("task.status === 'FAILED'");
     expect(source).not.toContain('item.plan.finalAnswer');
   });
 });

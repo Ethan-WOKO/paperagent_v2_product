@@ -6,22 +6,24 @@ const pagePath = fileURLToPath(new URL('../src/views/ProjectPreviewPage.vue', im
 const source = readFileSync(pagePath, 'utf8');
 
 describe('Project unified input contract', () => {
-  it('has one user composer and only submits through the Project message route', () => {
-    expect(source.match(/v-model:value="chatInput"/g)).toHaveLength(1);
-    expect(source).toContain('@click="sendChat"');
-    expect(source).toContain('@keydown="handleComposerKeydown"');
-    expect(source).toContain("event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229");
+  it('has one V2 composer and submits through the persistent natural-language turn route', () => {
+    expect(source.match(/v-model:value="v2TurnInput"/g)).toHaveLength(1);
+    expect(source).not.toContain('v-model:value="chatInput"');
+    expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
+    expect(source).toContain('@keydown="handleV2TurnKeydown"');
+    expect(source).toContain("event.key !== 'Enter' || event.shiftKey || event.isComposing");
     expect(source).toContain('event.preventDefault()');
-    expect(source).toContain('void sendChat()');
-    expect(source).not.toContain('@keydown.ctrl.enter.prevent="sendChat"');
-    expect(source).toContain('sendProjectWithFallback(projectId, sessionId, content, requestId)');
+    expect(source).toContain('void sendV2NaturalLanguageTurn()');
+    expect(source).toContain('startV2NaturalLanguageTurn(sessionId, request, controller.signal)');
     expect(source).not.toContain('v-model:value="planInput"');
     expect(source).not.toContain('@click="createPlan"');
-    expect(source).not.toContain('createProjectPlan(');
   });
 
-  it('presents Plans as execution details rather than a second submission mode', () => {
-    expect(source).toContain("t('project.result.details')");
+  it('presents persistent Steps as collapsed execution details rather than a second submission mode', () => {
+    expect(source).toContain('class="v2-conversation__process"');
+    expect(source).not.toContain('class="v2-conversation__process" open');
+    expect(source).toContain('v-for="step in task.steps"');
+    expect(source).toContain(':content="task.finalText"');
     expect(source).not.toContain('Create a governed Project plan');
     expect(source).not.toContain('Create plan</NButton>');
   });

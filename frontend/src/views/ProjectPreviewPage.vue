@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <main class="project-workspace">
+    <main class="project-workspace project-workspace--console">
       <div class="project-workspace__header-shell" :class="{ 'project-workspace__header-shell--collapsed': projectHeaderCollapsed }">
         <header class="project-workspace__header" :class="{ 'project-workspace__header--collapsed': projectHeaderCollapsed }">
           <h1>{{ activeProject?.name || t('project.page.projects') }}</h1>
@@ -30,7 +30,7 @@
       </section>
 
       <section v-else class="project-workspace__grid">
-        <aside class="project-panel project-panel--files">
+        <aside class="project-panel project-panel--files project-context-rail">
           <section class="project-sidebar-section project-sidebar-section--projects" :class="{ 'project-sidebar-section--collapsed': sidebarSections.projects }">
             <div class="project-sidebar-section__toggle">
               <span>
@@ -42,7 +42,7 @@
               <span class="project-panel__count">{{ projects.length }}</span>
             </div>
             <div v-show="!sidebarSections.projects" class="project-list">
-              <button v-for="project in projects" :key="project.id" class="project-list__item" :class="{ active: project.id === activeProjectId }" @click="selectProject(project.id)">
+              <button v-for="project in projects" :key="project.id" type="button" class="project-list__item" :class="{ active: project.id === activeProjectId }" :aria-current="project.id === activeProjectId ? 'page' : undefined" @click="selectProject(project.id)">
                 <strong>{{ project.name }}</strong>
                 <small>#{{ project.id }} - {{ project.accessMode }}</small>
               </button>
@@ -67,6 +67,7 @@
                 tabindex="0"
                 class="project-conversation-item"
                 :class="{ active: session.id === activeSessionId }"
+                :aria-current="session.id === activeSessionId ? 'page' : undefined"
                 :title="session.title"
                 @click="selectConversation(session.id)"
                 @keydown.enter.prevent="selectConversation(session.id)"
@@ -110,6 +111,7 @@
                 :style="{ paddingLeft: `${6 + node.depth * 12}px` }"
                 :title="node.path"
                 :aria-expanded="node.directory ? !collapsedDirectories.has(node.path) : undefined"
+                :aria-current="!node.directory && selectedFile?.path === node.path ? 'page' : undefined"
                 @click="node.directory ? toggleDirectory(node.path) : openFile(node.path)"
               >
                 <span>
@@ -127,7 +129,7 @@
             </div>
 
             <div v-if="!sidebarSections.files && searchResults.length" class="project-search-results">
-              <button v-for="hit in searchResults" :key="`${hit.path}:${hit.lineNumber}`" @click="openFile(hit.path)">
+              <button v-for="hit in searchResults" :key="`${hit.path}:${hit.lineNumber}`" type="button" @click="openFile(hit.path)">
                 <strong>{{ hit.path }}:{{ hit.lineNumber }}</strong>
                 <span>{{ hit.line }}</span>
               </button>
@@ -136,21 +138,21 @@
         </aside>
 
         <section class="project-panel project-panel--main project-panel--v2">
-          <div class="project-tabs">
+          <div class="project-tabs project-command-bar">
             <div class="project-agent-mode">
               <strong class="project-tabs__title">V2 项目助手</strong>
               <span class="project-agent-mode__caption">持久化任务</span>
             </div>
-            <div class="project-tabs__actions">
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">文件预览</button>
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
-              <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
+            <div class="project-tabs__actions" role="group" aria-label="Project utilities">
+              <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" :aria-pressed="inspectorOpen && inspectorTab === 'preview'" aria-controls="project-inspector" @click="toggleInspector('preview')">文件预览</button>
+              <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" :aria-pressed="inspectorOpen && inspectorTab === 'evidence'" aria-controls="project-inspector" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
+              <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" :aria-pressed="inspectorOpen && inspectorTab === 'changes'" aria-controls="project-inspector" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
+              <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" :aria-pressed="inspectorOpen && inspectorTab === 'versions'" aria-controls="project-inspector" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
               <NButton size="tiny" quaternary :disabled="loading.send || v2NaturalTurnBusy" @click="startNewConversation">新建会话</NButton>
             </div>
           </div>
 
-          <section v-if="inspectorOpen" class="project-inspector">
+          <section v-if="inspectorOpen" id="project-inspector" class="project-inspector">
             <div class="project-inspector__tabs">
               <strong>任务详情</strong>
               <button type="button" class="project-inspector__close" @click="inspectorOpen = false">收起</button>
@@ -403,8 +405,8 @@
               </NTag>
             </header>
 
-            <div class="v2-conversation__tasks" aria-live="polite">
-              <article v-for="task in v2TurnHistory" :key="task.clientRequestId" class="v2-task-card">
+            <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="loading.v2History || v2NaturalTurnBusy">
+              <article v-for="task in v2TurnHistory" :key="task.clientRequestId" class="v2-task-card" :data-status="task.status">
                 <header class="v2-task-card__question">
                   <div>
                     <small>你的问题</small>
@@ -494,6 +496,7 @@
             <div class="v2-conversation__composer">
               <NInput
                 v-model:value="v2TurnInput"
+                aria-label="V2 project task"
                 type="textarea"
                 :maxlength="20000"
                 :autosize="{ minRows: 3, maxRows: 8 }"
@@ -3911,5 +3914,515 @@ onUnmounted(() => {
   .project-folder-picker > :deep(.n-button) { grid-column: 1 / -1; width: 100%; }
   .project-create-advanced__body { grid-template-columns: 1fr; gap: 0; }
   .project-create-advanced summary { align-items: flex-start; flex-direction: column; gap: 2px; }
+}
+
+/* Project console refresh: a restrained evidence workspace, scoped to this page. */
+.project-workspace--console {
+  --project-canvas: #08131c;
+  --project-surface: #0f1c28;
+  --project-surface-raised: #142534;
+  --project-rule: #2b4250;
+  --project-rule-strong: #3c5967;
+  --project-ink: #e8f0f2;
+  --project-text: #a8bbc3;
+  --project-muted: #748894;
+  --project-accent: #35b7c5;
+  --project-accent-strong: #208d9a;
+  --project-accent-soft: rgba(53, 183, 197, .14);
+  --project-active: rgba(53, 183, 197, .12);
+  --project-success: #63ad85;
+  --project-warning: #d8a24d;
+  --project-danger: #d66f6f;
+  --project-radius-control: 4px;
+  --project-radius-panel: 6px;
+  --project-font-ui: "IBM Plex Sans Condensed", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --yb-bg: var(--project-canvas);
+  --yb-bg-elevated: var(--project-surface);
+  --yb-bg-muted: var(--project-surface-raised);
+  --yb-bg-subtle: var(--project-canvas);
+  --yb-border: var(--project-rule);
+  --yb-border-strong: var(--project-rule-strong);
+  --yb-text: var(--project-ink);
+  --yb-text-secondary: var(--project-text);
+  --yb-text-muted: var(--project-muted);
+  --yb-primary: var(--project-accent);
+  --yb-primary-strong: var(--project-accent-strong);
+  --yb-primary-soft: var(--project-accent-soft);
+  --yb-primary-contrast: #061317;
+  --yb-sidebar-active: var(--project-active);
+  gap: 10px;
+  color: var(--project-ink);
+  background: var(--project-canvas);
+  font-family: var(--project-font-ui);
+}
+
+:global(body.theme-light) .project-workspace--console {
+  --project-canvas: #f4f8f8;
+  --project-surface: #ffffff;
+  --project-surface-raised: #ebf3f3;
+  --project-rule: #d3e0e0;
+  --project-rule-strong: #b5c8c8;
+  --project-ink: #17313a;
+  --project-text: #4f6770;
+  --project-muted: #71878d;
+  --project-accent: #167d8a;
+  --project-accent-strong: #0b6874;
+  --project-accent-soft: rgba(22, 125, 138, .11);
+  --project-active: rgba(22, 125, 138, .10);
+  --project-success: #357b59;
+  --project-warning: #a86e17;
+  --project-danger: #b95353;
+}
+
+.project-workspace--console .project-workspace__header {
+  min-height: 54px;
+  padding: 10px 12px;
+  border-bottom-color: var(--project-rule);
+  background: var(--project-surface);
+}
+
+.project-workspace--console .project-workspace__header h1 {
+  min-width: 0;
+  font-family: var(--project-font-ui);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -.015em;
+}
+
+.project-workspace--console .project-workspace__grid {
+  grid-template-columns: clamp(248px, 21vw, 290px) minmax(0, 1fr);
+  border-color: var(--project-rule);
+  border-radius: var(--project-radius-panel);
+  background: var(--project-surface);
+  box-shadow: none;
+}
+
+.project-workspace--console .project-panel {
+  padding: 14px;
+  gap: 12px;
+}
+
+.project-workspace--console .project-context-rail {
+  padding: 12px;
+  background: var(--project-canvas);
+}
+
+.project-workspace--console .project-panel + .project-panel,
+.project-workspace--console .project-sidebar-section + .project-sidebar-section .project-sidebar-section__toggle,
+.project-workspace--console .project-sidebar-section + .project-sidebar-section .project-sidebar-section__header {
+  border-color: var(--project-rule);
+}
+
+.project-workspace--console .project-sidebar-section__toggle {
+  min-height: 34px;
+  height: 34px;
+  padding-inline: 2px;
+}
+
+.project-workspace--console .project-sidebar-section__toggle strong,
+.project-workspace--console .project-panel__title,
+.project-workspace--console .project-tabs__title {
+  font-family: var(--project-font-ui);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+
+.project-workspace--console small {
+  font-size: 11px;
+}
+
+.project-workspace--console .project-panel__title > span,
+.project-workspace--console .project-panel__count,
+.project-workspace--console .project-panel__hint,
+.project-workspace--console .project-agent-mode__caption,
+.project-workspace--console .project-file-list__item,
+.project-workspace--console .project-search-results strong,
+.project-workspace--console .project-search-results span,
+.project-workspace--console .project-inspector__tabs > strong,
+.project-workspace--console .v2-conversation__process > summary,
+.project-workspace--console .v2-conversation__empty-process {
+  font-size: 11px;
+}
+
+.project-workspace--console .project-panel__title > span,
+.project-workspace--console .project-panel__count,
+.project-workspace--console .project-panel__hint,
+.project-workspace--console .project-agent-mode__caption {
+  color: var(--project-muted);
+}
+
+.project-workspace--console .project-chevron-button,
+.project-workspace--console .project-conversation-item__more {
+  border-radius: var(--project-radius-control);
+}
+
+.project-workspace--console .project-list__item,
+.project-workspace--console .project-file-list__item,
+.project-workspace--console .project-search-results button,
+.project-workspace--console .project-candidate-list button,
+.project-workspace--console .project-conversation-item {
+  border-radius: var(--project-radius-control);
+}
+
+.project-workspace--console .project-list__item,
+.project-workspace--console .project-conversation-item {
+  min-height: 38px;
+  padding: 8px;
+}
+
+.project-workspace--console .project-file-list__item {
+  min-height: 30px;
+  padding-block: 6px;
+}
+
+.project-workspace--console .project-list__item.active,
+.project-workspace--console .project-file-list__item.active,
+.project-workspace--console .project-candidate-list button.active,
+.project-workspace--console .project-conversation-item.active,
+.project-workspace--console [aria-current="page"] {
+  box-shadow: inset 2px 0 0 var(--project-accent);
+  background: var(--project-active);
+  color: var(--project-ink);
+}
+
+.project-workspace--console .project-list__item:hover,
+.project-workspace--console .project-file-list__item:hover,
+.project-workspace--console .project-search-results button:hover,
+.project-workspace--console .project-conversation-item:hover {
+  background: color-mix(in srgb, var(--project-surface-raised) 78%, var(--project-accent-soft));
+}
+
+.project-workspace--console .project-command-bar {
+  gap: 12px;
+  padding: 2px 0 10px;
+  border-bottom-color: var(--project-rule);
+}
+
+.project-workspace--console .project-agent-mode {
+  gap: 9px;
+}
+
+.project-workspace--console .project-tabs__actions {
+  gap: 5px;
+}
+
+.project-workspace--console .project-utility-chip {
+  min-height: 32px;
+  padding: 6px 9px;
+  border-color: var(--project-rule);
+  border-radius: var(--project-radius-control);
+  color: var(--project-text);
+  background: transparent;
+  font-size: 11px;
+}
+
+.project-workspace--console .project-utility-chip.active,
+.project-workspace--console .project-utility-chip[aria-pressed="true"] {
+  border-color: var(--project-accent);
+  background: var(--project-active);
+  color: var(--project-ink);
+  box-shadow: inset 2px 0 0 var(--project-accent);
+}
+
+.project-workspace--console .project-inspector {
+  gap: 10px;
+  padding: 12px 0;
+  border: 0;
+  border-block: 1px solid var(--project-rule);
+  border-radius: 0;
+  background: transparent;
+}
+
+.project-workspace--console .project-inspector__body {
+  gap: 12px;
+}
+
+.project-workspace--console .v2-conversation {
+  gap: 14px;
+  padding: 4px 0 2px;
+}
+
+.project-workspace--console .v2-conversation__header {
+  gap: 12px;
+  padding: 2px 0 12px;
+  border-bottom-color: var(--project-rule);
+}
+
+.project-workspace--console .v2-conversation__header h2 {
+  margin-bottom: 4px;
+  font-family: var(--project-font-ui);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .005em;
+}
+
+.project-workspace--console .v2-conversation__header p,
+.project-workspace--console .v2-task-card__question p,
+.project-workspace--console .v2-task-card__result,
+.project-workspace--console .v2-task-card__result :deep(.message-markdown) {
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.project-workspace--console .v2-conversation__header p {
+  color: var(--project-text);
+}
+
+.project-workspace--console .v2-conversation__tasks {
+  gap: 0;
+}
+
+.project-workspace--console .v2-task-card {
+  gap: 12px;
+  padding: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--project-rule);
+  border-radius: 0;
+  background: transparent;
+}
+
+.project-workspace--console .v2-task-card:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.project-workspace--console .v2-task-card__question small,
+.project-workspace--console .v2-task-card__result > strong {
+  color: var(--project-muted);
+  font-family: var(--project-font-ui);
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+
+.project-workspace--console .v2-task-card__result {
+  gap: 8px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--project-accent);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--project-surface-raised) 72%, transparent);
+}
+
+.project-workspace--console .v2-task-card[data-status="FAILED"] .v2-task-card__result { border-left-color: var(--project-danger); }
+.project-workspace--console .v2-task-card[data-status="WAITING_CONFIRMATION"] .v2-task-card__result { border-left-color: var(--project-warning); }
+.project-workspace--console .v2-task-card[data-status="SUCCEEDED"] .v2-task-card__result { border-left-color: var(--project-success); }
+
+.project-workspace--console .v2-task-card__delivery,
+.project-workspace--console .v2-conversation__outputs {
+  gap: 7px;
+}
+
+.project-workspace--console .v2-conversation__outputs {
+  padding: 8px 0 0 12px;
+  border-left: 2px solid var(--project-rule-strong);
+  border-radius: 0;
+  background: transparent;
+  font-size: 11px;
+}
+
+.project-workspace--console .v2-task-card__validation {
+  gap: 5px 12px;
+  font-size: 11px;
+}
+
+.project-workspace--console .v2-conversation__process {
+  padding: 8px 0 0;
+  border-bottom: 0;
+}
+
+.project-workspace--console .v2-conversation__process[open] > summary {
+  margin-bottom: 9px;
+}
+
+.project-workspace--console .v2-conversation__process ol {
+  position: relative;
+  gap: 0;
+}
+
+.project-workspace--console .v2-conversation__process ol::before {
+  position: absolute;
+  top: 19px;
+  bottom: 19px;
+  left: 11px;
+  width: 1px;
+  background: var(--project-rule-strong);
+  content: "";
+}
+
+.project-workspace--console .v2-conversation__process li {
+  position: relative;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 9px;
+  padding: 8px 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.project-workspace--console .v2-conversation__process li > span {
+  z-index: 1;
+  border-color: var(--project-rule-strong);
+  border-radius: 50%;
+  color: var(--project-muted);
+  background: var(--project-canvas);
+  font-size: 11px;
+}
+
+.project-workspace--console .v2-conversation__process li[data-status="SUCCEEDED"] > span { border-color: var(--project-success); color: var(--project-success); }
+.project-workspace--console .v2-conversation__process li[data-status="FAILED"] > span { border-color: var(--project-danger); color: var(--project-danger); }
+.project-workspace--console .v2-conversation__process li[data-status="RUNNING"] > span,
+.project-workspace--console .v2-conversation__process li[data-status="ACTIVE"] > span { border-color: var(--project-accent); color: var(--project-accent); }
+
+.project-workspace--console :deep(.n-button) {
+  --n-border-radius: var(--project-radius-control);
+}
+
+.project-workspace--console :deep(.n-button--primary-type) {
+  --n-color: var(--project-accent);
+  --n-color-hover: color-mix(in srgb, var(--project-accent) 88%, white);
+  --n-color-pressed: var(--project-accent-strong);
+  --n-border: 1px solid var(--project-accent);
+  --n-border-hover: 1px solid var(--project-accent);
+  --n-border-pressed: 1px solid var(--project-accent-strong);
+  --n-text-color: #061317;
+  --n-text-color-hover: #061317;
+  --n-text-color-pressed: #061317;
+}
+
+.project-workspace--console :deep(.n-button.n-button--primary-type) {
+  background-color: var(--project-accent) !important;
+  border-color: var(--project-accent) !important;
+  color: #061317 !important;
+}
+
+.project-workspace--console :deep(.n-button.n-button--primary-type .n-button__border) {
+  border-color: var(--project-accent) !important;
+}
+
+.project-workspace--console :deep(.n-button.n-button--primary-type:not(.n-button--disabled):hover) {
+  background-color: color-mix(in srgb, var(--project-accent) 88%, white) !important;
+  border-color: color-mix(in srgb, var(--project-accent) 88%, white) !important;
+}
+
+.project-workspace--console :deep(.n-button.n-button--primary-type:not(.n-button--disabled):active) {
+  background-color: var(--project-accent-strong) !important;
+  border-color: var(--project-accent-strong) !important;
+}
+
+.project-workspace--console :deep(.n-input-wrapper) {
+  --n-border-radius: var(--project-radius-control);
+}
+
+.project-workspace--console button:focus-visible,
+.project-workspace--console [role="button"]:focus-visible,
+.project-workspace--console :deep(.n-input):focus-within {
+  outline: 2px solid var(--project-accent);
+  outline-offset: 2px;
+}
+
+.project-workspace--console button:disabled,
+.project-workspace--console :deep(.n-button--disabled) {
+  opacity: .48;
+}
+
+@media (max-width: 1200px) {
+  .project-workspace--console .project-workspace__grid { grid-template-columns: 248px minmax(0, 1fr); }
+}
+
+@media (max-width: 980px) {
+  .project-workspace--console { height: auto; min-height: calc(100dvh - 28px); overflow: visible; gap: 8px; }
+  .project-workspace--console .project-workspace__header { padding: 10px 12px; }
+  .project-workspace--console .project-workspace__grid { grid-template-columns: 1fr; overflow: visible; }
+  .project-workspace--console .project-panel { min-height: 0; padding: 12px; }
+  .project-workspace--console .project-context-rail {
+    flex-direction: row;
+    gap: 0;
+    padding: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    scrollbar-gutter: stable both-edges;
+  }
+  .project-workspace--console .project-context-rail .project-sidebar-section {
+    flex: 0 0 clamp(238px, 34vw, 300px);
+    min-height: 224px;
+    max-height: 254px;
+    gap: 7px;
+    margin: 0;
+    padding: 12px;
+    scroll-snap-align: start;
+  }
+  .project-workspace--console .project-context-rail .project-sidebar-section--file-browser { flex-basis: clamp(278px, 42vw, 340px); }
+  .project-workspace--console .project-context-rail .project-sidebar-section + .project-sidebar-section { border-top: 0; border-left: 1px solid var(--project-rule); }
+  .project-workspace--console .project-context-rail .project-sidebar-section + .project-sidebar-section .project-sidebar-section__toggle,
+  .project-workspace--console .project-context-rail .project-sidebar-section + .project-sidebar-section .project-sidebar-section__header { border-top: 0; }
+  .project-workspace--console .project-context-rail .project-list,
+  .project-workspace--console .project-context-rail .project-conversation-history--sidebar,
+  .project-workspace--console .project-context-rail .project-file-list,
+  .project-workspace--console .project-context-rail .project-search-results { min-height: 0; max-height: none; }
+  .project-workspace--console .project-panel + .project-panel { border-top-color: var(--project-rule); }
+  .project-workspace--console .project-tabs { align-items: flex-start; gap: 9px; }
+  .project-workspace--console .project-tabs__actions { width: 100%; padding-bottom: 2px; }
+  .project-workspace--console .v2-conversation { overflow: visible; }
+}
+
+@media (max-width: 620px) {
+  .project-workspace--console .project-workspace__header { gap: 9px; padding: 10px; }
+  .project-workspace--console .project-workspace__header h1 {
+    width: 100%;
+    max-width: 100%;
+    padding-right: 32px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font-size: 18px;
+  }
+  .project-workspace--console .project-workspace__header :deep(.n-space) { width: 100%; gap: 6px !important; flex-wrap: wrap !important; }
+  .project-workspace--console .workspace-hero__collapse {
+    position: absolute;
+    top: auto;
+    right: auto;
+    bottom: -15px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .project-workspace--console .project-panel--v2 { padding: 12px 10px; }
+  .project-workspace--console .project-context-rail .project-sidebar-section,
+  .project-workspace--console .project-context-rail .project-sidebar-section--file-browser {
+    flex-basis: calc(100vw - 52px);
+    min-height: 196px;
+    max-height: 214px;
+  }
+  .project-workspace--console .v2-conversation__header,
+  .project-workspace--console .v2-task-card__question,
+  .project-workspace--console .v2-conversation__candidate {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .project-workspace--console .v2-task-card__validation { grid-template-columns: 1fr; gap: 3px; }
+  .project-workspace--console .v2-task-card__validation dd + dt { margin-top: 6px; }
+  .project-workspace--console .v2-conversation__process li { grid-template-columns: 24px minmax(0, 1fr); align-items: start; }
+  .project-workspace--console .v2-conversation__process li :deep(.n-tag) { grid-column: 2; justify-self: start; }
+  .project-workspace--console .project-inspector { max-height: 196px; overflow: hidden; }
+  .project-workspace--console .project-inspector__body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+  .project-workspace--console .project-preview--inline { min-height: 116px; max-height: 142px; }
+  .project-workspace--console .v2-conversation__composer {
+    position: sticky;
+    bottom: 6px;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px 0 2px;
+    background: var(--project-canvas);
+    z-index: 2;
+  }
+  .project-workspace--console .v2-conversation__composer :deep(.n-button) { width: 100%; min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-workspace--console *,
+  .project-workspace--console *::before,
+  .project-workspace--console *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
 }
 </style>

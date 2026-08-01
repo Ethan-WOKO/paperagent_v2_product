@@ -16,7 +16,7 @@ describe('Project page presentation contract', () => {
 
   it('uses the existing UI library chevron with fixed icon buttons and accessible labels', () => {
     expect(source).toContain("import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';");
-    expect(source.match(/<ChevronRightIcon \/>/g)?.length).toBeGreaterThanOrEqual(7);
+    expect(source.match(/<ChevronRightIcon \/>/g)?.length).toBeGreaterThanOrEqual(6);
     expect(source).toContain('class="project-chevron-button"');
     expect(source).toContain(":aria-label=\"sidebarSections.projects ? t('project.page.expandProjects') : t('project.page.collapseProjects')\"");
     expect(source).toContain(":aria-label=\"sidebarSections.conversations ? t('project.page.expandConversations') : t('project.page.collapseConversations')\"");
@@ -25,23 +25,23 @@ describe('Project page presentation contract', () => {
     expect(source).not.toContain('&gt;</span>');
   });
 
-  it('has one composer, no Chat/Plan mode tabs, and one inspector navigation group', () => {
-    expect(source.match(/v-model:value="chatInput"/g)).toHaveLength(1);
+  it('has one V2 composer, no Chat/Plan mode tabs, and one inspector navigation group', () => {
+    expect(source.match(/v-model:value="v2TurnInput"/g)).toHaveLength(1);
+    expect(source).not.toContain('v-model:value="chatInput"');
     expect(source).not.toContain('centerTab');
     expect(source).not.toContain('project plan conversation');
     expect(source.match(/class="project-utility-chip"/g)).toHaveLength(4);
     expect(source).not.toContain('@click="inspectorTab =');
   });
 
-  it('renders Plans as collapsed execution cards without a second final answer', () => {
-    expect(source).toContain('class="project-execution-card__details"');
-    expect(source).not.toContain('class="project-execution-card__details" open');
-    expect(source).toContain("t('project.result.details')");
-    expect(source).toContain('planProgressLabel(item.plan)');
-    expect(source).toContain('planUserStatus(item.plan)');
-    expect(source).toContain("t('project.result.confirm')");
-    expect(source).not.toContain('Final step synthesis');
-    expect(source).not.toContain('projectPlanFinalAnswer');
+  it('renders persisted V2 tasks with one result and collapsed execution details', () => {
+    expect(source).toContain('v-for="task in v2TurnHistory"');
+    expect(source).toContain('class="v2-task-card__result"');
+    expect(source).toContain(':content="task.finalText"');
+    expect(source).toContain('class="v2-conversation__process"');
+    expect(source).not.toContain('class="v2-conversation__process" open');
+    expect(source).toContain('v-for="step in task.steps"');
+    expect(source).not.toContain('item.plan.finalAnswer');
   });
 
   it('prevents inspector pills and execution metadata from wrapping or overflowing', () => {

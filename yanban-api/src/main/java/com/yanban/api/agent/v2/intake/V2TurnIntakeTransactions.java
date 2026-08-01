@@ -45,7 +45,9 @@ class V2TurnIntakeTransactions {
             String content,
             boolean ragDisabled,
             String skillId,
-            String experimentJson) {
+            String experimentJson,
+            String modelProviderSnapshot,
+            String modelSnapshot) {
         var existing = intakes.findByUserIdAndSessionIdAndClientRequestId(
                 userId, sessionId, clientRequestId);
         if (existing.isPresent()) {
@@ -84,6 +86,8 @@ class V2TurnIntakeTransactions {
                         experimentJson,
                         userMessage.getId(),
                         turn.getId(),
+                        modelProviderSnapshot,
+                        modelSnapshot,
                         Instant.now());
                 entityManager.persist(created);
                 entityManager.flush();

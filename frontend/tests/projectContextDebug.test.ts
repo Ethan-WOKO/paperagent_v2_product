@@ -7,10 +7,10 @@ const api = readFileSync(new URL('../src/api/project.ts', import.meta.url), 'utf
 const types = readFileSync(new URL('../src/api/agent.ts', import.meta.url), 'utf8');
 
 describe('temporary Project context debug view', () => {
-  it('reads the authenticated Project/session snapshot endpoint and uses the server ContextPackage projection', () => {
+  it('keeps the authenticated snapshot contract without exposing the legacy debug panel in V2-only UI', () => {
     expect(api).toContain('/projects/${projectId}/agent/sessions/${sessionId}/context-snapshots');
     expect(page).toContain('listProjectContextSnapshots');
-    expect(page).toContain('<ProjectContextDebugPanel');
+    expect(page).not.toContain('<ProjectContextDebugPanel');
     expect(page).toContain('contextSnapshot.value = snapshots[0] || null');
     expect(page.match(/resetContextDebug\(\);/g)?.length).toBeGreaterThanOrEqual(5);
     expect(types).toContain('context: AgentContextDebugView | null');

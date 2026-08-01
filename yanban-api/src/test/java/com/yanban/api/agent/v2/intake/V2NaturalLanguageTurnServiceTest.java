@@ -73,11 +73,12 @@ class V2NaturalLanguageTurnServiceTest {
     private final ChatModelProvider model = mock(ChatModelProvider.class);
     private final ObjectMapper json = new ObjectMapper();
     private final AgentSession session = new AgentSession(
-            7L, "session", "deepseek", "model", 20, false,
+            7L, "session", "deepseek", "legacy-pro", 20, false,
             AgentSessionScope.WORKSPACE, null);
     private final V2TurnIntakeEntity intake = new V2TurnIntakeEntity(
             7L, 9L, "request-1", "a".repeat(64), "question",
-            false, "skill-1", "{}", 11L, 12L, Instant.EPOCH);
+            false, "skill-1", "{}", 11L, 12L,
+            "deepseek", "model", Instant.EPOCH);
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -86,7 +87,8 @@ class V2NaturalLanguageTurnServiceTest {
                 .thenReturn(Optional.of(session));
         when(transactions.open(
                 eq(7L), eq(9L), eq("request-1"), any(), eq("question"),
-                eq(false), eq("skill-1"), any()))
+                eq(false), eq("skill-1"), any(),
+                any(), any()))
                 .thenReturn(intake);
         when(transactions.locked(eq(intake), any())).thenAnswer(invocation -> {
             Function<V2TurnIntakeEntity, Object> operation =
@@ -110,10 +112,14 @@ class V2NaturalLanguageTurnServiceTest {
         when(experiment.ragResult()).thenReturn(rag);
         when(experiments.prepare(eq(7L), eq("question"), any()))
                 .thenReturn(experiment);
-        when(settings.resolveModelEndpoint(7L, "deepseek", "model"))
-                .thenReturn(new UserSettingsService.ModelEndpoint(
+        UserSettingsService.ModelEndpoint endpoint =
+                new UserSettingsService.ModelEndpoint(
                         "deepseek", "model", null, "SECRET-KEY",
-                        "builtin", "DeepSeek"));
+                        "builtin", "DeepSeek");
+        when(settings.resolveModelEndpoint(7L, null, null))
+                .thenReturn(endpoint);
+        when(settings.resolveModelEndpoint(7L, "deepseek", "model"))
+                .thenReturn(endpoint);
         AgentSessionSummary summary = mock(AgentSessionSummary.class);
         when(summary.getSummaryText()).thenReturn("rolling summary");
         when(summaries.findBySessionAndUser(9L, 7L))
@@ -160,6 +166,10 @@ class V2NaturalLanguageTurnServiceTest {
         assertEquals("answer", response.answer());
         assertEquals(13L, response.assistantMessageId());
         verify(bootstraps, never()).bootstrap(any(), any(), any());
+        verify(transactions).open(
+                eq(7L), eq(9L), eq("request-1"), any(), eq("question"),
+                eq(false), eq("skill-1"), any(),
+                eq("deepseek"), eq("model"));
 
         ArgumentCaptor<AgentContextBuildRequest> context =
                 ArgumentCaptor.forClass(AgentContextBuildRequest.class);
@@ -380,7 +390,8 @@ class V2NaturalLanguageTurnServiceTest {
     void changedPayloadConflictStopsBeforePlanning() {
         when(transactions.open(
                 eq(7L), eq(9L), eq("request-1"), any(), eq("question"),
-                eq(false), eq("skill-1"), any()))
+                eq(false), eq("skill-1"), any(),
+                any(), any()))
                 .thenThrow(new IllegalArgumentException(
                         "clientRequestId was already used for another payload"));
 
@@ -482,6 +493,43 @@ class V2NaturalLanguageTurnServiceTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void replayKeepsTurnModelAfterDefaultSettingChanges() {
+        PersistedPlanBootstrap persisted = stubPersistentPlanning();
+        UserSettingsService.ModelEndpoint changedDefault =
+                new UserSettingsService.ModelEndpoint(
+                        "deepseek", "changed-pro", null, "NEW-KEY",
+                        "builtin", "DeepSeek");
+        when(settings.resolveModelEndpoint(7L, null, null))
+                .thenReturn(
+                        new UserSettingsService.ModelEndpoint(
+                                "deepseek", "model", null, "SECRET-KEY",
+                                "builtin", "DeepSeek"),
+                        changedDefault);
+        V2AdaptiveExecutionService adaptive =
+                mock(V2AdaptiveExecutionService.class);
+        when(adaptive.canResume(7L, 9L, "request-1"))
+                .thenReturn(true);
+        when(adaptive.execute(any())).thenReturn(
+                new V2AdaptiveExecutionResult(
+                        "RUNNING", List.of(), null, null, 1, 0, 0),
+                new V2AdaptiveExecutionResult(
+                        "RUNNING", List.of(), null, null, 2, 0, 0));
+        ProductPlanBootstrapRepositoryAdapter resume =
+                mock(ProductPlanBootstrapRepositoryAdapter.class);
+        when(resume.find(new PlanId("product-plan.test")))
+                .thenReturn(Optional.of(persisted));
+
+        V2NaturalLanguageTurnService service = service(adaptive, resume);
+        service.execute(7L, 9L, request());
+        service.execute(7L, 9L, request());
+
+        verify(settings, times(2)).resolveModelEndpoint(
+                7L, "deepseek", "model");
+        verify(settings, never()).resolveModelEndpoint(
+                7L, "deepseek", "changed-pro");
     }
 
     private PersistedPlanBootstrap stubPersistentPlanning() {

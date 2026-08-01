@@ -42,6 +42,10 @@ class V2TurnIntakeEntity {
     private Long userMessageId;
     @Column(name = "turn_id", nullable = false)
     private Long turnId;
+    @Column(name = "model_provider_snapshot", length = 64)
+    private String modelProviderSnapshot;
+    @Column(name = "model_snapshot", length = 128)
+    private String modelSnapshot;
     @Column(name = "assistant_message_id")
     private Long assistantMessageId;
     @Column(name = "plan_id", length = 128)
@@ -77,6 +81,8 @@ class V2TurnIntakeEntity {
             String experimentJson,
             Long userMessageId,
             Long turnId,
+            String modelProviderSnapshot,
+            String modelSnapshot,
             Instant now) {
         this.userId = userId;
         this.sessionId = sessionId;
@@ -88,10 +94,29 @@ class V2TurnIntakeEntity {
         this.experimentJson = experimentJson;
         this.userMessageId = userMessageId;
         this.turnId = turnId;
+        this.modelProviderSnapshot = modelProviderSnapshot;
+        this.modelSnapshot = modelSnapshot;
         this.status = RUNNING;
         this.historyVisible = true;
         this.createdAt = now;
         this.updatedAt = now;
+    }
+
+    V2TurnIntakeEntity(
+            Long userId,
+            Long sessionId,
+            String clientRequestId,
+            String requestSha256,
+            String content,
+            boolean ragDisabled,
+            String skillId,
+            String experimentJson,
+            Long userMessageId,
+            Long turnId,
+            Instant now) {
+        this(userId, sessionId, clientRequestId, requestSha256, content,
+                ragDisabled, skillId, experimentJson, userMessageId, turnId,
+                null, null, now);
     }
 
     Long userId() { return userId; }
@@ -105,6 +130,8 @@ class V2TurnIntakeEntity {
     String experimentJson() { return experimentJson; }
     Long userMessageId() { return userMessageId; }
     Long turnId() { return turnId; }
+    String modelProviderSnapshot() { return modelProviderSnapshot; }
+    String modelSnapshot() { return modelSnapshot; }
     Long assistantMessageId() { return assistantMessageId; }
     String planId() { return planId; }
     String plannerOutputJson() { return plannerOutputJson; }
