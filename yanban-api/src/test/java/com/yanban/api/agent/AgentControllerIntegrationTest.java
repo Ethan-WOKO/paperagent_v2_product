@@ -311,7 +311,7 @@ class AgentControllerIntegrationTest {
                 .anySatisfy(message -> {
                     assertThat(message.role()).isEqualTo("user");
                     assertThat(message.content()).contains("Runtime data envelope", "\"providerDisplay\":\"deepseek\"",
-                            "\"modelDisplay\":\"deepseek-chat\"");
+                            "\"modelDisplay\":\"deepseek-v4-flash\"");
                 });
 
         mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages?view=all&limit=10", sessionId)

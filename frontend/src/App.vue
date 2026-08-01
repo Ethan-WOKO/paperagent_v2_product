@@ -56,6 +56,7 @@ const route = useRoute();
 // viewport and centered — like zooming a photo. Component layout never
 // reflows; only the whole canvas scales.
 const DEFAULT_CANVAS_WIDTH = 1600;
+const CHAT_CANVAS_WIDTH = 1728;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 3.0;
 
@@ -67,7 +68,7 @@ const isProjectRoute = computed(() => route.path.startsWith('/projects'));
 // Project workspaces reflow as a real responsive interface. Every other
 // authenticated route retains the established fixed-canvas behavior.
 const useCanvasScale = computed(() => isAuthenticatedRoute.value && !isProjectRoute.value);
-const canvasWidth = computed(() => DEFAULT_CANVAS_WIDTH);
+const canvasWidth = computed(() => (route.path.startsWith('/chat') ? CHAT_CANVAS_WIDTH : DEFAULT_CANVAS_WIDTH));
 
 function updateCanvasScale() {
   if (typeof window === 'undefined') return;

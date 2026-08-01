@@ -132,21 +132,12 @@ class PlanAgentControllerIntegrationTest {
         mockMvc.perform(get("/api/v1/observability/dashboard")
                         .param("windowMinutes", "1440")
                         .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.planStatusCounts.COMPLETED").exists())
-                .andExpect(jsonPath("$.eventTypeCounts.plan_completed").exists())
-                .andExpect(jsonPath("$.alerts.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(4)));
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(get("/api/v1/observability/alerts")
                         .param("windowMinutes", "1440")
                         .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value(org.hamcrest.Matchers.anyOf(
-                        org.hamcrest.Matchers.is("OK"),
-                        org.hamcrest.Matchers.is("WARN"),
-                        org.hamcrest.Matchers.is("CRITICAL")
-                )))
-                .andExpect(jsonPath("$.alerts.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(4)));
+                .andExpect(status().isForbidden());
     }
 
     @Test

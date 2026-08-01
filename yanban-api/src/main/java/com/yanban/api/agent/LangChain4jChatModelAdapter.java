@@ -62,6 +62,13 @@ public class LangChain4jChatModelAdapter implements ChatModel {
         return toLangChain4jResponse(request, response);
     }
 
+    /** Compatibility entry used only by the restored legacy workspace Agent. */
+    public dev.langchain4j.model.chat.response.ChatResponse chat(
+            dev.langchain4j.model.chat.request.ChatRequest request,
+            AgentRuntimeRequest runtimeRequest) {
+        return chat(request, invocationContext(runtimeRequest));
+    }
+
     public Flux<ChatChunk> stream(dev.langchain4j.model.chat.request.ChatRequest request,
                                   ModelInvocationContext context) {
         ChatRequest coreRequest = toCoreChatRequest(request, context);
@@ -79,6 +86,24 @@ public class LangChain4jChatModelAdapter implements ChatModel {
                             ex.getMessage());
                     return Flux.fromIterable(toFallbackChunks(chatModelProvider.chat(coreRequest)));
                 });
+    }
+
+    /** Compatibility entry used only by the restored legacy workspace Agent. */
+    public Flux<ChatChunk> stream(
+            dev.langchain4j.model.chat.request.ChatRequest request,
+            AgentRuntimeRequest runtimeRequest) {
+        return stream(request, invocationContext(runtimeRequest));
+    }
+
+    private ModelInvocationContext invocationContext(AgentRuntimeRequest runtimeRequest) {
+        if (runtimeRequest == null) {
+            return null;
+        }
+        return new ModelInvocationContext(
+                runtimeRequest.provider(),
+                runtimeRequest.apiKey(),
+                runtimeRequest.apiUrl(),
+                runtimeRequest.traceId());
     }
 
     private ChatRequest toCoreChatRequest(dev.langchain4j.model.chat.request.ChatRequest request,

@@ -27,14 +27,15 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/v1/agent/sessions")
 public class AgentController {
 
-    private final AgentSessionService sessionService;
+    private final AgentService agentService;
+    private final AgentContextSnapshotService contextSnapshotService;
     private final V2LiteratureTurnService v2LiteratureTurns;
     private final V2LiteratureOutcomeService v2LiteratureOutcomes;
     private final V2ProductAvailability v2Availability;
@@ -42,16 +43,82 @@ public class AgentController {
     private final V2AdaptiveTurnQueryService v2AdaptiveTurns;
     private final V2TurnHistoryQueryService v2TurnHistory;
 
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes) {
+        this(agentService, contextSnapshotService, v2LiteratureTurns,
+                v2LiteratureOutcomes,
+                V2ProductAvailability.enabledByDefault(), null, null);
+    }
+
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability) {
+        this(agentService, contextSnapshotService, v2LiteratureTurns,
+                v2LiteratureOutcomes, v2Availability, null);
+    }
+
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability,
+                           V2NaturalLanguageTurnService v2NaturalLanguageTurns) {
+        this(agentService, contextSnapshotService, v2LiteratureTurns,
+                v2LiteratureOutcomes, v2Availability,
+                v2NaturalLanguageTurns, null);
+    }
+
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability,
+                           V2NaturalLanguageTurnService v2NaturalLanguageTurns,
+                           V2AdaptiveTurnQueryService v2AdaptiveTurns) {
+        this(agentService, contextSnapshotService, v2LiteratureTurns,
+                v2LiteratureOutcomes, v2Availability,
+                v2NaturalLanguageTurns, v2AdaptiveTurns, null);
+    }
+
+    /**
+     * Compatibility constructor for the V2-only controller surface. The
+     * workspace chat endpoints require {@link AgentService}; V2 endpoint
+     * tests and callers that never use that surface can retain the stable
+     * session-service dependency used before workspace chat was restored.
+     */
+    public AgentController(AgentSessionService sessionService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability,
+                           V2NaturalLanguageTurnService v2NaturalLanguageTurns,
+                           V2AdaptiveTurnQueryService v2AdaptiveTurns,
+                           V2TurnHistoryQueryService v2TurnHistory) {
+        java.util.Objects.requireNonNull(sessionService, "sessionService");
+        this.agentService = null;
+        this.contextSnapshotService = null;
+        this.v2LiteratureTurns = v2LiteratureTurns;
+        this.v2LiteratureOutcomes = v2LiteratureOutcomes;
+        this.v2Availability = v2Availability;
+        this.v2NaturalLanguageTurns = v2NaturalLanguageTurns;
+        this.v2AdaptiveTurns = v2AdaptiveTurns;
+        this.v2TurnHistory = v2TurnHistory;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
-    public AgentController(
-            AgentSessionService sessionService,
-            V2LiteratureTurnService v2LiteratureTurns,
-            V2LiteratureOutcomeService v2LiteratureOutcomes,
-            V2ProductAvailability v2Availability,
-            V2NaturalLanguageTurnService v2NaturalLanguageTurns,
-            V2AdaptiveTurnQueryService v2AdaptiveTurns,
-            V2TurnHistoryQueryService v2TurnHistory) {
-        this.sessionService = sessionService;
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService,
+                           V2LiteratureTurnService v2LiteratureTurns,
+                           V2LiteratureOutcomeService v2LiteratureOutcomes,
+                           V2ProductAvailability v2Availability,
+                           V2NaturalLanguageTurnService v2NaturalLanguageTurns,
+                           V2AdaptiveTurnQueryService v2AdaptiveTurns,
+                           V2TurnHistoryQueryService v2TurnHistory) {
+        this.agentService = agentService;
+        this.contextSnapshotService = contextSnapshotService;
         this.v2LiteratureTurns = v2LiteratureTurns;
         this.v2LiteratureOutcomes = v2LiteratureOutcomes;
         this.v2Availability = v2Availability;
@@ -89,18 +156,46 @@ public class AgentController {
                 currentUser.id(), sessionId, clientRequestId);
     }
 
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public AgentSessionResponse createSession(@AuthenticationPrincipal JwtUser currentUser,
+                                              @Valid @RequestBody CreateSessionRequest request) {
+        return agentService.createSession(currentUser.id(), request);
+    }
+
+    @GetMapping
+    public List<AgentSessionResponse> listSessions(@AuthenticationPrincipal JwtUser currentUser) {
+        return agentService.listSessions(currentUser.id());
+    }
+
     @PatchMapping("/{sessionId}")
     public AgentSessionResponse updateSession(@AuthenticationPrincipal JwtUser currentUser,
                                               @PathVariable Long sessionId,
                                               @Valid @RequestBody UpdateSessionRequest request) {
-        return sessionService.updateSession(currentUser.id(), sessionId, request);
+        return agentService.updateSession(currentUser.id(), sessionId, request);
     }
 
     @DeleteMapping("/{sessionId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteSession(@AuthenticationPrincipal JwtUser currentUser,
                               @PathVariable Long sessionId) {
-        sessionService.deleteSession(currentUser.id(), sessionId);
+        agentService.deleteSession(currentUser.id(), sessionId);
+    }
+
+    @GetMapping("/{sessionId}/messages")
+    public List<AgentMessageResponse> listMessages(@AuthenticationPrincipal JwtUser currentUser,
+                                                   @PathVariable Long sessionId,
+                                                   @RequestParam(defaultValue = "50") Integer limit,
+                                                   @RequestParam(required = false) Long beforeId,
+                                                   @RequestParam(defaultValue = "chat") String view) {
+        return agentService.listMessages(currentUser.id(), sessionId, limit, beforeId, view);
+    }
+
+    @PostMapping("/{sessionId}/messages")
+    public SendMessageResponse sendMessage(@AuthenticationPrincipal JwtUser currentUser,
+                                           @PathVariable Long sessionId,
+                                           @Valid @RequestBody SendMessageRequest request) {
+        return agentService.sendMessage(currentUser.id(), sessionId, request);
     }
 
     @PostMapping("/{sessionId}/v2/turns")
@@ -158,4 +253,17 @@ public class AgentController {
                 currentUser.id(), sessionId, clientRequestId);
     }
 
+    @GetMapping("/{sessionId}/context-snapshots")
+    public List<AgentContextSnapshotResponse> listContextSnapshots(@AuthenticationPrincipal JwtUser currentUser,
+                                                                   @PathVariable Long sessionId,
+                                                                   @RequestParam(defaultValue = "20") Integer limit) {
+        return contextSnapshotService.listSessionSnapshots(currentUser.id(), sessionId, limit);
+    }
+
+    @GetMapping("/{sessionId}/turns/{turnId}/context-snapshot")
+    public AgentContextSnapshotResponse getContextSnapshot(@AuthenticationPrincipal JwtUser currentUser,
+                                                          @PathVariable Long sessionId,
+                                                          @PathVariable Long turnId) {
+        return contextSnapshotService.getTurnSnapshot(currentUser.id(), sessionId, turnId);
+    }
 }

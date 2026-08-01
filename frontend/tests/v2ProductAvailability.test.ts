@@ -78,29 +78,27 @@ describe('V2 product availability', () => {
     expect(v2AvailabilityLabel(literatureOnly, 'literature.search')).toBe('V2 available');
   });
 
-  it('wires both pages to the capability document without a legacy fallback', () => {
+  it('wires workspace literature and the current Project V2 surface without a fallback', () => {
     const chat = readFileSync(new URL('../src/views/ChatPage.vue', import.meta.url), 'utf8');
     const project = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
     expect(chat).toContain('getV2ProductAvailability');
     expect(chat).toContain("isV2CapabilityAvailable(v2Availability.value, 'literature.search')");
     expect(chat).toContain('if (!v2LiteratureAvailable.value)');
     expect(project).toContain('getV2ProductAvailability');
-    expect(project).toContain("isV2CapabilityAvailable(v2Availability.value, 'project.read-analysis')");
-    expect(project).toContain("isV2CapabilityAvailable(v2Availability.value, 'project.candidate')");
-    expect(project).toContain('if (!v2ProjectAnalysisAvailable.value)');
-    expect(project).toContain('if (!v2ProjectCandidateAvailable.value)');
+    expect(project).toContain('v2NaturalTurnAvailable.value = validDocument');
+    expect(project).toContain('if (!v2NaturalTurnAvailable.value)');
     expect(chat).not.toContain('sendAgentMessage(sessionId, request)');
     expect(project).not.toContain('sendProjectMessage(projectId, sessionId, request)');
   });
 
-  it('aborts scoped V2 work on session/project switch while ordinary controls remain ungated', () => {
+  it('aborts scoped V2 work on session/project switch while workspace messages remain available', () => {
     const chat = readFileSync(new URL('../src/views/ChatPage.vue', import.meta.url), 'utf8');
     const project = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
     expect(chat).toContain('watch(selectedSessionId');
     expect(chat).toContain('stopLiteraturePolling()');
-    expect(project).toContain('stopProjectAnalysisPolling()');
-    expect(project).toContain('stopProjectCandidatePolling()');
+    expect(project).toContain('stopV2NaturalLanguagePolling()');
+    expect(project).toContain('resetV2NaturalLanguageView()');
     expect(chat).not.toContain(':disabled="!v2LiteratureAvailable" @click="handleSend"');
-    expect(project).not.toContain(':disabled="!v2ProjectAnalysisAvailable" @click="sendChat"');
+    expect(project).not.toContain('@click="sendChat"');
   });
 });

@@ -3,21 +3,21 @@ import { describe, expect, it } from 'vitest';
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
-describe('V2-only frontend boundary', () => {
-  it('routes every authenticated default entry to the Project workspace', () => {
+describe('workspace chat restoration with V2-only Project boundary', () => {
+  it('restores the original authenticated workspace chat entry', () => {
     const router = read('../src/router/index.ts');
     const layout = read('../src/components/AppLayout.vue');
 
-    expect(router).not.toContain('ChatPage');
-    expect(router).not.toContain("path: '/chat'");
-    expect(router).toContain("{ path: '/', redirect: '/projects' }");
-    expect(router).toContain("{ path: '/:pathMatch(.*)*', redirect: '/projects' }");
+    expect(router).toContain("import ChatPage from '@/views/ChatPage.vue'");
+    expect(router).toContain("path: '/chat'");
+    expect(router).toContain("{ path: '/', redirect: '/chat' }");
+    expect(router).toContain("{ path: '/:pathMatch(.*)*', redirect: '/chat' }");
     expect(router).toContain("path: '/paper'");
     expect(router).toContain("path: '/knowledge-base'");
     expect(router).toContain("path: '/settings'");
-    expect(layout).not.toContain("'/chat'");
-    expect(layout).toContain("router.push('/projects')");
-    expect(existsSync(new URL('../src/views/ChatPage.vue', import.meta.url))).toBe(false);
+    expect(layout).toContain("router.push('/chat')");
+    expect(layout).toContain("label: t('nav.workspace'), path: '/chat'");
+    expect(existsSync(new URL('../src/views/ChatPage.vue', import.meta.url))).toBe(true);
   });
 
   it('keeps one persisted natural-language V2 conversation surface', () => {
@@ -35,14 +35,14 @@ describe('V2-only frontend boundary', () => {
     expect(project).not.toContain('startProjectCandidate');
   });
 
-  it('removes obsolete V1 and explicit form clients from the browser API', () => {
+  it('keeps workspace V1 clients without restoring Project V1 clients', () => {
     const agent = read('../src/api/agent.ts');
     const project = read('../src/api/project.ts');
 
-    expect(agent).not.toContain('sendMessage(');
-    expect(agent).not.toContain('listMessages(');
-    expect(agent).not.toContain('/agent/plans/');
-    expect(agent).not.toContain('/v2/literature-turns');
+    expect(agent).toContain('sendMessage(');
+    expect(agent).toContain('listMessages(');
+    expect(agent).toContain('/agent/plans/');
+    expect(agent).toContain('/v2/literature-turns');
     expect(project).not.toContain('sendProjectMessage(');
     expect(project).not.toContain('/v2/read-analysis-turns');
     expect(project).not.toContain('/v2/candidate-turns');

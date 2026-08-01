@@ -542,3 +542,24 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   PDF/DOCX/OCR or image-content analysis, network/RAG/literature retrieval,
   Workspace writes, Candidate creation/apply, ProjectVersion mutation, Sandbox
   execution, schema/frontend changes, V2 core changes, and V1 orchestration.
+
+## Workspace chat corrective restoration
+
+- Issues: `#120` and `#121`.
+- Status: `RESTORE_LEGACY_WORKSPACE_SURFACE_WITH_V2_BOUNDARY`.
+- Product decision: restore the workspace `/chat` page and the legacy Agent/Plan
+  orchestration it requires after their accidental removal. This is a directed
+  corrective restoration, not a precedent for copying the orchestration into
+  V2 runtime code.
+- `#120` is the mechanical recovery baseline: deleted workspace frontend,
+  backend, and focused test sources were restored from their deletion parents
+  without semantic edits.
+- `#121` adapts that baseline to current `main`: `/chat` is again the default
+  authenticated workspace, its HTTP and WebSocket contracts are active, and
+  the restored model adapter accepts the legacy runtime request without
+  replacing the current V2 invocation context.
+- Boundary: `ProjectPreviewPage.vue` remains V2-only. The old Project V1 input,
+  V1/V2 switch, and Project WebSocket route are not restored. Current V2
+  natural-language history, Candidate/Workspace authority, and the 15-entry V2
+  product tool catalog remain authoritative and unchanged.
+- Data boundary: no schema or data migration, deletion, or backfill is added.
