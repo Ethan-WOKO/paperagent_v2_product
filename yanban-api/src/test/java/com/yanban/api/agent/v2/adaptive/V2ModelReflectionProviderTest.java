@@ -91,6 +91,10 @@ class V2ModelReflectionProviderTest {
                 "stepId equals activeStepId"));
         assertTrue(system.contains(
                 "REVIEWABLE_CANDIDATE_CREATED"));
+        assertTrue(system.contains(
+                "PROJECT_BIBLIOGRAPHY_READ_ONLY"));
+        assertTrue(system.contains(
+                "does not prove compilation, modification, citation quality"));
     }
 
     @Test

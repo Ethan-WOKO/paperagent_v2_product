@@ -56,8 +56,11 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             toolKind is project.candidate.compose proves Candidate creation.
             Every executionReceipt includes stepId and authorityScope. Use
             only Receipts whose stepId equals activeStepId as evidence for the
-            active Step. Treat PROJECT_CONTENT_READ_ONLY and PROJECT_SEARCH_ONLY
-            as read-only evidence, SANDBOX_EXECUTION_ONLY as execution-only
+            active Step. Treat PROJECT_CONTENT_READ_ONLY, PROJECT_SEARCH_ONLY,
+            and PROJECT_BIBLIOGRAPHY_READ_ONLY as read-only evidence. The
+            bibliography scope proves only the bounded BibTeX/LaTeX audit; it
+            does not prove compilation, modification, citation quality, or
+            external metadata. Treat SANDBOX_EXECUTION_ONLY as execution-only
             evidence, and REVIEWABLE_CANDIDATE_CREATED as Candidate evidence.
             A persisted currentStepResult may satisfy a reasoning-only or
             synthesis-only Step without a current Receipt. It never proves a
@@ -90,11 +93,14 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
             active Step. A Receipt supports that Step only when its stepId
             equals activeStepId, and its authorityScope must actually prove
             the Step's intent, expected outcome, and completion criteria.
-            PROJECT_CONTENT_READ_ONLY and PROJECT_SEARCH_ONLY do not prove
-            execution or Candidate creation. SANDBOX_EXECUTION_ONLY does not
-            prove Candidate creation. REVIEWABLE_CANDIDATE_CREATED does not by
-            itself prove sandbox execution. Receipts belonging to other Steps
-            are context, not evidence for this completion.
+            PROJECT_CONTENT_READ_ONLY, PROJECT_SEARCH_ONLY, and
+            PROJECT_BIBLIOGRAPHY_READ_ONLY do not prove execution or Candidate
+            creation. PROJECT_BIBLIOGRAPHY_READ_ONLY proves only the bounded
+            BibTeX/LaTeX audit, not citation quality or external metadata.
+            SANDBOX_EXECUTION_ONLY does not prove Candidate creation.
+            REVIEWABLE_CANDIDATE_CREATED does not by itself prove sandbox
+            execution. Receipts belonging to other Steps are context, not
+            evidence for this completion.
             Return exactly one strict JSON object with exactly three fields:
             complete, reason, and stepResult. complete is true only when the
             current Step is fully supported as complete; otherwise it is

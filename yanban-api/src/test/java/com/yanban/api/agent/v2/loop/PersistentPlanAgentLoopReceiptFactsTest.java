@@ -79,6 +79,22 @@ class PersistentPlanAgentLoopReceiptFactsTest {
     }
 
     @Test
+    void bibtexAuditReceiptCarriesReadOnlyBibliographyAuthorityScope() {
+        ExecutionReceipt receipt = mock(ExecutionReceipt.class);
+        when(receipt.id()).thenReturn(new ReceiptId("receipt-bibtex"));
+        when(receipt.standardOutput()).thenReturn(OutputCapture.empty());
+        when(receipt.standardError()).thenReturn(OutputCapture.empty());
+        when(receipt.status()).thenReturn(ReceiptStatus.SUCCESS);
+
+        PersistentPlanAgentLoopReceiptFacts facts =
+                PersistentPlanAgentLoopReceiptFacts.from(
+                        "step-3", "project.bibtex.audit", receipt);
+
+        assertEquals(
+                "PROJECT_BIBLIOGRAPHY_READ_ONLY", facts.authorityScope());
+    }
+
+    @Test
     void failedCandidateReceiptDoesNotClaimCandidateCreation() {
         ExecutionReceipt receipt = mock(ExecutionReceipt.class);
         when(receipt.id()).thenReturn(

@@ -84,6 +84,8 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
     private static final String LITERATURE_SEARCH = "literature.search";
     private static final String PROJECT_CANDIDATE_COMPOSE =
             "project.candidate.compose";
+    private static final String PROJECT_BIBTEX_AUDIT =
+            "project.bibtex.audit";
     private static final String SANDBOX_EXECUTE = "sandbox.execute";
 
     private final AgentTurnProductContextResolver contexts;
@@ -409,6 +411,7 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             if (!LITERATURE_SEARCH.equals(effectKind)
                     && !"project.read".equals(effectKind)
                     && !"project.search".equals(effectKind)
+                    && !PROJECT_BIBTEX_AUDIT.equals(effectKind)
                     && !PROJECT_CANDIDATE_COMPOSE.equals(effectKind)
                     && !SANDBOX_EXECUTE.equals(effectKind)) {
                 return outcome(planId, cycle,
