@@ -3,7 +3,6 @@ import { useAuthStore } from '@/stores/auth';
 import LoginPage from '@/views/LoginPage.vue';
 import RegisterPage from '@/views/RegisterPage.vue';
 import DemoPage from '@/views/DemoPage.vue';
-import ChatPage from '@/views/ChatPage.vue';
 import SettingsPage from '@/views/SettingsPage.vue';
 import MemorySettingsPage from '@/views/MemorySettingsPage.vue';
 import KnowledgeBasePage from '@/views/KnowledgeBasePage.vue';
@@ -16,11 +15,10 @@ import { isJwtExpired } from '@/auth/session';
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/chat' },
+    { path: '/', redirect: '/projects' },
     { path: '/demo', name: 'demo', component: DemoPage },
     { path: '/login', name: 'login', component: LoginPage, meta: { guestOnly: true } },
     { path: '/register', name: 'register', component: RegisterPage, meta: { guestOnly: true } },
-    { path: '/chat', name: 'chat', component: ChatPage, meta: { requiresAuth: true } },
     { path: '/paper', name: 'paper', component: PaperPage, meta: { requiresAuth: true } },
     { path: '/projects', name: 'projects', component: ProjectPreviewPage, meta: { requiresAuth: true } },
     { path: '/knowledge-base', name: 'knowledge-base', component: KnowledgeBasePage, meta: { requiresAuth: true } },
@@ -28,7 +26,7 @@ const router = createRouter({
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
     { path: '/settings/memory', name: 'memory-settings', component: MemorySettingsPage, meta: { requiresAuth: true } },
     { path: '/admin', name: 'admin', component: AdminPage, meta: { requiresAuth: true, requiresAdmin: true } },
-    { path: '/:pathMatch(.*)*', redirect: '/chat' },
+    { path: '/:pathMatch(.*)*', redirect: '/projects' },
   ],
 });
 
@@ -51,10 +49,10 @@ router.beforeEach(async (to) => {
     return { path: '/login', query: { redirect: to.fullPath } };
   }
   if (to.meta.requiresAdmin && authStore.currentUser?.role !== 'ADMIN') {
-    return '/chat';
+    return '/projects';
   }
   if (to.meta.guestOnly && authStore.isAuthenticated) {
-    return '/chat';
+    return '/projects';
   }
   return true;
 });

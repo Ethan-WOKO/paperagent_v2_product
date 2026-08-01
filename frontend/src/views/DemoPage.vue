@@ -130,7 +130,7 @@ async function handleStartDemo() {
     if (pendingQuestion.value) {
       query.q = pendingQuestion.value;
     }
-    await router.push({ path: '/chat', query });
+    await router.push({ path: '/projects', query });
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || '进入 Demo 失败');
   } finally {

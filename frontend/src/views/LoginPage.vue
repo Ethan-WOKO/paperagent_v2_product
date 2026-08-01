@@ -53,7 +53,7 @@ async function handleSubmit() {
   try {
     await authStore.signIn(form);
     ui.message.success('登录成功');
-    await router.push((route.query.redirect as string) || '/chat');
+    await router.push((route.query.redirect as string) || '/projects');
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || '登录失败');
   } finally {
@@ -66,7 +66,7 @@ async function handleDemoLogin() {
   try {
     await authStore.signInDemo();
     ui.message.success('已进入游客体验');
-    await router.push('/chat?demo=1');
+    await router.push('/projects?demo=1');
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || 'Demo 入口未开启');
   } finally {

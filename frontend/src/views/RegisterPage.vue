@@ -65,7 +65,7 @@ async function handleSubmit() {
   try {
     await authStore.signUp({ username: form.username, password: form.password, inviteCode: form.inviteCode });
     ui.message.success('注册成功，已自动登录');
-    await router.push('/chat');
+    await router.push('/projects');
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || '注册失败');
   } finally {

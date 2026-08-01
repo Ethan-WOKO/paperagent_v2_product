@@ -2,15 +2,14 @@
   <div
     class="app-frame"
     :class="{
-      'app-frame--chat': route.path.startsWith('/chat'),
       'app-frame--paper': route.path.startsWith('/paper'),
       'app-frame--project': route.path.startsWith('/projects'),
       'app-frame--settings': route.path.startsWith('/settings'),
-      'app-frame--non-chat': !route.path.startsWith('/chat'),
+      'app-frame--non-chat': true,
     }"
   >
     <aside class="app-sidebar">
-      <div class="app-sidebar__brand" @click="router.push('/chat')">
+      <div class="app-sidebar__brand" @click="router.push('/projects')">
         <div class="app-sidebar__logo">
           <img src="/logo.png" alt="" />
         </div>
@@ -67,39 +66,11 @@
     <main
       class="app-workspace"
       :class="{
-        'app-workspace--topbar-collapsed': showTopbar && topbarCollapsed,
-        'app-workspace--no-topbar': !showTopbar,
-        'app-workspace--chat': route.path.startsWith('/chat'),
+        'app-workspace--no-topbar': true,
         'app-workspace--paper': route.path.startsWith('/paper'),
         'app-workspace--settings': route.path.startsWith('/settings'),
       }"
     >
-      <header v-if="showTopbar" class="app-topbar">
-        <div>
-          <h1>{{ routeTitle }}</h1>
-        </div>
-        <NSpace align="center" :size="10" wrap>
-          <NButton secondary round @click="router.push('/chat')">+ {{ t('top.newTask') }}</NButton>
-          <NButton secondary round @click="router.push('/paper')">{{ t('top.uploadPaper') }}</NButton>
-          <NButton secondary round @click="router.push('/chat')">{{ t('top.searchLiterature') }}</NButton>
-          <NButton type="primary" round class="agent-mode-button">{{ t('top.agentLive') }}</NButton>
-          <NButton quaternary round size="small" class="theme-toggle-button" @click="toggleTheme">
-            {{ isDark ? t('common.light') : t('common.dark') }}
-          </NButton>
-        </NSpace>
-        <button type="button" class="app-topbar__collapse" :title="t('top.hide')" @click="setTopbarCollapsed(true)">-</button>
-      </header>
-
-      <button
-        v-if="showTopbar && topbarCollapsed"
-        type="button"
-        class="app-topbar__restore"
-        :title="t('top.show')"
-        @click="setTopbarCollapsed(false)"
-      >
-        +
-      </button>
-
       <section class="app-content-shell">
         <slot />
       </section>
@@ -108,26 +79,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { NButton, NSpace } from 'naive-ui';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { useTheme } from '@/composables/useTheme';
 import { useI18n } from '@/composables/useI18n';
 import LanguageToggle from '@/components/LanguageToggle.vue';
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
-const { isDark, toggleTheme } = useTheme();
 const { t } = useI18n();
-const TOPBAR_COLLAPSED_KEY = 'yanban.app.topbarCollapsed';
-const topbarCollapsed = ref(readStoredBoolean(TOPBAR_COLLAPSED_KEY, false));
-const showTopbar = computed(() => route.path.startsWith('/chat'));
 let quotaRefreshTimer: number | undefined;
 
 const navItems = computed(() => [
-  { label: t('nav.workspace'), path: '/chat' },
   { label: t('nav.papers'), path: '/paper' },
   { label: t('nav.projects'), path: '/projects' },
   { label: t('nav.knowledge'), path: '/knowledge-base' },
@@ -159,16 +123,6 @@ const quotaMeterStyle = computed(() => {
   if (!user || user.aiQuotaTotal <= 0) return { width: '0%' };
   const percentage = Math.min(100, Math.max(0, (user.aiQuotaUsed / user.aiQuotaTotal) * 100));
   return { width: `${percentage}%` };
-});
-
-const routeTitle = computed(() => {
-  if (route.path.startsWith('/paper')) return t('route.paper');
-  if (route.path.startsWith('/projects')) return t('route.projects');
-  if (route.path.startsWith('/knowledge-base/search-debug')) return t('route.retrieval');
-  if (route.path.startsWith('/knowledge-base')) return t('route.knowledge');
-  if (route.path.startsWith('/settings')) return t('route.settings');
-  if (route.path.startsWith('/admin')) return '管理后台';
-  return t('route.chat');
 });
 
 function isActiveNav(path: string) {
@@ -206,28 +160,6 @@ onBeforeUnmount(() => {
     window.clearInterval(quotaRefreshTimer);
   }
 });
-
-function readStoredBoolean(key: string, fallback: boolean) {
-  if (typeof window === 'undefined') {
-    return fallback;
-  }
-  const value = window.localStorage.getItem(key);
-  if (value == null) {
-    return fallback;
-  }
-  return value === 'true';
-}
-
-function setStoredBoolean(key: string, value: boolean) {
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(key, String(value));
-  }
-}
-
-function setTopbarCollapsed(collapsed: boolean) {
-  topbarCollapsed.value = collapsed;
-  setStoredBoolean(TOPBAR_COLLAPSED_KEY, collapsed);
-}
 
 async function logout() {
   authStore.clear();

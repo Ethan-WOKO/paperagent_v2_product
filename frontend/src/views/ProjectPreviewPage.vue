@@ -7,7 +7,7 @@
           <NSpace :size="8" wrap>
             <NTag v-if="activeProject" size="small" type="success">{{ t('project.page.readOnly') }}</NTag>
             <NButton size="small" secondary :loading="loading.projects" @click="loadProjects">{{ t('project.page.refresh') }}</NButton>
-            <NButton v-if="activeProject" size="small" secondary type="error" :disabled="loading.send" @click="deleteModalOpen = true">{{ t('project.page.deleteProject') }}</NButton>
+            <NButton v-if="activeProject" size="small" secondary type="error" :disabled="v2NaturalTurnBusy" @click="deleteModalOpen = true">{{ t('project.page.deleteProject') }}</NButton>
             <NButton size="small" type="primary" @click="openCreateProjectModal">{{ t('project.page.newProject') }}</NButton>
           </NSpace>
           <button type="button" class="workspace-hero__collapse" :title="t('project.page.collapseHeader')" :aria-label="t('project.page.collapseHeader')" @click="setProjectHeaderCollapsed(true)">
@@ -148,7 +148,7 @@
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" :aria-pressed="inspectorOpen && inspectorTab === 'evidence'" aria-controls="project-inspector" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" :aria-pressed="inspectorOpen && inspectorTab === 'changes'" aria-controls="project-inspector" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" :aria-pressed="inspectorOpen && inspectorTab === 'versions'" aria-controls="project-inspector" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
-              <NButton size="tiny" quaternary :disabled="loading.send || v2NaturalTurnBusy" @click="startNewConversation">新建会话</NButton>
+              <NButton size="tiny" quaternary :disabled="v2NaturalTurnBusy" @click="startNewConversation">新建会话</NButton>
             </div>
           </div>
 
@@ -635,61 +635,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NInputNumber, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
+import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
-import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listMessages, listPlans, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentContextSnapshotResponse, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
+import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectContextSnapshots, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, readV2ProjectCandidateTurn, readV2ProjectReadAnalysisTurn, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, startV2ProjectCandidateTurn, startV2ProjectReadAnalysisTurn, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse, type V2ProjectCandidateTurnResponse, type V2ProjectReadAnalysisTurnResponse } from '@/api/project';
-import { useAuthStore } from '@/stores/auth';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
-import {
-  isControlledProjectPartial,
-  isInternalRuntimeFailureText,
-  isSandboxConfirmationRequiredText,
-  projectAssistantPresentation,
-  withoutInternalRuntimeCodes,
-  withoutInternalProjectEvidenceRefs,
-} from '@/utils/projectCompletion';
-import { requiresSandboxConfirmation, sandboxConfirmationStepCount } from '@/utils/projectSandboxConfirmation';
-import {
-  answerStatusPresentation,
-  effectivePlanResult,
-  executionOutcomePresentation,
-  groupSynthesisEvidence,
-  hasTechnicalEvidenceFields,
-  planUserStatusPresentation,
-  taskOutcomePresentation,
-} from '@/utils/projectResultPresentation';
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
-import {
-  isCurrentV2ProjectAnalysisRequest,
-  isDefinitiveV2ProjectAnalysisStartRejection,
-  isV2ProjectAnalysisConfirmedNotCreated,
-  isV2ProjectAnalysisTerminal,
-  newV2ProjectAnalysisClientRequestId,
-  normalizeV2ProjectAnalysisForm,
-  pollV2ProjectAnalysis,
-  startThenPollV2ProjectAnalysis,
-  type V2ProjectAnalysisRequestIdentity,
-} from '@/utils/v2ProjectAnalysis';
-import {
-  isCurrentV2ProjectCandidateRequest,
-  isDefinitiveV2ProjectCandidateStartRejection,
-  isV2ProjectCandidateConfirmedNotCreated,
-  newV2ProjectCandidateClientRequestId,
-  normalizeV2ProjectCandidateForm,
-  startThenPollV2ProjectCandidate,
-  type V2ProjectCandidateRequestIdentity,
-} from '@/utils/v2ProjectCandidate';
-import {
-  V2_PRODUCT_AVAILABILITY_LOADING,
-  isV2CapabilityAvailable,
-  loadV2ProductAvailability,
-  v2AvailabilityLabel,
-  type V2ProductAvailabilityState,
-} from '@/utils/v2ProductAvailability';
 import {
   V2NaturalLanguageTurnNotCreatedError,
   isV2CandidateApplied,
@@ -704,45 +658,7 @@ import {
   type V2NaturalLanguageRequestIdentity,
 } from '@/utils/v2NaturalLanguageTurn';
 
-type ProjectChatRole = 'user' | 'assistant' | 'process';
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
-type V2TaskKind = 'analysis' | 'candidate';
-type V2ProgressState = 'pending' | 'running' | 'done' | 'failed';
-
-interface ProjectChatMessage {
-  localId: string;
-  role: ProjectChatRole;
-  content: string;
-  pending?: boolean;
-  processOpen?: boolean;
-  processDone?: boolean;
-  processStartedAt?: number;
-  processElapsedMs?: number;
-  technicalContent?: string;
-  createdAt?: string;
-}
-
-interface ProjectWsChatEvent {
-  type: 'ack' | 'process' | 'chunk' | 'reset' | 'replace' | 'done' | 'error' | 'debug';
-  content?: string | null;
-  assistantContent?: string | null;
-  sessionId?: number | null;
-  error?: string | null;
-  clientRequestId?: string | null;
-  projectEvidence?: ProjectEvidenceResponse[] | null;
-  evidence?: ProjectEvidenceResponse[] | null;
-  completionStatus?: 'VERIFIED' | 'PARTIAL' | 'INSUFFICIENT_EVIDENCE' | 'FAILED' | null;
-  stopReason?: string | null;
-  outcome?: string | null;
-}
-
-interface ProjectContentNavItem {
-  id: string;
-  label: string;
-  title: string;
-  kind: 'user' | 'assistant' | 'process' | 'step' | 'final';
-  planId?: number;
-}
 
 interface CandidateReviewItem {
   artifact: ArtifactResponse;
@@ -751,11 +667,9 @@ interface CandidateReviewItem {
   error: string | null;
 }
 
-const authStore = useAuthStore();
 const { isEnglish, t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const v2TaskKind = ref<V2TaskKind>('analysis');
 const projects = ref<ProjectSummaryResponse[]>([]);
 const activeProjectId = ref<number | null>(null);
 const projectSessions = ref<AgentSessionResponse[]>([]);
@@ -764,13 +678,6 @@ const manifest = ref<ProjectManifestResponse | null>(null);
 const selectedFile = ref<ProjectFileResponse | null>(null);
 const searchQuery = ref('');
 const searchResults = ref<ProjectSearchHit[]>([]);
-const messages = ref<ProjectChatMessage[]>([]);
-const contextSnapshot = ref<AgentContextSnapshotResponse | null>(null);
-const contextError = ref('');
-const plans = ref<AgentPlanResponse[]>([]);
-const selectedPlan = ref<AgentPlanResponse | null>(null);
-const executingSandboxPlanId = ref<number | null>(null);
-const cancellingPlanId = ref<number | null>(null);
 const evidence = ref<ProjectEvidenceResponse[]>([]);
 const candidates = ref<CandidateReviewItem[]>([]);
 const selectedCandidate = ref<CandidateReviewItem | null>(null);
@@ -798,50 +705,15 @@ const revisionMessage = ref('');
 const revisionMessageType = ref<'success' | 'warning' | 'error'>('success');
 const inspectorTab = ref<ProjectInspectorTab>('preview');
 const inspectorOpen = ref(false);
-const chatInput = ref('');
 const error = ref('');
 const createModalOpen = ref(false);
 const deleteModalOpen = ref(false);
 const renameSessionModalOpen = ref(false);
 const renameSessionId = ref<number | null>(null);
 const renameSessionDraft = ref('');
-const messagesContainer = ref<HTMLElement | null>(null);
-const activeProjectNavId = ref<string | null>(null);
-const projectContentRefs: Record<string, HTMLElement | null> = {};
 let projectEpoch = 0;
 let sessionFlight: Promise<number | null> | null = null;
-let planPoll: number | null = null;
 let candidateValidationPoll: number | null = null;
-let currentSocket: WebSocket | null = null;
-let activeClientRequestId: string | null = null;
-let currentAssistantMessageId: string | null = null;
-let currentProcessMessageId: string | null = null;
-const V2_PROJECT_ANALYSIS_STORAGE_KEY = 'yanban.v2ProjectAnalysis.activeRequest.';
-const projectAnalysisOpen = ref(false);
-const projectAnalysisStarting = ref(false);
-const projectAnalysisPolling = ref(false);
-const projectAnalysisError = ref('');
-const projectAnalysisOutcome = ref<V2ProjectReadAnalysisTurnResponse | null>(null);
-const projectAnalysisForm = reactive({
-  objective: '',
-  pathsText: '',
-  searchQuery: '',
-  maxSearchResults: 10 as number | null,
-});
-let projectAnalysisAbortController: AbortController | null = null;
-let projectAnalysisSequence = 0;
-let projectAnalysisClientRequestId: string | null = null;
-const V2_PROJECT_CANDIDATE_STORAGE_KEY = 'yanban.v2ProjectCandidate.activeRequest.';
-const projectCandidateOpen = ref(false);
-const projectCandidateStarting = ref(false);
-const projectCandidatePolling = ref(false);
-const projectCandidateError = ref('');
-const projectCandidateOutcome = ref<V2ProjectCandidateTurnResponse | null>(null);
-const projectCandidateForm = reactive({ objective: '', pathsText: '' });
-const v2Availability = ref<V2ProductAvailabilityState>(V2_PRODUCT_AVAILABILITY_LOADING);
-let projectCandidateAbortController: AbortController | null = null;
-let projectCandidateSequence = 0;
-let projectCandidateClientRequestId: string | null = null;
 const V2_NATURAL_LANGUAGE_STORAGE_KEY = 'yanban.v2NaturalLanguage.activeRequest.';
 const v2NaturalTurnAvailable = ref(false);
 const v2TurnInput = ref('');
@@ -854,82 +726,6 @@ let v2TurnAbortController: AbortController | null = null;
 let v2TurnSequence = 0;
 let v2TurnClientRequestId: string | null = null;
 const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.value);
-const v2ProjectAnalysisAvailable = computed(() => (
-  isV2CapabilityAvailable(v2Availability.value, 'project.read-analysis')
-));
-const v2ProjectCandidateAvailable = computed(() => (
-  isV2CapabilityAvailable(v2Availability.value, 'project.candidate')
-));
-const v2ProjectAvailable = computed(() => (
-  v2ProjectAnalysisAvailable.value || v2ProjectCandidateAvailable.value
-));
-const v2ProjectAvailabilityLabel = computed(() => {
-  if (v2ProjectAvailable.value) return 'V2 已连接，可以开始测试。';
-  return v2AvailabilityLabel(v2Availability.value, 'project.read-analysis');
-});
-const v2ActiveOutcome = computed(() => (
-  v2TaskKind.value === 'analysis' ? projectAnalysisOutcome.value : projectCandidateOutcome.value
-));
-const v2ProgressSteps = computed<Array<{
-  key: string;
-  title: string;
-  detail: string;
-  state: V2ProgressState;
-}>>(() => {
-  const outcome = v2ActiveOutcome.value;
-  const starting = v2TaskKind.value === 'analysis'
-    ? projectAnalysisStarting.value || projectAnalysisPolling.value
-    : projectCandidateStarting.value || projectCandidatePolling.value;
-  const terminalState: V2ProgressState = outcome?.status === 'SUCCEEDED'
-    ? 'done'
-    : outcome?.status === 'FAILED'
-      ? 'failed'
-      : outcome || starting
-        ? 'running'
-        : 'pending';
-  const taskLabel = v2TaskKind.value === 'analysis' ? '读取并分析文件' : '在隔离工作区生成候选修改';
-  const resultLabel = v2TaskKind.value === 'analysis' ? '生成分析结果' : '等待检查、验证和确认';
-  return [
-    {
-      key: 'task',
-      title: '固定任务和项目版本',
-      detail: outcome?.projectVersion
-        ? `已固定版本 ${shortHash(outcome.projectVersion)}`
-        : starting ? '正在接收任务并固定当前版本' : '提交任务后开始',
-      state: outcome ? 'done' : starting ? 'running' : 'pending',
-    },
-    {
-      key: 'plan',
-      title: '创建持久化计划',
-      detail: outcome?.planId ? `计划 ${outcome.planId}` : outcome?.status === 'FAILED' ? '计划未能正常完成' : '等待创建计划',
-      state: outcome?.planId ? 'done' : outcome?.status === 'FAILED' ? 'failed' : starting ? 'running' : 'pending',
-    },
-    {
-      key: 'execute',
-      title: taskLabel,
-      detail: outcome?.status === 'SUCCEEDED'
-        ? '执行成功'
-        : outcome?.status === 'FAILED'
-          ? `执行失败：${outcome.errorCode || '没有返回具体原因'}`
-          : outcome || starting ? '正在执行' : '等待执行',
-      state: terminalState,
-    },
-    {
-      key: 'result',
-      title: resultLabel,
-      detail: v2TaskKind.value === 'candidate' && outcome?.status === 'SUCCEEDED'
-        ? '候选修改已生成，原项目尚未改变'
-        : outcome?.status === 'SUCCEEDED'
-          ? '结果已返回'
-          : outcome?.status === 'FAILED'
-            ? '没有生成可接受的结果'
-            : '等待前一步完成',
-      state: outcome?.status === 'SUCCEEDED'
-        ? v2TaskKind.value === 'candidate' ? 'running' : 'done'
-        : outcome?.status === 'FAILED' ? 'failed' : 'pending',
-    },
-  ];
-});
 
 const loading = reactive({
   projects: false,
@@ -937,10 +733,6 @@ const loading = reactive({
   manifest: false,
   file: false,
   search: false,
-  messages: false,
-  context: false,
-  send: false,
-  plans: false,
   evidence: false,
   candidates: false,
   revisions: false,
@@ -1028,33 +820,6 @@ watch(validationProfileOptions, (options) => {
     validationProfile.value = options[0].value;
   }
 }, { immediate: true });
-const timelinePlans = computed(() => [...plans.value].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()));
-const projectTimelineItems = computed(() => [
-  ...messages.value.map((message, index) => ({
-    type: 'message' as const,
-    key: message.localId,
-    message,
-    sortAt: parseTimestamp(message.createdAt) ?? index,
-    order: index,
-  })),
-  ...timelinePlans.value.map((plan, index) => ({
-    type: 'plan' as const,
-    key: `plan-${plan.id}`,
-    plan,
-    sortAt: parseTimestamp(plan.createdAt) ?? Number.MAX_SAFE_INTEGER - timelinePlans.value.length + index,
-    order: messages.value.length + index,
-  })),
-].sort((left, right) => left.sortAt - right.sortAt || left.order - right.order));
-const projectNavItems = computed<ProjectContentNavItem[]>(() => {
-  return messages.value
-    .filter((message) => message.role === 'user')
-    .map((message, index) => ({
-      id: message.localId,
-      label: String(index + 1),
-      title: abbreviateText(message.content || 'User message', 140),
-      kind: 'user' as const,
-    }));
-});
 const directoryPaths = computed(() => collectDirectoryPaths(manifest.value?.files || []));
 const fileTree = computed(() => {
   const directories = new Set(directoryPaths.value);
@@ -1080,18 +845,6 @@ const fileTree = computed(() => {
   walk('', 0);
   return rows;
 });
-
-watch(projectNavItems, async (items) => {
-  await nextTick();
-  const validIds = new Set(items.map((item) => item.id));
-  Object.keys(projectContentRefs).forEach((id) => {
-    if (!validIds.has(id)) delete projectContentRefs[id];
-  });
-  if (!items.some((item) => item.id === activeProjectNavId.value)) {
-    activeProjectNavId.value = items[0]?.id || null;
-  }
-  handleProjectContentScroll();
-}, { flush: 'post' });
 
 function readStoredBoolean(key: string, fallback: boolean) {
   if (typeof window === 'undefined') return fallback;
@@ -1156,15 +909,17 @@ function apiError(value: unknown) {
   }
   const code = item.response?.data?.code;
   const traceId = item.response?.headers?.['x-trace-id'];
-  if (isInternalRuntimeFailureText([message, code, traceId ? `traceId=${traceId}` : ''].filter(Boolean).join(' '))) {
-    return t('project.result.requestFailed');
-  }
   const details = [code, traceId ? `traceId=${traceId}` : null].filter(Boolean).join(', ');
   return `${message || 'Request failed.'}${details ? ` (${details})` : ''}`;
 }
 
 function apiStatus(value: unknown) {
   return (value as { response?: { status?: number } }).response?.status;
+}
+
+function newClientRequestId() {
+  return globalThis.crypto?.randomUUID?.()
+    || `project-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function shortHash(value?: string) {
@@ -1212,167 +967,6 @@ function resetProjectFolderSelection() {
   if (directoryInput.value) directoryInput.value.value = '';
 }
 
-function planTagType(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {
-  const value = status.toUpperCase();
-  if (value.includes('COMPLETED') || value.includes('VERIFIED')) return 'success';
-  if (value.includes('FAILED')) return 'error';
-  if (value.includes('TIMED_OUT')) return 'error';
-  if (value.includes('CANCELLED')) return 'warning';
-  if (value.includes('REVIEWING')) return 'warning';
-  if (value.includes('PENDING') || value.includes('RUNNING')) return 'info';
-  if (value.includes('PARTIAL') || value.includes('DEGRADED') || value.includes('SKIPPED')) return 'warning';
-  return 'default';
-}
-
-function abbreviateText(value: string, max = 220) {
-  const compact = value.replace(/\s+/g, ' ').trim();
-  return compact.length > max ? `${compact.slice(0, max - 3)}...` : compact;
-}
-
-function projectPlanItemId(planId: number, part: 'plan') {
-  return `plan-${planId}-${part}`;
-}
-
-function setProjectContentRef(el: any, id: string) {
-  if (el) {
-    projectContentRefs[id] = el as HTMLElement;
-  } else {
-    delete projectContentRefs[id];
-  }
-}
-
-function getProjectScrollContainer() {
-  return messagesContainer.value;
-}
-
-function handleProjectContentScroll() {
-  const container = getProjectScrollContainer();
-  const items = projectNavItems.value;
-  if (!container || items.length === 0) {
-    activeProjectNavId.value = items[0]?.id || null;
-    return;
-  }
-
-  const containerRect = container.getBoundingClientRect();
-  const threshold = container.scrollTop + container.clientHeight * 0.22;
-  let activeId = items[0].id;
-  for (const item of items) {
-    const element = projectContentRefs[item.id];
-    if (!element) continue;
-    const top = element.getBoundingClientRect().top - containerRect.top + container.scrollTop;
-    if (top <= threshold) activeId = item.id;
-    else break;
-  }
-  activeProjectNavId.value = activeId;
-}
-
-async function scrollToProjectNavItem(item: ProjectContentNavItem) {
-  if (item.planId) {
-    const plan = plans.value.find((candidate) => candidate.id === item.planId);
-    if (plan) void selectPlan(plan);
-  }
-  await nextTick();
-  const container = getProjectScrollContainer();
-  const element = projectContentRefs[item.id];
-  if (!container || !element) return;
-
-  const containerRect = container.getBoundingClientRect();
-  const top = element.getBoundingClientRect().top - containerRect.top + container.scrollTop - 10;
-  activeProjectNavId.value = item.id;
-  container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-}
-
-function planElapsedMs(plan: AgentPlanResponse) {
-  const start = parseTimestamp(plan.startedAt || plan.createdAt);
-  const end = parseTimestamp(plan.finishedAt || plan.updatedAt);
-  if (start != null && !planTerminal(plan.status)) {
-    return Math.max(0, Date.now() - start);
-  }
-  if (start != null && end != null && end >= start) {
-    return end - start;
-  }
-
-  const stepStarts = plan.steps.map((step) => parseTimestamp(step.startedAt)).filter((value): value is number => value != null);
-  const stepEnds = plan.steps.map((step) => parseTimestamp(step.finishedAt)).filter((value): value is number => value != null);
-  if (stepStarts.length && stepEnds.length) {
-    const firstStart = Math.min(...stepStarts);
-    const lastEnd = Math.max(...stepEnds);
-    return lastEnd >= firstStart ? lastEnd - firstStart : null;
-  }
-  return null;
-}
-
-function parseTimestamp(value?: string | null) {
-  if (!value) return null;
-  const timestamp = new Date(value).getTime();
-  return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-function formatPlanElapsed(value: number | null) {
-  if (value == null) return t('project.result.duration.seconds', { seconds: 0 });
-  const totalSeconds = Math.max(0, Math.round(value / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes <= 0) return t('project.result.duration.seconds', { seconds });
-  return t('project.result.duration.minutes', { minutes, seconds });
-}
-
-function planProgressLabel(plan: AgentPlanResponse) {
-  const completed = plan.steps.filter((step) => ['COMPLETED', 'SKIPPED'].includes(step.status.toUpperCase())).length;
-  return t('project.result.progress', { completed, total: plan.steps.length });
-}
-
-function planUserStatus(plan: AgentPlanResponse) {
-  return planUserStatusPresentation(plan, requiresSandboxConfirmation(plan));
-}
-
-function planExecutionResult(plan: AgentPlanResponse) {
-  return executionOutcomePresentation(effectivePlanResult(plan).executionOutcome);
-}
-
-function planTaskResult(plan: AgentPlanResponse) {
-  return taskOutcomePresentation(effectivePlanResult(plan).taskOutcome);
-}
-
-function planAnswerResult(plan: AgentPlanResponse) {
-  return answerStatusPresentation(effectivePlanResult(plan).answerStatus);
-}
-
-function answerStatusResult(status: AgentPlanResponse['answerStatus']) {
-  return answerStatusPresentation(status);
-}
-
-function planEvidenceGroups(plan: AgentPlanResponse) {
-  return groupSynthesisEvidence(plan.finalSynthesisInput?.evidence || []);
-}
-
-function planStepStatusLabel(value: string) {
-  const status = value.toUpperCase();
-  if (status === 'PENDING') return t('project.result.step.queued');
-  if (status === 'RUNNING' || status === 'REVIEWING') return t('project.result.step.running');
-  if (status === 'COMPLETED') return t('project.result.step.completed');
-  if (status === 'PARTIAL' || status === 'DEGRADED') return t('project.result.step.partial');
-  if (status === 'FAILED' || status === 'TIMED_OUT') return t('project.result.step.failed');
-  if (status === 'SKIPPED') return t('project.result.step.skipped');
-  if (status === 'CANCELLED') return t('project.result.step.cancelled');
-  return t('project.result.step.unknown');
-}
-
-function planStepPreviewLine(step: AgentPlanResponse['steps'][number]) {
-  const source = withoutInternalRuntimeCodes(step.description || step.title || '');
-  if (source.trim()) return abbreviateText(source, 140);
-  return planStepStatusLabel(step.status);
-}
-
-function planStepMessageContent(step: AgentPlanResponse['steps'][number]) {
-  const lines: string[] = [];
-  if (step.description && step.description !== step.title) {
-    lines.push(withoutInternalProjectEvidenceRefs(step.description));
-  }
-  lines.push(planStepStatusLabel(step.status));
-  return lines.join('\n\n');
-}
-
 function toggleInspector(tab: ProjectInspectorTab) {
   if (inspectorOpen.value && inspectorTab.value === tab) {
     inspectorOpen.value = false;
@@ -1385,19 +979,6 @@ function toggleInspector(tab: ProjectInspectorTab) {
 function showInspector(tab: ProjectInspectorTab) {
   inspectorTab.value = tab;
   inspectorOpen.value = true;
-}
-
-function v2OutcomeStatusLabel(status: 'RUNNING' | 'SUCCEEDED' | 'FAILED') {
-  if (status === 'SUCCEEDED') return '执行成功';
-  if (status === 'FAILED') return '执行失败';
-  return '正在执行';
-}
-
-function v2ProgressStateLabel(state: V2ProgressState) {
-  if (state === 'done') return '已完成';
-  if (state === 'failed') return '失败';
-  if (state === 'running') return '进行中';
-  return '等待中';
 }
 
 function v2TurnStatusType(status: V2NaturalLanguageTurnHistoryItem['status']) {
@@ -1527,7 +1108,6 @@ async function confirmApplyCandidate() {
     await Promise.all([
       activeSessionId.value ? loadCandidates(activeSessionId.value, epoch) : Promise.resolve(),
       activeSessionId.value ? loadV2TurnHistory(activeSessionId.value, epoch) : Promise.resolve(),
-      selectedPlan.value ? selectPlan(selectedPlan.value, epoch) : Promise.resolve(),
     ]);
     showInspector('versions');
   } catch (cause) {
@@ -1694,7 +1274,6 @@ async function confirmRollback() {
     await Promise.all([loadManifest(epoch), loadRevisions()]);
     await Promise.all([
       activeSessionId.value ? loadCandidates(activeSessionId.value, epoch) : Promise.resolve(),
-      selectedPlan.value ? selectPlan(selectedPlan.value, epoch) : Promise.resolve(),
     ]);
   } catch (cause) {
     const status = apiStatus(cause);
@@ -1811,181 +1390,6 @@ function technicalStatusLabel(status: string) {
 
 function candidateEvidence(candidate: CandidateArtifactResponse, relativePath: string): CandidateEvidenceRef[] {
   return candidate.changes.find((change) => change.relativePath === relativePath)?.evidenceRefs || [];
-}
-
-function syncProcessOpen(message: ProjectChatMessage, event: Event) {
-  message.processOpen = (event.currentTarget as HTMLDetailsElement).open;
-}
-
-function processSummary(message: ProjectChatMessage) {
-  if (!message.processDone) return 'Project Agent is working...';
-  if (message.processElapsedMs != null) return `Process completed - ${(message.processElapsedMs / 1000).toFixed(1)}s`;
-  return 'Process details';
-}
-
-function newClientRequestId() {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `project-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function appendChatMessage(message: ProjectChatMessage) {
-  messages.value = [...messages.value, message];
-}
-
-function updateChatMessage(localId: string | null, update: (message: ProjectChatMessage) => void) {
-  if (!localId) return;
-  const message = messages.value.find((item) => item.localId === localId);
-  if (message) update(message);
-}
-
-async function scrollMessagesToBottom() {
-  await Promise.resolve();
-  window.requestAnimationFrame(() => {
-    if (messagesContainer.value) messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
-  });
-}
-
-function appendAssistantChunk(content: string) {
-  updateChatMessage(currentAssistantMessageId, (message) => {
-    message.content += content;
-    message.pending = false;
-  });
-  void scrollMessagesToBottom();
-}
-
-function replaceAssistantContent(content: string) {
-  updateChatMessage(currentAssistantMessageId, (message) => {
-    const presentation = projectAssistantPresentation(content, t('project.result.requestFailed'));
-    message.content = presentation.content;
-    message.technicalContent = presentation.technicalContent;
-    message.pending = false;
-  });
-  void scrollMessagesToBottom();
-}
-
-function appendProcessLine(content: string) {
-  const line = content.trim();
-  if (!line) return;
-  updateChatMessage(currentProcessMessageId, (message) => {
-    const lines = message.content.split('\n').filter(Boolean);
-    if (lines[lines.length - 1] !== line) message.content = [...lines, line].join('\n');
-    message.processOpen = true;
-    message.processDone = false;
-  });
-  void scrollMessagesToBottom();
-}
-
-function finishProcess() {
-  updateChatMessage(currentProcessMessageId, (message) => {
-    message.processDone = true;
-    message.processOpen = false;
-    message.processElapsedMs = message.processStartedAt ? Date.now() - message.processStartedAt : undefined;
-  });
-}
-
-function closeProjectSocket() {
-  const socket = currentSocket;
-  currentSocket = null;
-  activeClientRequestId = null;
-  if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
-}
-
-function projectToolLabel(name: string) {
-  if (name === 'project_manifest') return 'Inspecting the authorized Project directory manifest.';
-  if (name === 'project_search') return 'Searching authorized Project-relative files.';
-  if (name === 'project_read_file') return 'Reading an authorized Project-relative file.';
-  return 'Calling an authorized read-only Project tool.';
-}
-
-function parseToolNames(value: string | null) {
-  if (!value) return [] as string[];
-  try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((item) => String(item?.function?.name || item?.name || '')).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function toolResultLabel(content: string | null) {
-  if (!content) return 'Project tool completed.';
-  try {
-    const payload = JSON.parse(content);
-    if (payload?.success === false) return 'Project tool failed; the Agent may retry with another authorized read operation.';
-    const path = payload?.relativePath;
-    return path && path !== 'manifest' ? `Observed Project-relative path: ${path}` : 'Project tool completed.';
-  } catch {
-    return 'Project tool completed.';
-  }
-}
-
-function buildProjectMessages(serverMessages: AgentMessageResponse[]) {
-  const result: ProjectChatMessage[] = [];
-  const hasProcessSummary = serverMessages.some((item) => item.role?.toLowerCase() === 'process');
-  let pendingProcess: string[] = [];
-  let pendingIds: number[] = [];
-  let pendingCreatedAt: string | undefined;
-  const flushProcess = () => {
-    if (!pendingProcess.length) return;
-    result.push({
-      localId: `process-server-${pendingIds.join('-') || result.length}`,
-      role: 'process',
-      content: pendingProcess.join('\n'),
-      processOpen: false,
-      processDone: true,
-      createdAt: pendingCreatedAt,
-    });
-    pendingProcess = [];
-    pendingIds = [];
-    pendingCreatedAt = undefined;
-  };
-
-  for (const item of serverMessages) {
-    const role = item.role?.toLowerCase();
-    if (role === 'assistant' && item.toolCallsJson) {
-      if (!hasProcessSummary) {
-        pendingCreatedAt ||= item.createdAt;
-        pendingIds.push(item.id);
-        pendingProcess.push(...(parseToolNames(item.toolCallsJson).map(projectToolLabel).length ? parseToolNames(item.toolCallsJson).map(projectToolLabel) : ['Selecting an authorized read-only Project tool.']));
-      }
-      continue;
-    }
-    if (role === 'tool') {
-      if (!hasProcessSummary) {
-        pendingCreatedAt ||= item.createdAt;
-        pendingIds.push(item.id);
-        pendingProcess.push(toolResultLabel(item.content));
-      }
-      continue;
-    }
-    if (role === 'system') continue;
-    if (role === 'process') {
-      pendingCreatedAt ||= item.createdAt;
-      pendingIds.push(item.id);
-      if (item.content?.trim()) pendingProcess.push(item.content.trim());
-      continue;
-    }
-    if (role === 'user' || role === 'assistant') {
-      flushProcess();
-      if (role === 'assistant' && isSandboxConfirmationRequiredText(item.content)) continue;
-      const rawContent = item.content || '';
-      const presentation = role === 'assistant'
-        ? projectAssistantPresentation(rawContent, t('project.result.requestFailed'))
-        : { content: rawContent, technicalContent: undefined };
-      result.push({
-        localId: `server-${item.id}`,
-        role,
-        content: presentation.content,
-        technicalContent: presentation.technicalContent,
-        createdAt: item.createdAt,
-      });
-    }
-  }
-
-  flushProcess();
-  return result;
 }
 
 function currentSessionId() {
@@ -2385,346 +1789,16 @@ function handleV2TurnKeydown(event: KeyboardEvent) {
   void sendV2NaturalLanguageTurn();
 }
 
-function currentProjectAnalysisIdentity(): V2ProjectAnalysisRequestIdentity {
-  return {
-    projectId: activeProjectId.value,
-    sessionId: activeSessionId.value,
-    clientRequestId: projectAnalysisClientRequestId,
-    sequence: projectAnalysisSequence,
-  };
-}
-
-function syncProjectAnalysisOpen(event: Event) {
-  projectAnalysisOpen.value = (event.currentTarget as HTMLDetailsElement).open;
-}
-
-function stopProjectAnalysisPolling() {
-  projectAnalysisSequence += 1;
-  projectAnalysisAbortController?.abort();
-  projectAnalysisAbortController = null;
-  projectAnalysisPolling.value = false;
-}
-
-function storeProjectAnalysisRequest(projectId: number, sessionId: number, clientRequestId: string) {
-  window.localStorage.setItem(`${V2_PROJECT_ANALYSIS_STORAGE_KEY}${projectId}.${sessionId}`, clientRequestId);
-}
-
-function clearStoredProjectAnalysisRequest(projectId: number, sessionId: number) {
-  window.localStorage.removeItem(`${V2_PROJECT_ANALYSIS_STORAGE_KEY}${projectId}.${sessionId}`);
-}
-
-function storedProjectAnalysisRequest(projectId: number, sessionId: number) {
-  const value = window.localStorage.getItem(`${V2_PROJECT_ANALYSIS_STORAGE_KEY}${projectId}.${sessionId}`);
-  return value?.trim() || null;
-}
-
-async function runProjectAnalysisPolling(projectId: number, sessionId: number, clientRequestId: string) {
-  if (!v2ProjectAnalysisAvailable.value) return;
-  stopProjectAnalysisPolling();
-  projectAnalysisClientRequestId = clientRequestId;
-  const sequence = projectAnalysisSequence;
-  const expected = { projectId, sessionId, clientRequestId, sequence };
-  const controller = new AbortController();
-  projectAnalysisAbortController = controller;
-  projectAnalysisPolling.value = true;
-  try {
-    const terminal = await pollV2ProjectAnalysis(
-      async () => (await readV2ProjectReadAnalysisTurn(projectId, sessionId, clientRequestId)).data,
-      {
-        signal: controller.signal,
-        onOutcome: (outcome) => {
-          if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
-            projectAnalysisOutcome.value = outcome;
-          }
-        },
-      },
-    );
-    if (!isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) return;
-    projectAnalysisOutcome.value = terminal;
-    clearStoredProjectAnalysisRequest(projectId, sessionId);
-    if (terminal.status === 'SUCCEEDED') {
-      await loadMessages(sessionId, projectEpoch).catch(() => undefined);
-    }
-  } catch (cause) {
-    if (controller.signal.aborted) return;
-    if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
-      if (isV2ProjectAnalysisConfirmedNotCreated(cause)) {
-        clearStoredProjectAnalysisRequest(projectId, sessionId);
-      }
-      projectAnalysisError.value = apiError(cause);
-    }
-  } finally {
-    if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
-      projectAnalysisPolling.value = false;
-      projectAnalysisAbortController = null;
-    }
-  }
-}
-
-async function recoverProjectAnalysis(projectId: number, sessionId: number) {
-  if (!v2ProjectAnalysisAvailable.value) return;
-  const clientRequestId = storedProjectAnalysisRequest(projectId, sessionId);
-  if (!clientRequestId) return;
-  projectAnalysisOpen.value = true;
-  projectAnalysisError.value = '';
-  await runProjectAnalysisPolling(projectId, sessionId, clientRequestId);
-}
-
-async function startProjectAnalysis() {
-  if (!v2ProjectAnalysisAvailable.value) {
-    projectAnalysisError.value = v2AvailabilityLabel(v2Availability.value, 'project.read-analysis');
-    return;
-  }
-  const projectId = activeProjectId.value;
-  if (!projectId || projectAnalysisStarting.value || projectAnalysisPolling.value) return;
-  const epoch = projectEpoch;
-  const clientRequestId = newV2ProjectAnalysisClientRequestId();
-  projectAnalysisStarting.value = true;
-  projectAnalysisError.value = '';
-  projectAnalysisOutcome.value = null;
-  try {
-    const sessionId = await ensureSession();
-    if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
-    const pendingRequestId = storedProjectAnalysisRequest(projectId, sessionId);
-    if (pendingRequestId) {
-      await runProjectAnalysisPolling(projectId, sessionId, pendingRequestId);
-      return;
-    }
-    const request = normalizeV2ProjectAnalysisForm(projectAnalysisForm, clientRequestId);
-    stopProjectAnalysisPolling();
-    projectAnalysisClientRequestId = clientRequestId;
-    const sequence = projectAnalysisSequence;
-    const expected = { projectId, sessionId, clientRequestId, sequence };
-    storeProjectAnalysisRequest(projectId, sessionId, clientRequestId);
-    const controller = new AbortController();
-    projectAnalysisAbortController = controller;
-    projectAnalysisPolling.value = true;
-    const response = await startThenPollV2ProjectAnalysis(
-      async () => (await startV2ProjectReadAnalysisTurn(projectId, sessionId, request)).data,
-      async () => (await readV2ProjectReadAnalysisTurn(projectId, sessionId, clientRequestId)).data,
-      {
-        signal: controller.signal,
-        onOutcome: (outcome) => {
-          if (isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) {
-            projectAnalysisOutcome.value = outcome;
-          }
-        },
-      },
-    );
-    if (!isCurrentV2ProjectAnalysisRequest(expected, currentProjectAnalysisIdentity())) return;
-    projectAnalysisOutcome.value = response;
-    clearStoredProjectAnalysisRequest(projectId, sessionId);
-    if (response.status === 'SUCCEEDED') {
-      await loadMessages(sessionId, epoch).catch(() => undefined);
-    }
-  } catch (cause) {
-    if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      const sessionId = activeSessionId.value;
-      if (sessionId && (
-        isDefinitiveV2ProjectAnalysisStartRejection(cause)
-        || isV2ProjectAnalysisConfirmedNotCreated(cause)
-      )) {
-        clearStoredProjectAnalysisRequest(projectId, sessionId);
-      }
-      if (sessionId && storedProjectAnalysisRequest(projectId, sessionId)
-          === clientRequestId) {
-        projectAnalysisError.value = apiError(cause);
-      } else {
-        projectAnalysisError.value = apiError(cause);
-      }
-    }
-  } finally {
-    if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      projectAnalysisStarting.value = false;
-      projectAnalysisPolling.value = false;
-      projectAnalysisAbortController = null;
-    }
-  }
-}
-
-function currentProjectCandidateIdentity(): V2ProjectCandidateRequestIdentity {
-  return {
-    projectId: activeProjectId.value,
-    sessionId: activeSessionId.value,
-    clientRequestId: projectCandidateClientRequestId,
-    sequence: projectCandidateSequence,
-  };
-}
-
-function stopProjectCandidatePolling() {
-  projectCandidateSequence += 1;
-  projectCandidateAbortController?.abort();
-  projectCandidateAbortController = null;
-  projectCandidatePolling.value = false;
-}
-
-function candidateStorageKey(projectId: number, sessionId: number) {
-  return `${V2_PROJECT_CANDIDATE_STORAGE_KEY}${projectId}.${sessionId}`;
-}
-
-function clearStoredProjectCandidateRequest(projectId: number, sessionId: number) {
-  window.localStorage.removeItem(candidateStorageKey(projectId, sessionId));
-}
-
-function storedProjectCandidateRequest(projectId: number, sessionId: number) {
-  return window.localStorage.getItem(candidateStorageKey(projectId, sessionId))?.trim() || null;
-}
-
-async function presentProjectCandidate(
-  projectId: number,
-  sessionId: number,
-  outcome: V2ProjectCandidateTurnResponse,
-  epoch: number,
-) {
-  if (outcome.status !== 'SUCCEEDED' || !outcome.candidateArtifactId
-      || epoch !== projectEpoch || projectId !== activeProjectId.value
-      || sessionId !== activeSessionId.value) return;
-  await Promise.all([
-    loadMessages(sessionId, epoch).catch(() => undefined),
-    loadCandidates(sessionId, epoch),
-  ]);
-  const candidate = candidates.value.find((item) => item.artifact.id === outcome.candidateArtifactId);
-  if (candidate) selectCandidate(candidate);
-}
-
-async function recoverProjectCandidate(projectId: number, sessionId: number) {
-  if (!v2ProjectCandidateAvailable.value) return;
-  const clientRequestId = storedProjectCandidateRequest(projectId, sessionId);
-  if (!clientRequestId) return;
-  projectCandidateOpen.value = true;
-  projectCandidateError.value = '';
-  stopProjectCandidatePolling();
-  projectCandidateClientRequestId = clientRequestId;
-  const sequence = projectCandidateSequence;
-  const expected = { projectId, sessionId, clientRequestId, sequence };
-  const controller = new AbortController();
-  projectCandidateAbortController = controller;
-  projectCandidatePolling.value = true;
-  const epoch = projectEpoch;
-  try {
-    const outcome = await startThenPollV2ProjectCandidate(
-      async () => (await readV2ProjectCandidateTurn(projectId, sessionId, clientRequestId)).data,
-      async () => (await readV2ProjectCandidateTurn(projectId, sessionId, clientRequestId)).data,
-      {
-        signal: controller.signal,
-        onOutcome: (value) => {
-          if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
-            projectCandidateOutcome.value = value;
-          }
-        },
-      },
-    );
-    if (!isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) return;
-    projectCandidateOutcome.value = outcome;
-    clearStoredProjectCandidateRequest(projectId, sessionId);
-    await presentProjectCandidate(projectId, sessionId, outcome, epoch);
-  } catch (cause) {
-    if (controller.signal.aborted) return;
-    if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
-      if (isV2ProjectCandidateConfirmedNotCreated(cause)) {
-        clearStoredProjectCandidateRequest(projectId, sessionId);
-      }
-      projectCandidateError.value = apiError(cause);
-    }
-  } finally {
-    if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
-      projectCandidatePolling.value = false;
-      projectCandidateAbortController = null;
-    }
-  }
-}
-
-async function startProjectCandidate() {
-  if (!v2ProjectCandidateAvailable.value) {
-    projectCandidateError.value = v2AvailabilityLabel(v2Availability.value, 'project.candidate');
-    return;
-  }
-  const projectId = activeProjectId.value;
-  if (!projectId || projectCandidateStarting.value || projectCandidatePolling.value) return;
-  const epoch = projectEpoch;
-  projectCandidateStarting.value = true;
-  projectCandidateError.value = '';
-  projectCandidateOutcome.value = null;
-  const clientRequestId = newV2ProjectCandidateClientRequestId();
-  try {
-    const sessionId = await ensureSession();
-    if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
-    const pending = storedProjectCandidateRequest(projectId, sessionId);
-    if (pending) {
-      await recoverProjectCandidate(projectId, sessionId);
-      return;
-    }
-    const request = normalizeV2ProjectCandidateForm(projectCandidateForm, clientRequestId);
-    stopProjectCandidatePolling();
-    projectCandidateClientRequestId = clientRequestId;
-    const sequence = projectCandidateSequence;
-    const expected = { projectId, sessionId, clientRequestId, sequence };
-    window.localStorage.setItem(candidateStorageKey(projectId, sessionId), clientRequestId);
-    const controller = new AbortController();
-    projectCandidateAbortController = controller;
-    projectCandidatePolling.value = true;
-    const outcome = await startThenPollV2ProjectCandidate(
-      async () => (await startV2ProjectCandidateTurn(projectId, sessionId, request)).data,
-      async () => (await readV2ProjectCandidateTurn(projectId, sessionId, clientRequestId)).data,
-      {
-        signal: controller.signal,
-        onOutcome: (value) => {
-          if (isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) {
-            projectCandidateOutcome.value = value;
-          }
-        },
-      },
-    );
-    if (!isCurrentV2ProjectCandidateRequest(expected, currentProjectCandidateIdentity())) return;
-    projectCandidateOutcome.value = outcome;
-    clearStoredProjectCandidateRequest(projectId, sessionId);
-    await presentProjectCandidate(projectId, sessionId, outcome, epoch);
-  } catch (cause) {
-    const sessionId = activeSessionId.value;
-    if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      if (sessionId && (isDefinitiveV2ProjectCandidateStartRejection(cause)
-          || isV2ProjectCandidateConfirmedNotCreated(cause))) {
-        clearStoredProjectCandidateRequest(projectId, sessionId);
-      }
-      projectCandidateError.value = apiError(cause);
-    }
-  } finally {
-    if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      projectCandidateStarting.value = false;
-      projectCandidatePolling.value = false;
-      projectCandidateAbortController = null;
-    }
-  }
-}
-
 async function selectProject(projectId: number) {
   resetV2NaturalLanguageView();
-  stopProjectAnalysisPolling();
-  stopProjectCandidatePolling();
-  projectCandidateStarting.value = false;
-  projectCandidateClientRequestId = null;
-  projectCandidateOutcome.value = null;
-  projectCandidateError.value = '';
-  projectAnalysisStarting.value = false;
-  projectAnalysisClientRequestId = null;
-  projectAnalysisOutcome.value = null;
-  projectAnalysisError.value = '';
-  closeProjectSocket();
-  currentAssistantMessageId = null;
-  currentProcessMessageId = null;
   projectEpoch++;
   sessionFlight = null;
-  if (planPoll != null) {
-    window.clearTimeout(planPoll);
-    planPoll = null;
-  }
   if (candidateValidationPoll != null) {
     window.clearTimeout(candidateValidationPoll);
     candidateValidationPoll = null;
   }
   loading.file = false;
   loading.search = false;
-  loading.send = false;
   activeProjectId.value = projectId;
   activeSessionId.value = null;
   projectSessions.value = [];
@@ -2732,13 +1806,9 @@ async function selectProject(projectId: number) {
   manifest.value = null;
   selectedFile.value = null;
   searchResults.value = [];
-  messages.value = [];
-  resetContextDebug();
-  plans.value = [];
   evidence.value = [];
   candidates.value = [];
   revisions.value = [];
-  selectedPlan.value = null;
   selectedCandidate.value = null;
   selectedChangeIndexes.value = new Set();
   candidateValidations.value = [];
@@ -2816,315 +1886,9 @@ async function loadConversation(epoch = projectEpoch) {
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
       void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
-      void recoverProjectAnalysis(activeProjectId.value, sessionId);
-      void recoverProjectCandidate(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
-  }
-}
-
-async function loadMessages(sessionId = currentSessionId(), epoch = projectEpoch) {
-  if (!sessionId) return;
-  const value = (await listMessages(sessionId, { limit: 100, view: 'all' })).data;
-  if (epoch === projectEpoch) {
-    messages.value = buildProjectMessages(value);
-    await scrollMessagesToBottom();
-  }
-  await loadContextDebug(sessionId, epoch);
-}
-
-async function loadContextDebug(sessionId = currentSessionId(), epoch = projectEpoch) {
-  const projectId = activeProjectId.value;
-  if (!projectId || !sessionId) {
-    resetContextDebug();
-    return;
-  }
-  loading.context = true;
-  contextError.value = '';
-  try {
-    const snapshots = (await listProjectContextSnapshots(projectId, sessionId, 1)).data;
-    if (epoch === projectEpoch && projectId === activeProjectId.value && sessionId === activeSessionId.value) {
-      contextSnapshot.value = snapshots[0] || null;
-    }
-  } catch (cause) {
-    if (epoch === projectEpoch && projectId === activeProjectId.value && sessionId === activeSessionId.value) {
-      contextSnapshot.value = null;
-      contextError.value = apiError(cause);
-    }
-  } finally {
-    if (epoch === projectEpoch && projectId === activeProjectId.value) loading.context = false;
-  }
-}
-
-function resetContextDebug() {
-  contextSnapshot.value = null;
-  contextError.value = '';
-  loading.context = false;
-}
-
-async function loadPlans(sessionId = currentSessionId(), epoch = projectEpoch) {
-  if (!sessionId) return;
-  const value = (await listPlans(sessionId)).data;
-  if (epoch === projectEpoch) {
-    plans.value = value;
-    const preserved = selectedPlan.value
-      ? value.find((item) => item.id === selectedPlan.value?.id) || null
-      : null;
-    const restored = preserved || value[0] || null;
-    if (restored && selectedPlan.value?.id !== restored.id) {
-      await selectPlan(restored, epoch);
-    } else {
-      selectedPlan.value = restored;
-    }
-  }
-}
-
-function buildProjectWebSocketUrl(projectId: number, token: string) {
-  const origin = window.location.origin.replace(/^http/, 'ws');
-  return `${origin}/api/v1/ws/projects/${projectId}/chat?token=${encodeURIComponent(token)}`;
-}
-
-async function sendProjectWebSocket(projectId: number, sessionId: number, content: string, clientRequestId: string) {
-  const token = authStore.token || localStorage.getItem('yanban_access_token');
-  if (!token) throw new Error('Not authenticated.');
-  closeProjectSocket();
-  activeClientRequestId = clientRequestId;
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let acknowledged = false;
-    const socket = new WebSocket(buildProjectWebSocketUrl(projectId, token));
-    currentSocket = socket;
-    const timeout = window.setTimeout(() => {
-      if (!acknowledged && !settled) {
-        settled = true;
-        socket.close();
-        reject(new Error('Project streaming connection timed out.'));
-      }
-    }, 8000);
-    const cleanup = () => {
-      window.clearTimeout(timeout);
-      if (currentSocket === socket) currentSocket = null;
-    };
-    const fail = (message: string) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error(message));
-    };
-    socket.onopen = () => socket.send(JSON.stringify({ sessionId, content, ragDisabled: true, clientRequestId }));
-    socket.onmessage = (event) => {
-      let payload: ProjectWsChatEvent;
-      try {
-        payload = JSON.parse(event.data) as ProjectWsChatEvent;
-      } catch {
-        fail('Project streaming returned an invalid event.');
-        socket.close();
-        return;
-      }
-      if (payload.clientRequestId && payload.clientRequestId !== clientRequestId) return;
-      if (payload.type === 'ack') {
-        acknowledged = true;
-        window.clearTimeout(timeout);
-        return;
-      }
-      if (payload.type === 'process' && payload.content) {
-        appendProcessLine(payload.content);
-        return;
-      }
-      if (payload.type === 'reset') {
-        replaceAssistantContent('');
-        return;
-      }
-      if (payload.type === 'replace') {
-        replaceAssistantContent(payload.assistantContent || payload.content || '');
-        return;
-      }
-      if (payload.type === 'chunk' && payload.content) {
-        appendAssistantChunk(payload.content);
-        return;
-      }
-      if (payload.type === 'error') {
-        if (isSandboxConfirmationRequiredText(payload.error)) {
-          replaceAssistantContent('');
-          finishProcess();
-          if (!settled) {
-            settled = true;
-            cleanup();
-            resolve();
-          }
-          socket.close();
-          return;
-        }
-        fail(payload.error || 'Project Agent request failed.');
-        socket.close();
-        return;
-      }
-      if (payload.type === 'done') {
-        if (payload.assistantContent != null) replaceAssistantContent(payload.assistantContent);
-        const projectedEvidence = payload.projectEvidence || payload.evidence;
-        if (projectedEvidence) evidence.value = projectedEvidence;
-        finishProcess();
-        if (!settled) {
-          settled = true;
-          cleanup();
-          resolve();
-        }
-        socket.close();
-      }
-    };
-    socket.onerror = () => fail(acknowledged ? 'Project streaming connection failed.' : 'Project streaming is unavailable.');
-    socket.onclose = () => {
-      cleanup();
-      if (!settled) fail('Project streaming connection closed before completion.');
-    };
-  });
-}
-
-async function sendProjectHttp(projectId: number, sessionId: number, content: string, clientRequestId: string) {
-  const response = (await sendProjectMessage(projectId, sessionId, { content, ragDisabled: true, clientRequestId })).data;
-  evidence.value = response.projectEvidence || [];
-  if (isSandboxConfirmationRequiredText(response.errorMessage)
-      || isSandboxConfirmationRequiredText(response.assistantContent)) {
-    replaceAssistantContent('');
-    return;
-  }
-  if (response.assistantContent != null) replaceAssistantContent(response.assistantContent);
-  if (!response.success && !isControlledProjectPartial(response)) {
-    throw new Error(response.errorMessage || 'Project Agent request failed.');
-  }
-}
-
-async function sendProjectWithFallback(projectId: number, sessionId: number, content: string, clientRequestId: string) {
-  try {
-    await sendProjectWebSocket(projectId, sessionId, content, clientRequestId);
-  } catch {
-    appendProcessLine('Streaming connection unavailable; reconciling through the HTTP fallback.');
-    await sendProjectHttp(projectId, sessionId, content, clientRequestId);
-  }
-}
-
-function handleComposerKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
-  event.preventDefault();
-  void sendChat();
-}
-
-async function sendChat() {
-  const projectId = activeProjectId.value;
-  const content = chatInput.value.trim();
-  if (!projectId || !content || loading.send) return;
-  const epoch = projectEpoch;
-  let requestId: string | null = null;
-  loading.send = true;
-  error.value = '';
-  try {
-    const sessionId = await ensureSession();
-    if (!sessionId || epoch !== projectEpoch) return;
-    chatInput.value = '';
-    requestId = newClientRequestId();
-    activeClientRequestId = requestId;
-    currentProcessMessageId = `process-${requestId}`;
-    currentAssistantMessageId = `assistant-${requestId}`;
-    const createdAt = new Date().toISOString();
-    appendChatMessage({ localId: `user-${requestId}`, role: 'user', content, createdAt });
-    appendChatMessage({ localId: currentProcessMessageId, role: 'process', content: 'Starting authenticated read-only Project request.', processOpen: false, processDone: false, processStartedAt: Date.now(), createdAt });
-    appendChatMessage({ localId: currentAssistantMessageId, role: 'assistant', content: '', pending: true, createdAt });
-    await scrollMessagesToBottom();
-    await sendProjectWithFallback(projectId, sessionId, content, requestId);
-    finishProcess();
-    if (epoch !== projectEpoch) return;
-    await Promise.all([
-      loadMessages(sessionId, epoch).catch(() => undefined),
-      loadPlans(sessionId, epoch).catch(() => undefined),
-      loadCandidates(sessionId, epoch).catch(() => undefined),
-    ]);
-  } catch (cause) {
-    if (requestId && activeClientRequestId === requestId) finishProcess();
-    if (epoch === projectEpoch) {
-      await Promise.all([
-        loadMessages(currentSessionId(), epoch).catch(() => undefined),
-        loadPlans(currentSessionId(), epoch).catch(() => undefined),
-      ]);
-      if (!messages.value.some((item) => item.role === 'assistant' && item.content)) chatInput.value = content;
-      error.value = apiError(cause);
-    }
-  } finally {
-    if (epoch === projectEpoch) loading.send = false;
-    if (requestId && activeClientRequestId === requestId) {
-      currentAssistantMessageId = null;
-      currentProcessMessageId = null;
-      closeProjectSocket();
-    }
-  }
-}
-
-async function selectPlan(plan: AgentPlanResponse, epoch = projectEpoch) {
-  const projectId = activeProjectId.value;
-  selectedPlan.value = plan;
-  if (!projectId) return;
-  loading.evidence = true;
-  try {
-    const value = (await listProjectEvidence(projectId, plan.id)).data;
-    if (epoch === projectEpoch && projectId === activeProjectId.value && selectedPlan.value?.id === plan.id) {
-      evidence.value = value;
-    }
-  } catch (cause) {
-    if (epoch === projectEpoch && projectId === activeProjectId.value && selectedPlan.value?.id === plan.id) {
-      error.value = apiError(cause);
-      evidence.value = [];
-    }
-  } finally {
-    if (epoch === projectEpoch && projectId === activeProjectId.value) loading.evidence = false;
-  }
-}
-
-async function confirmSandboxExecution(plan: AgentPlanResponse) {
-  if (!requiresSandboxConfirmation(plan) || executingSandboxPlanId.value !== null) return;
-  const sessionId = currentSessionId();
-  if (!sessionId || plan.sessionId !== sessionId) {
-    error.value = 'This plan does not belong to the active Project conversation.';
-    return;
-  }
-  const epoch = projectEpoch;
-  executingSandboxPlanId.value = plan.id;
-  error.value = '';
-  try {
-    const response = await confirmAndQueueSandboxPlan(plan.id, newClientRequestId());
-    if (epoch !== projectEpoch) return;
-    selectedPlan.value = response.data;
-    await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch)]);
-    const refreshed = plans.value.find((item) => item.id === plan.id);
-    if (refreshed) await selectPlan(refreshed, epoch);
-    void pollPlanUntilTerminal(sessionId, plan.id, epoch, 0);
-  } catch (cause) {
-    if (epoch === projectEpoch) error.value = apiError(cause);
-  } finally {
-    if (epoch === projectEpoch) executingSandboxPlanId.value = null;
-  }
-}
-
-async function cancelProjectPlan(plan: AgentPlanResponse) {
-  if (planTerminal(plan.status) || cancellingPlanId.value !== null) return;
-  const sessionId = currentSessionId();
-  if (!sessionId || plan.sessionId !== sessionId) {
-    error.value = 'This plan does not belong to the active Project conversation.';
-    return;
-  }
-  const epoch = projectEpoch;
-  cancellingPlanId.value = plan.id;
-  error.value = '';
-  try {
-    const response = await cancelPlan(plan.id);
-    if (epoch !== projectEpoch) return;
-    selectedPlan.value = response.data;
-    await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch)]);
-    const refreshed = plans.value.find((item) => item.id === plan.id);
-    if (refreshed) await selectPlan(refreshed, epoch);
-  } catch (cause) {
-    if (epoch === projectEpoch) error.value = apiError(cause);
-  } finally {
-    if (epoch === projectEpoch) cancellingPlanId.value = null;
   }
 }
 
@@ -3164,51 +1928,14 @@ async function loadCandidates(sessionId: number, epoch = projectEpoch) {
   }
 }
 
-function planTerminal(status: string) {
-  return ['COMPLETED', 'FAILED', 'CANCELLED'].includes(status.toUpperCase());
-}
-
-async function pollPlanUntilTerminal(sessionId: number, planId: number, epoch: number, attempt: number) {
-  if (epoch !== projectEpoch) return;
-  await loadPlans(sessionId, epoch);
-  const plan = plans.value.find((item) => item.id === planId);
-  if (!plan) return;
-  await selectPlan(plan);
-  if (requiresSandboxConfirmation(plan)) return;
-  if (planTerminal(plan.status)) {
-    await Promise.all([loadMessages(sessionId, epoch), loadCandidates(sessionId, epoch)]);
-    return;
-  }
-  if (attempt >= 150) {
-    error.value = 'Plan is still running beyond the expected five-minute window; use Refresh to check its latest status.';
-    return;
-  }
-  planPoll = window.setTimeout(() => {
-    void pollPlanUntilTerminal(sessionId, planId, epoch, attempt + 1);
-  }, 2000);
-}
-
 async function refreshCandidates() {
   const sessionId = currentSessionId();
   if (sessionId) await loadCandidates(sessionId);
 }
 
 async function selectConversation(sessionId: number) {
-  if (sessionId === activeSessionId.value || loading.send) return;
+  if (sessionId === activeSessionId.value || v2NaturalTurnBusy.value) return;
   resetV2NaturalLanguageView();
-  stopProjectAnalysisPolling();
-  stopProjectCandidatePolling();
-  projectCandidateStarting.value = false;
-  projectCandidateClientRequestId = null;
-  projectCandidateOutcome.value = null;
-  projectCandidateError.value = '';
-  projectAnalysisStarting.value = false;
-  projectAnalysisClientRequestId = null;
-  projectAnalysisOutcome.value = null;
-  projectAnalysisError.value = '';
-  closeProjectSocket();
-  currentAssistantMessageId = null;
-  currentProcessMessageId = null;
   projectEpoch++;
   sessionFlight = null;
   if (candidateValidationPoll != null) {
@@ -3217,12 +1944,8 @@ async function selectConversation(sessionId: number) {
   }
   activeSessionId.value = sessionId;
   syncProjectLocation(activeProjectId.value, sessionId);
-  messages.value = [];
-  resetContextDebug();
-  plans.value = [];
   evidence.value = [];
   candidates.value = [];
-  selectedPlan.value = null;
   selectedCandidate.value = null;
   candidateValidations.value = [];
   selectedValidation.value = null;
@@ -3234,8 +1957,6 @@ async function selectConversation(sessionId: number) {
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
       void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
-      void recoverProjectAnalysis(activeProjectId.value, sessionId);
-      void recoverProjectCandidate(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -3244,29 +1965,12 @@ async function selectConversation(sessionId: number) {
 
 async function startNewConversation() {
   const project = activeProject.value;
-  if (!project || loading.send) return;
+  if (!project || v2NaturalTurnBusy.value) return;
   resetV2NaturalLanguageView();
-  stopProjectAnalysisPolling();
-  stopProjectCandidatePolling();
-  projectCandidateStarting.value = false;
-  projectCandidateClientRequestId = null;
-  projectCandidateOutcome.value = null;
-  projectCandidateError.value = '';
-  projectAnalysisStarting.value = false;
-  projectAnalysisClientRequestId = null;
-  projectAnalysisOutcome.value = null;
-  projectAnalysisError.value = '';
-  closeProjectSocket();
-  currentAssistantMessageId = null;
-  currentProcessMessageId = null;
   projectEpoch++;
   sessionFlight = null;
-  messages.value = [];
-  resetContextDebug();
-  plans.value = [];
   evidence.value = [];
   candidates.value = [];
-  selectedPlan.value = null;
   selectedCandidate.value = null;
   const epoch = projectEpoch;
   loading.sessions = true;
@@ -3319,7 +2023,7 @@ async function confirmRenameSession() {
 }
 
 async function deleteConversation(session: AgentSessionResponse) {
-  if (loading.send) {
+  if (v2NaturalTurnBusy.value) {
     error.value = 'Current Project Agent request is still running. Please wait before deleting a conversation.';
     return;
   }
@@ -3334,22 +2038,10 @@ async function deleteConversation(session: AgentSessionResponse) {
     projectSessions.value = projectSessions.value.filter((item) => item.id !== session.id);
     if (!wasActive) return;
     resetV2NaturalLanguageView();
-    stopProjectAnalysisPolling();
-    stopProjectCandidatePolling();
-    projectAnalysisStarting.value = false;
-    projectAnalysisClientRequestId = null;
-    projectAnalysisOutcome.value = null;
-    closeProjectSocket();
-    currentAssistantMessageId = null;
-    currentProcessMessageId = null;
     projectEpoch++;
     sessionFlight = null;
-    messages.value = [];
-    resetContextDebug();
-    plans.value = [];
     evidence.value = [];
     candidates.value = [];
-    selectedPlan.value = null;
     selectedCandidate.value = null;
     activeSessionId.value = null;
     const next = projectSessions.value[0];
@@ -3377,20 +2069,8 @@ async function removeActiveProject() {
   try {
     await deleteProject(projectId);
     resetV2NaturalLanguageView();
-    stopProjectAnalysisPolling();
-    stopProjectCandidatePolling();
-    projectAnalysisStarting.value = false;
-    projectAnalysisClientRequestId = null;
-    projectAnalysisOutcome.value = null;
-    closeProjectSocket();
-    currentAssistantMessageId = null;
-    currentProcessMessageId = null;
     projectEpoch++;
     sessionFlight = null;
-    if (planPoll != null) {
-      window.clearTimeout(planPoll);
-      planPoll = null;
-    }
     collapsedDirectoriesByProject.delete(projectId);
     projects.value = projects.value.filter((item) => item.id !== projectId);
     deleteModalOpen.value = false;
@@ -3401,12 +2081,8 @@ async function removeActiveProject() {
     projectSessions.value = [];
     activeSessionId.value = null;
     syncProjectLocation(null, null);
-    messages.value = [];
-    resetContextDebug();
-    plans.value = [];
     evidence.value = [];
     candidates.value = [];
-    selectedPlan.value = null;
     selectedCandidate.value = null;
     collapsedDirectories.value = new Set();
     const nextProject = projects.value[0];
@@ -3464,32 +2140,17 @@ async function loadProductV2Availability() {
     v2NaturalTurnAvailable.value = validDocument
       && document.enabled
       && capabilities.includes('agent.turn');
-    v2Availability.value = await loadV2ProductAvailability(async () => ({
-      ...document,
-      capabilities: capabilities.filter((capability) => capability !== 'agent.turn'),
-    }));
   } catch {
     v2NaturalTurnAvailable.value = false;
-    v2Availability.value = V2_PRODUCT_AVAILABILITY_LOADING;
   }
   if (!v2NaturalTurnAvailable.value) {
     stopV2NaturalLanguagePolling();
     v2TurnStarting.value = false;
   }
-  if (!v2ProjectAnalysisAvailable.value) {
-    stopProjectAnalysisPolling();
-    projectAnalysisStarting.value = false;
-  }
-  if (!v2ProjectCandidateAvailable.value) {
-    stopProjectCandidatePolling();
-    projectCandidateStarting.value = false;
-  }
   const projectId = activeProjectId.value;
   const sessionId = activeSessionId.value;
   if (!projectId || !sessionId) return;
   if (v2NaturalTurnAvailable.value) void recoverV2NaturalLanguageTurn(projectId, sessionId);
-  if (v2ProjectAnalysisAvailable.value) void recoverProjectAnalysis(projectId, sessionId);
-  if (v2ProjectCandidateAvailable.value) void recoverProjectCandidate(projectId, sessionId);
 }
 
 onMounted(() => {
@@ -3498,10 +2159,6 @@ onMounted(() => {
 });
 onUnmounted(() => {
   stopV2NaturalLanguagePolling();
-  stopProjectAnalysisPolling();
-  stopProjectCandidatePolling();
-  closeProjectSocket();
-  if (planPoll != null) window.clearTimeout(planPoll);
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
   projectEpoch++;
 });

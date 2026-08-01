@@ -332,6 +332,30 @@ worker, Spring bean, or frontend client still calls the removed path. Use
 focused compile and behavior tests for the affected boundary; do not treat a
 class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
 
+## V1 frontend entry-point retirement
+
+- Issue: `#110`.
+- Status: `RETIRED_AFTER_V2_CUTOVER`.
+- Removed entry points: `ChatPage`, `/chat`, both browser V1 message clients,
+  V1 Project WebSocket usage, legacy Plan controls/clients, and the dead
+  Project-page message/Plan/context-debug presentation path.
+- Removed superseded explicit forms: the standalone browser literature,
+  Project read-analysis, and Project Candidate form/polling clients. Their
+  product capabilities and backend services remain available to the unified
+  natural-language V2 Agent; this deletion removes only unreachable browser
+  adapters and tests.
+- Default navigation: authenticated root, guest completion, demo completion,
+  brand navigation, admin denial, and unknown routes now enter `/projects`.
+- Preserved frontend capabilities: Project/session management, the persisted
+  natural-language V2 task list, collapsed execution Steps, file preview and
+  search, Candidate review/automatic validation/confirmation validation,
+  explicit Candidate apply, immutable revisions/rollback/export, paper,
+  knowledge base, memory, settings/provider configuration, and admin pages.
+- Backend and data boundary: this frontend retirement does not delete any
+  controller, service, WebSocket registration, database schema, historical
+  message, Plan, Receipt, or user data. Backend retirement remains a separate
+  call-graph-gated change.
+
 ## Unified V2 product tool catalog and parameter schemas
 
 - Status: `V2_PRODUCT_CONTRACT`.

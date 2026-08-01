@@ -11,7 +11,7 @@ describe('Project unified input contract', () => {
     expect(source).not.toContain('v-model:value="chatInput"');
     expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
     expect(source).toContain('@keydown="handleV2TurnKeydown"');
-    expect(source).toContain("event.key !== 'Enter' || event.shiftKey || event.isComposing");
+    expect(source).toContain("event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)");
     expect(source).toContain('event.preventDefault()');
     expect(source).toContain('void sendV2NaturalLanguageTurn()');
     expect(source).toContain('startV2NaturalLanguageTurn(sessionId, request, controller.signal)');

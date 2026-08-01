@@ -1,5 +1,5 @@
 import http from './http';
-import type { AgentContextSnapshotResponse, CreateAgentPlanPayload, AgentPlanResponse, AgentMessageResponse, AgentSessionResponse, CreateSessionPayload, SendMessageRequestPayload, SendMessageResponse } from './agent';
+import type { AgentSessionResponse, CreateSessionPayload } from './agent';
 
 export interface ProjectSummaryResponse {
   id: number;
@@ -58,56 +58,6 @@ export interface ProjectRevisionOperationResponse {
   acceptedChangeIndexes: number[];
   rejectedChangeIndexes: number[];
   completedAt: string;
-}
-
-export interface V2ProjectReadAnalysisTurnRequest {
-  objective: string;
-  paths: string[];
-  searchQuery?: string;
-  maxSearchResults?: number;
-  clientRequestId: string;
-}
-
-export type V2ProjectReadAnalysisStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-
-export interface V2ProjectReadAnalysisTurnResponse {
-  projectId: number;
-  sessionId: number;
-  clientRequestId: string;
-  status: V2ProjectReadAnalysisStatus;
-  terminal: boolean;
-  turnId: number;
-  planId?: string;
-  projectVersion: string;
-  finalText?: string;
-  assistantMessageId?: number;
-  errorCode?: string;
-  replayed: boolean;
-}
-
-export interface V2ProjectCandidateTurnRequest {
-  objective: string;
-  paths: string[];
-  clientRequestId: string;
-}
-
-export type V2ProjectCandidateStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-
-export interface V2ProjectCandidateTurnResponse {
-  projectId: number;
-  sessionId: number;
-  clientRequestId: string;
-  status: V2ProjectCandidateStatus;
-  terminal: boolean;
-  turnId: number;
-  planId?: string;
-  projectVersion: string;
-  candidateArtifactId?: number;
-  candidateFingerprint?: string;
-  diffFingerprint?: string;
-  assistantMessageId?: number;
-  errorCode?: string;
-  replayed: boolean;
 }
 
 export type CandidateValidationProfile = 'DOCUMENT_INTEGRITY' | 'MAVEN_TEST' | 'MAVEN_VERIFY' | 'JAVA_SOURCE_RUN'
@@ -208,64 +158,11 @@ export function uploadProject(payload: UploadProjectPayload) {
 export function deleteProject(projectId: number) { return http.delete<void>(`/projects/${projectId}`); }
 export function getProjectManifest(projectId: number) { return http.get<ProjectManifestResponse>(`/projects/${projectId}/manifest`); }
 export function listProjectSessions(projectId: number) { return http.get<AgentSessionResponse[]>(`/projects/${projectId}/agent/sessions`); }
-export function listProjectContextSnapshots(projectId: number, sessionId: number, limit = 20) {
-  return http.get<AgentContextSnapshotResponse[]>(
-    `/projects/${projectId}/agent/sessions/${sessionId}/context-snapshots`,
-    { params: { limit } },
-  );
-}
 export function createProjectSession(projectId: number, payload: CreateSessionPayload) {
   return http.post<AgentSessionResponse>(`/projects/${projectId}/agent/sessions`, payload);
 }
 export function readProjectFile(projectId: number, path: string) { return http.get<ProjectFileResponse>(`/projects/${projectId}/files/read`, { params: { path } }); }
 export function searchProject(projectId: number, query: string) { return http.get<ProjectSearchHit[]>(`/projects/${projectId}/search`, { params: { query, maxResults: 50 } }); }
-export function sendProjectMessage(projectId: number, sessionId: number, payload: SendMessageRequestPayload) {
-  return http.post<SendMessageResponse>(`/projects/${projectId}/agent/sessions/${sessionId}/messages`, payload);
-}
-export function startV2ProjectReadAnalysisTurn(
-  projectId: number,
-  sessionId: number,
-  payload: V2ProjectReadAnalysisTurnRequest,
-) {
-  return http.post<V2ProjectReadAnalysisTurnResponse>(
-    `/projects/${projectId}/agent/sessions/${sessionId}/v2/read-analysis-turns`,
-    payload,
-  );
-}
-export function readV2ProjectReadAnalysisTurn(
-  projectId: number,
-  sessionId: number,
-  clientRequestId: string,
-) {
-  return http.get<V2ProjectReadAnalysisTurnResponse>(
-    `/projects/${projectId}/agent/sessions/${sessionId}/v2/read-analysis-turns/${encodeURIComponent(clientRequestId)}`,
-  );
-}
-export function startV2ProjectCandidateTurn(
-  projectId: number,
-  sessionId: number,
-  payload: V2ProjectCandidateTurnRequest,
-) {
-  return http.post<V2ProjectCandidateTurnResponse>(
-    `/projects/${projectId}/agent/sessions/${sessionId}/v2/candidate-turns`,
-    payload,
-  );
-}
-export function readV2ProjectCandidateTurn(
-  projectId: number,
-  sessionId: number,
-  clientRequestId: string,
-) {
-  return http.get<V2ProjectCandidateTurnResponse>(
-    `/projects/${projectId}/agent/sessions/${sessionId}/v2/candidate-turns/${encodeURIComponent(clientRequestId)}`,
-  );
-}
-export function createProjectPlan(projectId: number, sessionId: number, payload: CreateAgentPlanPayload) {
-  return http.post<AgentPlanResponse>(`/projects/${projectId}/agent/sessions/${sessionId}/plans`, payload);
-}
-export function listProjectEvidence(projectId: number, planId: number) {
-  return http.get<ProjectEvidenceResponse[]>(`/projects/${projectId}/agent/plans/${planId}/evidence`);
-}
 export function applyProjectCandidate(projectId: number, artifactId: number, projectVersion: string,
                                       acceptedChangeIndexes: number[], validationId: string,
                                       idempotencyKey: string) {
@@ -300,4 +197,4 @@ export function rollbackProjectRevision(projectId: number, revisionId: number, p
 export function exportProjectRevision(projectId: number, revisionId: number) {
   return http.get<Blob>(`/projects/${projectId}/revisions/${revisionId}/export`, { responseType: 'blob' });
 }
-export type { AgentPlanResponse, AgentMessageResponse, AgentSessionResponse };
+export type { AgentSessionResponse };
