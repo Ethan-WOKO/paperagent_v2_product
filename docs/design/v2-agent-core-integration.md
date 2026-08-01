@@ -1294,3 +1294,32 @@ that the original Project is unchanged and hands the Candidate to the existing
 Changes, Sandbox-validation, and explicit-apply authority. The frontend does
 not plan, infer success from technical output, manufacture progress, or apply
 changes.
+
+## Read-only paper-quality audit tool boundary
+
+The natural-language V2 product catalog includes one coherent bundle of five
+deterministic Project analysis tools for paper-quality facts:
+`project.latex.crossref.audit`, `project.latex.float.audit`,
+`project.latex.protected.inventory`, `project.paper.acronym.audit`, and
+`project.paper.language.stats`. They use the catalog-owned Project execution
+target and `READ_PROJECT` capability, so routing requirements, provider
+descriptors, Step selection, authority checks, and loop dispatch do not gain a
+second hardcoded alias source.
+
+Every call is executed only after the existing authenticated turn, persistent
+Plan, ACTIVE Step, ToolCall, fenced lease, frozen ProjectVersion, confirmed
+execution context, and Workspace claims agree. Arguments select bounded exact
+relative paths and parser options only. Results are deterministic,
+host-path-free, structured Receipts with tool-specific sanitized failure codes.
+No tool calls a Workspace mutation method.
+
+The parsers are deliberately conservative. Cross-reference and float audits do
+not expand includes, macros, or `graphicspath`; float asset checks cover only
+normalized local paths and never inspect image content. Protected-inventory
+math facts expose hashes and lengths rather than source expressions. Acronym
+and language outputs are local observations and descriptive signals, not
+semantic correctness, grammar, novelty, or publication-quality judgments.
+
+This boundary adds no schema, Controller, frontend, network, RAG, literature,
+Sandbox, Candidate, ProjectVersion mutation, V2 core change, paper-task
+orchestration, or legacy Agent execution path.

@@ -30,6 +30,11 @@ public final class V2ProductToolCatalog {
             projectRead(),
             projectSearch(),
             projectLatexOutline(),
+            projectLatexCrossrefAudit(),
+            projectLatexFloatAudit(),
+            projectLatexProtectedInventory(),
+            projectPaperAcronymAudit(),
+            projectPaperLanguageStats(),
             projectBibtexAudit(),
             projectCodeSymbols(),
             projectExperimentSummary(),
@@ -202,6 +207,129 @@ public final class V2ProductToolCatalog {
                                         1, 20, true),
                                 "includeUnusedEntries", booleanSchema()),
                         List.of("paths")),
+                Set.of(Capability.READ_PROJECT),
+                projectReadRequirements(),
+                ExecutionTarget.PROJECT);
+    }
+
+    private static Entry projectLatexCrossrefAudit() {
+        return entry(
+                "project_latex_crossref_audit",
+                "Audit LaTeX labels and references in frozen Project files.",
+                "project.latex.crossref.audit",
+                "Inspect one to twenty exact .tex files in the authenticated "
+                        + "frozen Project Workspace. Report duplicate labels, "
+                        + "unresolved ref/eqref/autoref/pageref/cref targets, "
+                        + "and optionally unreferenced labels. This is a "
+                        + "bounded syntax audit; it does not expand included "
+                        + "files or prove successful LaTeX compilation.",
+                objectSchema(
+                        Map.of(
+                                "relativePaths", arraySchema(
+                                        stringSchema(1, 1_024,
+                                                "(?i).+\\.tex"),
+                                        1, 20, true),
+                                "includeUnreferencedLabels", booleanSchema()),
+                        List.of("relativePaths")),
+                Set.of(Capability.READ_PROJECT),
+                projectReadRequirements(),
+                ExecutionTarget.PROJECT);
+    }
+
+    private static Entry projectLatexFloatAudit() {
+        return entry(
+                "project_latex_float_audit",
+                "Audit LaTeX figures, tables, captions, labels, and assets.",
+                "project.latex.float.audit",
+                "Inspect one to twenty exact .tex files in the authenticated "
+                        + "frozen Project Workspace. Inventory figure and table "
+                        + "environments, captions, labels, references, and "
+                        + "normalized local includegraphics assets. The parser "
+                        + "does not expand includes, graphicspath, macros, or "
+                        + "inspect image contents.",
+                objectSchema(
+                        Map.of(
+                                "relativePaths", arraySchema(
+                                        stringSchema(1, 1_024,
+                                                "(?i).+\\.tex"),
+                                        1, 20, true),
+                                "checkAssetExistence", booleanSchema()),
+                        List.of("relativePaths")),
+                Set.of(Capability.READ_PROJECT),
+                projectReadRequirements(),
+                ExecutionTarget.PROJECT);
+    }
+
+    private static Entry projectLatexProtectedInventory() {
+        return entry(
+                "project_latex_protected_inventory",
+                "Inventory protected LaTeX elements for safe comparison.",
+                "project.latex.protected.inventory",
+                "Inspect one to twenty exact .tex files in the authenticated "
+                        + "frozen Project Workspace. Return a stable bounded "
+                        + "inventory of citation keys, references, labels, "
+                        + "protected environments, and optional hashes of "
+                        + "line-local math tokens. Math content itself is not "
+                        + "returned. Use before and after edits to compare "
+                        + "protected facts; this does not compile LaTeX.",
+                objectSchema(
+                        Map.of(
+                                "relativePaths", arraySchema(
+                                        stringSchema(1, 1_024,
+                                                "(?i).+\\.tex"),
+                                        1, 20, true),
+                                "includeMathHashes", booleanSchema()),
+                        List.of("relativePaths")),
+                Set.of(Capability.READ_PROJECT),
+                projectReadRequirements(),
+                ExecutionTarget.PROJECT);
+    }
+
+    private static Entry projectPaperAcronymAudit() {
+        return entry(
+                "project_paper_acronym_audit",
+                "Audit local acronym definitions and casing in paper text.",
+                "project.paper.acronym.audit",
+                "Inspect one to thirty exact .tex, .md, or .txt files in the "
+                        + "authenticated frozen Project Workspace. Report "
+                        + "locally observed acronym definitions, undefined "
+                        + "uppercase uses, use-before-definition, differing "
+                        + "definitions, and casing variants. This conservative "
+                        + "heuristic does not decide domain correctness.",
+                objectSchema(
+                        Map.of(
+                                "relativePaths", arraySchema(
+                                        stringSchema(1, 1_024,
+                                                "(?i).+\\.(tex|md|txt)"),
+                                        1, 30, true),
+                                "minimumAcronymLength", integerSchema(2, 8)),
+                        List.of("relativePaths")),
+                Set.of(Capability.READ_PROJECT),
+                projectReadRequirements(),
+                ExecutionTarget.PROJECT);
+    }
+
+    private static Entry projectPaperLanguageStats() {
+        return entry(
+                "project_paper_language_stats",
+                "Measure bounded prose and sentence statistics in paper text.",
+                "project.paper.language.stats",
+                "Inspect one to thirty exact .tex, .md, or .txt files in the "
+                        + "authenticated frozen Project Workspace. After "
+                        + "conservative markup removal, report file and optional "
+                        + "section character, word-like-unit, sentence, "
+                        + "paragraph, and long-sentence locations. These are "
+                        + "descriptive signals, not grammar or quality scores.",
+                objectSchema(
+                        Map.of(
+                                "relativePaths", arraySchema(
+                                        stringSchema(1, 1_024,
+                                                "(?i).+\\.(tex|md|txt)"),
+                                        1, 30, true),
+                                "longSentenceWordLikeUnits",
+                                integerSchema(10, 200),
+                                "includeSections", booleanSchema()),
+                        List.of("relativePaths")),
                 Set.of(Capability.READ_PROJECT),
                 projectReadRequirements(),
                 ExecutionTarget.PROJECT);

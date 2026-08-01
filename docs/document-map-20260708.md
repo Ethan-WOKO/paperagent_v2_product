@@ -25,6 +25,12 @@ As of 2026-07-27, development has two coordinated tracks:
 2. integrate the frozen V2 Agent core under `agent-v2/`, then add product-side
    adapters one capability at a time.
 
+The current product tool expansion groups four to five closely related tools
+per Issue only when authority, side effects, runtime target, and verification
+are identical. Issue #118 applies that rule to five read-only paper-quality
+audits; their outputs are structured facts for the V2 Agent and do not replace
+semantic review or authorize Project mutation.
+
 `docs/design/v2-agent-core-integration.md` is authoritative for Agent runtime
 architecture. The dated product roadmap remains authoritative for quality work
 outside the Agent core. Older runtime documents are historical where they

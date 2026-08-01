@@ -81,6 +81,12 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final NaturalLanguageCandidateAuthorityStore naturalCandidates;
     private final V2ProjectBibtexAuditTool bibtexAudit;
     private final V2ProjectLatexOutlineTool latexOutline;
+    private final V2ProjectLatexCrossrefAuditTool latexCrossrefAudit;
+    private final V2ProjectLatexFloatAuditTool latexFloatAudit;
+    private final V2ProjectLatexProtectedInventoryTool
+            latexProtectedInventory;
+    private final V2ProjectPaperAcronymAuditTool paperAcronymAudit;
+    private final V2ProjectPaperLanguageStatsTool paperLanguageStats;
     private final V2ProjectCodeSymbolsTool codeSymbols;
     private final V2ProjectExperimentSummaryTool experimentSummary;
     private final V2ProjectCrossMaterialSearchTool crossMaterialSearch;
@@ -165,6 +171,15 @@ public class AuthenticatedProjectEffectExecutionComposer {
         this.naturalCandidates = naturalCandidates;
         this.bibtexAudit = new V2ProjectBibtexAuditTool(json);
         this.latexOutline = new V2ProjectLatexOutlineTool(json);
+        this.latexCrossrefAudit =
+                new V2ProjectLatexCrossrefAuditTool(json);
+        this.latexFloatAudit = new V2ProjectLatexFloatAuditTool(json);
+        this.latexProtectedInventory =
+                new V2ProjectLatexProtectedInventoryTool(json);
+        this.paperAcronymAudit =
+                new V2ProjectPaperAcronymAuditTool(json);
+        this.paperLanguageStats =
+                new V2ProjectPaperLanguageStatsTool(json);
         this.codeSymbols = new V2ProjectCodeSymbolsTool(json);
         this.experimentSummary =
                 new V2ProjectExperimentSummaryTool(json);
@@ -494,6 +509,20 @@ public class AuthenticatedProjectEffectExecutionComposer {
                         bibtexAudit.execute(workspace, ref, arguments);
                 case V2ProjectLatexOutlineTool.KIND ->
                         latexOutline.execute(workspace, ref, arguments);
+                case V2ProjectLatexCrossrefAuditTool.KIND ->
+                        latexCrossrefAudit.execute(
+                                workspace, ref, arguments);
+                case V2ProjectLatexFloatAuditTool.KIND ->
+                        latexFloatAudit.execute(workspace, ref, arguments);
+                case V2ProjectLatexProtectedInventoryTool.KIND ->
+                        latexProtectedInventory.execute(
+                                workspace, ref, arguments);
+                case V2ProjectPaperAcronymAuditTool.KIND ->
+                        paperAcronymAudit.execute(
+                                workspace, ref, arguments);
+                case V2ProjectPaperLanguageStatsTool.KIND ->
+                        paperLanguageStats.execute(
+                                workspace, ref, arguments);
                 case V2ProjectCodeSymbolsTool.KIND ->
                         codeSymbols.execute(workspace, ref, arguments);
                 case V2ProjectExperimentSummaryTool.KIND ->
@@ -712,6 +741,16 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     "PROJECT_BIBTEX_AUDIT_FAILED";
             case V2ProjectLatexOutlineTool.KIND ->
                     "PROJECT_LATEX_OUTLINE_FAILED";
+            case V2ProjectLatexCrossrefAuditTool.KIND ->
+                    "PROJECT_LATEX_CROSSREF_AUDIT_FAILED";
+            case V2ProjectLatexFloatAuditTool.KIND ->
+                    "PROJECT_LATEX_FLOAT_AUDIT_FAILED";
+            case V2ProjectLatexProtectedInventoryTool.KIND ->
+                    "PROJECT_LATEX_PROTECTED_INVENTORY_FAILED";
+            case V2ProjectPaperAcronymAuditTool.KIND ->
+                    "PROJECT_PAPER_ACRONYM_AUDIT_FAILED";
+            case V2ProjectPaperLanguageStatsTool.KIND ->
+                    "PROJECT_PAPER_LANGUAGE_STATS_FAILED";
             case V2ProjectCodeSymbolsTool.KIND ->
                     "PROJECT_CODE_SYMBOLS_FAILED";
             case V2ProjectExperimentSummaryTool.KIND ->
@@ -728,6 +767,16 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     "Project BibTeX audit failed";
             case V2ProjectLatexOutlineTool.KIND ->
                     "Project LaTeX outline failed";
+            case V2ProjectLatexCrossrefAuditTool.KIND ->
+                    "Project LaTeX cross-reference audit failed";
+            case V2ProjectLatexFloatAuditTool.KIND ->
+                    "Project LaTeX float audit failed";
+            case V2ProjectLatexProtectedInventoryTool.KIND ->
+                    "Project LaTeX protected inventory failed";
+            case V2ProjectPaperAcronymAuditTool.KIND ->
+                    "Project paper acronym audit failed";
+            case V2ProjectPaperLanguageStatsTool.KIND ->
+                    "Project paper language statistics failed";
             case V2ProjectCodeSymbolsTool.KIND ->
                     "Project code symbol extraction failed";
             case V2ProjectExperimentSummaryTool.KIND ->
