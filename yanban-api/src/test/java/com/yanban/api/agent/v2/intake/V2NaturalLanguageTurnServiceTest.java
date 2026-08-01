@@ -43,12 +43,14 @@ import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
+import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.Plan;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.TaskFrame;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.providers.*;
+import io.paperagent.v2.runtime.routing.RoutingRequirement;
 import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.List;
@@ -252,6 +254,11 @@ class V2NaturalLanguageTurnServiceTest {
                     assertThat(step.id().value()).isEqualTo("read-1");
                     assertThat(step.intent()).isEqualTo("Read source");
                 });
+        assertThat(command.getValue().routingDecision().requirements())
+                .contains(RoutingRequirement.PROJECT_FILE_ACCESS,
+                        RoutingRequirement.TOOL_USE);
+        assertThat(command.getValue().executionProfile().capabilities())
+                .contains(Capability.READ_PROJECT);
     }
 
     @Test
