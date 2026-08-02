@@ -40,6 +40,7 @@
         <jjwt.version>0.12.6</jjwt.version>
         <tika.version>2.9.1</tika.version>
         <poi.version>5.3.0</poi.version>
+        <pdfbox.version>2.0.29</pdfbox.version>
         <minio.version>8.5.12</minio.version>
         <elasticsearch-java.version>8.10.0</elasticsearch-java.version>
         <langchain4j.version>1.17.1</langchain4j.version>
@@ -86,6 +87,11 @@
                 <groupId>org.apache.poi</groupId>
                 <artifactId>poi-ooxml</artifactId>
                 <version>${poi.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>${pdfbox.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.minio</groupId>

@@ -1350,3 +1350,36 @@ This boundary adds no parser, OCR, image analysis, network call, tool
 descriptor, frontend behavior, schema, second asset table, second Project
 version model, or V2 core dependency on product code. Document and spreadsheet
 inspection are layered later as read-only tools over this frozen Workspace.
+
+## Bounded document and spreadsheet inspection boundary
+
+The natural-language V2 product catalog adds two read-only Project tools over
+the authenticated exact-byte Workspace source. `project.document.extract`
+accepts one exact PDF or DOCX path and returns bounded parser metadata plus PDF
+page or DOCX paragraph/table-cell locations. `project.spreadsheet.inspect`
+accepts one exact XLSX path and returns bounded sheet metadata, dimensions,
+headers, typed samples, and formula-presence observations.
+
+Both tools execute only after the existing authenticated turn, persistent
+Plan, ACTIVE Step, ToolCall, fenced lease, frozen ProjectVersion, confirmed
+Workspace, and effect-claim checks agree. Model arguments provide only paths
+and parser budgets. Parser output becomes the existing immutable structured
+Receipt, and exact claim replay does not parse Workspace bytes again.
+
+PDF parsing uses no OCR or external resource. OOXML relationship and macro
+signals are inspected without resolving targets. Spreadsheet formulas are
+never evaluated, macros are never executed, and external links are never
+resolved. Input bytes, locations, characters, sheets, rows, columns, cells,
+and output capture are bounded; success reports explicit partial and truncated
+state while malformed or unavailable assets produce sanitized tool-specific
+failure Receipts.
+
+Catalog descriptions now distinguish ordinary literal `project.search` from
+cross-file proof via `project.cross-material.search`, and distinguish LaTeX
+outline, cross-reference, float, and protected-inventory tools through positive
+and negative examples. These examples guide model selection without adding a
+semantic router or another hardcoded alias source.
+
+This boundary adds no Workspace or Project mutation, Candidate, revision,
+schema, frontend, network, Sandbox, RAG, paper-polish, legacy `/chat`, V2 core,
+or LangChain4j annotation-registration behavior.

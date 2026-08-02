@@ -79,6 +79,42 @@ final class V2ProjectAnalysisToolSupport {
         return List.copyOf(result);
     }
 
+    static ProjectPath path(
+            ObjectNode arguments,
+            String field,
+            Predicate<String> supported) {
+        if (!arguments.path(field).isTextual()) {
+            throw failed("arguments");
+        }
+        String value = arguments.path(field).textValue();
+        if (value.isEmpty() || value.length() > MAX_PATH_CHARACTERS) {
+            throw failed("arguments");
+        }
+        ProjectPath path;
+        try {
+            path = new ProjectPath(value);
+        } catch (RuntimeException invalid) {
+            throw failed("arguments");
+        }
+        if (!path.value().equals(value) || !supported.test(value)) {
+            throw failed("arguments");
+        }
+        return path;
+    }
+
+    static byte[] readBytes(
+            WorkspacePort workspace,
+            WorkspaceRef ref,
+            ProjectPath path,
+            int maximumBytes) {
+        byte[] bytes = workspace.read(ref, path);
+        if (bytes == null || bytes.length == 0
+                || bytes.length > maximumBytes) {
+            throw failed("input_budget");
+        }
+        return bytes;
+    }
+
     static ReadResult read(
             WorkspacePort workspace,
             WorkspaceRef ref,
@@ -163,6 +199,34 @@ final class V2ProjectAnalysisToolSupport {
             end--;
         }
         return normalized.substring(0, end);
+    }
+
+    static String boundedText(String value, int maximum) {
+        if (value == null || maximum < 1) {
+            return "";
+        }
+        String normalized = value.replace("\r\n", "\n")
+                .replace('\r', '\n');
+        StringBuilder safe = new StringBuilder(
+                Math.min(normalized.length(), maximum));
+        normalized.codePoints().forEach(character -> {
+            if (safe.length() >= maximum) {
+                return;
+            }
+            if (character >= 0x20 || character == '\t'
+                    || character == '\n') {
+                safe.appendCodePoint(character);
+            }
+        });
+        if (safe.length() > maximum) {
+            safe.setLength(maximum);
+        }
+        if (!safe.isEmpty()
+                && Character.isHighSurrogate(
+                        safe.charAt(safe.length() - 1))) {
+            safe.setLength(safe.length() - 1);
+        }
+        return safe.toString().strip();
     }
 
     static String extension(String path) {

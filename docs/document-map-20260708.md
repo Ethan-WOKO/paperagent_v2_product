@@ -31,10 +31,11 @@ are identical. Issue #118 applies that rule to five read-only paper-quality
 audits; their outputs are structured facts for the V2 Agent and do not replace
 semantic review or authorize Project mutation.
 
-Issue #123 adds the prerequisite Project-source boundary for bounded immutable
-PDF, DOCX, and XLSX assets. It does not parse them or add tools. Issue #122 is
-paused until that boundary is merged, then may add the bounded document and
-spreadsheet inspection bundle over the authenticated frozen V2 Workspace.
+Issue #123 added the prerequisite Project-source boundary for bounded immutable
+PDF, DOCX, and XLSX assets. Issue #122 now layers two bounded read-only tools
+over that merged source: PDF/DOCX document extraction and XLSX workbook
+inspection. It also clarifies model-facing selection boundaries without adding
+semantic routing rules.
 
 `docs/design/v2-agent-core-integration.md` is authoritative for Agent runtime
 architecture. The dated product roadmap remains authoritative for quality work

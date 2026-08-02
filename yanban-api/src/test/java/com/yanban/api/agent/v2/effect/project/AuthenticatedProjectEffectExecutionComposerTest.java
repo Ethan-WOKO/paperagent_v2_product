@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -203,7 +204,8 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     @Test
-    void readOnlyAnalysisBundleDispatchesThroughFrozenWorkspaceClaims() {
+    void readOnlyAnalysisBundleDispatchesThroughFrozenWorkspaceClaims()
+            throws Exception {
         WorkspacePort latexWorkspace = mock(WorkspacePort.class);
         when(latexWorkspace.read(ref(), new ProjectPath("paper/main.tex")))
                 .thenReturn("\\section{Method}".getBytes(
@@ -315,6 +317,31 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 "{\"query\":\"accuracy\",\"relativePaths\":["
                         + "\"paper/main.tex\",\"results/metrics.csv\"]}",
                 crossWorkspace);
+
+        WorkspacePort documentWorkspace = mock(WorkspacePort.class);
+        when(documentWorkspace.read(
+                ref(), new ProjectPath("paper/report.docx")))
+                .thenReturn(V2ProjectBinaryAssetFixtures.docx(
+                        "A bounded document observation."));
+        assertSuccessfulToolReceipt(
+                "project.document.extract",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "path", new io.paperagent.v2.contracts.TextValue(
+                                "paper/report.docx"))),
+                "{\"path\":\"paper/report.docx\"}",
+                documentWorkspace);
+
+        WorkspacePort spreadsheetWorkspace = mock(WorkspacePort.class);
+        when(spreadsheetWorkspace.read(
+                ref(), new ProjectPath("results/metrics.xlsx")))
+                .thenReturn(V2ProjectBinaryAssetFixtures.xlsx());
+        assertSuccessfulToolReceipt(
+                "project.spreadsheet.inspect",
+                new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                        "path", new io.paperagent.v2.contracts.TextValue(
+                                "results/metrics.xlsx"))),
+                "{\"path\":\"results/metrics.xlsx\"}",
+                spreadsheetWorkspace);
     }
 
     @Test
@@ -352,6 +379,48 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         assertFailureReceipt("project.cross-material.search", emptyQuery,
                 "{\"query\":\"\"}",
                 "PROJECT_CROSS_MATERIAL_SEARCH_FAILED", workspace);
+        var textPath = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "path", new io.paperagent.v2.contracts.TextValue(
+                        "paper/report.txt")));
+        assertFailureReceipt("project.document.extract", textPath,
+                "{\"path\":\"paper/report.txt\"}",
+                "PROJECT_DOCUMENT_EXTRACT_FAILED", workspace);
+        var csvPath = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "path", new io.paperagent.v2.contracts.TextValue(
+                        "results/metrics.csv")));
+        assertFailureReceipt("project.spreadsheet.inspect", csvPath,
+                "{\"path\":\"results/metrics.csv\"}",
+                "PROJECT_SPREADSHEET_INSPECT_FAILED", workspace);
+        var missingPdf = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "path", new io.paperagent.v2.contracts.TextValue(
+                        "paper/missing.pdf")));
+        assertFailureReceipt("project.document.extract", missingPdf,
+                "{\"path\":\"paper/missing.pdf\"}",
+                "PROJECT_DOCUMENT_EXTRACT_FAILED", workspace);
+        var missingWorkbook = new io.paperagent.v2.contracts.ObjectValue(
+                Map.of("path", new io.paperagent.v2.contracts.TextValue(
+                        "results/missing.xlsx")));
+        assertFailureReceipt("project.spreadsheet.inspect", missingWorkbook,
+                "{\"path\":\"results/missing.xlsx\"}",
+                "PROJECT_SPREADSHEET_INSPECT_FAILED", workspace);
+    }
+
+    @Test
+    void replayedBinaryToolClaimDoesNotParseWorkspaceAgain() {
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        var arguments = new io.paperagent.v2.contracts.ObjectValue(Map.of(
+                "path", new io.paperagent.v2.contracts.TextValue(
+                        "paper/report.pdf")));
+
+        var outcome = execute(
+                "project.document.extract", arguments,
+                "{\"path\":\"paper/report.pdf\"}", workspace, true);
+
+        assertTrue(outcome.replayed());
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
+                outcome.result().receipt().status());
+        verify(workspace, never()).read(
+                ref(), new ProjectPath("paper/report.pdf"));
     }
 
     @Test
@@ -832,6 +901,14 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     private AuthenticatedProjectEffectExecutionOutcome executeSuccess(
             String kind, io.paperagent.v2.contracts.ObjectValue arguments,
             String canonicalArguments, WorkspacePort workspace) {
+        return execute(
+                kind, arguments, canonicalArguments, workspace, false);
+    }
+
+    private AuthenticatedProjectEffectExecutionOutcome execute(
+            String kind, io.paperagent.v2.contracts.ObjectValue arguments,
+            String canonicalArguments, WorkspacePort workspace,
+            boolean replay) {
         var contexts = mock(com.yanban.api.agent.v2
                 .AgentTurnProductContextResolver.class);
         var planIds = new com.yanban.agent.v2.adapter.bootstrap
@@ -911,13 +988,27 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                     var request = (com.yanban.api.agent.v2.persistence
                             .ProductEffectExecutionClaimRequest)
                             call.getArgument(0);
-                    var receipt = request.execution().get();
+                    var receipt = replay
+                            ? new io.paperagent.v2.contracts.ExecutionReceipt(
+                                    new io.paperagent.v2.contracts.ReceiptId(
+                                            "replayed-receipt"),
+                                    toolCallId,
+                                    io.paperagent.v2.contracts.ReceiptStatus
+                                            .SUCCESS,
+                                    Instant.now(), Instant.now(),
+                                    Optional.of(0), Optional.empty(),
+                                    io.paperagent.v2.contracts.OutputCapture
+                                            .inline("{}", false),
+                                    io.paperagent.v2.contracts.OutputCapture
+                                            .empty(),
+                                    List.of(), Optional.empty(), List.of())
+                            : request.execution().get();
                     return new com.yanban.api.agent.v2.persistence
                             .ProductEffectExecutionClaimResult(
                                     new io.paperagent.v2.persistence
                                             .PersistedEffectResult(
                                                     receipt, "owner", 1L),
-                                    false);
+                                    replay);
                 });
         var target = new AuthenticatedProjectEffectExecutionComposer(
                 contexts, planIds, recoverer, intents, claims,

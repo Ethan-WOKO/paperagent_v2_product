@@ -29,6 +29,8 @@ public final class V2ProductToolCatalog {
             literatureSearch(),
             projectRead(),
             projectSearch(),
+            projectDocumentExtract(),
+            projectSpreadsheetInspect(),
             projectLatexOutline(),
             projectLatexCrossrefAudit(),
             projectLatexFloatAudit(),
@@ -146,12 +148,75 @@ public final class V2ProductToolCatalog {
                 "project.search",
                 "Search all frozen Project text files for one literal query. "
                         + "query is 1-256 characters and maxResults is 1-20. "
-                        + "This operation is read-only.",
+                        + "Choose this for ordinary literal discovery, such as "
+                        + "finding every mention of mergeSort. Do not choose it "
+                        + "when the result must prove that the same observation "
+                        + "appears in at least two specified materials; choose "
+                        + "project.cross-material.search for that case. This "
+                        + "operation is read-only.",
                 objectSchema(
                         Map.of(
                                 "query", stringSchema(1, 256),
                                 "maxResults", integerSchema(1, 20)),
                         List.of("query", "maxResults")),
+                Set.of(Capability.READ_PROJECT),
+                projectReadRequirements(),
+                ExecutionTarget.PROJECT);
+    }
+
+    private static Entry projectDocumentExtract() {
+        return entry(
+                "project_document_extract",
+                "Extract bounded text and locations from one frozen PDF or DOCX file.",
+                "project.document.extract",
+                "Extract bounded text locations and parser metadata from one "
+                        + "exact .pdf or .docx path in the authenticated frozen "
+                        + "Project Workspace. Choose this for PDF pages or DOCX "
+                        + "paragraphs/table cells, for example "
+                        + "{\"path\":\"paper/report.pdf\",\"maxLocations\":20}. "
+                        + "Do not use project.read for binary documents, and do "
+                        + "not use this tool for .tex structure, spreadsheets, "
+                        + "OCR, images, or external resources. The result states "
+                        + "partial, truncated, and parse-failure status.",
+                objectSchema(
+                        Map.of(
+                                "path", stringSchema(
+                                        1, 1_024,
+                                        "(?i).+\\.(pdf|docx)"),
+                                "maxCharacters", integerSchema(1_000, 60_000),
+                                "maxLocations", integerSchema(1, 200),
+                                "includeMetadata", booleanSchema()),
+                        List.of("path")),
+                Set.of(Capability.READ_PROJECT),
+                projectReadRequirements(),
+                ExecutionTarget.PROJECT);
+    }
+
+    private static Entry projectSpreadsheetInspect() {
+        return entry(
+                "project_spreadsheet_inspect",
+                "Inspect bounded metadata and cell samples from one frozen XLSX workbook.",
+                "project.spreadsheet.inspect",
+                "Inspect one exact .xlsx workbook in the authenticated frozen "
+                        + "Project Workspace. Return bounded sheet dimensions, "
+                        + "headers, typed cell samples, formula presence, and "
+                        + "partial/truncated/parse-failure status. Example: "
+                        + "{\"path\":\"results/metrics.xlsx\",\"sheetNames\":["
+                        + "\"Summary\"],\"maxRowsPerSheet\":20}. Choose this "
+                        + "for XLSX; keep CSV, JSON, YAML, text, Markdown, and "
+                        + "logs with project.experiment.summary. Formulas are "
+                        + "never evaluated, macros are never executed, and "
+                        + "external links are never resolved.",
+                objectSchema(
+                        Map.of(
+                                "path", stringSchema(
+                                        1, 1_024, "(?i).+\\.xlsx"),
+                                "sheetNames", arraySchema(
+                                        stringSchema(1, 100),
+                                        1, 20, true),
+                                "maxRowsPerSheet", integerSchema(1, 100),
+                                "maxColumnsPerSheet", integerSchema(1, 50)),
+                        List.of("path")),
                 Set.of(Capability.READ_PROJECT),
                 projectReadRequirements(),
                 ExecutionTarget.PROJECT);
@@ -167,6 +232,10 @@ public final class V2ProductToolCatalog {
                         + "section, label, citation, float, and optional "
                         + "formula-reference locations. This parser does not "
                         + "expand includes or claim a complete LaTeX AST. "
+                        + "Choose it to learn section/float/citation structure; "
+                        + "do not use it to decide whether references resolve, "
+                        + "whether float assets exist, or whether protected "
+                        + "tokens changed. Those are separate audit tools. "
                         + "Example input: {\"relativePaths\":[\"paper/main.tex\"],"
                         + "\"includeFormulaReferences\":true}.",
                 objectSchema(
@@ -222,7 +291,9 @@ public final class V2ProductToolCatalog {
                         + "unresolved ref/eqref/autoref/pageref/cref targets, "
                         + "and optionally unreferenced labels. This is a "
                         + "bounded syntax audit; it does not expand included "
-                        + "files or prove successful LaTeX compilation.",
+                        + "files or prove successful LaTeX compilation. Choose "
+                        + "this for label/ref consistency, not for document "
+                        + "outline, float assets, or protected-token inventory.",
                 objectSchema(
                         Map.of(
                                 "relativePaths", arraySchema(
@@ -246,7 +317,9 @@ public final class V2ProductToolCatalog {
                         + "environments, captions, labels, references, and "
                         + "normalized local includegraphics assets. The parser "
                         + "does not expand includes, graphicspath, macros, or "
-                        + "inspect image contents.",
+                        + "inspect image contents. Choose this for figures and "
+                        + "tables, not for general outline, cross-reference "
+                        + "consistency, or protected-token comparison.",
                 objectSchema(
                         Map.of(
                                 "relativePaths", arraySchema(
@@ -271,7 +344,9 @@ public final class V2ProductToolCatalog {
                         + "protected environments, and optional hashes of "
                         + "line-local math tokens. Math content itself is not "
                         + "returned. Use before and after edits to compare "
-                        + "protected facts; this does not compile LaTeX.",
+                        + "protected facts; this does not compile LaTeX. Do not "
+                        + "use it as a document outline, cross-reference audit, "
+                        + "or float audit.",
                 objectSchema(
                         Map.of(
                                 "relativePaths", arraySchema(
@@ -397,7 +472,11 @@ public final class V2ProductToolCatalog {
                         + "deterministically ordered matches. A cross-material "
                         + "link is reported only when at least two distinct "
                         + "files contain the query. This is not semantic, "
-                        + "vector, retrieval, or network search.",
+                        + "vector, retrieval, or network search. Choose this, "
+                        + "for example, to prove that an accuracy claim occurs "
+                        + "in both a paper and a report. Do not choose it for "
+                        + "ordinary one-or-many-file discovery where no "
+                        + "cross-file proof is required; use project.search.",
                 objectSchema(
                         Map.of(
                                 "query", stringSchema(1, 200),

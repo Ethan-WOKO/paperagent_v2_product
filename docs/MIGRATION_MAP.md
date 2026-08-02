@@ -560,7 +560,7 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   replacing the current V2 invocation context.
 - Boundary: `ProjectPreviewPage.vue` remains V2-only. The old Project V1 input,
   V1/V2 switch, and Project WebSocket route are not restored. Current V2
-  natural-language history, Candidate/Workspace authority, and the 15-entry V2
+  natural-language history, Candidate/Workspace authority, and the V2
   product tool catalog remain authoritative and unchanged.
 - Data boundary: no schema or data migration, deletion, or backfill is added.
 
@@ -593,3 +593,35 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   network access, frontend changes, schema changes, and legacy `/chat`
   orchestration. Those remain separate capabilities; Issue `#122` consumes
   this source boundary for bounded document and spreadsheet inspection.
+
+## V2 bounded document and spreadsheet inspection tools
+
+- Issue: `#122`.
+- Status: `NEW_READ_ONLY_WORKSPACE_TOOLS`.
+- Grouping decision: `project.document.extract` and
+  `project.spreadsheet.inspect` share the authenticated frozen-Workspace,
+  read-only binary source, structured Receipt, parser-budget, and focused test
+  boundary. They remain separate descriptors, schemas, parsers, failure codes,
+  and result shapes.
+- Document behavior: one exact `.pdf` or `.docx` path is parsed with bounded
+  input, locations, text, and metadata. PDF locations are pages; DOCX locations
+  are paragraphs and table cells. OCR, image extraction, external-resource
+  loading, knowledge-base ingestion, and network access are not invoked.
+- Spreadsheet behavior: one exact `.xlsx` path returns bounded sheet metadata,
+  dimensions, headers, typed cell samples, and formula-presence observations.
+  Formulas are never evaluated, macros are never executed, and external links
+  are never resolved. CSV, JSON, YAML, text, Markdown, and logs remain owned by
+  `project.experiment.summary`.
+- Selection behavior: the product catalog descriptions give positive and
+  negative examples for ordinary `project.search` versus cross-file proof via
+  `project.cross-material.search`, and for LaTeX outline, cross-reference,
+  float, and protected-inventory tools. These examples guide the model and add
+  no semantic routing rules or second tool registry.
+- Authority: authenticated user/turn, persistent Plan, ACTIVE Step, ToolCall,
+  fenced lease, frozen ProjectVersion, confirmed Workspace, immutable effect
+  claim, Receipt, and replay remain unchanged. Model arguments contain only
+  bounded paths and parser options.
+- Excluded: Workspace, Candidate, ProjectVersion, revision, or database writes;
+  OCR, image understanding, formula evaluation, macro execution, external-link
+  resolution, frontend changes, schema, Sandbox, RAG, paper-polish, legacy
+  `/chat`, V2 core changes, or LangChain4j annotation registration.
