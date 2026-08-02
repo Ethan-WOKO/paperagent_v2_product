@@ -1,7 +1,11 @@
 :root {
   --pa-rail-width: 78px;
-  --pa-font-sans: Inter, "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --pa-font-sans: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --pa-font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
   --pa-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --pa-font-weight-regular: 400;
+  --pa-font-weight-medium: 500;
+  --pa-font-weight-semibold: 600;
   --pa-radius-xs: 5px;
   --pa-radius-sm: 7px;
   --pa-radius-md: 10px;
@@ -26,6 +30,8 @@ body.theme-light {
   --pa-text-muted: #667980;
   --pa-rail: #fbfcfc;
   --pa-code: #edf3f2;
+  --pa-role-user-surface: #edf7f6;
+  --pa-role-user-border: #b9dcda;
   --yb-bg: var(--pa-canvas);
   --yb-bg-elevated: var(--pa-surface);
   --yb-bg-muted: var(--pa-surface-muted);
@@ -54,6 +60,8 @@ body.theme-dark {
   --pa-text-muted: #778b91;
   --pa-rail: #0c171b;
   --pa-code: #14262b;
+  --pa-role-user-surface: #112c31;
+  --pa-role-user-border: #24575b;
   --pa-accent: #22aaac;
   --pa-accent-hover: #35bec0;
   --pa-accent-soft: #12383c;
@@ -86,6 +94,10 @@ body {
   font-family: var(--pa-font-sans);
   background: var(--pa-canvas);
   color: var(--pa-text);
+  font-weight: var(--pa-font-weight-regular);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,

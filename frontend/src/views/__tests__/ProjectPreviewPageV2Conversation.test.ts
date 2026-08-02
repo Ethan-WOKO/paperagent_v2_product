@@ -14,9 +14,9 @@ describe('ProjectPreviewPage V2-only 中文任务界面', () => {
     expect(source).not.toContain('class="project-composer"');
   });
 
-  it('只有一个中文自然语言输入，不再显示两种任务表单', () => {
-    expect(source).toContain('V2 项目助手');
-    expect(source).toContain('直接说明你想完成什么');
+  it('只有一个中文自然语言输入，不再显示重复的任务说明', () => {
+    expect(source).not.toContain('class="v2-conversation__header"');
+    expect(source).not.toContain('class="project-agent-mode"');
     expect(source).toContain('class="v2-conversation__composer"');
     expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
     expect(source).not.toContain('aria-label="选择 V2 任务类型"');
@@ -26,7 +26,7 @@ describe('ProjectPreviewPage V2-only 中文任务界面', () => {
 
   it('每个问题展示一个结果、折叠过程和 Candidate 交付状态', () => {
     expect(source).toContain('v-for="task in v2TurnHistory"');
-    expect(source).toContain('<strong>Agent 结果</strong>');
+    expect(source).not.toContain('v2-task-card__role');
     expect(source).toContain("task.status === 'SUCCEEDED'");
     expect(source).toContain("task.status === 'FAILED'");
     expect(source).toContain("task.status === 'WAITING_CONFIRMATION'");

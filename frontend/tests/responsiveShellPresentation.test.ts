@@ -42,6 +42,13 @@ describe('responsive product shell presentation', () => {
     expect(languageToggleSource).toContain('@click="toggleLocale"');
     expect(languageToggleSource).toContain("locale.value === 'zh-CN' ? 'en-US' : 'zh-CN'");
   });
+
+  it('uses a stable system interface type stack and semantic conversation colors', () => {
+    expect(designSystemSource).toContain('--pa-font-sans: "Segoe UI Variable Text"');
+    expect(designSystemSource).not.toContain('--pa-font-sans: Inter');
+    expect(designSystemSource).toContain('--pa-role-user-surface:');
+    expect(designSystemSource).toContain('--pa-role-user-border:');
+  });
 });
 
 describe('responsive chat controls', () => {

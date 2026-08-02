@@ -60,7 +60,7 @@ body,
 }
 
 body {
-  font-family: Geist, Inter, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--pa-font-sans);
   background:
     radial-gradient(circle at 18% 0%, rgba(0, 124, 240, 0.10), transparent 28%),
     radial-gradient(circle at 78% 2%, rgba(255, 0, 128, 0.08), transparent 24%),

@@ -94,8 +94,15 @@
               <NSpace class="project-panel__title-actions" :size="4" align="center">
                 <span class="project-panel__count">{{ manifest?.files.length || 0 }}</span>
                 <template v-if="!sidebarSections.files">
-                  <NButton size="tiny" quaternary :disabled="directoryPaths.length === 0" :title="t('project.page.expandAllFolders')" @click="expandAllDirectories">{{ t('project.page.expand') }}</NButton>
-                  <NButton size="tiny" quaternary :disabled="directoryPaths.length === 0" :title="t('project.page.collapseAllFolders')" @click="collapseAllDirectories">{{ t('project.page.collapse') }}</NButton>
+                  <NButton
+                    size="tiny"
+                    quaternary
+                    :disabled="directoryPaths.length === 0"
+                    :title="allDirectoriesExpanded ? t('project.page.collapseAllFolders') : t('project.page.expandAllFolders')"
+                    @click="toggleAllDirectories"
+                  >
+                    {{ allDirectoriesExpanded ? t('project.page.collapse') : t('project.page.expand') }}
+                  </NButton>
                 </template>
               </NSpace>
             </div>
@@ -139,10 +146,6 @@
 
         <section class="project-panel project-panel--main project-panel--v2">
           <div class="project-tabs project-command-bar">
-            <div class="project-agent-mode">
-              <strong class="project-tabs__title">V2 项目助手</strong>
-              <span class="project-agent-mode__caption">持久化任务</span>
-            </div>
             <div class="project-tabs__actions" role="group" aria-label="Project utilities">
               <button type="button" class="project-utility-chip project-context-toggle" :aria-expanded="!contextRailCollapsed" @click="setContextRailCollapsed(!contextRailCollapsed)">
                 {{ contextRailCollapsed ? '展开项目资料' : '收起项目资料' }}
@@ -403,21 +406,11 @@
           </section>
 
           <section class="v2-conversation">
-            <header class="v2-conversation__header">
-              <div>
-                <h2>V2 项目助手</h2>
-                <p>直接说明你想完成什么，助手会自行制定计划并展示真实执行结果。</p>
-              </div>
-              <NTag :type="v2NaturalTurnAvailable ? 'success' : 'error'">
-                {{ v2NaturalTurnAvailable ? '可以使用' : '暂时不可用' }}
-              </NTag>
-            </header>
-
             <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="loading.v2History || v2NaturalTurnBusy">
               <article v-for="task in v2TurnHistory" :key="task.clientRequestId" class="v2-task-card" :data-status="task.status">
                 <header class="v2-task-card__question">
-                  <div>
-                    <small>你的问题</small>
+                  <div class="v2-task-card__question-copy">
+                    <span class="v2-task-card__avatar" aria-hidden="true">你</span>
                     <p>{{ task.question }}</p>
                   </div>
                   <NTag size="small" :type="v2TaskStatusType(task)">
@@ -455,28 +448,30 @@
                 </details>
 
                 <section class="v2-task-card__result">
-                  <strong>Agent 结果</strong>
-                  <NAlert v-if="v2TaskApplied(task)" type="success" :show-icon="false">
-                    候选修改 #{{ task.candidateArtifactId }} 已确认应用，已创建项目版本
-                    revision #{{ task.confirmationValidation?.appliedRevisionId }}
-                    <template v-if="task.confirmationValidation?.appliedProjectVersion">
-                      （{{ shortHash(task.confirmationValidation.appliedProjectVersion) }}）
-                    </template>。旧项目版本仍然保留。
-                  </NAlert>
-                  <MarkdownMessage
-                    v-else-if="task.status === 'SUCCEEDED' && task.finalText"
-                    :content="task.finalText"
-                    variant="project"
-                  />
-                  <NAlert v-else-if="task.status === 'FAILED'" type="error" :show-icon="false">
-                    执行没有成功。<template v-if="task.errorCode">错误代码：{{ task.errorCode }}</template>
-                  </NAlert>
-                  <NAlert v-else-if="task.status === 'WAITING_CONFIRMATION'" type="warning" :show-icon="false">
-                    候选修改已经生成，原项目尚未修改。请检查并验证后，再确认是否创建新版本。
-                  </NAlert>
-                  <p v-else-if="task.status === 'PLANNING'">正在制定持久化计划。</p>
-                  <p v-else-if="task.status === 'RUNNING'">任务正在执行，刷新页面后仍可继续查看。</p>
-                  <p v-else>任务已完成。</p>
+                  <span class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">P</span>
+                  <div class="v2-task-card__result-copy">
+                    <NAlert v-if="v2TaskApplied(task)" type="success" :show-icon="false">
+                      候选修改 #{{ task.candidateArtifactId }} 已确认应用，已创建项目版本
+                      revision #{{ task.confirmationValidation?.appliedRevisionId }}
+                      <template v-if="task.confirmationValidation?.appliedProjectVersion">
+                        （{{ shortHash(task.confirmationValidation.appliedProjectVersion) }}）
+                      </template>。旧项目版本仍然保留。
+                    </NAlert>
+                    <MarkdownMessage
+                      v-else-if="task.status === 'SUCCEEDED' && task.finalText"
+                      :content="task.finalText"
+                      variant="project"
+                    />
+                    <NAlert v-else-if="task.status === 'FAILED'" type="error" :show-icon="false">
+                      执行没有成功。<template v-if="task.errorCode">错误代码：{{ task.errorCode }}</template>
+                    </NAlert>
+                    <NAlert v-else-if="task.status === 'WAITING_CONFIRMATION'" type="warning" :show-icon="false">
+                      候选修改已经生成，原项目尚未修改。请检查并验证后，再确认是否创建新版本。
+                    </NAlert>
+                    <p v-else-if="task.status === 'PLANNING'">正在制定持久化计划。</p>
+                    <p v-else-if="task.status === 'RUNNING'">任务正在执行，刷新页面后仍可继续查看。</p>
+                    <p v-else>任务已完成。</p>
+                  </div>
                 </section>
 
                 <div v-if="task.candidateArtifactId || task.outputPaths.length" class="v2-task-card__delivery">
@@ -847,6 +842,7 @@ watch(validationProfileOptions, (options) => {
   }
 }, { immediate: true });
 const directoryPaths = computed(() => collectDirectoryPaths(manifest.value?.files || []));
+const allDirectoriesExpanded = computed(() => directoryPaths.value.length > 0 && collapsedDirectories.value.size === 0);
 const fileTree = computed(() => {
   const directories = new Set(directoryPaths.value);
   const rows: Array<{ key: string; name: string; path: string; sha256?: string; depth: number; directory: boolean }> = [];
@@ -914,6 +910,11 @@ function expandAllDirectories() {
 function collapseAllDirectories() {
   collapsedDirectories.value = new Set(directoryPaths.value);
   storeCollapsedDirectories();
+}
+
+function toggleAllDirectories() {
+  if (allDirectoriesExpanded.value) collapseAllDirectories();
+  else expandAllDirectories();
 }
 
 function initializeDirectoryState(projectId: number, files: ProjectManifestResponse['files']) {
@@ -2235,11 +2236,11 @@ onUnmounted(() => {
 .project-sidebar-section--file-browser { flex: 1 1 auto; min-height: 0; }
 .project-sidebar-section--collapsed { flex: 0 0 auto; min-height: 0; gap: 0; }
 .project-sidebar-section--collapsed + .project-sidebar-section--collapsed { margin-top: 0; }
-.project-sidebar-section__header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.project-sidebar-section__header { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .project-sidebar-section__toggle { box-sizing: border-box; flex: 0 0 32px; min-width: 0; height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 2px; border: 0; background: transparent; color: var(--yb-text); text-align: left; font: inherit; }
 .project-sidebar-section + .project-sidebar-section .project-sidebar-section__toggle,
 .project-sidebar-section + .project-sidebar-section .project-sidebar-section__header { border-top: 1px solid var(--yb-border); }
-.project-sidebar-section__header .project-sidebar-section__toggle { border-top: 0 !important; }
+.project-sidebar-section__header .project-sidebar-section__toggle { width: 100%; min-width: 0; border-top: 0 !important; }
 .project-sidebar-section__toggle > span { min-width: 0; display: inline-flex; align-items: center; gap: 5px; }
 .project-sidebar-section__toggle strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .project-chevron-button { flex: 0 0 22px; width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--yb-text-muted); cursor: pointer; }
@@ -2254,18 +2255,18 @@ onUnmounted(() => {
 .project-sidebar-section--projects .project-list,
 .project-sidebar-section--chats .project-conversation-history--sidebar { flex: 0 1 auto; max-height: 136px; }
 .project-list__item, .project-file-list__item, .project-search-results button, .project-candidate-list button { width: 100%; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; border-radius: 7px; }
-.project-list__item { padding: 7px; }
+.project-list__item { min-height: 50px; display: grid; align-content: center; gap: 2px; padding: 7px 10px; line-height: 1.3; }
 .project-list__item.active, .project-file-list__item.active, .project-candidate-list button.active { background: var(--yb-sidebar-active); }
 .project-list__item strong, .project-list__item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-list__item strong { font-size: 12px; }
-.project-list__item small { margin-top: 2px; font-size: 10px; color: var(--yb-text-muted); }
+.project-list__item strong { font-size: 12px; font-weight: 600; line-height: 1.35; }
+.project-list__item small { margin: 0; color: var(--yb-text-muted); font-size: 10px; line-height: 1.3; }
 
 .project-file-list { flex: 1 1 180px; min-height: 70px; }
 .project-sidebar-section--file-browser .project-file-list { flex: 1 1 auto; min-height: 0; }
-.project-file-list__item { padding: 5px 6px; display: flex; justify-content: space-between; gap: 6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
+.project-file-list__item { padding: 5px 6px; display: flex; justify-content: space-between; gap: 6px; font-family: var(--pa-font-sans); font-size: 10px; }
 .project-file-list__item:hover { background: var(--yb-bg-muted); }
 .project-file-list__item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-file-list__item small { flex: 0 0 auto; color: var(--yb-text-muted); font-size: 9px; }
+.project-file-list__item small { flex: 0 0 auto; color: var(--yb-text-muted); font-family: var(--pa-font-mono); font-size: 9px; }
 .project-file-list__directory { font-weight: 650; }
 .project-file-list__chevron { display: inline-flex; width: 13px; height: 13px; margin-right: 2px; color: var(--yb-text-muted); font-size: 13px; vertical-align: -2px; transition: transform 160ms ease; }
 .project-file-list__chevron--expanded { transform: rotate(90deg); }
@@ -2321,17 +2322,16 @@ onUnmounted(() => {
 .v2-workbench__progress > article > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .v2-workbench__progress > article > div small { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 .v2-conversation { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 2px; }
-.v2-conversation__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--yb-border); }
-.v2-conversation__header h2 { margin: 0 0 5px; font-size: 18px; }
-.v2-conversation__header p { margin: 0; color: var(--yb-text-secondary); font-size: 11px; line-height: 1.6; }
 .v2-conversation__tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 3px; scrollbar-gutter: stable; }
 .v2-task-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 12px; background: var(--yb-bg-elevated); }
 .v2-task-card__question { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.v2-task-card__question > div { min-width: 0; }
-.v2-task-card__question small { color: var(--yb-text-muted); font-size: 9px; }
-.v2-task-card__question p { margin: 5px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
-.v2-task-card__result { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 8px; background: var(--yb-bg-muted); }
-.v2-task-card__result > p { margin: 0; color: var(--yb-text-secondary); }
+.v2-task-card__question-copy { min-width: 0; flex: 1 1 auto; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 10px; }
+.v2-task-card__question p { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.v2-task-card__avatar { flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--yb-border-strong); border-radius: 50%; color: var(--yb-primary); background: var(--yb-bg-elevated); font-size: 10px; font-weight: 700; line-height: 1; }
+.v2-task-card__avatar--assistant { border-color: var(--yb-primary); border-radius: 5px; color: var(--yb-primary-contrast); background: var(--yb-primary); }
+.v2-task-card__result { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px; border-radius: 8px; background: var(--yb-bg-muted); }
+.v2-task-card__result-copy { min-width: 0; }
+.v2-task-card__result-copy > p { margin: 0; color: var(--yb-text-secondary); }
 .v2-task-card__delivery { display: flex; flex-direction: column; gap: 8px; }
 .v2-task-card__validation { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 10px; }
 .v2-task-card__validation dt { color: var(--yb-text-muted); }
@@ -2786,10 +2786,29 @@ onUnmounted(() => {
   border-radius: var(--project-radius-control);
 }
 
-.project-workspace--console .project-list__item,
+.project-workspace--console .project-list__item {
+  min-height: 54px;
+  padding: 8px 12px;
+}
+
+.project-workspace--console .project-list__item strong {
+  font-size: 13px;
+  font-weight: var(--pa-font-weight-semibold);
+  line-height: 1.35;
+}
+
+.project-workspace--console .project-list__item small {
+  margin: 0;
+  font-size: 11px;
+  font-weight: var(--pa-font-weight-regular);
+  line-height: 1.3;
+}
+
 .project-workspace--console .project-conversation-item {
-  min-height: 38px;
-  padding: 8px;
+  min-height: 40px;
+  padding: 0 8px 0 10px;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .project-workspace--console .project-file-list__item {
@@ -2818,6 +2837,10 @@ onUnmounted(() => {
   gap: 12px;
   padding: 2px 0 10px;
   border-bottom-color: var(--project-rule);
+}
+
+.project-workspace--console .project-command-bar .project-tabs__actions {
+  margin-left: auto;
 }
 
 .project-workspace--console .project-agent-mode {
@@ -2868,30 +2891,11 @@ onUnmounted(() => {
   padding: 4px 0 2px;
 }
 
-.project-workspace--console .v2-conversation__header {
-  gap: 12px;
-  padding: 2px 0 12px;
-  border-bottom-color: var(--project-rule);
-}
-
-.project-workspace--console .v2-conversation__header h2 {
-  margin-bottom: 4px;
-  font-family: var(--project-font-ui);
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: .005em;
-}
-
-.project-workspace--console .v2-conversation__header p,
 .project-workspace--console .v2-task-card__question p,
 .project-workspace--console .v2-task-card__result,
 .project-workspace--console .v2-task-card__result :deep(.message-markdown) {
   font-size: 14px;
   line-height: 1.65;
-}
-
-.project-workspace--console .v2-conversation__header p {
-  color: var(--project-text);
 }
 
 .project-workspace--console .v2-conversation__tasks {
@@ -2912,12 +2916,12 @@ onUnmounted(() => {
   padding-top: 0;
 }
 
-.project-workspace--console .v2-task-card__question small,
-.project-workspace--console .v2-task-card__result > strong {
-  color: var(--project-muted);
-  font-family: var(--project-font-ui);
-  font-size: 11px;
-  letter-spacing: .04em;
+.project-workspace--console .v2-task-card__question {
+  padding: 12px 14px;
+  border: 1px solid var(--pa-role-user-border);
+  border-left: 3px solid var(--project-accent);
+  border-radius: var(--project-radius-panel);
+  background: var(--pa-role-user-surface);
 }
 
 .project-workspace--console .v2-task-card__result {
@@ -2926,13 +2930,6 @@ onUnmounted(() => {
   border-left: 0;
   border-radius: 0;
   background: transparent;
-}
-
-.project-workspace--console .v2-task-card__result > strong {
-  color: var(--project-ink);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
 }
 
 .project-workspace--console .v2-task-card__delivery,
@@ -3211,7 +3208,6 @@ onUnmounted(() => {
     min-height: 196px;
     max-height: 214px;
   }
-  .project-workspace--console .v2-conversation__header,
   .project-workspace--console .v2-task-card__question,
   .project-workspace--console .v2-conversation__candidate {
     flex-direction: column;
