@@ -6,19 +6,61 @@
       </button>
 
       <nav class="product-rail__nav" :aria-label="t('nav.workspace')">
-        <button
-          v-for="item in navItems"
-          :key="item.path"
-          type="button"
-          class="product-rail__nav-item"
-          :class="{ 'product-rail__nav-item--active': isActiveNav(item.path) }"
-          :title="item.label"
-          :aria-label="item.label"
-          @click="router.push(item.path)"
-        >
-          <AppNavIcon :name="item.icon" />
-          <span>{{ item.label }}</span>
-        </button>
+        <div class="product-rail__nav-list product-rail__nav-list--desktop">
+          <button
+            v-for="item in navItems"
+            :key="item.path"
+            type="button"
+            class="product-rail__nav-item"
+            :class="{ 'product-rail__nav-item--active': isActiveNav(item.path) }"
+            :title="item.label"
+            :aria-label="item.label"
+            @click="navigateTo(item.path)"
+          >
+            <AppNavIcon :name="item.icon" />
+            <span>{{ item.label }}</span>
+          </button>
+        </div>
+
+        <div class="product-rail__nav-list product-rail__nav-list--mobile">
+          <button
+            v-for="item in mobilePrimaryNavItems"
+            :key="item.path"
+            type="button"
+            class="product-rail__nav-item"
+            :class="{ 'product-rail__nav-item--active': isActiveNav(item.path) }"
+            :title="item.label"
+            :aria-label="item.label"
+            @click="navigateTo(item.path)"
+          >
+            <AppNavIcon :name="item.icon" />
+            <span>{{ item.label }}</span>
+          </button>
+
+          <details ref="mobileMoreRef" class="product-rail__more">
+            <summary
+              class="product-rail__nav-item product-rail__more-trigger"
+              :class="{ 'product-rail__nav-item--active': mobileMoreActive }"
+              :title="mobileMoreLabel"
+              :aria-label="mobileMoreLabel"
+            >
+              <span class="product-rail__more-icon" aria-hidden="true">•••</span>
+              <span>{{ mobileMoreLabel }}</span>
+            </summary>
+            <div class="product-rail__more-menu">
+              <button
+                v-for="item in mobileSecondaryNavItems"
+                :key="item.path"
+                type="button"
+                :class="{ 'product-rail__more-menu-item--active': isActiveNav(item.path) }"
+                @click="navigateTo(item.path)"
+              >
+                <AppNavIcon :name="item.icon" />
+                <span>{{ item.label }}</span>
+              </button>
+            </div>
+          </details>
+        </div>
       </nav>
 
       <div class="product-rail__spacer" />
@@ -58,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useTheme } from '@/composables/useTheme';
@@ -70,8 +112,9 @@ const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const { isDark, toggleTheme } = useTheme();
-const { t } = useI18n();
+const { isEnglish, t } = useI18n();
 let quotaRefreshTimer: number | undefined;
+const mobileMoreRef = ref<HTMLDetailsElement | null>(null);
 
 const navItems = computed(() => [
   { label: t('nav.workspace'), path: '/chat', icon: 'workspace' },
@@ -86,6 +129,10 @@ const navItems = computed(() => [
 
 const userInitial = computed(() => (authStore.currentUser?.username || 'U').slice(0, 1).toUpperCase());
 const themeTitle = computed(() => (isDark.value ? '切换为浅色模式' : '切换为深色模式'));
+const mobilePrimaryNavItems = computed(() => navItems.value.slice(0, 5));
+const mobileSecondaryNavItems = computed(() => navItems.value.slice(5));
+const mobileMoreActive = computed(() => mobileSecondaryNavItems.value.some((item) => isActiveNav(item.path)));
+const mobileMoreLabel = computed(() => (isEnglish.value ? 'More' : '更多'));
 
 const hasLimitedQuota = computed(() => {
   const total = authStore.currentUser?.aiQuotaTotal;
@@ -113,6 +160,20 @@ function formatTokenCount(value: number) {
   return Number(value || 0).toLocaleString('zh-CN');
 }
 
+function navigateTo(path: string) {
+  if (mobileMoreRef.value) {
+    mobileMoreRef.value.open = false;
+  }
+  void router.push(path);
+}
+
+function handleDocumentKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && mobileMoreRef.value?.open) {
+    mobileMoreRef.value.open = false;
+    mobileMoreRef.value.querySelector<HTMLElement>('summary')?.focus();
+  }
+}
+
 function refreshQuota() {
   if (authStore.token && document.visibilityState === 'visible') {
     void authStore.fetchCurrentUser();
@@ -128,11 +189,13 @@ function handleVisibilityChange() {
 onMounted(() => {
   refreshQuota();
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  document.addEventListener('keydown', handleDocumentKeydown);
   quotaRefreshTimer = window.setInterval(refreshQuota, 30_000);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  document.removeEventListener('keydown', handleDocumentKeydown);
   if (quotaRefreshTimer !== undefined) {
     window.clearInterval(quotaRefreshTimer);
   }

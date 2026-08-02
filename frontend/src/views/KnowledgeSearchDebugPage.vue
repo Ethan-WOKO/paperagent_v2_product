@@ -10,7 +10,7 @@
         <template #actions>
           <NSpace align="center">
             <NTag type="info" round>{{ results.length }} results</NTag>
-            <NButton v-if="results.length > 0" secondary @click="diagnosticsVisible = !diagnosticsVisible">
+            <NButton v-if="results.length > 0" secondary @click="toggleDiagnostics($event)">
               {{ diagnosticsVisible ? (isEnglish ? 'Hide diagnostics' : '收起诊断') : (isEnglish ? 'Show diagnostics' : '展开诊断') }}
             </NButton>
             <NButton secondary @click="fillSampleQuery">Sample Query</NButton>
@@ -44,7 +44,7 @@
                     <div class="search-static-pill" :title="isEnglish ? 'Configured backend embedding model' : '后端已配置的向量模型'">Configured backend model</div>
                   </NFormItemGi>
                   <NFormItemGi span="24 m:6" label="Action">
-                    <NButton type="primary" block :loading="searching" @click="handleSearch">Search</NButton>
+                    <NButton ref="searchButtonRef" type="primary" block :loading="searching" @click="handleSearch">Search</NButton>
                   </NFormItemGi>
                 </NGrid>
               </NForm>
@@ -101,24 +101,33 @@
                     <strong>{{ item.filename }}</strong>
                     <small>documentId={{ item.documentId }} · chunk {{ item.chunkIndex }}</small>
                   </div>
-                  <span>{{ formatScore(item.score) }}</span>
-                  <NTag :type="scoreBandType(item.score)" size="small">{{ scoreBandLabel(item.score) }}</NTag>
-                  <NTag :type="item.isPublic ? 'info' : 'default'" size="small">
+                  <span class="search-result-score">{{ formatScore(item.score) }}</span>
+                  <NTag class="search-result-band" :type="scoreBandType(item.score)" size="small">{{ scoreBandLabel(item.score) }}</NTag>
+                  <NTag class="search-result-visibility" :type="item.isPublic ? 'info' : 'default'" size="small">
                     {{ item.isPublic ? 'Public' : 'Private' }}
                   </NTag>
-                  <p>{{ item.chunkText }}</p>
+                  <p class="search-result-snippet">{{ item.chunkText }}</p>
                 </article>
               </div>
             </NCard>
         </main>
 
-        <aside v-if="results.length > 0 && diagnosticsVisible" class="search-workspace__diagnostics">
+        <aside
+          v-if="results.length > 0 && diagnosticsVisible"
+          ref="diagnosticsPanelRef"
+          class="search-workspace__diagnostics"
+          role="region"
+          aria-label="Retrieval diagnostics"
+          tabindex="-1"
+          @click.self="closeDiagnostics"
+          @keydown.esc.stop="closeDiagnostics"
+        >
           <NCard class="workbench-card scholar-card search-diagnostics-card" :bordered="false">
             <template #header>
               <div class="section-title">Diagnostics</div>
             </template>
             <template #header-extra>
-              <NButton size="small" quaternary @click="diagnosticsVisible = false">{{ isEnglish ? 'Close' : '关闭' }}</NButton>
+              <NButton size="small" quaternary @click="closeDiagnostics">{{ isEnglish ? 'Close' : '关闭' }}</NButton>
             </template>
 
             <NSpace vertical size="large">
@@ -198,7 +207,7 @@ import {
   NSpace,
   NTag,
 } from 'naive-ui';
-import { computed, reactive, ref } from 'vue';
+import { computed, nextTick, reactive, ref } from 'vue';
 import AppLayout from '@/components/AppLayout.vue';
 import WorkspaceHero from '@/components/WorkspaceHero.vue';
 import { searchKnowledge, type KnowledgeSearchResult } from '@/api/knowledge';
@@ -217,6 +226,9 @@ const selectedIndex = ref(0);
 const lastDurationMs = ref<number | null>(null);
 const lastRunAt = ref<string | null>(null);
 const diagnosticsVisible = ref(true);
+const diagnosticsPanelRef = ref<HTMLElement | null>(null);
+const searchButtonRef = ref<{ $el?: HTMLElement } | null>(null);
+let diagnosticsReturnFocus: HTMLElement | null = null;
 
 const selectedResult = computed(() => results.value[selectedIndex.value] || null);
 const highScoreCount = computed(() => results.value.filter((item) => item.score >= 0.8).length);
@@ -284,11 +296,40 @@ async function handleSearch() {
     lastRunAt.value = new Date().toISOString();
     if (data.length === 0) {
       ui.message.info('No retrieval results found.');
+    } else {
+      diagnosticsReturnFocus = searchButtonRef.value?.$el || null;
+      await focusCompactDiagnostics();
     }
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || 'Search failed.');
   } finally {
     searching.value = false;
+  }
+}
+
+function toggleDiagnostics(event?: MouseEvent) {
+  if (diagnosticsVisible.value) {
+    closeDiagnostics();
+    return;
+  }
+  if (event?.currentTarget instanceof HTMLElement) {
+    diagnosticsReturnFocus = event.currentTarget;
+  }
+  diagnosticsVisible.value = true;
+  void focusCompactDiagnostics();
+}
+
+function closeDiagnostics() {
+  const returnFocus = diagnosticsReturnFocus;
+  diagnosticsVisible.value = false;
+  diagnosticsReturnFocus = null;
+  void nextTick(() => returnFocus?.focus());
+}
+
+async function focusCompactDiagnostics() {
+  await nextTick();
+  if (window.matchMedia('(max-width: 1180px)').matches) {
+    diagnosticsPanelRef.value?.focus({ preventScroll: true });
   }
 }
 

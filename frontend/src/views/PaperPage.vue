@@ -21,7 +21,12 @@
           <span class="paper-task-summary__file">TEX</span>
           <div>
             <strong>{{ currentTask?.sourceFilename || selectedTexFile?.name || t('paper.chooseTex') }}</strong>
-            <span>{{ currentTask ? taskStatusLabel(currentTask.status) : t('paper.noTask') }}</span>
+            <div class="paper-task-summary__status">
+              <NTag :type="currentTask ? statusTagType(currentTask.status) : 'default'" size="small" round>
+                {{ currentTask ? taskStatusLabel(currentTask.status) : t('paper.noTask') }}
+              </NTag>
+              <span v-if="currentTask">#{{ currentTask.id }}</span>
+            </div>
           </div>
         </div>
         <div class="paper-hero-progress">
@@ -32,14 +37,31 @@
           <strong>{{ progressPercent }}%</strong>
           <NProgress type="line" :percentage="progressPercent" :show-indicator="false" status="success" />
         </div>
-        <div v-if="currentTask" class="paper-hero-actions">
-          <NButton size="small" secondary :disabled="!currentTaskId" @click="refreshTask">{{ t('paper.refreshTasks') }}</NButton>
-          <NButton size="small" secondary :disabled="!currentTaskId" @click="connectSse">{{ isEnglish ? 'Reconnect SSE' : '重连 SSE' }}</NButton>
+        <div v-if="currentTask" class="paper-hero-actions" role="group" :aria-label="isEnglish ? 'Task controls' : '任务控制'">
           <NButton size="small" tertiary :disabled="!canPause" @click="handlePause">{{ isEnglish ? 'Pause' : '暂停' }}</NButton>
           <NButton size="small" tertiary :disabled="!canResume" @click="handleResume">{{ isEnglish ? 'Resume' : '继续' }}</NButton>
           <NButton size="small" tertiary type="error" :disabled="!canStop" @click="handleStop">{{ isEnglish ? 'Stop' : '停止' }}</NButton>
+          <NDropdown trigger="click" :options="paperTaskUtilityOptions" @select="handlePaperTaskUtilitySelect">
+            <NButton size="small" secondary>{{ isEnglish ? 'More' : '更多' }}</NButton>
+          </NDropdown>
         </div>
       </div>
+
+      <section v-if="currentTask?.errorMessage || currentTask?.status === 'WAITING_INPUT' || pendingClarifications.length > 0" class="paper-task-notices" aria-live="polite">
+        <NAlert v-if="currentTask?.errorMessage" type="error" title="Task error">
+          {{ currentTask.errorMessage }}
+        </NAlert>
+        <NAlert v-if="currentTask?.status === 'WAITING_INPUT' || pendingClarifications.length > 0" type="warning" title="结构确认待处理">
+          当前任务需要你确认论文结构。请在下方 Review Workspace 的 Clarifications 中提交选择，任务会继续后台执行。
+        </NAlert>
+        <div v-if="needsStructureConfirmation" class="paper-structure-confirmation-callout">
+          <div>
+            <strong>需要确认论文结构</strong>
+            <span>{{ pendingClarifications.length }} 个确认项等待处理，提交后任务会继续执行。</span>
+          </div>
+          <NButton type="warning" secondary @click="focusStructureConfirmation">去确认</NButton>
+        </div>
+      </section>
 
       <section v-if="activeTaskCards.length > 0" class="paper-task-board">
         <div class="paper-task-board__head">
@@ -85,7 +107,7 @@
       <div class="paper-polish-shell" :class="{ 'paper-polish-shell--single': !currentTask }">
         <main class="paper-polish-main">
           <NGrid :cols="24" :x-gap="14" :y-gap="14" responsive="screen" item-responsive>
-            <NGridItem :span="currentTask ? '24 l:11' : '24'">
+            <NGridItem span="24">
               <NCard class="workbench-card scholar-card paper-polish-card paper-input-card" :bordered="false">
                 <template #header>
                   <div class="section-title">{{ t('paper.inputManuscript') }}</div>
@@ -158,66 +180,37 @@
               </NCard>
             </NGridItem>
 
-            <NGridItem v-if="currentTask" span="24 l:13">
-              <NCard class="workbench-card scholar-card paper-polish-card paper-status-card-v2" :bordered="false">
-                <template #header>
-                  <div class="section-title">Task Status</div>
-                </template>
-                <template #header-extra>
-                  <NTag :type="currentTask ? statusTagType(currentTask.status) : 'default'" round>
-                    {{ currentTask?.status || 'No task' }}
-                  </NTag>
-                </template>
-
-                <div class="paper-status-v2">
-                  <div class="paper-status-v2__meta">
-                    <div><span>{{ isEnglish ? 'Manuscript' : '论文' }}</span><strong>{{ currentTask?.title || currentTask?.sourceFilename || (isEnglish ? 'New manuscript' : '新论文') }}</strong></div>
-                    <div><span>{{ isEnglish ? 'Task' : '任务' }}</span><strong>{{ currentTask ? `#${currentTask.id}` : '-' }}</strong></div>
-                    <div><span>{{ isEnglish ? 'Target language' : '目标语言' }}</span><strong>{{ currentTask?.targetLanguage || form.targetLanguage }}</strong></div>
-                  </div>
-                  <div class="paper-status-v2__progress">
-                    <div class="paper-status-v2__facts">
-                      <div><span>{{ isEnglish ? 'Current stage' : '当前阶段' }}</span><strong>{{ currentStageLabel }}</strong></div>
-                      <div><span>{{ isEnglish ? 'Sections' : '章节' }}</span><strong>{{ sectionProgressText }}</strong></div>
-                      <div><span>{{ isEnglish ? 'Attempts' : '尝试次数' }}</span><strong>{{ attemptProgressText }}</strong></div>
-                      <div><span>{{ isEnglish ? 'Artifacts' : '产物' }}</span><strong>{{ artifacts.length }}</strong></div>
-                    </div>
-                  </div>
-                </div>
-
-                <NAlert v-if="currentTask?.errorMessage" type="error" title="Task error">
-                  {{ currentTask.errorMessage }}
-                </NAlert>
-                <NAlert v-if="currentTask?.status === 'WAITING_INPUT' || pendingClarifications.length > 0" type="warning" title="结构确认待处理">
-                  当前任务需要你确认论文结构。请在下方 Review Workspace 的 Clarifications 中提交选择，任务会继续后台执行。
-                </NAlert>
-                <div v-if="needsStructureConfirmation" class="paper-structure-confirmation-callout">
-                  <div>
-                    <strong>需要确认论文结构</strong>
-                    <span>{{ pendingClarifications.length }} 个确认项等待处理，提交后任务会继续执行。</span>
-                  </div>
-                  <NButton type="warning" secondary @click="focusStructureConfirmation">去确认</NButton>
-                </div>
-              </NCard>
-            </NGridItem>
           </NGrid>
 
-          <NCard v-if="currentTask" class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2" :bordered="false">
-            <template #header>
-              <div class="section-title">Workflow</div>
-            </template>
-            <div class="paper-workflow-v2">
-              <div v-for="step in workflowSteps" :key="step.stage" class="paper-workflow-step-v2" :class="workflowStepClass(step.stage)">
-                <span>{{ step.shortLabel }}</span>
-                <strong>{{ step.label }}</strong>
-                <small>{{ workflowStepDetail(step.stage) }}</small>
+          <details v-if="currentTask" class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2">
+            <summary>
+              <div>
+                <div class="section-title">Workflow</div>
+                <small>{{ currentStageLabel }} · {{ progressPercent }}%</small>
+              </div>
+              <span>{{ isEnglish ? 'View 9 stages' : '查看 9 个阶段' }}</span>
+            </summary>
+            <div class="paper-workflow-card-v2__body">
+              <div class="paper-workflow-context">
+                <span>{{ isEnglish ? 'Task' : '任务' }} #{{ currentTask.id }}</span>
+                <span>{{ isEnglish ? 'Target' : '目标语言' }} {{ currentTask.targetLanguage || form.targetLanguage }}</span>
+                <span>{{ isEnglish ? 'Sections' : '章节' }} {{ sectionProgressText }}</span>
+                <span>{{ isEnglish ? 'Attempts' : '尝试' }} {{ attemptProgressText }}</span>
+                <span>{{ isEnglish ? 'Artifacts' : '产物' }} {{ artifacts.length }}</span>
+              </div>
+              <div class="paper-workflow-v2">
+                <div v-for="step in workflowSteps" :key="step.stage" class="paper-workflow-step-v2" :class="workflowStepClass(step.stage)">
+                  <span>{{ step.shortLabel }}</span>
+                  <strong>{{ step.label }}</strong>
+                  <small>{{ workflowStepDetail(step.stage) }}</small>
+                </div>
+              </div>
+              <div class="paper-workflow-activity" role="status" aria-live="polite">
+                <strong>{{ workflowActivityTitle }}</strong>
+                <span>{{ workflowActivityDetail }}</span>
               </div>
             </div>
-            <div v-if="currentTask" class="paper-workflow-activity" role="status" aria-live="polite">
-              <strong>{{ workflowActivityTitle }}</strong>
-              <span>{{ workflowActivityDetail }}</span>
-            </div>
-          </NCard>
+          </details>
 
           <NCard
             v-if="currentTask"
@@ -454,10 +447,10 @@
                 <NRadio v-for="option in clarificationOptions(item).options" :key="option" :value="option">{{ option }}</NRadio>
               </NSpace>
             </NRadioGroup>
-            <NSpace size="small">
+            <div class="paper-structure-modal__actions">
               <NButton type="primary" size="small" :loading="clarificationSubmitting" @click="submitClarification(item)">Confirm</NButton>
               <NButton size="small" secondary :disabled="clarificationSubmitting" @click="skipClarification(item)">Keep detected structure</NButton>
-            </NSpace>
+            </div>
           </div>
           <NEmpty v-if="pendingClarifications.length === 0" description="Loading structure confirmation items..." />
         </div>
@@ -477,6 +470,7 @@ import {
   NButton,
   NButtonGroup,
   NCard,
+  NDropdown,
   NEmpty,
   NForm,
   NFormItemGi,
@@ -600,6 +594,10 @@ const canStop = computed(() => {
   }
   return ['PENDING', 'RUNNING', 'PAUSED', 'CANCEL_REQUESTED', 'CANCELLING'].includes(currentTask.value?.status || '');
 });
+const paperTaskUtilityOptions = computed(() => [
+  { label: t('paper.refreshTasks'), key: 'refresh' },
+  { label: isEnglish.value ? 'Reconnect SSE' : '重连 SSE', key: 'reconnect-sse' },
+]);
 const downloadableArtifactTypes = ['polished_tex', 'suggested_bib', 'suggested_bib_novel', 'review_report', 'retrieved_literature_json', 'retrieved_literature_md'];
 const activeArtifacts = computed(() => artifacts.value.filter((item) => !item.artifactStatus || item.artifactStatus === 'COMPLETED'));
 const hasDownloadableArtifacts = computed(() => activeArtifacts.value.some((item) => downloadableArtifactTypes.includes(item.type)));
@@ -742,6 +740,16 @@ const sseStatusText = computed(() => {
   if (sseStatus.value === 'error') return isEnglish.value ? 'Disconnected' : '异常断开';
   return isEnglish.value ? 'Not connected' : '未连接';
 });
+
+function handlePaperTaskUtilitySelect(key: string | number) {
+  if (key === 'refresh') {
+    void refreshTask();
+    return;
+  }
+  if (key === 'reconnect-sse') {
+    void connectSse();
+  }
+}
 
 onMounted(async () => {
   await loadHistory();

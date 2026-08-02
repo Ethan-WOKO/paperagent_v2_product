@@ -47,4 +47,16 @@ describe('long-term memory presentation contract', () => {
     expect(app).toContain("route.path.startsWith('/settings')");
     expect(main).toContain("import './styles/memory-workspace.css';");
   });
+
+  it('keeps memory editors usable in short viewports and avoids cramped tablet summaries', () => {
+    expect(page).toContain("maxHeight: 'calc(100dvh - 24px)'");
+    expect(page.match(/content-scrollable/g)).toHaveLength(2);
+    expect(page).toContain('.memory-modal :deep(.n-card__content)');
+    expect(page).toContain('overscroll-behavior: contain;');
+    expect(page).toContain('.memory-modal__actions {');
+    expect(page).toContain('position: sticky;');
+    expect(styles).toContain('grid-template-columns: repeat(3, minmax(0, 1fr));');
+    expect(styles).toContain('@media (max-width: 900px)');
+    expect(styles).toContain('font-size: 12px;');
+  });
 });

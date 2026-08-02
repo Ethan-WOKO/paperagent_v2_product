@@ -131,7 +131,7 @@
                   </NTag>
                   <span class="kb-document-updated">{{ formatDateTime(item.updatedAt) }}</span>
                   <NSpace class="kb-document-actions" size="small" justify="end">
-                    <NButton text type="primary" @click="handlePreview(item)">Preview</NButton>
+                    <NButton text type="primary" @click="handlePreview(item, $event)">Preview</NButton>
                     <NPopconfirm v-if="item.sourceType !== 'DEMO_SEED'" @positive-click="handleDelete(item.id)">
                       <template #trigger>
                         <NButton text type="error">Delete</NButton>
@@ -145,7 +145,16 @@
             </NCard>
         </main>
 
-        <aside v-if="previewDocument" class="kb-workspace__preview">
+        <aside
+          v-if="previewDocument"
+          ref="previewPanelRef"
+          class="kb-workspace__preview"
+          role="region"
+          aria-label="Parsed text preview"
+          tabindex="-1"
+          @click.self="closePreview"
+          @keydown.esc.stop="closePreview"
+        >
           <NCard class="workbench-card scholar-card kb-preview-side-card" :bordered="false">
             <template #header>
               <div class="section-title">Parsed Text Preview</div>
@@ -221,7 +230,7 @@ import {
   NSpin,
   NTag,
 } from 'naive-ui';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
 import WorkspaceHero from '@/components/WorkspaceHero.vue';
@@ -254,6 +263,8 @@ const documents = ref<KbDocumentItem[]>([]);
 const previewLoading = ref(false);
 const previewData = ref<KbDocumentPreviewResponse | null>(null);
 const previewDocument = ref<KbDocumentItem | null>(null);
+const previewPanelRef = ref<HTMLElement | null>(null);
+let previewReturnFocus: HTMLElement | null = null;
 let pollingTimer: number | null = null;
 
 const hasProcessingDocuments = computed(() =>
@@ -308,8 +319,11 @@ function toggleUploadPanel() {
 }
 
 function closePreview() {
+  const returnFocus = previewReturnFocus;
   previewDocument.value = null;
   previewData.value = null;
+  previewReturnFocus = null;
+  void nextTick(() => returnFocus?.focus());
 }
 
 async function handleUpload() {
@@ -397,10 +411,17 @@ async function handleDelete(documentId: number) {
   }
 }
 
-async function handlePreview(document: KbDocumentItem) {
+async function handlePreview(document: KbDocumentItem, event?: MouseEvent) {
+  if (event?.currentTarget instanceof HTMLElement) {
+    previewReturnFocus = event.currentTarget;
+  }
   previewDocument.value = document;
   previewData.value = null;
   previewLoading.value = true;
+  await nextTick();
+  if (isCompactKnowledgePreview()) {
+    previewPanelRef.value?.focus({ preventScroll: true });
+  }
   try {
     const { data } = await previewKbDocument(document.id, 20000);
     previewData.value = data;
@@ -409,6 +430,10 @@ async function handlePreview(document: KbDocumentItem) {
   } finally {
     previewLoading.value = false;
   }
+}
+
+function isCompactKnowledgePreview() {
+  return window.matchMedia('(max-width: 1100px)').matches;
 }
 
 async function copyPreviewContent() {

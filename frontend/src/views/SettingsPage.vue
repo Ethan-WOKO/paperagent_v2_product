@@ -52,6 +52,8 @@
                       v-model:value="defaultModel"
                       filterable
                       tag
+                      :title="defaultModel"
+                      :consistent-menu-width="false"
                       :options="defaultModelOptions"
                       :disabled="!isBuiltinDefaultProvider"
                       :input-props="{ autocomplete: 'off', name: 'paperagent-default-model' }"
@@ -87,6 +89,8 @@
                         v-model:value="form.deepseekModel"
                         filterable
                         tag
+                        :title="form.deepseekModel"
+                        :consistent-menu-width="false"
                         :options="deepseekModelOptions"
                         :input-props="{ autocomplete: 'off', name: 'paperagent-deepseek-model' }"
                       />
@@ -141,6 +145,8 @@
                         v-model:value="form.glmModel"
                         filterable
                         tag
+                        :title="form.glmModel"
+                        :consistent-menu-width="false"
                         :options="glmModelOptions"
                         :input-props="{ autocomplete: 'off', name: 'paperagent-glm-model' }"
                       />

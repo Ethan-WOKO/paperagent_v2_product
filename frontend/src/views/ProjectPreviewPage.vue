@@ -147,11 +147,16 @@
               <button type="button" class="project-utility-chip project-context-toggle" :aria-expanded="!contextRailCollapsed" @click="setContextRailCollapsed(!contextRailCollapsed)">
                 {{ contextRailCollapsed ? '展开项目资料' : '收起项目资料' }}
               </button>
-              <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" :aria-pressed="inspectorOpen && inspectorTab === 'preview'" aria-controls="project-inspector" @click="toggleInspector('preview')">文件预览</button>
-              <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" :aria-pressed="inspectorOpen && inspectorTab === 'evidence'" aria-controls="project-inspector" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
+              <button type="button" class="project-utility-chip project-utility-chip--secondary" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" :aria-pressed="inspectorOpen && inspectorTab === 'preview'" aria-controls="project-inspector" @click="toggleInspector('preview')">文件预览</button>
+              <button type="button" class="project-utility-chip project-utility-chip--secondary" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" :aria-pressed="inspectorOpen && inspectorTab === 'evidence'" aria-controls="project-inspector" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" :aria-pressed="inspectorOpen && inspectorTab === 'changes'" aria-controls="project-inspector" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
-              <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" :aria-pressed="inspectorOpen && inspectorTab === 'versions'" aria-controls="project-inspector" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
-              <NButton size="tiny" quaternary :disabled="v2NaturalTurnBusy" @click="startNewConversation">新建会话</NButton>
+              <button type="button" class="project-utility-chip project-utility-chip--secondary" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" :aria-pressed="inspectorOpen && inspectorTab === 'versions'" aria-controls="project-inspector" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
+              <NButton class="project-new-conversation" size="tiny" quaternary :disabled="v2NaturalTurnBusy" @click="startNewConversation">新建会话</NButton>
+              <NDropdown trigger="click" :options="projectUtilityMenuOptions" @select="handleProjectUtilityMenuSelect">
+                <button type="button" class="project-utility-chip project-utility-more" :aria-label="isEnglish ? 'More project tools' : '更多项目工具'">
+                  {{ isEnglish ? 'More tools' : '更多工具' }}
+                </button>
+              </NDropdown>
             </div>
           </div>
 
@@ -509,11 +514,12 @@
                 aria-label="V2 project task"
                 type="textarea"
                 :maxlength="20000"
-                :autosize="{ minRows: 3, maxRows: 8 }"
+                :autosize="{ minRows: 2, maxRows: 8 }"
                 placeholder="例如：读取项目中的 Sort.java，找出编译失败的原因，修复后在沙箱中运行"
                 @keydown="handleV2TurnKeydown"
               />
               <NButton
+                class="project-send-button"
                 type="primary"
                 :loading="v2NaturalTurnBusy"
                 :disabled="!v2NaturalTurnAvailable || !activeProject || !v2TurnInput.trim() || v2NaturalTurnBusy"
@@ -801,6 +807,11 @@ const sessionMenuOptions = computed(() => [
   { label: isEnglish.value ? 'Rename' : '重命名', key: 'rename' },
   { label: isEnglish.value ? 'Delete' : '删除', key: 'delete' },
 ]);
+const projectUtilityMenuOptions = computed(() => [
+  { label: isEnglish.value ? 'File preview' : '文件预览', key: 'preview' },
+  { label: `${isEnglish.value ? 'Evidence' : '证据'} (${evidence.value.length})`, key: 'evidence' },
+  { label: `${isEnglish.value ? 'Project versions' : '项目版本'} (${revisions.value.length})`, key: 'versions' },
+]);
 const activeProject = computed(() => projects.value.find((item) => item.id === activeProjectId.value) || null);
 const selectedCandidateAutomaticValidation = computed(() => {
   const artifactId = selectedCandidate.value?.artifact.id;
@@ -994,6 +1005,12 @@ function toggleInspector(tab: ProjectInspectorTab) {
   }
   inspectorTab.value = tab;
   inspectorOpen.value = true;
+}
+
+function handleProjectUtilityMenuSelect(key: string | number) {
+  if (key === 'preview' || key === 'evidence' || key === 'versions') {
+    toggleInspector(key);
+  }
 }
 
 function showInspector(tab: ProjectInspectorTab) {
@@ -2337,8 +2354,37 @@ onUnmounted(() => {
 .v2-conversation__outputs { display: flex; flex-direction: column; gap: 5px; padding: 9px; border-radius: 7px; background: var(--yb-bg-muted); font-size: 10px; }
 .v2-conversation__outputs code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
 .v2-conversation__candidate { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.v2-conversation__composer { display: flex; align-items: flex-end; gap: 9px; margin-top: auto; padding-top: 2px; }
-.v2-conversation__composer :deep(.n-input) { flex: 1; }
+.v2-conversation__composer {
+  width: min(1040px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin: auto auto 0;
+  padding: 8px;
+  border: 1px solid var(--project-rule);
+  border-radius: 10px;
+  background: var(--project-surface);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--project-ink) 5%, transparent);
+}
+.v2-conversation__composer :deep(.n-input) {
+  min-width: 0;
+  background: transparent !important;
+}
+.v2-conversation__composer :deep(.n-input__border),
+.v2-conversation__composer :deep(.n-input__state-border) { display: none; }
+.v2-conversation__composer .project-send-button {
+  width: 72px;
+  min-width: 72px;
+  height: 40px;
+  padding: 0;
+  border-radius: 8px !important;
+}
+.v2-conversation__composer .project-send-button :deep(.n-button__content) {
+  width: 100%;
+  justify-content: center;
+  line-height: 1;
+}
 
 .project-utility-chip { min-height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--yb-border); border-radius: 999px; background: transparent; color: var(--yb-text-secondary); font-size: 10px; line-height: 1; white-space: nowrap; cursor: pointer; }
 .project-utility-chip span { color: var(--yb-text-muted); }
@@ -2356,7 +2402,7 @@ onUnmounted(() => {
 .project-conversation-item:hover { background: var(--yb-bg-muted); }
 .project-conversation-item.active { background: var(--yb-sidebar-active); color: var(--yb-text); }
 .project-conversation-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-conversation-item__more { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--yb-text-muted); cursor: pointer; font-size: 12px; line-height: 1; }
+.project-conversation-item__more { width: 36px; height: 36px; margin: -4px -4px -4px 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--yb-text-muted); cursor: pointer; font-size: 12px; line-height: 1; }
 .project-conversation-item__more:hover { background: var(--yb-bg-elevated); color: var(--yb-text); }
 
 .project-inspector { flex: 0 0 auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 12px; background: color-mix(in srgb, var(--yb-bg-muted) 58%, transparent); }
@@ -2782,6 +2828,10 @@ onUnmounted(() => {
   gap: 5px;
 }
 
+.project-workspace--console .project-utility-more {
+  display: none;
+}
+
 .project-workspace--console .project-utility-chip {
   min-height: 32px;
   padding: 6px 9px;
@@ -3062,8 +3112,9 @@ onUnmounted(() => {
     overflow-x: auto;
     overflow-y: hidden;
     scroll-snap-type: x proximity;
-    scrollbar-gutter: stable both-edges;
+    scrollbar-width: none;
   }
+  .project-workspace--console .project-context-rail::-webkit-scrollbar { display: none; }
   .project-workspace--console .project-context-rail .project-sidebar-section {
     flex: 0 0 clamp(238px, 34vw, 300px);
     min-height: 224px;
@@ -3083,12 +3134,54 @@ onUnmounted(() => {
   .project-workspace--console .project-context-rail .project-search-results { min-height: 0; max-height: none; }
   .project-workspace--console .project-panel + .project-panel { border-top-color: var(--project-rule); }
   .project-workspace--console .project-tabs { align-items: flex-start; gap: 9px; }
-  .project-workspace--console .project-tabs__actions { width: 100%; padding-bottom: 2px; }
+  .project-workspace--console .project-tabs__actions {
+    width: 100%;
+    flex-wrap: wrap;
+    overflow: visible;
+    padding-bottom: 2px;
+  }
+  .project-workspace--console .project-utility-chip--secondary { display: none; }
+  .project-workspace--console .project-utility-more { display: inline-flex; }
   .project-workspace--console .project-panel--v2,
   .project-workspace--console .v2-conversation,
   .project-workspace--console .v2-conversation__tasks { overflow: visible; }
   .project-workspace--console .v2-conversation,
   .project-workspace--console .v2-conversation__tasks { flex: none; }
+}
+
+@media (min-width: 981px) {
+  .project-workspace--console .project-inspector {
+    min-height: 0;
+    max-height: 42dvh;
+    overflow: hidden;
+  }
+
+  .project-workspace--console .project-inspector__tabs {
+    flex: 0 0 auto;
+  }
+
+  .project-workspace--console .project-inspector__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 4px;
+    scrollbar-gutter: stable;
+  }
+
+  .project-workspace--console .project-inspector__body .project-diff {
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .project-workspace--console .project-candidate-apply {
+    position: sticky;
+    z-index: 2;
+    bottom: 0;
+    margin-inline: -4px;
+    padding: 10px 4px 2px;
+    background: var(--project-surface);
+  }
 }
 
 @media (max-width: 620px) {
@@ -3111,6 +3204,7 @@ onUnmounted(() => {
     transform: translateX(-50%);
   }
   .project-workspace--console .project-panel--v2 { padding: 12px 10px; }
+  .project-workspace--console .project-utility-chip { min-height: 40px; }
   .project-workspace--console .project-context-rail .project-sidebar-section,
   .project-workspace--console .project-context-rail .project-sidebar-section--file-browser {
     flex-basis: calc(100vw - 52px);

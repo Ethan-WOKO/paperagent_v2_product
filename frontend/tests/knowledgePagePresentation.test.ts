@@ -32,7 +32,11 @@ describe('Knowledge workspace presentation contract', () => {
 
   it('opens parsed text as an optional inspector rather than reserving an empty column', () => {
     expect(knowledgeSource).toContain("'kb-workspace--preview-open': previewDocument");
-    expect(knowledgeSource).toContain('<aside v-if="previewDocument"');
+    expect(knowledgeSource).toContain('v-if="previewDocument"');
+    expect(knowledgeSource).toContain('ref="previewPanelRef"');
+    expect(knowledgeSource).toContain('@click.self="closePreview"');
+    expect(knowledgeSource).toContain('@keydown.esc.stop="closePreview"');
+    expect(knowledgeSource).toContain("window.matchMedia('(max-width: 1100px)')");
     expect(knowledgeSource).toContain('@click="closePreview"');
     expect(knowledgeSource).not.toContain('The full text still participates in retrieval.');
   });
@@ -49,9 +53,22 @@ describe('Knowledge workspace presentation contract', () => {
     expect(searchSource).toContain("'search-workspace--diagnostics-open': results.length > 0 && diagnosticsVisible");
     expect(searchSource).toContain('@keydown.enter.prevent="selectedIndex = index"');
     expect(searchSource).toContain('@keydown.space.prevent="selectedIndex = index"');
-    expect(searchSource).toContain('diagnosticsVisible = false');
+    expect(searchSource).toContain('ref="diagnosticsPanelRef"');
+    expect(searchSource).toContain('@click.self="closeDiagnostics"');
+    expect(searchSource).toContain('@keydown.esc.stop="closeDiagnostics"');
+    expect(searchSource).toContain("window.matchMedia('(max-width: 1180px)')");
+    expect(searchSource).toContain('class="search-result-snippet"');
     expect(searchSource).toContain('v-if="searching || results.length > 0"');
     expect(searchSource).toContain(':autosize="{ minRows: 1, maxRows: 4 }"');
+  });
+
+  it('uses viewport-bound inspectors and keeps narrow-screen result content available', () => {
+    expect(styles).toContain('@media (max-width: 1100px)');
+    expect(styles).toContain('@media (max-width: 1180px)');
+    expect(styles).toContain('height: 100dvh;');
+    expect(styles).toContain('overscroll-behavior: contain;');
+    expect(styles).toContain('-webkit-line-clamp: unset;');
+    expect(styles).not.toContain('.search-result-row > .n-tag:last-of-type');
   });
 
   it('uses responsive semantic-token styling for both knowledge routes', () => {
