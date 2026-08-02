@@ -26,6 +26,8 @@ class V2ProductToolCatalogTest {
                         "literature.search",
                         "project.read",
                         "project.search",
+                        "project.document.extract",
+                        "project.spreadsheet.inspect",
                         "project.latex.outline",
                         "project.latex.crossref.audit",
                         "project.latex.float.audit",
@@ -45,6 +47,8 @@ class V2ProductToolCatalogTest {
                         "literature_search",
                         "project_read",
                         "project_search",
+                        "project_document_extract",
+                        "project_spreadsheet_inspect",
                         "project_latex_outline",
                         "project_latex_crossref_audit",
                         "project_latex_float_audit",
@@ -129,6 +133,71 @@ class V2ProductToolCatalogTest {
                 "maxResults", number(0)))));
         assertFalse(accepts(id("project.search"), object(Map.of(
                 "query", text("mergeSort")))));
+    }
+
+    @Test
+    void acceptsAndRejectsDocumentAndSpreadsheetArgumentsWithoutExecution() {
+        assertTrue(accepts(id("project.document.extract"), object(Map.of(
+                "path", text("paper/report.pdf"),
+                "maxCharacters", number(20_000),
+                "maxLocations", number(50),
+                "includeMetadata", bool(true)))));
+        assertTrue(accepts(id("project.document.extract"), object(Map.of(
+                "path", text("paper/report.docx")))));
+        assertFalse(accepts(id("project.document.extract"), object(Map.of(
+                "path", text("paper/main.tex")))));
+        assertFalse(accepts(id("project.document.extract"), object(Map.of(
+                "path", text("paper/report.pdf"),
+                "maxCharacters", number(999)))));
+
+        assertTrue(accepts(id("project.spreadsheet.inspect"), object(Map.of(
+                "path", text("results/metrics.xlsx"),
+                "sheetNames", list(text("Summary")),
+                "maxRowsPerSheet", number(20),
+                "maxColumnsPerSheet", number(10)))));
+        assertTrue(accepts(id("project.spreadsheet.inspect"), object(Map.of(
+                "path", text("results/metrics.xlsx")))));
+        assertFalse(accepts(id("project.spreadsheet.inspect"), object(Map.of(
+                "path", text("results/metrics.csv")))));
+        assertFalse(accepts(id("project.spreadsheet.inspect"), object(Map.of(
+                "path", text("results/metrics.xlsx"),
+                "sheetNames", list(text("Summary"), text("Summary"))))));
+        assertFalse(accepts(id("project.spreadsheet.inspect"), object(Map.of(
+                "path", text("results/metrics.xlsx"),
+                "maxRowsPerSheet", number(101)))));
+    }
+
+    @Test
+    void descriptionsGivePositiveAndNegativeSelectionBoundaries() {
+        String ordinary = V2ProductToolCatalog.requireDescriptor(
+                id("project.search")).description();
+        String cross = V2ProductToolCatalog.requireDescriptor(
+                id("project.cross-material.search")).description();
+        String document = V2ProductToolCatalog.requireDescriptor(
+                id("project.document.extract")).description();
+        String spreadsheet = V2ProductToolCatalog.requireDescriptor(
+                id("project.spreadsheet.inspect")).description();
+        assertTrue(ordinary.contains("ordinary literal discovery"));
+        assertTrue(ordinary.contains("project.cross-material.search"));
+        assertTrue(cross.contains("both a paper and a report"));
+        assertTrue(cross.contains("use project.search"));
+        assertTrue(document.contains("PDF pages or DOCX"));
+        assertTrue(document.contains("Do not use project.read"));
+        assertTrue(spreadsheet.contains("Choose this for XLSX"));
+        assertTrue(spreadsheet.contains("project.experiment.summary"));
+
+        assertTrue(V2ProductToolCatalog.requireDescriptor(
+                id("project.latex.outline")).description().contains(
+                        "separate audit tools"));
+        assertTrue(V2ProductToolCatalog.requireDescriptor(
+                id("project.latex.crossref.audit")).description().contains(
+                        "label/ref consistency"));
+        assertTrue(V2ProductToolCatalog.requireDescriptor(
+                id("project.latex.float.audit")).description().contains(
+                        "figures and tables"));
+        assertTrue(V2ProductToolCatalog.requireDescriptor(
+                id("project.latex.protected.inventory")).description()
+                .contains("Do not use it as a document outline"));
     }
 
     @Test

@@ -322,6 +322,8 @@ class V2TurnPlannerTest {
                 "literature_search", "literature.search",
                 "project_read", "project.read",
                 "project_search", "project.search",
+                "project_document_extract", "project.document.extract",
+                "project_spreadsheet_inspect", "project.spreadsheet.inspect",
                 "project_bibtex_audit", "project.bibtex.audit",
                 "project_candidate", "project.candidate.compose",
                 "sandbox_execute", "sandbox.execute");

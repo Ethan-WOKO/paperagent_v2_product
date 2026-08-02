@@ -90,6 +90,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final V2ProjectCodeSymbolsTool codeSymbols;
     private final V2ProjectExperimentSummaryTool experimentSummary;
     private final V2ProjectCrossMaterialSearchTool crossMaterialSearch;
+    private final V2ProjectDocumentExtractTool documentExtract;
+    private final V2ProjectSpreadsheetInspectTool spreadsheetInspect;
 
     public AuthenticatedProjectEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
@@ -185,6 +187,9 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 new V2ProjectExperimentSummaryTool(json);
         this.crossMaterialSearch =
                 new V2ProjectCrossMaterialSearchTool(json);
+        this.documentExtract = new V2ProjectDocumentExtractTool(json);
+        this.spreadsheetInspect =
+                new V2ProjectSpreadsheetInspectTool(json);
     }
 
     public AuthenticatedProjectEffectExecutionOutcome execute(
@@ -530,6 +535,11 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 case V2ProjectCrossMaterialSearchTool.KIND ->
                         crossMaterialSearch.execute(
                                 workspace, ref, arguments);
+                case V2ProjectDocumentExtractTool.KIND ->
+                        documentExtract.execute(workspace, ref, arguments);
+                case V2ProjectSpreadsheetInspectTool.KIND ->
+                        spreadsheetInspect.execute(
+                                workspace, ref, arguments);
                 default -> throw failed("unsupported_project_effect");
             };
         } catch (RuntimeException | java.io.IOException exception) {
@@ -757,6 +767,10 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     "PROJECT_EXPERIMENT_SUMMARY_FAILED";
             case V2ProjectCrossMaterialSearchTool.KIND ->
                     "PROJECT_CROSS_MATERIAL_SEARCH_FAILED";
+            case V2ProjectDocumentExtractTool.KIND ->
+                    "PROJECT_DOCUMENT_EXTRACT_FAILED";
+            case V2ProjectSpreadsheetInspectTool.KIND ->
+                    "PROJECT_SPREADSHEET_INSPECT_FAILED";
             default -> "PROJECT_EVIDENCE_FAILED";
         };
     }
@@ -783,6 +797,10 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     "Project experiment summary failed";
             case V2ProjectCrossMaterialSearchTool.KIND ->
                     "Project cross-material search failed";
+            case V2ProjectDocumentExtractTool.KIND ->
+                    "Project document extraction failed";
+            case V2ProjectSpreadsheetInspectTool.KIND ->
+                    "Project spreadsheet inspection failed";
             default -> "Project evidence operation failed";
         };
     }
