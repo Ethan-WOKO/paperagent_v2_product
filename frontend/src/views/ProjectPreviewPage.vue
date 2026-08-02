@@ -29,7 +29,7 @@
         <NEmpty :description="t('project.page.noProjects')" />
       </section>
 
-      <section v-else class="project-workspace__grid">
+      <section v-else class="project-workspace__grid" :class="{ 'project-workspace__grid--context-collapsed': contextRailCollapsed }">
         <aside class="project-panel project-panel--files project-context-rail">
           <section class="project-sidebar-section project-sidebar-section--projects" :class="{ 'project-sidebar-section--collapsed': sidebarSections.projects }">
             <div class="project-sidebar-section__toggle">
@@ -144,6 +144,9 @@
               <span class="project-agent-mode__caption">持久化任务</span>
             </div>
             <div class="project-tabs__actions" role="group" aria-label="Project utilities">
+              <button type="button" class="project-utility-chip project-context-toggle" :aria-expanded="!contextRailCollapsed" @click="setContextRailCollapsed(!contextRailCollapsed)">
+                {{ contextRailCollapsed ? '展开项目资料' : '收起项目资料' }}
+              </button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" :aria-pressed="inspectorOpen && inspectorTab === 'preview'" aria-controls="project-inspector" @click="toggleInspector('preview')">文件预览</button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" :aria-pressed="inspectorOpen && inspectorTab === 'evidence'" aria-controls="project-inspector" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" :aria-pressed="inspectorOpen && inspectorTab === 'changes'" aria-controls="project-inspector" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
@@ -417,6 +420,35 @@
                   </NTag>
                 </header>
 
+                <details
+                  class="v2-conversation__process"
+                  :open="task.status === 'PLANNING' || task.status === 'RUNNING'"
+                >
+                  <summary>
+                    <span>{{ task.status === 'PLANNING' || task.status === 'RUNNING' ? '正在处理' : task.status === 'FAILED' ? '处理失败' : task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理' }}</span>
+                    <small>{{ task.steps.length ? `${task.steps.length} 个步骤` : '直接回答' }}</small>
+                  </summary>
+                  <ol v-if="task.steps.length">
+                    <li v-for="step in task.steps" :key="`${task.clientRequestId}:${step.index}:${step.title}`" :data-status="step.status">
+                      <span>{{ step.index }}</span>
+                      <div>
+                        <strong>{{ step.title }}</strong>
+                        <small v-if="step.detail">结果：{{ step.detail }}</small>
+                      </div>
+                      <NTag size="tiny" :type="v2StepTagType(step.status)">
+                        {{ v2NaturalLanguageStepStatusLabel(step.status) }}
+                      </NTag>
+                    </li>
+                  </ol>
+                  <p v-else class="v2-conversation__empty-process">
+                    {{ task.route === 'DIRECT'
+                      ? '此问题无需执行项目步骤，已直接回答。'
+                      : task.status === 'PLANNING'
+                        ? '正在制定执行步骤，请稍候。'
+                        : '没有可展示的执行步骤。' }}
+                  </p>
+                </details>
+
                 <section class="v2-task-card__result">
                   <strong>Agent 结果</strong>
                   <NAlert v-if="v2TaskApplied(task)" type="success" :show-icon="false">
@@ -465,28 +497,6 @@
                   </dl>
                 </div>
 
-                <details class="v2-conversation__process">
-                  <summary>查看执行过程</summary>
-                  <ol v-if="task.steps.length">
-                    <li v-for="step in task.steps" :key="`${task.clientRequestId}:${step.index}:${step.title}`" :data-status="step.status">
-                      <span>{{ step.index }}</span>
-                      <div>
-                        <strong>{{ step.title }}</strong>
-                        <small v-if="step.detail">结果：{{ step.detail }}</small>
-                      </div>
-                      <NTag size="tiny" :type="v2StepTagType(step.status)">
-                        {{ v2NaturalLanguageStepStatusLabel(step.status) }}
-                      </NTag>
-                    </li>
-                  </ol>
-                  <p v-else class="v2-conversation__empty-process">
-                    {{ task.route === 'DIRECT'
-                      ? '此问题无需执行项目步骤，已直接回答。'
-                      : task.status === 'PLANNING'
-                        ? '正在制定执行步骤，请稍候。'
-                        : '没有可展示的执行步骤。' }}
-                  </p>
-                </details>
               </article>
               <NEmpty v-if="!loading.v2History && v2TurnHistory.length === 0" description="新版本产生的 V2 任务会显示在这里。" />
               <NSpin v-if="loading.v2History" size="small" />
@@ -780,8 +790,13 @@ const formattedProjectUploadSize = computed(() => formatBytes(projectUploadSize.
 const collapsedDirectories = ref<Set<string>>(new Set());
 const collapsedDirectoriesByProject = new Map<number, Set<string>>();
 const PROJECT_HEADER_COLLAPSED_KEY = 'yanban.project.headerCollapsed';
+const PROJECT_CONTEXT_COLLAPSED_KEY = 'yanban.project.contextCollapsed';
 const DEFAULT_SESSION_TITLE = '\u65b0\u4f1a\u8bdd';
 const projectHeaderCollapsed = ref(readStoredBoolean(PROJECT_HEADER_COLLAPSED_KEY, false));
+const contextRailCollapsed = ref(readStoredBoolean(
+  PROJECT_CONTEXT_COLLAPSED_KEY,
+  typeof window !== 'undefined' && window.innerWidth <= 980,
+));
 const sessionMenuOptions = computed(() => [
   { label: isEnglish.value ? 'Rename' : '重命名', key: 'rename' },
   { label: isEnglish.value ? 'Delete' : '删除', key: 'delete' },
@@ -855,6 +870,11 @@ function readStoredBoolean(key: string, fallback: boolean) {
 function setProjectHeaderCollapsed(collapsed: boolean) {
   projectHeaderCollapsed.value = collapsed;
   if (typeof window !== 'undefined') window.localStorage.setItem(PROJECT_HEADER_COLLAPSED_KEY, String(collapsed));
+}
+
+function setContextRailCollapsed(collapsed: boolean) {
+  contextRailCollapsed.value = collapsed;
+  if (typeof window !== 'undefined') window.localStorage.setItem(PROJECT_CONTEXT_COLLAPSED_KEY, String(collapsed));
 }
 
 function collectDirectoryPaths(files: ProjectManifestResponse['files']) {
@@ -1817,7 +1837,7 @@ async function selectProject(projectId: number) {
   validationMessage.value = '';
   revisionMessage.value = '';
   inspectorTab.value = 'preview';
-  inspectorOpen.value = true;
+  inspectorOpen.value = false;
   const epoch = projectEpoch;
   await Promise.all([loadManifest(epoch), loadConversation(epoch), loadRevisions()]);
 }
@@ -2154,6 +2174,7 @@ async function loadProductV2Availability() {
 }
 
 onMounted(() => {
+  inspectorOpen.value = false;
   void loadProductV2Availability();
   void loadProjects();
 });
@@ -2575,24 +2596,24 @@ onUnmounted(() => {
 
 /* Project console refresh: a restrained evidence workspace, scoped to this page. */
 .project-workspace--console {
-  --project-canvas: #08131c;
-  --project-surface: #0f1c28;
-  --project-surface-raised: #142534;
-  --project-rule: #2b4250;
-  --project-rule-strong: #3c5967;
-  --project-ink: #e8f0f2;
-  --project-text: #a8bbc3;
-  --project-muted: #748894;
-  --project-accent: #35b7c5;
-  --project-accent-strong: #208d9a;
-  --project-accent-soft: rgba(53, 183, 197, .14);
-  --project-active: rgba(53, 183, 197, .12);
-  --project-success: #63ad85;
-  --project-warning: #d8a24d;
-  --project-danger: #d66f6f;
+  --project-canvas: var(--pa-canvas);
+  --project-surface: var(--pa-surface);
+  --project-surface-raised: var(--pa-surface-muted);
+  --project-rule: var(--pa-line);
+  --project-rule-strong: var(--pa-line-strong);
+  --project-ink: var(--pa-text);
+  --project-text: var(--pa-text-secondary);
+  --project-muted: var(--pa-text-muted);
+  --project-accent: var(--pa-accent);
+  --project-accent-strong: var(--pa-accent-hover);
+  --project-accent-soft: var(--pa-accent-soft);
+  --project-active: var(--pa-accent-soft);
+  --project-success: var(--pa-success);
+  --project-warning: var(--pa-warning);
+  --project-danger: var(--pa-danger);
   --project-radius-control: 4px;
   --project-radius-panel: 6px;
-  --project-font-ui: "IBM Plex Sans Condensed", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --project-font-ui: var(--pa-font-sans);
   --yb-bg: var(--project-canvas);
   --yb-bg-elevated: var(--project-surface);
   --yb-bg-muted: var(--project-surface-raised);
@@ -2611,24 +2632,6 @@ onUnmounted(() => {
   color: var(--project-ink);
   background: var(--project-canvas);
   font-family: var(--project-font-ui);
-}
-
-:global(body.theme-light) .project-workspace--console {
-  --project-canvas: #f4f8f8;
-  --project-surface: #ffffff;
-  --project-surface-raised: #ebf3f3;
-  --project-rule: #d3e0e0;
-  --project-rule-strong: #b5c8c8;
-  --project-ink: #17313a;
-  --project-text: #4f6770;
-  --project-muted: #71878d;
-  --project-accent: #167d8a;
-  --project-accent-strong: #0b6874;
-  --project-accent-soft: rgba(22, 125, 138, .11);
-  --project-active: rgba(22, 125, 138, .10);
-  --project-success: #357b59;
-  --project-warning: #a86e17;
-  --project-danger: #b95353;
 }
 
 .project-workspace--console .project-workspace__header {
@@ -2652,6 +2655,19 @@ onUnmounted(() => {
   border-radius: var(--project-radius-panel);
   background: var(--project-surface);
   box-shadow: none;
+}
+
+.project-workspace--console .project-workspace__grid--context-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.project-workspace--console .project-workspace__grid--context-collapsed .project-context-rail {
+  visibility: hidden;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
 }
 
 .project-workspace--console .project-panel {
@@ -2854,15 +2870,18 @@ onUnmounted(() => {
 
 .project-workspace--console .v2-task-card__result {
   gap: 8px;
-  padding: 10px 12px;
-  border-left: 2px solid var(--project-accent);
+  padding: 10px 0 2px;
+  border-left: 0;
   border-radius: 0;
-  background: color-mix(in srgb, var(--project-surface-raised) 72%, transparent);
+  background: transparent;
 }
 
-.project-workspace--console .v2-task-card[data-status="FAILED"] .v2-task-card__result { border-left-color: var(--project-danger); }
-.project-workspace--console .v2-task-card[data-status="WAITING_CONFIRMATION"] .v2-task-card__result { border-left-color: var(--project-warning); }
-.project-workspace--console .v2-task-card[data-status="SUCCEEDED"] .v2-task-card__result { border-left-color: var(--project-success); }
+.project-workspace--console .v2-task-card__result > strong {
+  color: var(--project-ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
 
 .project-workspace--console .v2-task-card__delivery,
 .project-workspace--console .v2-conversation__outputs {
@@ -2883,17 +2902,58 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .v2-conversation__process {
-  padding: 8px 0 0;
-  border-bottom: 0;
+  padding: 0;
+  border-top: 1px solid var(--project-rule);
+  border-bottom: 1px solid var(--project-rule);
 }
 
+.project-workspace--console .v2-conversation__process > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 2px;
+  list-style: none;
+  color: var(--project-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.project-workspace--console .v2-conversation__process > summary::-webkit-details-marker { display: none; }
+
+.project-workspace--console .v2-conversation__process > summary::before {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1px solid var(--project-rule-strong);
+  border-radius: 50%;
+  color: var(--project-success);
+  content: "✓";
+  font-size: 10px;
+  line-height: 1;
+}
+
+.project-workspace--console .v2-conversation__process > summary::after {
+  margin-left: auto;
+  color: var(--project-muted);
+  content: "›";
+  font-size: 18px;
+  transition: transform 150ms ease;
+}
+
+.project-workspace--console .v2-conversation__process[open] > summary::after { transform: rotate(90deg); }
+.project-workspace--console .v2-conversation__process > summary small { color: var(--project-muted); font-size: 10px; font-weight: 400; }
+
 .project-workspace--console .v2-conversation__process[open] > summary {
-  margin-bottom: 9px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--project-rule);
 }
 
 .project-workspace--console .v2-conversation__process ol {
   position: relative;
   gap: 0;
+  padding: 8px 2px;
 }
 
 .project-workspace--console .v2-conversation__process ol::before {
@@ -2983,12 +3043,15 @@ onUnmounted(() => {
 
 @media (max-width: 1200px) {
   .project-workspace--console .project-workspace__grid { grid-template-columns: 248px minmax(0, 1fr); }
+  .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
 }
 
 @media (max-width: 980px) {
   .project-workspace--console { height: auto; min-height: calc(100dvh - 28px); overflow: visible; gap: 8px; }
   .project-workspace--console .project-workspace__header { padding: 10px 12px; }
   .project-workspace--console .project-workspace__grid { grid-template-columns: 1fr; overflow: visible; }
+  .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 1fr; }
+  .project-workspace--console .project-workspace__grid--context-collapsed .project-context-rail { display: none; }
   .project-workspace--console .project-panel { min-height: 0; padding: 12px; }
   .project-workspace--console .project-context-rail {
     flex-direction: row;

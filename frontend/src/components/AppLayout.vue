@@ -1,106 +1,56 @@
 ﻿<template>
-  <div
-    class="app-frame"
-    :class="{
-      'app-frame--chat': route.path.startsWith('/chat'),
-      'app-frame--paper': route.path.startsWith('/paper'),
-      'app-frame--project': route.path.startsWith('/projects'),
-      'app-frame--settings': route.path.startsWith('/settings'),
-      'app-frame--non-chat': !route.path.startsWith('/chat'),
-    }"
-  >
-    <aside class="app-sidebar">
-      <div class="app-sidebar__brand" @click="router.push('/chat')">
-        <div class="app-sidebar__logo">
-          <img src="/logo.png" alt="" />
-        </div>
-        <div>
-          <div class="app-sidebar__name">ScholarAI</div>
-          <div class="app-sidebar__sub">Research Copilot</div>
-        </div>
-      </div>
+  <div class="product-shell">
+    <aside class="product-rail">
+      <button type="button" class="product-rail__brand" title="PaperAgent" @click="router.push('/chat')">
+        <img src="/logo.png" alt="PaperAgent" />
+      </button>
 
-      <div class="app-sidebar__search">
-        <span>S</span>
-        <span>{{ t('nav.search') }}</span>
-        <kbd>Ctrl+K</kbd>
-      </div>
-
-      <nav class="app-sidebar__nav" :aria-label="t('nav.workspace')">
+      <nav class="product-rail__nav" :aria-label="t('nav.workspace')">
         <button
           v-for="item in navItems"
           :key="item.path"
           type="button"
-          class="app-sidebar__nav-item"
-          :class="{ 'app-sidebar__nav-item--active': isActiveNav(item.path) }"
+          class="product-rail__nav-item"
+          :class="{ 'product-rail__nav-item--active': isActiveNav(item.path) }"
+          :title="item.label"
+          :aria-label="item.label"
           @click="router.push(item.path)"
         >
+          <AppNavIcon :name="item.icon" />
           <span>{{ item.label }}</span>
         </button>
       </nav>
 
+      <div class="product-rail__spacer" />
 
-      <div class="app-sidebar__spacer" />
-
-      <LanguageToggle class="app-sidebar__language" />
-
-      <div class="app-sidebar__plan" aria-live="polite">
-        <div>
-          <strong>{{ t('nav.credits') }}</strong>
-          <span>{{ quotaSummary }}</span>
-        </div>
-        <div v-if="hasLimitedQuota" class="app-sidebar__meter" :aria-label="quotaSummary">
-          <span :style="quotaMeterStyle" />
-        </div>
-      </div>
-
-      <div class="app-sidebar__user">
-        <div class="app-sidebar__avatar">{{ userInitial }}</div>
-        <div class="app-sidebar__user-info">
-          <strong>{{ authStore.currentUser?.username || t('nav.signedOut') }}</strong>
-          <span>{{ t('nav.researcher') }}</span>
-        </div>
-        <button type="button" class="app-sidebar__logout" @click="logout">{{ t('nav.signOut') }}</button>
+      <div class="product-rail__utilities">
+        <button type="button" class="product-rail__utility product-rail__quota" :title="`${t('nav.credits')} · ${quotaSummary}`" :aria-label="`${t('nav.credits')} · ${quotaSummary}`">
+          AI
+        </button>
+        <LanguageToggle class="product-rail__language" />
+        <button type="button" class="product-rail__utility" :title="themeTitle" :aria-label="themeTitle" @click="toggleTheme">
+          {{ isDark ? '☀' : '◐' }}
+        </button>
+        <div class="product-rail__avatar" :title="authStore.currentUser?.username || t('nav.signedOut')">{{ userInitial }}</div>
+        <button type="button" class="product-rail__logout" :title="t('nav.signOut')" :aria-label="t('nav.signOut')" @click="logout">↪</button>
       </div>
     </aside>
 
-    <main
-      class="app-workspace"
-      :class="{
-        'app-workspace--topbar-collapsed': showTopbar && topbarCollapsed,
-        'app-workspace--no-topbar': !showTopbar,
-        'app-workspace--chat': route.path.startsWith('/chat'),
-        'app-workspace--paper': route.path.startsWith('/paper'),
-        'app-workspace--settings': route.path.startsWith('/settings'),
-      }"
-    >
-      <header v-if="showTopbar" class="app-topbar">
-        <div>
-          <h1>{{ routeTitle }}</h1>
-        </div>
-        <NSpace align="center" :size="10" wrap>
-          <NButton secondary round @click="router.push('/chat')">+ {{ t('top.newTask') }}</NButton>
-          <NButton secondary round @click="router.push('/paper')">{{ t('top.uploadPaper') }}</NButton>
-          <NButton secondary round @click="router.push('/chat')">{{ t('top.searchLiterature') }}</NButton>
-          <NButton type="primary" round class="agent-mode-button">{{ t('top.agentLive') }}</NButton>
-          <NButton quaternary round size="small" class="theme-toggle-button" @click="toggleTheme">
-            {{ isDark ? t('common.light') : t('common.dark') }}
-          </NButton>
-        </NSpace>
-        <button type="button" class="app-topbar__collapse" :title="t('top.hide')" @click="setTopbarCollapsed(true)">-</button>
-      </header>
+    <details class="product-mobile-account">
+      <summary :title="authStore.currentUser?.username || t('nav.signedOut')" :aria-label="authStore.currentUser?.username || t('nav.signedOut')">
+        {{ userInitial }}
+      </summary>
+      <div class="product-mobile-account__menu">
+        <strong>{{ authStore.currentUser?.username || t('nav.signedOut') }}</strong>
+        <span>{{ quotaSummary }}</span>
+        <LanguageToggle class="product-mobile-account__language" />
+        <button type="button" @click="toggleTheme">{{ themeTitle }}</button>
+        <button type="button" @click="logout">{{ t('nav.signOut') }}</button>
+      </div>
+    </details>
 
-      <button
-        v-if="showTopbar && topbarCollapsed"
-        type="button"
-        class="app-topbar__restore"
-        :title="t('top.show')"
-        @click="setTopbarCollapsed(false)"
-      >
-        +
-      </button>
-
-      <section class="app-content-shell">
+    <main class="product-main">
+      <section class="product-content">
         <slot />
       </section>
     </main>
@@ -108,36 +58,34 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { NButton, NSpace } from 'naive-ui';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useTheme } from '@/composables/useTheme';
 import { useI18n } from '@/composables/useI18n';
 import LanguageToggle from '@/components/LanguageToggle.vue';
+import AppNavIcon from '@/components/AppNavIcon.vue';
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const { isDark, toggleTheme } = useTheme();
 const { t } = useI18n();
-const TOPBAR_COLLAPSED_KEY = 'yanban.app.topbarCollapsed';
-const topbarCollapsed = ref(readStoredBoolean(TOPBAR_COLLAPSED_KEY, false));
-const showTopbar = computed(() => route.path.startsWith('/chat'));
 let quotaRefreshTimer: number | undefined;
 
 const navItems = computed(() => [
-  { label: t('nav.workspace'), path: '/chat' },
-  { label: t('nav.papers'), path: '/paper' },
-  { label: t('nav.projects'), path: '/projects' },
-  { label: t('nav.knowledge'), path: '/knowledge-base' },
-  { label: t('nav.retrieval'), path: '/knowledge-base/search-debug' },
-  { label: t('nav.memory'), path: '/settings/memory' },
-  { label: t('nav.settings'), path: '/settings' },
-  ...(authStore.currentUser?.role === 'ADMIN' ? [{ label: '管理后台', path: '/admin' }] : []),
+  { label: t('nav.workspace'), path: '/chat', icon: 'workspace' },
+  { label: t('nav.papers'), path: '/paper', icon: 'paper' },
+  { label: t('nav.projects'), path: '/projects', icon: 'projects' },
+  { label: t('nav.knowledge'), path: '/knowledge-base', icon: 'knowledge' },
+  { label: t('nav.retrieval'), path: '/knowledge-base/search-debug', icon: 'search' },
+  { label: t('nav.memory'), path: '/settings/memory', icon: 'memory' },
+  { label: t('nav.settings'), path: '/settings', icon: 'settings' },
+  ...(authStore.currentUser?.role === 'ADMIN' ? [{ label: '管理后台', path: '/admin', icon: 'admin' }] : []),
 ]);
 
 const userInitial = computed(() => (authStore.currentUser?.username || 'U').slice(0, 1).toUpperCase());
+const themeTitle = computed(() => (isDark.value ? '切换为浅色模式' : '切换为深色模式'));
 
 const hasLimitedQuota = computed(() => {
   const total = authStore.currentUser?.aiQuotaTotal;
@@ -152,23 +100,6 @@ const quotaSummary = computed(() => {
     used: formatTokenCount(user.aiQuotaUsed),
     total: formatTokenCount(user.aiQuotaTotal),
   });
-});
-
-const quotaMeterStyle = computed(() => {
-  const user = authStore.currentUser;
-  if (!user || user.aiQuotaTotal <= 0) return { width: '0%' };
-  const percentage = Math.min(100, Math.max(0, (user.aiQuotaUsed / user.aiQuotaTotal) * 100));
-  return { width: `${percentage}%` };
-});
-
-const routeTitle = computed(() => {
-  if (route.path.startsWith('/paper')) return t('route.paper');
-  if (route.path.startsWith('/projects')) return t('route.projects');
-  if (route.path.startsWith('/knowledge-base/search-debug')) return t('route.retrieval');
-  if (route.path.startsWith('/knowledge-base')) return t('route.knowledge');
-  if (route.path.startsWith('/settings')) return t('route.settings');
-  if (route.path.startsWith('/admin')) return '管理后台';
-  return t('route.chat');
 });
 
 function isActiveNav(path: string) {
@@ -206,28 +137,6 @@ onBeforeUnmount(() => {
     window.clearInterval(quotaRefreshTimer);
   }
 });
-
-function readStoredBoolean(key: string, fallback: boolean) {
-  if (typeof window === 'undefined') {
-    return fallback;
-  }
-  const value = window.localStorage.getItem(key);
-  if (value == null) {
-    return fallback;
-  }
-  return value === 'true';
-}
-
-function setStoredBoolean(key: string, value: boolean) {
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(key, String(value));
-  }
-}
-
-function setTopbarCollapsed(collapsed: boolean) {
-  topbarCollapsed.value = collapsed;
-  setStoredBoolean(TOPBAR_COLLAPSED_KEY, collapsed);
-}
 
 async function logout() {
   authStore.clear();

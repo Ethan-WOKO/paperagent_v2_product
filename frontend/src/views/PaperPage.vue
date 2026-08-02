@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="paper-page workbench-page scholar-page scholar-page--paper">
+    <div class="paper-page paper-page--redesign workbench-page scholar-page scholar-page--paper">
       <WorkspaceHero
         :kicker="t('paper.kicker')"
         :title="t('paper.title')"
@@ -10,33 +10,38 @@
         <template #actions>
           <NSpace align="center">
             <NButton secondary @click="startNewPaperTask">{{ t('paper.newPolish') }}</NButton>
-            <NButton secondary :loading="historyLoading" @click="loadHistory">{{ t('paper.saveDraft') }}</NButton>
+            <NButton secondary :loading="historyLoading" @click="refreshTaskBoard">{{ t('paper.refreshTasks') }}</NButton>
             <NButton type="primary" :loading="submitting" @click="handleSubmit">{{ t('paper.runWorkflow') }}</NButton>
           </NSpace>
         </template>
       </WorkspaceHero>
 
       <div class="paper-hero-panel">
-        <NTag :type="currentTask ? statusTagType(currentTask.status) : 'default'" round>
-          {{ currentTask ? taskStatusLabel(currentTask.status) : t('paper.noTask') }}
-        </NTag>
-        <div class="paper-hero-metrics">
+        <div class="paper-task-summary">
+          <span class="paper-task-summary__file">TEX</span>
           <div>
-            <span>{{ t('paper.progress') }}</span>
-            <strong>{{ progressPercent }}%</strong>
+            <strong>{{ currentTask?.sourceFilename || selectedTexFile?.name || t('paper.chooseTex') }}</strong>
+            <span>{{ currentTask ? taskStatusLabel(currentTask.status) : t('paper.noTask') }}</span>
           </div>
+        </div>
+        <div class="paper-hero-progress">
           <div>
             <span>{{ t('paper.stage') }}</span>
             <strong>{{ currentStageLabel }}</strong>
           </div>
-          <div>
-            <span>{{ t('paper.artifacts') }}</span>
-            <strong>{{ canDownload ? t('paper.ready') : t('paper.pending') }}</strong>
-          </div>
+          <strong>{{ progressPercent }}%</strong>
+          <NProgress type="line" :percentage="progressPercent" :show-indicator="false" status="success" />
+        </div>
+        <div class="paper-hero-actions">
+          <NButton size="small" secondary :disabled="!currentTaskId" @click="refreshTask">{{ t('paper.refreshTasks') }}</NButton>
+          <NButton size="small" secondary :disabled="!currentTaskId" @click="connectSse">{{ isEnglish ? 'Reconnect SSE' : '重连 SSE' }}</NButton>
+          <NButton size="small" tertiary :disabled="!canPause" @click="handlePause">{{ isEnglish ? 'Pause' : '暂停' }}</NButton>
+          <NButton size="small" tertiary :disabled="!canResume" @click="handleResume">{{ isEnglish ? 'Resume' : '继续' }}</NButton>
+          <NButton size="small" tertiary type="error" :disabled="!canStop" @click="handleStop">{{ isEnglish ? 'Stop' : '停止' }}</NButton>
         </div>
       </div>
 
-      <section class="paper-task-board">
+      <section v-if="activeTaskCards.length > 0" class="paper-task-board">
         <div class="paper-task-board__head">
           <div>
             <div class="section-title">{{ t('paper.runningTasks') }}</div>
@@ -45,7 +50,7 @@
           <NButton size="small" secondary :loading="historyLoading" @click="refreshTaskBoard">{{ t('paper.refreshTasks') }}</NButton>
         </div>
 
-        <div v-if="activeTaskCards.length > 0" class="paper-running-tasks">
+        <div class="paper-running-tasks">
           <article
             v-for="task in activeTaskCards"
             :key="task.id"
@@ -75,7 +80,6 @@
             </div>
           </article>
         </div>
-        <NEmpty v-else :description="t('paper.noRunningTasks')" />
       </section>
 
       <div class="paper-polish-shell">
@@ -94,7 +98,7 @@
                   <div>
                     <strong>{{ selectedTexFile?.name || currentTask?.sourceFilename || t('paper.chooseTex') }}</strong>
                     <span>
-                      {{ selectedTexFile ? formatFileSize(selectedTexFile.size) : (currentTask?.sourceFilename ? `Task #${currentTask.id}` : t('paper.dropTex')) }}
+                      {{ selectedTexFile ? formatFileSize(selectedTexFile.size) : (currentTask?.sourceFilename ? `${isEnglish ? 'Task' : '任务'} #${currentTask.id}` : t('paper.dropTex')) }}
                     </span>
                   </div>
                   <NTag :type="selectedTexFile || currentTask ? 'success' : 'default'" round>
@@ -124,7 +128,9 @@
                   </div>
                 </section>
 
-                <div class="paper-config-grid">
+                <details class="paper-config-grid">
+                  <summary>{{ isEnglish ? 'Polish parameters' : '润色参数' }}</summary>
+                  <div class="paper-config-grid__body">
                   <NForm :model="form" label-placement="top">
                     <NGrid :cols="24" :x-gap="12" responsive="screen" item-responsive>
                       <NFormItemGi span="24 m:8" :label="t('paper.targetLanguage')">
@@ -147,7 +153,8 @@
                       </NFormItemGi>
                     </NGrid>
                   </NForm>
-                </div>
+                  </div>
+                </details>
               </NCard>
             </NGridItem>
 
@@ -164,21 +171,16 @@
 
                 <div class="paper-status-v2">
                   <div class="paper-status-v2__meta">
-                    <div><span>Project</span><strong>{{ currentTask?.title || currentTask?.sourceFilename || 'New manuscript polish' }}</strong></div>
-                    <div><span>Mode</span><strong>Full paper polish</strong></div>
-                    <div><span>Owner</span><strong>Current researcher</strong></div>
+                    <div><span>{{ isEnglish ? 'Manuscript' : '论文' }}</span><strong>{{ currentTask?.title || currentTask?.sourceFilename || (isEnglish ? 'New manuscript' : '新论文') }}</strong></div>
+                    <div><span>{{ isEnglish ? 'Task' : '任务' }}</span><strong>{{ currentTask ? `#${currentTask.id}` : '-' }}</strong></div>
+                    <div><span>{{ isEnglish ? 'Target language' : '目标语言' }}</span><strong>{{ currentTask?.targetLanguage || form.targetLanguage }}</strong></div>
                   </div>
                   <div class="paper-status-v2__progress">
-                    <div class="paper-status-progress-head">
-                      <span>Overall progress</span>
-                      <strong>{{ progressPercent }}%</strong>
-                    </div>
-                    <NProgress type="line" :percentage="progressPercent" :show-indicator="false" status="success" />
                     <div class="paper-status-v2__facts">
-                      <div><span>Current stage</span><strong>{{ currentStageLabel }}</strong></div>
-                      <div><span>Sections</span><strong>{{ sectionProgressText }}</strong></div>
-                      <div><span>Attempts</span><strong>{{ attemptProgressText }}</strong></div>
-                      <div><span>Started</span><strong>{{ currentTask ? formatDateTime(currentTask.createdAt) : '-' }}</strong></div>
+                      <div><span>{{ isEnglish ? 'Current stage' : '当前阶段' }}</span><strong>{{ currentStageLabel }}</strong></div>
+                      <div><span>{{ isEnglish ? 'Sections' : '章节' }}</span><strong>{{ sectionProgressText }}</strong></div>
+                      <div><span>{{ isEnglish ? 'Attempts' : '尝试次数' }}</span><strong>{{ attemptProgressText }}</strong></div>
+                      <div><span>{{ isEnglish ? 'Artifacts' : '产物' }}</span><strong>{{ artifacts.length }}</strong></div>
                     </div>
                   </div>
                 </div>
@@ -195,13 +197,6 @@
                     <span>{{ pendingClarifications.length }} 个确认项等待处理，提交后任务会继续执行。</span>
                   </div>
                   <NButton type="warning" secondary @click="focusStructureConfirmation">去确认</NButton>
-                </div>
-                <div class="paper-status-actions">
-                  <NButton secondary :disabled="!currentTaskId" @click="refreshTask">Refresh</NButton>
-                  <NButton secondary :disabled="!currentTaskId" @click="connectSse">Reconnect SSE</NButton>
-                  <NButton tertiary :disabled="!canPause" @click="handlePause">Pause</NButton>
-                  <NButton tertiary :disabled="!canResume" @click="handleResume">Resume</NButton>
-                  <NButton tertiary type="error" :disabled="!canStop" @click="handleStop">Stop</NButton>
                 </div>
               </NCard>
             </NGridItem>
@@ -258,7 +253,16 @@
                 <span>Severity</span>
                 <span>State</span>
               </div>
-              <article v-for="suggestion in visibleSuggestions" :key="suggestion.id" class="paper-suggestion-row-v2">
+              <article
+                v-for="suggestion in visibleSuggestions"
+                :key="suggestion.id"
+                class="paper-suggestion-row-v2"
+                :class="{ 'paper-suggestion-row-v2--selected': suggestion.id === selectedSuggestionId }"
+                role="button"
+                tabindex="0"
+                @click="selectPaperSuggestion(suggestion.id)"
+                @keydown.enter.prevent="selectPaperSuggestion(suggestion.id)"
+              >
                 <div>
                   <strong>{{ suggestion.category }}</strong>
                   <p>{{ suggestionCustomerText(suggestion.statement) }}</p>
@@ -266,7 +270,7 @@
                     {{ suggestionDecisionReason(suggestion) }}
                   </small>
                 </div>
-                <span>{{ suggestion.evidenceCount }} supporting papers</span>
+                <span>{{ isEnglish ? `${suggestion.evidenceCount} supporting papers` : `${suggestion.evidenceCount} 篇支撑文献` }}</span>
                 <NTag :type="suggestion.severity === 'HIGH' ? 'error' : suggestion.severity === 'LOW' ? 'success' : 'warning'" size="small">
                   {{ suggestion.severity || 'Info' }}
                 </NTag>
@@ -277,114 +281,63 @@
             </div>
           </NCard>
 
-          <NCard
-            class="workbench-card scholar-card paper-polish-card"
-            :class="{ 'paper-polish-card--collapsed': evidenceSnippetsCollapsed }"
-            :bordered="false"
-          >
-            <template #header>
-              <div class="section-title">Evidence Snippets</div>
-            </template>
-            <template #header-extra>
-              <NButton
-                class="paper-card-collapse-button"
-                quaternary
-                circle
-                size="small"
-                :title="evidenceSnippetsCollapsed ? 'Expand evidence snippets' : 'Collapse evidence snippets'"
-                :aria-label="evidenceSnippetsCollapsed ? 'Expand evidence snippets' : 'Collapse evidence snippets'"
-                :aria-expanded="!evidenceSnippetsCollapsed"
-                @click="evidenceSnippetsCollapsed = !evidenceSnippetsCollapsed"
-              >
-                <span aria-hidden="true">{{ evidenceSnippetsCollapsed ? '▾' : '▴' }}</span>
-              </NButton>
-            </template>
-            <div v-if="!evidenceSnippetsCollapsed && literatureSupportCards.length > 0" class="paper-evidence-grid-v2">
-              <article v-for="card in literatureSupportCards" :key="card.id" class="paper-evidence-card-v2">
-                <strong>{{ card.title }}</strong>
-                <span>{{ formatAuthors(card.authors) }} · {{ card.publicationYear || '-' }} · {{ card.venue || '-' }}</span>
-                <p>{{ card.citationCount == null ? 'Citation metadata unavailable.' : `${card.citationCount} citations found in metadata.` }}</p>
-                <div>
-                  <NTag size="small" type="success">Evidence</NTag>
-                  <a v-if="card.url || card.doi" :href="card.url || doiUrl(card.doi)" target="_blank" rel="noreferrer">View source</a>
-                </div>
-              </article>
-            </div>
-            <NEmpty v-else-if="!evidenceSnippetsCollapsed" description="No evidence snippets yet." />
-          </NCard>
         </main>
 
         <aside class="paper-polish-side">
-          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
-            <template #header>
-              <div class="section-title">Literature Support</div>
-            </template>
-            <template #header-extra>
-              <NTag type="info" round>{{ bibliographyCards.length }}</NTag>
-            </template>
-            <div class="paper-support-list-v2">
-              <article v-for="card in literatureSupportCards" :key="`support-${card.id}`" class="paper-support-card-v2">
-                <div>
-                  <strong>{{ card.title }}</strong>
-                  <span>{{ formatAuthors(card.authors) }} · {{ card.publicationYear || '-' }}</span>
-                  <p>{{ card.venue || 'Venue unavailable' }}</p>
+          <NCard class="workbench-card scholar-card paper-polish-card paper-side-tabs" :bordered="false">
+            <NTabs v-model:value="activeSideTab" type="line" animated>
+              <NTabPane name="evidence" :tab="isEnglish ? 'Evidence' : '证据'">
+                <div class="paper-support-list-v2">
+                  <article v-for="card in selectedSuggestionEvidence" :key="`support-${card.id}`" class="paper-support-card-v2">
+                    <div>
+                      <strong>{{ card.title }}</strong>
+                      <span>{{ formatAuthors(card.authors) }} · {{ card.publicationYear || '-' }}</span>
+                      <p>{{ card.venue || (isEnglish ? 'Venue unavailable' : '来源信息暂缺') }}</p>
+                    </div>
+                    <NTag type="success" size="small">{{ isEnglish ? 'Evidence' : '证据' }}</NTag>
+                  </article>
+                  <NEmpty v-if="selectedSuggestionEvidence.length === 0" :description="isEnglish ? 'This suggestion has no linked evidence.' : '这条建议没有关联证据。'" />
                 </div>
-                <NTag type="success" size="small">Support</NTag>
-              </article>
-              <NEmpty v-if="literatureSupportCards.length === 0" description="No literature support yet." />
-            </div>
-          </NCard>
-
-          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
-            <template #header>
-              <div class="section-title">Export Artifacts</div>
-            </template>
-            <template #header-extra>
-              <NButton size="small" secondary :disabled="!canDownload" :loading="downloading" @click="handleDownload">Download</NButton>
-            </template>
-            <div class="paper-artifact-list-v2">
-              <article v-for="artifact in exportArtifacts" :key="artifact.id" class="paper-artifact-row-v2">
-                <span>{{ artifactDisplayName(artifact).slice(0, 2).toUpperCase() }}</span>
-                <div>
-                  <strong>{{ artifactDisplayName(artifact) }}</strong>
-                  <small>v{{ artifact.version }} · {{ formatDateTime(artifact.createdAt) }}</small>
+              </NTabPane>
+              <NTabPane name="artifacts" :tab="isEnglish ? 'Artifacts' : '产物'">
+                <div class="paper-side-tab__action">
+                  <NButton size="small" secondary :disabled="!canDownload" :loading="downloading" @click="handleDownload">{{ isEnglish ? 'Download' : '下载结果' }}</NButton>
                 </div>
-              </article>
-              <NEmpty v-if="exportArtifacts.length === 0" description="No export artifacts yet." />
-            </div>
-          </NCard>
-
-          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
-            <template #header>
-              <div class="section-title">Live Task Events</div>
-            </template>
-            <template #header-extra>
-              <NTag :type="sseStatus === 'connected' ? 'success' : 'default'" round>SSE {{ sseStatusText }}</NTag>
-            </template>
-            <div class="paper-live-events-v2">
-              <article v-for="(event, index) in liveTaskEvents" :key="`${event.timestamp}-${index}`">
-                <i />
-                <span>{{ formatDateTime(event.timestamp) }}</span>
-                <strong>{{ event.message }}</strong>
-              </article>
-              <NEmpty v-if="liveTaskEvents.length === 0" description="No live events yet." />
-            </div>
-          </NCard>
-
-          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
-            <template #header>
-              <div class="section-title">History</div>
-            </template>
-            <template #header-extra>
-              <NButton size="small" secondary :loading="historyLoading" @click="loadHistory">Refresh</NButton>
-            </template>
-            <div class="paper-history-compact-v2">
-              <article v-for="task in historyTasks" :key="task.id" :class="{ 'paper-history-compact-v2--active': task.id === currentTaskId }">
-                <button type="button" @click="openHistoryTask(task.id)">{{ task.title || task.sourceFilename || `Task ${task.id}` }}</button>
-                <NTag size="small" :type="statusTagType(task.status)">{{ task.status }}</NTag>
-              </article>
-              <NEmpty v-if="historyTasks.length === 0" description="No history yet." />
-            </div>
+                <div class="paper-artifact-list-v2">
+                  <article v-for="artifact in exportArtifacts" :key="artifact.id" class="paper-artifact-row-v2">
+                    <span>{{ artifactDisplayName(artifact).slice(0, 2).toUpperCase() }}</span>
+                    <div>
+                      <strong>{{ artifactDisplayName(artifact) }}</strong>
+                      <small>v{{ artifact.version }} · {{ formatDateTime(artifact.createdAt) }}</small>
+                    </div>
+                  </article>
+                  <NEmpty v-if="exportArtifacts.length === 0" :description="isEnglish ? 'No export artifacts yet.' : '暂无导出产物。'" />
+                </div>
+              </NTabPane>
+              <NTabPane name="events" :tab="isEnglish ? 'Events' : '事件'">
+                <div class="paper-side-tab__status">SSE {{ sseStatusText }}</div>
+                <div class="paper-live-events-v2">
+                  <article v-for="(event, index) in liveTaskEvents" :key="`${event.timestamp}-${index}`">
+                    <i />
+                    <span>{{ formatDateTime(event.timestamp) }}</span>
+                    <strong>{{ event.message }}</strong>
+                  </article>
+                  <NEmpty v-if="liveTaskEvents.length === 0" :description="isEnglish ? 'No live events yet.' : '暂无任务事件。'" />
+                </div>
+              </NTabPane>
+              <NTabPane name="history" :tab="isEnglish ? 'History' : '历史'">
+                <div class="paper-side-tab__action">
+                  <NButton size="small" secondary :loading="historyLoading" @click="loadHistory">{{ isEnglish ? 'Refresh' : '刷新' }}</NButton>
+                </div>
+                <div class="paper-history-compact-v2">
+                  <article v-for="task in historyTasks" :key="task.id" :class="{ 'paper-history-compact-v2--active': task.id === currentTaskId }">
+                    <button type="button" @click="openHistoryTask(task.id)">{{ task.title || task.sourceFilename || `Task ${task.id}` }}</button>
+                    <NTag size="small" :type="statusTagType(task.status)">{{ task.status }}</NTag>
+                  </article>
+                  <NEmpty v-if="historyTasks.length === 0" :description="isEnglish ? 'No history yet.' : '暂无历史任务。'" />
+                </div>
+              </NTabPane>
+            </NTabs>
           </NCard>
         </aside>
       </div>
@@ -449,7 +402,7 @@
               <div v-for="suggestion in suggestions" :key="suggestion.id" class="paper-suggestion-card" :class="`paper-suggestion-card--${suggestion.honestyGrade}`">
                 <strong>{{ suggestion.category }} · {{ suggestion.severity || '-' }}</strong>
                 <p>{{ suggestionCustomerText(suggestion.statement) }}</p>
-                <small>{{ suggestionCustomerText(suggestion.honestyReason) }} · {{ suggestion.evidenceCount }} supporting papers · {{ suggestionStateLabel(suggestion) }}</small>
+                <small>{{ suggestionCustomerText(suggestion.honestyReason) }} · {{ isEnglish ? `${suggestion.evidenceCount} supporting papers` : `${suggestion.evidenceCount} 篇支撑文献` }} · {{ suggestionStateLabel(suggestion) }}</small>
                 <br v-if="suggestionDecisionReason(suggestion)" />
                 <small v-if="suggestionDecisionReason(suggestion)" class="paper-suggestion-decision">{{ suggestionDecisionReason(suggestion) }}</small>
                 <pre v-if="suggestion.patchJson && previewMode === 'advanced'" class="paper-code-preview">{{ prettyJson(suggestion.patchJson) }}</pre>
@@ -481,377 +434,6 @@
         </NTabs>
       </NCard>
 
-      <div class="paper-steps-bar">
-        <div class="paper-step" :class="{ 'paper-step--active': !currentTask }">
-          <span>1</span>
-          <div><strong>上传论文</strong><small>选择 tex / bib 与参数</small></div>
-        </div>
-        <div class="paper-step" :class="{ 'paper-step--active': currentTask && !canDownload }">
-          <span>2</span>
-          <div><strong>处理中</strong><small>查看 SSE 日志</small></div>
-        </div>
-        <div class="paper-step" :class="{ 'paper-step--active': canDownload }">
-          <span>3</span>
-          <div><strong>下载结果</strong><small>保存最终文件</small></div>
-        </div>
-      </div>
-
-      <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-        <NGridItem span="24 l:7">
-          <NSpace vertical size="medium">
-          <NCard class="workbench-card" :bordered="false">
-            <template #header><div class="section-title">上传与参数</div></template>
-            <NSpace vertical size="large">
-              <NForm :model="form" label-placement="top">
-                <NFormItem label="LaTeX 主文件（.tex，必填）">
-                  <input ref="texInputRef" type="file" accept=".tex" class="kb-file-input" @change="handleTexFileChange" />
-                  <div class="upload-dropzone" @click="texInputRef?.click()">
-                    <strong>{{ selectedTexFile ? selectedTexFile.name : '点击选择 main.tex' }}</strong>
-                    <span>{{ selectedTexFile ? formatFileSize(selectedTexFile.size) : '主入口 tex 文件，后续会作为 LaTeX 解析入口' }}</span>
-                  </div>
-                </NFormItem>
-                <NFormItem label="参考文献文件（.bib，可选）">
-                  <input ref="bibInputRef" type="file" accept=".bib" class="kb-file-input" @change="handleBibFileChange" />
-                  <div class="upload-dropzone" @click="bibInputRef?.click()">
-                    <strong>{{ selectedBibFile ? selectedBibFile.name : '点击选择 refs.bib（可选）' }}</strong>
-                    <span>{{ selectedBibFile ? formatFileSize(selectedBibFile.size) : '无 .bib 时也支持内联 thebibliography 样例' }}</span>
-                  </div>
-                </NFormItem>
-                <NGrid :cols="2" :x-gap="12">
-                  <NFormItemGi label="目标语言">
-                    <NSelect v-model:value="form.targetLanguage" :options="languageOptions" />
-                  </NFormItemGi>
-                  <NFormItemGi label="评分阈值">
-                    <NInputNumber v-model:value="form.scoreThreshold" :min="0" :max="100" style="width: 100%" />
-                  </NFormItemGi>
-                  <NFormItemGi label="最大轮次">
-                    <NInputNumber v-model:value="form.maxRounds" :min="1" :max="20" style="width: 100%" />
-                  </NFormItemGi>
-                  <NFormItemGi label="单节尝试">
-                    <NInputNumber v-model:value="form.innerMaxAttempts" :min="1" :max="20" style="width: 100%" />
-                  </NFormItemGi>
-                  <NFormItemGi label="推荐文献最少数量">
-                    <NInputNumber v-model:value="form.literatureMinCount" :min="1" :max="form.literatureCount" style="width: 100%" />
-                  </NFormItemGi>
-                  <NFormItemGi label="推荐文献最多数量">
-                    <NInputNumber v-model:value="form.literatureCount" :min="form.literatureMinCount" :max="100" style="width: 100%" />
-                  </NFormItemGi>
-                </NGrid>
-              </NForm>
-              <NButton type="primary" block :loading="submitting" @click="handleSubmit">开始处理</NButton>
-            </NSpace>
-          </NCard>
-
-          <NCard class="workbench-card history-card" :bordered="false">
-            <template #header><div class="section-title">历史任务</div></template>
-            <template #header-extra><NButton size="small" tertiary :loading="historyLoading" @click="loadHistory">刷新</NButton></template>
-            <div class="paper-history-list">
-              <NEmpty v-if="historyTasks.length === 0" description="暂无历史任务" />
-              <div v-for="task in historyTasks" :key="task.id" class="paper-history-item" :class="{ 'paper-history-item--active': task.id === currentTaskId }">
-                <div class="paper-history-item__head">
-                  <button type="button" class="paper-history-title" @click="openHistoryTask(task.id)">{{ task.title || task.sourceFilename || `Task ${task.id}` }}</button>
-                  <NTag size="small" :type="statusTagType(task.status)">{{ task.status }}</NTag>
-                </div>
-                <div class="paper-history-item__meta">
-                  创建：{{ formatDateTime(task.createdAt) }}<br />
-                  更新：{{ formatDateTime(task.updatedAt) }}
-                </div>
-                <div class="paper-history-files">
-                  <span v-for="artifact in downloadableHistoryArtifacts(task)" :key="artifact.id">{{ artifactDisplayName(artifact) }}</span>
-                  <span v-if="downloadableHistoryArtifacts(task).length === 0">暂无结果文件</span>
-                </div>
-                <NSpace size="small">
-                  <NButton size="tiny" secondary @click="openHistoryTask(task.id)">查看</NButton>
-                  <NButton size="tiny" type="primary" :disabled="!historyTaskDownloadable(task)" :loading="downloadingTaskId === task.id" @click="downloadHistoryTask(task.id)">下载结果</NButton>
-                </NSpace>
-              </div>
-            </div>
-          </NCard>
-          </NSpace>
-        </NGridItem>
-
-        <NGridItem span="24 l:10">
-          <NCard class="workbench-card" :bordered="false">
-            <template #header><div class="section-title">实时进度</div></template>
-            <template #header-extra><NTag :type="sseStatus === 'connected' ? 'success' : 'default'">SSE {{ sseStatusText }}</NTag></template>
-            <NSpace vertical size="large">
-              <div class="paper-status-box status-grid">
-                <div><span>任务 ID</span><strong>{{ currentTask?.id ?? '-' }}</strong></div>
-                <div><span>当前状态</span><strong>{{ currentTask?.status ?? '-' }}</strong></div>
-                <div><span>当前阶段</span><strong>{{ currentStageLabel }}</strong></div>
-                <div><span>整体进度</span><strong>{{ progressPercent }}%</strong></div>
-                <div v-if="currentTask?.errorMessage" class="status-grid__wide"><span>错误信息</span><strong>{{ currentTask.errorMessage }}</strong></div>
-              </div>
-
-              <div class="paper-stage-panel">
-                <NProgress type="line" :percentage="progressPercent" :show-indicator="false" status="success" />
-                <div class="paper-stage-chain">
-                  <div v-for="step in workflowSteps" :key="step.stage" class="paper-stage-chip" :class="stageChipClass(step.stage)">
-                    <span>{{ step.label }}</span>
-                  </div>
-                </div>
-                <div class="paper-progress-detail">
-                  <span>章节：{{ sectionProgressText }}</span>
-                  <span>尝试：{{ attemptProgressText }}</span>
-                </div>
-              </div>
-
-              <NSpace>
-                <NButton secondary :disabled="!currentTaskId" @click="refreshTask">刷新</NButton>
-                <NButton secondary :disabled="!currentTaskId" @click="connectSse">重连 SSE</NButton>
-                <NButton tertiary :disabled="!canPause" @click="handlePause">暂停</NButton>
-                <NButton tertiary :disabled="!canResume" @click="handleResume">继续</NButton>
-                <NButton tertiary type="error" :disabled="!canStop" @click="handleStop">停止</NButton>
-              </NSpace>
-              <div class="paper-event-list timeline-list">
-                <NEmpty v-if="events.length === 0" description="等待任务事件" />
-                <div v-for="(event, index) in events" :key="`${event.timestamp}-${index}`" class="paper-event-item timeline-item">
-                  <div class="paper-event-item__meta">{{ eventDisplayType(event.type) }} · {{ stageLabel(event.stage) }} · {{ formatDateTime(event.timestamp) }}</div>
-                  <div>{{ event.message }}</div>
-                  <div v-if="event.sectionTitle || event.currentSection || event.attempt" class="paper-event-item__hint">
-                    {{ eventProgressHint(event) }}
-                  </div>
-                </div>
-              </div>
-              <NCollapse v-if="events.length > 0" class="paper-debug-collapse">
-                <NCollapseItem title="原始 SSE 事件日志（调试）" name="raw-events">
-                  <pre class="paper-raw-events">{{ rawEventLog }}</pre>
-                </NCollapseItem>
-              </NCollapse>
-            </NSpace>
-          </NCard>
-        </NGridItem>
-
-        <NGridItem span="24 l:7">
-          <NCard class="workbench-card result-card result-hub-card" :bordered="false">
-            <template #header>
-              <div class="result-hub-title">
-                <div>
-                  <div class="section-title">结果中心</div>
-                  <small>下载、确认、预览与审查集中管理</small>
-                </div>
-              </div>
-            </template>
-            <div class="result-hub">
-              <div class="result-download-strip">
-                <div class="result-download-strip__main">
-                  <NTag :type="canDownload ? 'success' : 'default'" round>{{ canDownload ? '可下载' : '等待产物' }}</NTag>
-                  <div>
-                    <strong>{{ resultFileText }}</strong>
-                    <span>原始文件：{{ currentTask?.sourceFilename || '-' }}</span>
-                  </div>
-                </div>
-                <NButton type="primary" :loading="downloading" :disabled="!canDownload" @click="handleDownload">下载结果</NButton>
-              </div>
-
-              <NTabs v-model:value="activeResultTab" type="segment" animated class="paper-result-tabs" pane-class="paper-result-pane">
-                <NTabPane name="overview" tab="总览">
-                  <div class="paper-result-scroll">
-                    <NSpace vertical size="medium">
-                      <NAlert type="info" title="当前说明">
-                        当前结果以 LaTeX 三件套为目标；真实编译与逐条 patch 组装仍按后续验收逐步增强。
-                      </NAlert>
-                      <div class="result-overview-grid">
-                        <div class="result-overview-card">
-                          <span>结构确认</span>
-                          <strong>{{ pendingClarifications.length > 0 ? `${pendingClarifications.length} 个待确认` : (clarifications.length > 0 ? '已处理' : '暂无') }}</strong>
-                        </div>
-                        <div class="result-overview-card">
-                          <span>章节角色</span>
-                          <strong>{{ sections.length }} 节</strong>
-                        </div>
-                        <div class="result-overview-card">
-                          <span>预览建议</span>
-                          <strong>{{ suggestions.length }} 条</strong>
-                        </div>
-                        <div class="result-overview-card">
-                          <span>已采纳</span>
-                          <strong>{{ acceptedSuggestions.length }} 条</strong>
-                        </div>
-                      </div>
-                      <div class="paper-artifact-summary result-artifact-card">
-                        <div>suggested.bib：{{ suggestedBibArtifacts.length }} 个版本</div>
-                        <div>polished.tex：{{ polishedTexArtifacts.length }} 个版本</div>
-                        <div>retrieved-literature：{{ retrievedLiteratureArtifacts.length }} 个诊断文件</div>
-                        <div>结果文件：{{ resultFileText }}</div>
-                      </div>
-                      <NAlert type="warning" title="免责声明">
-                        审查报告和 suggested.bib 是 AI 辅助结果。请在投稿前核验每条引用、事实陈述、DOI/URL 与 LaTeX 改动。
-                      </NAlert>
-                    </NSpace>
-                  </div>
-                </NTabPane>
-
-                <NTabPane name="clarification" :tab="pendingClarifications.length ? `结构(${pendingClarifications.length})` : '结构'">
-                  <div class="paper-result-scroll">
-                    <div v-if="clarifications.length > 0" class="paper-clarification-panel">
-                      <div class="paper-panel-heading">
-                        <strong>结构确认</strong>
-                        <NTag :type="pendingClarifications.length > 0 ? 'warning' : 'success'" size="small">
-                          {{ pendingClarifications.length > 0 ? `${pendingClarifications.length} 个待确认` : '已处理' }}
-                        </NTag>
-                      </div>
-                      <NAlert v-if="pendingBlockingClarifications.length > 0" type="warning" title="需要你的确认">
-                        阻塞型问题必须先回答。默认选项会优先保持原结构，避免任务跑偏。
-                      </NAlert>
-                      <div v-for="item in clarifications" :key="item.id" class="paper-clarification-item">
-                        <div class="paper-clarification-item__title">
-                          <span>{{ clarificationQuestion(item).message || item.type }}</span>
-                          <NTag size="small" :type="clarificationQuestion(item).blocking ? 'error' : 'info'">
-                            {{ clarificationQuestion(item).blocking ? '必须回答' : '可跳过' }}
-                          </NTag>
-                        </div>
-                        <div class="paper-clarification-item__meta">
-                          类型：{{ item.type }} · 相关章节序号：{{ clarificationQuestion(item).relatedSectionOrderIndex ?? '-' }}
-                        </div>
-                        <NRadioGroup v-if="item.status === 'PENDING'" v-model:value="clarificationAnswers[item.id]" class="paper-option-group">
-                          <NSpace vertical size="small">
-                            <NRadio v-for="option in clarificationOptions(item).options" :key="option" :value="option">
-                              {{ option }}
-                            </NRadio>
-                          </NSpace>
-                        </NRadioGroup>
-                        <div v-else class="paper-clarification-item__answer">已回答：{{ answeredOption(item) }}</div>
-                        <NSpace v-if="item.status === 'PENDING'" size="small">
-                          <NButton size="small" type="primary" :loading="clarificationSubmitting" @click="submitClarification(item)">提交</NButton>
-                          <NButton v-if="!clarificationQuestion(item).blocking" size="small" tertiary :loading="clarificationSubmitting" @click="skipClarification(item)">跳过</NButton>
-                        </NSpace>
-                      </div>
-                      <NButton v-if="pendingClarifications.length > 0" secondary block :loading="clarificationSubmitting" @click="keepAllClarifications">
-                        全部保持原样
-                      </NButton>
-                    </div>
-                    <NEmpty v-else description="暂无结构确认项" />
-                  </div>
-                </NTabPane>
-
-                <NTabPane name="sections" :tab="`章节(${sections.length})`">
-                  <div class="paper-result-scroll">
-                    <div v-if="sections.length > 0" class="paper-section-role-panel">
-                      <div class="paper-panel-heading"><strong>章节角色</strong><span>可手动修正识别结果</span></div>
-                      <div v-for="section in sections" :key="section.id" class="paper-section-role-row">
-                        <div>
-                          <strong>{{ section.orderIndex + 1 }}. {{ section.title }}</strong>
-                          <small>{{ section.roleSource || 'auto' }} · confidence {{ formatConfidence(section.roleConfidence) }}</small>
-                        </div>
-                        <NSelect :value="section.role" :options="sectionRoleOptions" size="small" @update:value="(role) => handleSectionRoleChange(section.id, role)" />
-                      </div>
-                    </div>
-                    <NEmpty v-else description="暂无章节角色结果" />
-                  </div>
-                </NTabPane>
-
-                <NTabPane name="preview" :tab="`预览(${previewSections.length + suggestions.length})`">
-                  <div class="paper-result-scroll">
-                    <div class="paper-preview-panel">
-                      <div class="paper-panel-heading">
-                        <strong>在线预览与逐条采纳</strong>
-                        <NTag size="small" type="info">已采纳 {{ acceptedSuggestions.length }}</NTag>
-                      </div>
-                      <NButtonGroup>
-                        <NButton :type="previewMode === 'basic' ? 'primary' : 'default'" size="small" @click="previewMode = 'basic'">基础版：只看建议</NButton>
-                        <NButton :type="previewMode === 'advanced' ? 'primary' : 'default'" size="small" @click="previewMode = 'advanced'">进阶版：Diff + cite patch</NButton>
-                      </NButtonGroup>
-                      <NAlert :type="previewMode === 'basic' ? 'info' : 'warning'" :title="previewMode === 'basic' ? '基础版预览' : '进阶版预览'">
-                        {{ previewMode === 'basic' ? '只展示建议、review 和 suggested.bib，不直接改写原文。' : '只会采纳 A 类且 evidence 真实可追溯的补丁；B 类仅作为骨架和批评展示。' }}
-                      </NAlert>
-                      <NEmpty v-if="suggestions.length === 0 && previewSections.length === 0" description="暂无 diff 或建议结果" />
-                      <div v-for="section in previewSections" :key="`preview-${section.id}`" class="paper-diff-card">
-                        <div class="paper-diff-card__title">
-                          <span>{{ section.orderIndex + 1 }}. {{ section.title }} · {{ section.polishStatus || 'NOT_POLISHED' }}</span>
-                          <NSpace size="small" align="center">
-                            <NTag size="small" :type="section.revisionStatus === 'ACCEPTED' ? 'success' : section.revisionStatus === 'REJECTED' ? 'error' : 'warning'">
-                              {{ section.revisionStatus || 'PENDING' }}
-                            </NTag>
-                            <NButton size="tiny" tertiary :disabled="sectionRevisionSubmitting === section.id" @click="updateSectionRevisionStatus(section, 'ACCEPTED')">采纳</NButton>
-                            <NButton size="tiny" tertiary :disabled="sectionRevisionSubmitting === section.id" @click="updateSectionRevisionStatus(section, 'REJECTED')">拒绝</NButton>
-                            <NButton size="tiny" tertiary :disabled="sectionRevisionSubmitting === section.id" @click="updateSectionRevisionStatus(section, 'PENDING')">待处理</NButton>
-                          </NSpace>
-                        </div>
-                        <pre v-if="section.diffJson" class="paper-code-preview">{{ readableDiff(section.diffJson) }}</pre>
-                        <pre v-else-if="section.reviewJson" class="paper-code-preview">{{ prettyJson(section.reviewJson) }}</pre>
-                      </div>
-                      <div v-for="suggestion in suggestions" :key="suggestion.id" class="paper-suggestion-card" :class="`paper-suggestion-card--${suggestion.honestyGrade}`">
-                        <div class="paper-suggestion-card__head">
-                          <NTag :type="suggestionStateType(suggestion)" size="small">{{ suggestionStateLabel(suggestion) }}</NTag>
-                          <NTag :type="suggestion.honestyGrade === 'A' ? 'success' : 'warning'" size="small">{{ suggestion.honestyGrade }} 类</NTag>
-                        </div>
-                        <strong>{{ suggestion.category }} · {{ suggestion.severity || '-' }}</strong>
-                        <p>{{ suggestionCustomerText(suggestion.statement) }}</p>
-                        <small>{{ suggestionCustomerText(suggestion.honestyReason) }} · {{ suggestion.evidenceCount }} supporting papers · {{ suggestionStateLabel(suggestion) }}</small>
-                        <br v-if="suggestionDecisionReason(suggestion)" />
-                        <small v-if="suggestionDecisionReason(suggestion)" class="paper-suggestion-decision">{{ suggestionDecisionReason(suggestion) }}</small>
-                        <pre v-if="suggestion.patchJson && previewMode === 'advanced'" class="paper-code-preview">{{ prettyJson(suggestion.patchJson) }}</pre>
-                      </div>
-                    </div>
-                  </div>
-                </NTabPane>
-
-                <NTabPane name="report" :tab="`报告(${suggestions.length})`">
-                  <div class="paper-result-scroll">
-                    <div class="paper-report-panel">
-                      <div class="paper-panel-heading">
-                        <strong>审查报告与 suggested.bib</strong>
-                        <NTag size="small" :type="suggestions.length > 0 ? 'success' : 'default'">{{ suggestions.length }} 条建议</NTag>
-                      </div>
-                      <div v-if="citationApplicationSummary" class="paper-citation-summary">
-                        <div><span>新增推荐文献</span><strong>{{ citationApplicationSummary.newReferences }}</strong></div>
-                        <div><span>复用已有文献</span><strong>{{ citationApplicationSummary.reusedReferences }}</strong></div>
-                        <div><span>更新引用位置</span><strong>{{ citationApplicationSummary.locationsUpdated }}</strong></div>
-                        <div><span>确认已有位置</span><strong>{{ citationApplicationSummary.locationsVerified }}</strong></div>
-                      </div>
-                      <NEmpty v-if="suggestions.length === 0 && bibliographyCards.length === 0 && citationSlots.length === 0" description="暂无审查报告或推荐文献" />
-                      <div v-if="citationSlots.length > 0" class="paper-report-item">
-                        <div class="paper-panel-heading"><strong>引言待支持论断</strong><span>用于说明文献应支持的正文内容</span></div>
-                        <div v-for="(slot, slotIndex) in citationSlots" :key="slot.id || slotIndex" class="paper-bib-card">
-                          <strong>{{ slot.category || `论断 ${slotIndex + 1}` }}</strong>
-                          <p>{{ slot.claim }}</p>
-                          <small>需要：{{ slot.citationNeed || 'NEEDS_SUPPORT' }} · 原有引用：{{ Array.isArray(slot.existingCitationKeys) && slot.existingCitationKeys.length ? slot.existingCitationKeys.join(', ') : '尚未识别' }}</small>
-                          <div class="paper-bib-card__links">
-                            <span v-for="query in (slot.queries || [])" :key="query">{{ query }}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div v-for="suggestion in suggestions" :key="`report-${suggestion.id}`" class="paper-report-item">
-                        <div class="paper-report-item__head">
-                          <strong>{{ suggestion.severity || 'INFO' }} · {{ suggestion.category }}</strong>
-                          <NTag size="small" :type="suggestion.track === 'ADVOCACY' ? 'success' : 'warning'">{{ suggestion.track === 'ADVOCACY' ? 'Citation recommendation' : 'Review note' }}</NTag>
-                        </div>
-                        <p>{{ suggestionCustomerText(suggestion.statement) }}</p>
-                        <div class="paper-report-evidence">
-                          <span v-if="suggestion.evidenceCards.length === 0">无真实 evidence，禁止直接写入论文。</span>
-                          <a v-for="card in suggestion.evidenceCards" :key="card.id" :href="card.url || doiUrl(card.doi) || undefined" target="_blank" rel="noreferrer">
-                            {{ card.title }}{{ card.publicationYear ? ` (${card.publicationYear})` : '' }}
-                          </a>
-                        </div>
-                      </div>
-                      <div v-if="bibliographyCards.length > 0" class="paper-bib-list">
-                        <div class="paper-panel-heading"><strong>推荐文献列表</strong><span>请投稿前逐条核验</span></div>
-                        <div v-for="card in bibliographyCards" :key="`bib-${card.id}`" class="paper-bib-card">
-                          <strong>{{ card.title }}</strong>
-                          <small>{{ formatAuthors(card.authors) }} · {{ card.publicationYear || '-' }} · {{ card.venue || '-' }}</small>
-                          <small v-if="card.relevanceScore != null || card.narrativeRole || card.sourceQuery">
-                            {{ card.narrativeRole || 'literature' }} · score {{ card.relevanceScore != null ? card.relevanceScore.toFixed(3) : '-' }} · query {{ card.sourceQuery || '-' }}
-                          </small>
-                          <div class="paper-bib-card__links">
-                            <a v-if="card.doi" :href="doiUrl(card.doi)" target="_blank" rel="noreferrer">DOI: {{ card.doi }}</a>
-                            <a v-if="card.url" :href="card.url" target="_blank" rel="noreferrer">URL</a>
-                            <a v-if="card.pdfUrl" :href="card.pdfUrl" target="_blank" rel="noreferrer">PDF</a>
-                            <span v-if="card.openAlexId">OpenAlex: {{ card.openAlexId }}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <NAlert type="warning" title="免责声明">
-                        审查报告和 suggested.bib 是 AI 辅助结果。请在投稿前核验每条引用、事实陈述、DOI/URL 与 LaTeX 改动。
-                      </NAlert>
-                    </div>
-                  </div>
-                </NTabPane>
-              </NTabs>
-            </div>
-          </NCard>
-        </NGridItem>
-      </NGrid>
       <NModal
         v-model:show="structureConfirmationVisible"
         preset="card"
@@ -894,12 +476,8 @@ import {
   NButton,
   NButtonGroup,
   NCard,
-  NCheckbox,
-  NCollapse,
-  NCollapseItem,
   NEmpty,
   NForm,
-  NFormItem,
   NFormItemGi,
   NGrid,
   NGridItem,
@@ -971,9 +549,9 @@ const historyLoading = ref(false);
 const downloadingTaskId = ref<number | null>(null);
 const previewMode = ref<'basic' | 'advanced'>('basic');
 const revisionSuggestionsCollapsed = ref(false);
-const evidenceSnippetsCollapsed = ref(false);
+const activeSideTab = ref('evidence');
+const selectedSuggestionId = ref<number | null>(null);
 const activeReviewTab = ref('clarification');
-const activeResultTab = ref('overview');
 const sectionRevisionSubmitting = ref<number | null>(null);
 const clarificationAnswers = reactive<Record<number, string>>({});
 const clarificationSubmitting = ref(false);
@@ -1062,7 +640,8 @@ const citationApplicationSummary = computed(() => {
   };
 });
 const visibleSuggestions = computed(() => suggestions.value);
-const literatureSupportCards = computed(() => bibliographyCards.value);
+const selectedSuggestion = computed(() => suggestions.value.find((item) => item.id === selectedSuggestionId.value) || null);
+const selectedSuggestionEvidence = computed(() => selectedSuggestion.value?.evidenceCards || []);
 const exportArtifacts = computed(() => activeArtifacts.value.filter((item) => downloadableArtifactTypes.includes(item.type)));
 const liveTaskEvents = computed(() => events.value);
 const latestProgressEvent = computed(() => [...events.value].reverse().find((event) => hasProgressMeta(event)) || null);
@@ -1078,6 +657,16 @@ const workflowSteps = [
   { stage: 'GLOBAL_REVIEW', label: 'Global Review', shortLabel: '8' },
   { stage: 'ASSEMBLE', label: 'Export', shortLabel: '9' },
 ] as const;
+
+watch(suggestions, (items) => {
+  if (items.some((item) => item.id === selectedSuggestionId.value)) return;
+  selectedSuggestionId.value = items.find((item) => item.evidenceCards?.length)?.id || items[0]?.id || null;
+}, { deep: true });
+
+function selectPaperSuggestion(suggestionId: number) {
+  selectedSuggestionId.value = suggestionId;
+  activeSideTab.value = 'evidence';
+}
 
 const legacyStageAlias: Record<string, string> = {
   UPLOAD_RECEIVED: 'UPLOAD',
@@ -1180,7 +769,6 @@ watch(
 watch(needsStructureConfirmation, (needsConfirmation) => {
   if (needsConfirmation) {
     activeReviewTab.value = 'clarification';
-    activeResultTab.value = 'clarification';
     structureConfirmationVisible.value = true;
   } else {
     structureConfirmationVisible.value = false;
@@ -1385,7 +973,6 @@ async function refreshTask() {
 
 async function focusStructureConfirmation() {
   activeReviewTab.value = 'clarification';
-  activeResultTab.value = 'clarification';
   structureConfirmationVisible.value = true;
   await nextTick();
   document.getElementById('paper-structure-confirmation')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1775,20 +1362,21 @@ async function handleSectionRoleChange(sectionId: number, role: string) {
 }
 
 function suggestionStateLabel(suggestion: PaperSuggestionResponse) {
+  const localize = (english: string, chinese: string) => isEnglish.value ? english : chinese;
   const closure = suggestionClosure(suggestion);
   if (closure?.status === 'SUPPORTED') {
-    return `Applied after review (R${Number(closure.attempts || 1)})`;
+    return localize(`Applied after review (R${Number(closure.attempts || 1)})`, `审查后已应用（第 ${Number(closure.attempts || 1)} 轮）`);
   }
   if (closure?.status === 'REPORT_ONLY') {
-    return `Report only (R${Number(closure.attempts || 0)})`;
+    return localize(`Report only (R${Number(closure.attempts || 0)})`, `仅写入报告（第 ${Number(closure.attempts || 0)} 轮）`);
   }
   const decision = suggestionDecision(suggestion);
-  if (decision?.verdict === 'PARTIAL') return suggestion.status === 'ACCEPTED' ? 'Applied with supporting evidence' : 'Partially supported';
-  if (decision?.verdict === 'REJECTED') return 'Not supported';
-  if (decision?.verdict === 'UNREVIEWED') return 'Review unavailable';
-  if (suggestion.status === 'ACCEPTED') return 'Accepted for application';
-  if (suggestion.status === 'REJECTED') return 'Not applied';
-  return suggestion.applicable ? 'Pending application' : 'Report only';
+  if (decision?.verdict === 'PARTIAL') return suggestion.status === 'ACCEPTED' ? localize('Applied with supporting evidence', '补充证据后已应用') : localize('Partially supported', '部分支持');
+  if (decision?.verdict === 'REJECTED') return localize('Not supported', '证据不足');
+  if (decision?.verdict === 'UNREVIEWED') return localize('Review unavailable', '暂未审查');
+  if (suggestion.status === 'ACCEPTED') return localize('Accepted for application', '已接受应用');
+  if (suggestion.status === 'REJECTED') return localize('Not applied', '未应用');
+  return suggestion.applicable ? localize('Pending application', '待应用') : localize('Report only', '仅报告');
 }
 
 function suggestionStateType(suggestion: PaperSuggestionResponse): 'success' | 'warning' | 'default' {
@@ -2037,31 +1625,32 @@ function workflowStepClass(stage: string) {
 }
 
 function workflowStepDetail(stage: string) {
+  const localize = (english: string, chinese: string) => isEnglish.value ? english : chinese;
   const activeIndex = workflowSteps.findIndex((step) => step.stage === normalizedCurrentStage.value);
   const index = workflowSteps.findIndex((step) => step.stage === stage);
   const done = currentTask.value?.status === 'COMPLETED' || (activeIndex >= 0 && index < activeIndex);
-  if (stage === 'UPLOAD') return currentTask.value || selectedTexFile.value ? 'Ready' : 'Pending';
+  if (stage === 'UPLOAD') return currentTask.value || selectedTexFile.value ? localize('Ready', '就绪') : localize('Pending', '等待');
   if (stage === 'STRUCTURE_CHECK') {
-    if (needsStructureConfirmation.value) return `${pendingClarifications.value.length || 1} pending`;
-    return done ? 'Confirmed' : activeIndex === index ? 'Checking' : 'Pending';
+    if (needsStructureConfirmation.value) return localize(`${pendingClarifications.value.length || 1} pending`, `${pendingClarifications.value.length || 1} 项待确认`);
+    return done ? localize('Confirmed', '已确认') : activeIndex === index ? localize('Checking', '检查中') : localize('Pending', '等待');
   }
   if (stage === 'RETRIEVE') {
     const event = latestProgressEvent.value;
-    if (activeIndex === index && event?.currentSection != null && event.totalSections) return `${event.currentSection}/${event.totalSections} cards`;
-    return done ? `${bibliographyCards.value.length} selected` : activeIndex === index ? 'Searching' : 'Pending';
+    if (activeIndex === index && event?.currentSection != null && event.totalSections) return localize(`${event.currentSection}/${event.totalSections} cards`, `${event.currentSection}/${event.totalSections} 条文献`);
+    return done ? localize(`${bibliographyCards.value.length} selected`, `选中 ${bibliographyCards.value.length} 篇`) : activeIndex === index ? localize('Searching', '检索中') : localize('Pending', '等待');
   }
-  if (stage === 'GAP_ANALYSIS') return done ? `${suggestions.value.length} suggestions` : activeIndex === index ? 'Reviewing' : 'Pending';
+  if (stage === 'GAP_ANALYSIS') return done ? localize(`${suggestions.value.length} suggestions`, `${suggestions.value.length} 项建议`) : activeIndex === index ? localize('Reviewing', '审查中') : localize('Pending', '等待');
   if (stage === 'POLISH') {
     const polished = sections.value.filter((section) => Boolean(section.polishStatus)).length;
     const event = latestProgressEvent.value;
     if (activeIndex === index && event?.currentSection != null && event.totalSections) {
       return `${event.currentSection}/${event.totalSections}`;
     }
-    return done && sections.value.length > 0 ? `${polished}/${sections.value.length}` : 'Pending';
+    return done && sections.value.length > 0 ? `${polished}/${sections.value.length}` : localize('Pending', '等待');
   }
-  if (stage === 'GLOBAL_REVIEW') return done ? 'Reviewed' : activeIndex === index ? 'Reviewing' : 'Pending';
-  if (stage === 'ASSEMBLE') return canDownload.value ? 'Ready' : activeIndex === index ? 'Generating files' : 'Pending';
-  return done ? 'Completed' : activeIndex === index ? 'In progress' : 'Pending';
+  if (stage === 'GLOBAL_REVIEW') return done ? localize('Reviewed', '已审查') : activeIndex === index ? localize('Reviewing', '审查中') : localize('Pending', '等待');
+  if (stage === 'ASSEMBLE') return canDownload.value ? localize('Ready', '就绪') : activeIndex === index ? localize('Generating files', '生成文件中') : localize('Pending', '等待');
+  return done ? localize('Completed', '已完成') : activeIndex === index ? localize('In progress', '进行中') : localize('Pending', '等待');
 }
 
 function clampProgress(value: number) {

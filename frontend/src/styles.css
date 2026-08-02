@@ -5758,13 +5758,6 @@ body.theme-dark .score-band-track {
   }
 }
 
-/* Paper Polish prototype layout. The original implementation remains in the file, but this is the visible product surface. */
-.app-frame--non-chat .paper-page.scholar-page--paper > .workbench-hero,
-.app-frame--non-chat .paper-page.scholar-page--paper > .paper-steps-bar,
-.app-frame--non-chat .paper-page.scholar-page--paper > .n-grid {
-  display: none !important;
-}
-
 .paper-polish-hero {
   min-height: 72px;
   display: flex;

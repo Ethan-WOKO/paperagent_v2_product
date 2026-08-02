@@ -39,9 +39,21 @@ describe('Project page presentation contract', () => {
     expect(source).toContain('class="v2-task-card__result"');
     expect(source).toContain(':content="task.finalText"');
     expect(source).toContain('class="v2-conversation__process"');
+    expect(source.indexOf('class="v2-conversation__process"')).toBeLessThan(source.indexOf('class="v2-task-card__result"'));
+    expect(source).toContain(':open="task.status === \'PLANNING\' || task.status === \'RUNNING\'"');
+    expect(source).toContain("? '正在处理'");
+    expect(source).toContain(": '已处理'");
     expect(source).not.toContain('class="v2-conversation__process" open');
     expect(source).toContain('v-for="step in task.steps"');
     expect(source).not.toContain('item.plan.finalAnswer');
+  });
+
+  it('supports a persistent focus view and consumes shared semantic tokens', () => {
+    expect(source).toContain("'project-workspace__grid--context-collapsed': contextRailCollapsed");
+    expect(source).toContain("contextRailCollapsed ? '展开项目资料' : '收起项目资料'");
+    expect(source).toContain('--project-canvas: var(--pa-canvas);');
+    expect(source).toContain('--project-surface: var(--pa-surface);');
+    expect(source).toContain('inspectorOpen.value = false;');
   });
 
   it('prevents inspector pills and execution metadata from wrapping or overflowing', () => {

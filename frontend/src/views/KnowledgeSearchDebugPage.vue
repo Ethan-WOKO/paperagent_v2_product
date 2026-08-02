@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="search-page workbench-page scholar-page scholar-page--search">
+    <div class="search-page search-page--redesign workbench-page scholar-page scholar-page--search">
       <WorkspaceHero
         kicker="Search Debug"
         title="Knowledge Search Debug"
@@ -10,14 +10,16 @@
         <template #actions>
           <NSpace align="center">
             <NTag type="info" round>{{ results.length }} results</NTag>
+            <NButton v-if="results.length > 0" secondary @click="diagnosticsVisible = !diagnosticsVisible">
+              {{ diagnosticsVisible ? (isEnglish ? 'Hide diagnostics' : '收起诊断') : (isEnglish ? 'Show diagnostics' : '展开诊断') }}
+            </NButton>
             <NButton secondary @click="fillSampleQuery">Sample Query</NButton>
           </NSpace>
         </template>
       </WorkspaceHero>
 
-      <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-        <NGridItem span="24 xl:17">
-          <NSpace vertical size="large">
+      <div class="search-workspace" :class="{ 'search-workspace--diagnostics-open': results.length > 0 && diagnosticsVisible }">
+        <main class="search-workspace__main">
             <NCard class="workbench-card scholar-card search-console-card" :bordered="false">
               <template #header>
                 <div class="section-title">Retrieval Console</div>
@@ -49,7 +51,7 @@
 
               <div class="search-run-strip">
                 <div>
-                  <span>Search latency</span>
+                  <span>{{ isEnglish ? 'Round-trip time' : '请求往返时间' }}</span>
                   <strong>{{ lastDurationMs == null ? '-' : `${lastDurationMs} ms` }}</strong>
                 </div>
                 <div>
@@ -88,7 +90,11 @@
                   :key="`${item.documentId}-${item.chunkIndex}-${index}`"
                   class="search-result-row"
                   :class="{ 'search-result-row--selected': selectedIndex === index }"
+                  role="button"
+                  tabindex="0"
                   @click="selectedIndex = index"
+                  @keydown.enter.prevent="selectedIndex = index"
+                  @keydown.space.prevent="selectedIndex = index"
                 >
                   <span class="search-result-rank">{{ index + 1 }}</span>
                   <div>
@@ -104,13 +110,15 @@
                 </article>
               </div>
             </NCard>
-          </NSpace>
-        </NGridItem>
+        </main>
 
-        <NGridItem span="24 xl:7">
+        <aside v-if="results.length > 0 && diagnosticsVisible" class="search-workspace__diagnostics">
           <NCard class="workbench-card scholar-card search-diagnostics-card" :bordered="false">
             <template #header>
               <div class="section-title">Diagnostics</div>
+            </template>
+            <template #header-extra>
+              <NButton size="small" quaternary @click="diagnosticsVisible = false">{{ isEnglish ? 'Close' : '关闭' }}</NButton>
             </template>
 
             <NSpace vertical size="large">
@@ -147,8 +155,8 @@
                   <strong>{{ highScoreCount }}</strong>
                 </div>
                 <div>
-                  <span>No cross-user leakage</span>
-                  <strong>Pass</strong>
+                  <span>{{ isEnglish ? 'Private chunks' : '私有片段' }}</span>
+                  <strong>{{ privateResultCount }}</strong>
                 </div>
                 <div>
                   <span>Requested Top K</span>
@@ -169,8 +177,8 @@
               </div>
             </NSpace>
           </NCard>
-        </NGridItem>
-      </NGrid>
+        </aside>
+      </div>
     </div>
   </AppLayout>
 </template>
@@ -185,7 +193,6 @@ import {
   NFormItem,
   NFormItemGi,
   NGrid,
-  NGridItem,
   NInput,
   NInputNumber,
   NSpace,
@@ -209,10 +216,12 @@ const results = ref<KnowledgeSearchResult[]>([]);
 const selectedIndex = ref(0);
 const lastDurationMs = ref<number | null>(null);
 const lastRunAt = ref<string | null>(null);
+const diagnosticsVisible = ref(true);
 
 const selectedResult = computed(() => results.value[selectedIndex.value] || null);
-const highScoreCount = computed(() => results.value.filter((item) => item.score >= 0.75).length);
+const highScoreCount = computed(() => results.value.filter((item) => item.score >= 0.8).length);
 const lowScoreCount = computed(() => results.value.filter((item) => item.score < 0.5).length);
+const privateResultCount = computed(() => results.value.filter((item) => !item.isPublic).length);
 const averageScore = computed(() => {
   if (results.value.length === 0) {
     return null;
@@ -223,7 +232,7 @@ const recallStatusLabel = computed(() => {
   if (results.value.length === 0) {
     return isEnglish.value ? 'No run' : '尚未运行';
   }
-  if (lowScoreCount.value > Math.max(1, Math.floor(results.value.length / 3))) {
+  if (lowScoreCount.value >= Math.max(1, Math.floor(results.value.length / 3))) {
     return isEnglish.value ? 'Needs review' : '需要检查';
   }
   return isEnglish.value ? 'Good' : '良好';
@@ -232,7 +241,7 @@ const recallStatusType = computed(() => {
   if (results.value.length === 0) {
     return 'default';
   }
-  return recallStatusLabel.value === 'Good' ? 'success' : 'warning';
+  return lowScoreCount.value >= Math.max(1, Math.floor(results.value.length / 3)) ? 'warning' : 'success';
 });
 const scoreBands = computed(() => {
   const bands = [
@@ -269,6 +278,7 @@ async function handleSearch() {
       topK: form.topK,
     });
     results.value = data;
+    diagnosticsVisible.value = true;
     selectedIndex.value = 0;
     lastDurationMs.value = Math.round(performance.now() - startedAt);
     lastRunAt.value = new Date().toISOString();
@@ -294,23 +304,24 @@ function clearResults() {
   selectedIndex.value = 0;
   lastDurationMs.value = null;
   lastRunAt.value = null;
+  diagnosticsVisible.value = true;
 }
 
 function scoreBandLabel(score: number) {
-  if (score >= 0.75) {
+  if (score >= 0.8) {
     return isEnglish.value ? 'High' : '高';
   }
-  if (score >= 0.5) {
+  if (score >= 0.6) {
     return isEnglish.value ? 'Medium' : '中';
   }
   return isEnglish.value ? 'Low' : '低';
 }
 
 function scoreBandType(score: number) {
-  if (score >= 0.75) {
+  if (score >= 0.8) {
     return 'success';
   }
-  if (score >= 0.5) {
+  if (score >= 0.6) {
     return 'warning';
   }
   return 'error';

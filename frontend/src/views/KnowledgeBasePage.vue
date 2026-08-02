@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="kb-page workbench-page scholar-page scholar-page--knowledge">
+    <div class="kb-page kb-page--redesign workbench-page scholar-page scholar-page--knowledge">
       <WorkspaceHero
         kicker="Knowledge Base"
         title="Knowledge Base"
@@ -10,12 +10,13 @@
         <template #actions>
           <NSpace align="center">
             <NButton secondary @click="router.push('/knowledge-base/search-debug')">Search Debug</NButton>
+            <NButton secondary @click="toggleUploadPanel">{{ uploadPanelOpen ? (isEnglish ? 'Hide upload' : '收起上传') : (isEnglish ? 'Upload document' : '上传文档') }}</NButton>
             <NButton :loading="loading" @click="loadDocuments">Sync</NButton>
           </NSpace>
         </template>
       </WorkspaceHero>
 
-      <div class="scholar-metric-strip">
+      <div class="scholar-metric-strip kb-metric-strip">
         <article class="scholar-metric-card">
           <span>Total documents</span>
           <strong>{{ documents.length }}</strong>
@@ -29,34 +30,40 @@
           <strong>{{ processingCount }}</strong>
         </article>
         <article class="scholar-metric-card">
-          <span>Storage used</span>
+          <span>{{ isEnglish ? 'Listed file size' : '列表文件大小' }}</span>
           <strong>{{ totalStorageText }}</strong>
         </article>
       </div>
 
-      <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-        <NGridItem span="24 xl:16">
-          <NSpace vertical size="large">
-            <NCard class="workbench-card scholar-card kb-upload-card" :bordered="false">
+      <div class="kb-workspace" :class="{ 'kb-workspace--preview-open': previewDocument }">
+        <main class="kb-workspace__main">
+            <NCard v-if="uploadPanelOpen" class="workbench-card scholar-card kb-upload-card" :bordered="false">
               <template #header>
                 <div class="section-title">Upload Documents</div>
               </template>
               <NSpace vertical size="large">
                 <div class="kb-upload-box">
-                  <input ref="fileInputRef" type="file" class="kb-file-input" @change="handleFileChange" />
-                  <div class="upload-dropzone scholar-dropzone" @click="fileInputRef?.click()">
+                  <input ref="fileInputRef" type="file" accept=".pdf,.docx,.txt,.md" class="kb-file-input" @change="handleFileChange" />
+                  <div
+                    class="upload-dropzone scholar-dropzone"
+                    role="button"
+                    tabindex="0"
+                    @click="fileInputRef?.click()"
+                    @keydown.enter.prevent="fileInputRef?.click()"
+                    @keydown.space.prevent="fileInputRef?.click()"
+                  >
                     <div class="scholar-dropzone__icon">UP</div>
-                    <strong>{{ selectedFile ? selectedFile.name : 'Drag and drop files here' }}</strong>
-                    <span>{{ selectedFile ? formatFileSize(selectedFile.size) : 'PDF, DOCX, TXT, MD up to the backend upload limit.' }}</span>
+                    <strong>{{ selectedFile ? selectedFile.name : (isEnglish ? 'Choose a document' : '选择一个文档') }}</strong>
+                    <span>{{ selectedFile ? formatFileSize(selectedFile.size) : (isEnglish ? 'PDF, DOCX, TXT or MD. The backend enforces the size limit.' : '支持 PDF、DOCX、TXT、MD，大小限制由后端校验。') }}</span>
                   </div>
                 </div>
 
                 <div class="kb-upload-actions">
-                  <NCheckbox v-model:checked="isPublic">Make this document public in the workspace</NCheckbox>
+                  <NCheckbox v-model:checked="isPublic">{{ isEnglish ? 'Make this document public' : '将此文档设为公开' }}</NCheckbox>
                   <NSpace>
                     <NButton secondary :disabled="uploading || !selectedFile" @click="clearSelectedFile">Clear</NButton>
                     <NButton type="primary" :loading="uploading" :disabled="!selectedFile" @click="handleUpload">
-                      Upload Files
+                      {{ isEnglish ? 'Upload document' : '上传文档' }}
                     </NButton>
                   </NSpace>
                 </div>
@@ -68,14 +75,14 @@
               </NSpace>
             </NCard>
 
-            <NCard class="workbench-card scholar-card" :bordered="false">
+            <NCard class="workbench-card scholar-card kb-documents-card" :bordered="false">
               <template #header>
                 <div class="section-title">Documents</div>
               </template>
               <template #header-extra>
                 <NSpace>
-                  <NTag :type="hasProcessingDocuments ? 'warning' : 'success'" round>
-                    {{ hasProcessingDocuments ? 'Processing' : 'Stable' }}
+                  <NTag :type="documentHealthType" round>
+                    {{ documentHealthLabel }}
                   </NTag>
                   <NButton size="small" secondary :loading="loading" @click="loadDocuments">Refresh</NButton>
                 </NSpace>
@@ -130,16 +137,18 @@
                 </article>
               </div>
             </NCard>
-          </NSpace>
-        </NGridItem>
+        </main>
 
-        <NGridItem span="24 xl:8">
+        <aside v-if="previewDocument" class="kb-workspace__preview">
           <NCard class="workbench-card scholar-card kb-preview-side-card" :bordered="false">
             <template #header>
               <div class="section-title">Parsed Text Preview</div>
             </template>
             <template #header-extra>
-              <NButton size="small" secondary :disabled="!previewData?.content" @click="copyPreviewContent">Copy</NButton>
+              <NSpace size="small">
+                <NButton size="small" secondary :disabled="!previewData?.content" @click="copyPreviewContent">Copy</NButton>
+                <NButton size="small" quaternary @click="closePreview">{{ isEnglish ? 'Close' : '关闭' }}</NButton>
+              </NSpace>
             </template>
 
             <NSpin :show="previewLoading">
@@ -177,7 +186,7 @@
                 </div>
 
                 <NAlert v-if="previewData?.truncated" type="warning" title="Truncated preview">
-                  Showing the first {{ previewData.maxChars }} characters. The full text still participates in retrieval.
+                  {{ isEnglish ? `Showing the first ${previewData.maxChars} characters.` : `当前仅展示前 ${previewData.maxChars} 个字符。` }}
                 </NAlert>
                 <NAlert v-if="previewData && !previewData.content" type="info" title="No parsed text yet">
                   The document may still be processing, or no text could be extracted.
@@ -187,8 +196,8 @@
               <NEmpty v-else description="Select Preview on a document to inspect parsed text." />
             </NSpin>
           </NCard>
-        </NGridItem>
-      </NGrid>
+        </aside>
+      </div>
     </div>
   </AppLayout>
 </template>
@@ -200,8 +209,6 @@ import {
   NCard,
   NCheckbox,
   NEmpty,
-  NGrid,
-  NGridItem,
   NPopconfirm,
   NProgress,
   NSpace,
@@ -230,6 +237,7 @@ const router = useRouter();
 const { isEnglish, locale } = useI18n();
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const uploadPanelOpen = ref(readStoredBoolean('yanban.knowledge.uploadOpen', false));
 const selectedFile = ref<File | null>(null);
 const isPublic = ref(false);
 const uploading = ref(false);
@@ -246,12 +254,22 @@ const hasProcessingDocuments = computed(() =>
   documents.value.some((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING'),
 );
 const readyCount = computed(() => documents.value.filter((item) => item.status === 'READY').length);
+const failedCount = computed(() => documents.value.filter((item) => item.status === 'FAILED').length);
 const processingCount = computed(() =>
   documents.value.filter((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING').length,
 );
 const totalStorageText = computed(() =>
   formatFileSize(documents.value.reduce((total, item) => total + (item.fileSize || 0), 0)),
 );
+const documentHealthLabel = computed(() => {
+  if (hasProcessingDocuments.value) return isEnglish.value ? 'Processing' : '处理中';
+  if (failedCount.value > 0) return isEnglish.value ? 'Needs attention' : '需要处理';
+  return isEnglish.value ? 'Stable' : '稳定';
+});
+const documentHealthType = computed(() => {
+  if (hasProcessingDocuments.value) return 'warning';
+  return failedCount.value > 0 ? 'error' : 'success';
+});
 
 onMounted(async () => {
   await loadDocuments();
@@ -271,6 +289,21 @@ function clearSelectedFile() {
   if (fileInputRef.value) {
     fileInputRef.value.value = '';
   }
+}
+
+function readStoredBoolean(key: string, fallback: boolean) {
+  const value = window.localStorage.getItem(key);
+  return value == null ? fallback : value === 'true';
+}
+
+function toggleUploadPanel() {
+  uploadPanelOpen.value = !uploadPanelOpen.value;
+  window.localStorage.setItem('yanban.knowledge.uploadOpen', String(uploadPanelOpen.value));
+}
+
+function closePreview() {
+  previewDocument.value = null;
+  previewData.value = null;
 }
 
 async function handleUpload() {
