@@ -52,6 +52,8 @@ describe('ordinary workspace chat presentation contract', () => {
     expect(styles).toContain('@media (max-width: 760px)');
     expect(styles).toContain('.message-row--process');
     expect(styles).toContain('.process-message-card');
+    expect(styles).toContain('background: var(--pa-role-user-surface) !important;');
+    expect(styles).toContain('.message-row--assistant .message-role');
     expect(styles).toContain('.n-button.chat-send-button:last-child .n-button__content');
     expect(styles).toContain('place-items: center !important;');
   });

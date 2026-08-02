@@ -39,6 +39,9 @@ describe('Project page presentation contract', () => {
   it('renders persisted V2 tasks with one result and collapsed execution details', () => {
     expect(source).toContain('v-for="task in v2TurnHistory"');
     expect(source).toContain('class="v2-task-card__result"');
+    expect(source).not.toContain('v2-task-card__role');
+    expect(source).toContain('class="v2-task-card__avatar" aria-hidden="true">你</span>');
+    expect(source).toContain('class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">P</span>');
     expect(source).toContain(':content="task.finalText"');
     expect(source).toContain('class="v2-conversation__process"');
     expect(source.indexOf('class="v2-conversation__process"')).toBeLessThan(source.indexOf('class="v2-task-card__result"'));
@@ -67,5 +70,26 @@ describe('Project page presentation contract', () => {
     expect(source).toContain('.project-execution-card__heading > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;');
     expect(source).toContain('class="project-send-button"');
     expect(source).toContain('width: min(1040px, 100%);');
+  });
+
+  it('centers project rows and keeps filenames in the shared interface typeface', () => {
+    expect(source).toContain('min-height: 54px;\n  padding: 8px 12px;');
+    expect(source).toContain('display: grid; align-content: center; gap: 2px;');
+    expect(source).toContain('font-family: var(--pa-font-sans); font-size: 10px;');
+    expect(source).toContain('background: var(--pa-role-user-surface);');
+  });
+
+  it('keeps the file section title visible and uses one stateful directory toggle', () => {
+    expect(source).toContain('grid-template-columns: minmax(0, 1fr) auto;');
+    expect(source).toContain('.project-sidebar-section__header .project-sidebar-section__toggle { width: 100%;');
+    expect(source).toContain('@click="toggleAllDirectories"');
+    expect(source).toContain('allDirectoriesExpanded ? t(\'project.page.collapse\') : t(\'project.page.expand\')');
+  });
+
+  it('removes duplicate V2 headings while preserving project utilities', () => {
+    expect(source).not.toContain('class="project-agent-mode"');
+    expect(source).not.toContain('class="v2-conversation__header"');
+    expect(source).toContain('role="group" aria-label="Project utilities"');
+    expect(source).toContain('class="project-utility-chip project-context-toggle"');
   });
 });
