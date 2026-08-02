@@ -35,6 +35,26 @@ describe('frontend UI mock boundary', () => {
     expect(empty.data).toEqual([]);
   });
 
+  it('provides ordinary workspace sessions and their message history separately', () => {
+    const sessions = resolveUiMockResponse(
+      { method: 'GET', path: '/agent/sessions' },
+      { role: 'user', projectState: 'complete' },
+    );
+    const messages = resolveUiMockResponse(
+      { method: 'GET', path: '/agent/sessions/6201/messages' },
+      { role: 'user', projectState: 'complete' },
+    );
+
+    expect(sessions.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 6201, scope: 'WORKSPACE', projectId: null }),
+    ]));
+    expect(messages.data).toEqual([
+      expect.objectContaining({ role: 'user' }),
+      expect.objectContaining({ role: 'process' }),
+      expect.objectContaining({ role: 'assistant' }),
+    ]);
+  });
+
   it('advertises the same V2 capability document consumed by the production page', () => {
     const result = resolveUiMockResponse(
       { method: 'GET', path: '/agent/sessions/v2/capabilities' },
@@ -44,7 +64,7 @@ describe('frontend UI mock boundary', () => {
     expect(result.data).toMatchObject({
       formatVersion: 1,
       enabled: true,
-      capabilities: expect.arrayContaining(['agent.turn']),
+      capabilities: expect.arrayContaining(['agent.turn', 'literature.search']),
     });
   });
 

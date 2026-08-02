@@ -6,6 +6,7 @@ import './styles.css';
 import './design-system.css';
 import './styles/paper-workspace.css';
 import './styles/knowledge-workspace.css';
+import './styles/chat-workspace.css';
 import { useAuthStore } from './stores/auth';
 import { AUTH_EXPIRED_EVENT } from './auth/session';
 

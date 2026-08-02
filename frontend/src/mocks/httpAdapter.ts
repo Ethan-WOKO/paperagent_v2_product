@@ -2,6 +2,8 @@ import { AxiosError, AxiosHeaders, type AxiosAdapter, type AxiosResponse } from 
 import type { V2NaturalLanguageTurnStartResponse } from '@/api/agent';
 import {
   mockManifest,
+  mockChatMessages,
+  mockChatSessions,
   mockKnowledgeDocuments,
   mockKnowledgePreview,
   mockKnowledgeSearchResults,
@@ -57,8 +59,13 @@ export function resolveUiMockResponse(request: MockRequest, scenario: UiMockScen
   if (method === 'GET' && path === '/agent/sessions/v2/capabilities') {
     return {
       status: 200,
-      data: { formatVersion: 1, enabled: true, capabilities: ['agent.turn', 'project.read-analysis', 'project.candidate'] },
+      data: { formatVersion: 1, enabled: true, capabilities: ['agent.turn', 'literature.search', 'project.read-analysis', 'project.candidate'] },
     };
+  }
+  if (method === 'GET' && path === '/agent/sessions') return { status: 200, data: mockChatSessions };
+  const chatMessagesMatch = /^\/agent\/sessions\/(\d+)\/messages$/.exec(path);
+  if (method === 'GET' && chatMessagesMatch) {
+    return { status: 200, data: mockChatMessages[Number(chatMessagesMatch[1])] || [] };
   }
   if (method === 'GET' && path === '/projects') return { status: 200, data: mockProjects };
   if (method === 'GET' && path === '/projects/64/manifest') return { status: 200, data: mockManifest };

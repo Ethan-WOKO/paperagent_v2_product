@@ -1,7 +1,7 @@
 <template>
   <AppLayout>
     <div
-      class="chat-page research-chat-page"
+      class="chat-page research-chat-page research-chat-page--redesign"
       :class="{
         'research-chat-page--sessions-collapsed': chatSidebarCollapsed,
       }"
@@ -118,7 +118,11 @@
                 :class="'message-row--' + message.role"
               >
                 <template v-if="message.role === 'process'">
-                  <details class="process-message-card process-message-card--live" :open="message.processOpen">
+                  <details
+                    class="process-message-card"
+                    :class="{ 'process-message-card--live': !message.processDone }"
+                    :open="message.processOpen"
+                  >
                     <summary class="process-message-card__summary">
                       <span class="process-message-card__label">{{ processSummaryLabel(message) }}</span>
                       <span class="process-message-card__chevron">›</span>
@@ -1063,7 +1067,7 @@ function setDemoQuestionPanelOpen(open: boolean) {
 }
 
 function applyMobileChatDefaults() {
-  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches) {
+  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 980px)').matches) {
     setChatSidebarCollapsed(true);
   }
 }
@@ -1367,20 +1371,18 @@ async function handleSend() {
     }
 
     const willUsePlanExecution = planMode.value && !isPlanArtifactRequest(content);
-    if (!willUsePlanExecution) {
-      const processId = 'process-' + Date.now();
-      currentProcessMessageId.value = processId;
-      currentProcessMessageSessionId.value = sessionId;
-      appendSessionMessage(sessionId, {
-        localId: processId,
-        role: 'process',
-        content: 'Starting request...',
-        processOpen: true,
-        processDone: false,
-        processStartedAt: Date.now(),
-        processElapsedMs: null,
-      });
-    }
+    const processId = 'process-' + Date.now();
+    currentProcessMessageId.value = processId;
+    currentProcessMessageSessionId.value = sessionId;
+    appendSessionMessage(sessionId, {
+      localId: processId,
+      role: 'process',
+      content: willUsePlanExecution ? '正在创建并执行计划…' : '正在处理请求…',
+      processOpen: true,
+      processDone: false,
+      processStartedAt: Date.now(),
+      processElapsedMs: null,
+    });
 
     const assistantId = 'assistant-' + Date.now();
     currentAssistantMessageId.value = assistantId;
@@ -1454,7 +1456,7 @@ async function sendPlanMessage(sessionId: number, content: string, disableRag: b
     autoExecute: false,
   });
   currentPlan.value = createdPlan;
-  await setAssistantContent(buildPlanAssistantContent(createdPlan));
+  await setProcessContent(buildPlanProcessContent(createdPlan));
 
   let refreshing = false;
   const refreshPlan = async () => {
@@ -1465,7 +1467,7 @@ async function sendPlanMessage(sessionId: number, content: string, disableRag: b
     try {
       const { data } = await getPlan(createdPlan.id);
       currentPlan.value = data;
-      await setAssistantContent(buildPlanAssistantContent(data));
+      await setProcessContent(buildPlanProcessContent(data));
       return data;
     } catch {
       return currentPlan.value;
@@ -1477,7 +1479,7 @@ async function sendPlanMessage(sessionId: number, content: string, disableRag: b
   try {
     const { data: queuedPlan } = await executePlanAsync(createdPlan.id);
     currentPlan.value = queuedPlan;
-    await setAssistantContent(buildPlanAssistantContent(queuedPlan));
+    await setProcessContent(buildPlanProcessContent(queuedPlan));
 
     await new Promise<void>((resolve) => {
       let pollTimer: number | undefined;
@@ -1515,14 +1517,17 @@ async function sendPlanMessage(sessionId: number, content: string, disableRag: b
     });
 
     const finalPlan = currentPlan.value || queuedPlan;
-    if (finalPlan.status === 'FAILED' || finalPlan.status === 'CANCELLED') {
-      await appendAssistantChunk('\n\nPlan ended with status ' + finalPlan.status + ': ' + (finalPlan.errorMessage || 'No error message.'));
-    }
+    await setProcessContent(buildPlanProcessContent(finalPlan));
+    await setAssistantContent(buildPlanAssistantContent(finalPlan));
     await afterSendFinished(sessionId);
   } catch (error: any) {
     const message = error.response?.data?.message || error.message || 'Plan execution failed';
-    await refreshPlan();
-    await appendAssistantChunk('\n\nPlan execution failed: ' + message);
+    const refreshedPlan = await refreshPlan();
+    if (refreshedPlan) {
+      await setProcessContent(buildPlanProcessContent(refreshedPlan));
+    }
+    await appendProcessLine('计划执行失败：' + message);
+    await setAssistantContent('本次计划未能完成：' + message);
     collapseCurrentProcessMessage();
     ui.message.error(message);
     sending.value = false;
@@ -1791,6 +1796,21 @@ async function appendProcessLine(line: string) {
     message.content = message.content?.trim()
       ? message.content + '\n' + nextLine
       : nextLine;
+    message.processOpen = true;
+    message.processDone = false;
+  });
+  if (selectedSessionId.value === sessionId) {
+    await scrollMessagesToBottom();
+  }
+}
+
+async function setProcessContent(content: string) {
+  const sessionId = currentProcessMessageSessionId.value;
+  if (!sessionId || !currentProcessMessageId.value) {
+    return;
+  }
+  updateSessionMessage(sessionId, currentProcessMessageId.value, (message) => {
+    message.content = content;
     message.processOpen = true;
     message.processDone = false;
   });
@@ -2354,23 +2374,23 @@ function buildChatWebSocketUrl(token: string) {
 }
 
 function buildPlanAssistantContent(plan: AgentPlanResponse) {
-  const terminalHeader = [
-    `Plan lifecycle status: ${projectPlanLifecycle(plan)}.`,
-    `Plan execution outcome: ${projectPlanExecutionOutcome(plan)}.`,
-  ].join('\n');
-  if (isTerminalPlanStatus(plan.status)) {
-    const finalStepResult = projectPlanFinalAnswer(plan);
-    if (finalStepResult) {
-      return `${terminalHeader}\n\n${finalStepResult}`;
-    }
-    if (plan.errorMessage) {
-      return `${terminalHeader}\n\n${plan.errorMessage}`;
-    }
-    if (plan.summary) {
-      return `${terminalHeader}\n\n${plan.summary}`;
-    }
+  const finalStepResult = projectPlanFinalAnswer(plan);
+  if (finalStepResult) {
+    return finalStepResult;
   }
+  if (plan.errorMessage) {
+    return plan.errorMessage;
+  }
+  if (plan.summary) {
+    return plan.summary;
+  }
+  return uiText(
+    '计划已结束，但没有返回可展示的最终结果。',
+    'The plan finished without a displayable final result.',
+  );
+}
 
+function buildPlanProcessContent(plan: AgentPlanResponse) {
   const lines = [
     `Plan lifecycle status: ${projectPlanLifecycle(plan)}.`,
     `Plan execution outcome: ${projectPlanExecutionOutcome(plan)}.`,

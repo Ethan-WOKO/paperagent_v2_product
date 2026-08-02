@@ -1,5 +1,6 @@
 import type { UserMeResponse } from '@/api/auth';
 import type {
+  AgentMessageResponse,
   AgentSessionResponse,
   V2NaturalLanguageTurnHistoryItem,
   V2NaturalLanguageTurnResponse,
@@ -95,6 +96,113 @@ export const mockSessions: AgentSessionResponse[] = [{
   createdAt: CREATED_AT,
   updatedAt: UPDATED_AT,
 }];
+
+export const mockChatSessions: AgentSessionResponse[] = [
+  {
+    id: 6201,
+    userId: 1,
+    scope: 'WORKSPACE',
+    projectId: null,
+    title: '多智能体论文的证据约束',
+    modelProvider: 'deepseek',
+    model: 'deepseek-v4-flash',
+    maxSteps: 20,
+    ragDisabled: false,
+    createdAt: '2026-08-01T01:42:00Z',
+    updatedAt: UPDATED_AT,
+  },
+  {
+    id: 6202,
+    userId: 1,
+    scope: 'WORKSPACE',
+    projectId: null,
+    title: '梳理实验对照组',
+    modelProvider: 'deepseek',
+    model: 'deepseek-v4-flash',
+    maxSteps: 20,
+    ragDisabled: false,
+    createdAt: '2026-07-31T09:20:00Z',
+    updatedAt: '2026-07-31T10:08:00Z',
+  },
+  {
+    id: 6203,
+    userId: 1,
+    scope: 'WORKSPACE',
+    projectId: null,
+    title: '检索可复现性研究',
+    modelProvider: 'deepseek',
+    model: 'deepseek-v4-pro',
+    maxSteps: 20,
+    ragDisabled: false,
+    createdAt: '2026-07-30T07:12:00Z',
+    updatedAt: '2026-07-30T08:31:00Z',
+  },
+  {
+    id: 6204,
+    userId: 1,
+    scope: 'WORKSPACE',
+    projectId: null,
+    title: '润色方法章节摘要',
+    modelProvider: 'deepseek',
+    model: 'deepseek-v4-flash',
+    maxSteps: 20,
+    ragDisabled: true,
+    createdAt: '2026-07-28T04:16:00Z',
+    updatedAt: '2026-07-28T05:02:00Z',
+  },
+];
+
+export const mockChatMessages: Record<number, AgentMessageResponse[]> = {
+  6201: [
+    {
+      id: 8201,
+      sessionId: 6201,
+      userId: 1,
+      role: 'user',
+      content: '请结合我上传的综述，解释多智能体学术协作系统为什么需要证据约束，并给出可以落地的设计原则。',
+      toolCallsJson: null,
+      paperTaskId: null,
+      createdAt: '2026-08-01T02:18:00Z',
+    },
+    {
+      id: 8202,
+      sessionId: 6201,
+      userId: 1,
+      role: 'process',
+      content: [
+        '读取附件「多智能体学术协作综述.pdf」',
+        '检索知识库：证据约束、执行回执、项目版本',
+        '整理 3 条可实施的设计原则',
+      ].join('\n'),
+      toolCallsJson: null,
+      paperTaskId: null,
+      createdAt: '2026-08-01T02:18:28Z',
+    },
+    {
+      id: 8203,
+      sessionId: 6201,
+      userId: 1,
+      role: 'assistant',
+      content: [
+        '证据约束的价值，不是让系统展示更多过程，而是让每个结论都能回答三个问题：依据从哪里来、在哪个版本上得出、是否经过验证。',
+        '',
+        '### 可以落地的设计原则',
+        '',
+        '1. **结论与证据分离保存**：最终回答保持简洁，来源、执行回执与工具结果作为可展开的证据层。',
+        '2. **版本进入任务边界**：任务开始时固定输入版本；计划可以修订，但已经确认的事实不能被后续步骤静默覆盖。',
+        '3. **验证结果可追溯**：自动检查、人工确认和失败原因使用统一状态，并保留对应的时间与产物。',
+        '',
+        '这样既能降低用户阅读负担，也能在需要审计时快速还原推理与执行依据。',
+      ].join('\n'),
+      toolCallsJson: null,
+      paperTaskId: null,
+      createdAt: UPDATED_AT,
+    },
+  ],
+  6202: [],
+  6203: [],
+  6204: [],
+};
 
 const stepSet = {
   complete: [
