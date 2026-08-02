@@ -16,7 +16,7 @@
         </template>
       </WorkspaceHero>
 
-      <div class="scholar-metric-strip kb-metric-strip">
+      <div v-if="documents.length > 0" class="scholar-metric-strip kb-metric-strip">
         <article class="scholar-metric-card">
           <span>Total documents</span>
           <strong>{{ documents.length }}</strong>
@@ -75,7 +75,7 @@
               </NSpace>
             </NCard>
 
-            <NCard class="workbench-card scholar-card kb-documents-card" :bordered="false">
+            <NCard v-if="documents.length > 0 || !uploadPanelOpen || loading" class="workbench-card scholar-card kb-documents-card" :bordered="false">
               <template #header>
                 <div class="section-title">Documents</div>
               </template>
@@ -88,7 +88,13 @@
                 </NSpace>
               </template>
 
-              <NEmpty v-if="documents.length === 0 && !loading" description="No knowledge base documents yet." />
+              <NEmpty v-if="documents.length === 0 && !loading" :description="isEnglish ? 'No knowledge base documents yet.' : '知识库中暂无文档。'">
+                <template #extra>
+                  <NButton type="primary" @click="toggleUploadPanel">
+                    {{ isEnglish ? 'Upload the first document' : '上传第一份文档' }}
+                  </NButton>
+                </template>
+              </NEmpty>
 
               <div v-else class="kb-document-table">
                 <div class="kb-document-table__head">

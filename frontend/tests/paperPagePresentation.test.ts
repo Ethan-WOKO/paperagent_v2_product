@@ -42,6 +42,15 @@ describe('Paper page presentation contract', () => {
     expect(source).not.toContain('<details class="paper-config-grid" open>');
   });
 
+  it('progressively reveals task-only workspaces after a paper task exists', () => {
+    expect(source).toContain("'paper-polish-shell--single': !currentTask");
+    expect(source).toContain('<NGridItem v-if="currentTask" span="24 l:13">');
+    expect(source).toContain('<NCard v-if="currentTask" class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2"');
+    expect(source).toContain('<aside v-if="currentTask" class="paper-polish-side">');
+    expect(source).toContain('<NCard v-if="currentTask" id="paper-structure-confirmation"');
+    expect(styles).toContain('.paper-polish-shell--single');
+  });
+
   it('opts into real responsive layout and shared semantic tokens', () => {
     expect(appSource).toContain("route.path.startsWith('/projects')");
     expect(appSource).toContain("route.path.startsWith('/paper')");

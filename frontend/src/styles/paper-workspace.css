@@ -213,6 +213,11 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-polish-shell {
   gap: 12px !important;
 }
 
+.paper-page--redesign .paper-polish-shell--single,
+html:not(.canvas-scale-active) .paper-page--redesign .paper-polish-shell--single {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
 .paper-page--redesign .paper-polish-main,
 .paper-page--redesign .paper-polish-side {
   min-width: 0;

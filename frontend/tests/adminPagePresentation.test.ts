@@ -15,6 +15,7 @@ describe('admin console presentation contract', () => {
     expect(page).toContain('class="admin-card admin-detail"');
     expect(page).toContain('class="admin-stat-grid"');
     expect(page).toContain('class="admin-quota-form"');
+    expect(page).toContain('class="admin-list__row admin-invite-row"');
     expect(page).toContain('name="usage"');
     expect(page).toContain('name="chat"');
     expect(page).toContain('name="paper"');
@@ -45,6 +46,8 @@ describe('admin console presentation contract', () => {
     expect(page).toContain('var(--pa-line)');
     expect(page).toContain('@media (max-width: 900px)');
     expect(page).toContain('@media (max-width: 760px)');
+    expect(page).toContain('min-height: clamp(240px, 36vh, 380px);');
+    expect(page).toContain('max-height: clamp(240px, 36vh, 420px);');
     expect(app).toContain("route.path.startsWith('/admin')");
   });
 });

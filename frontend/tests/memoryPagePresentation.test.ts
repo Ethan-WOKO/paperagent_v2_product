@@ -20,6 +20,7 @@ describe('long-term memory presentation contract', () => {
     expect(page.indexOf('<details class="memory-record__details">'))
       .toBeLessThan(page.indexOf('<dl class="memory-fields">'));
     expect(page).toContain("t('memory.field.confirmationStatus')");
+    expect(page).toContain("t('memory.content.showDetails')");
   });
 
   it('preserves every existing memory-governance operation', () => {
@@ -41,6 +42,8 @@ describe('long-term memory presentation contract', () => {
     expect(styles).toContain('border: 1px solid var(--pa-line);');
     expect(styles).toContain('@media (max-width: 1180px)');
     expect(styles).toContain('@media (max-width: 760px)');
+    expect(styles).toContain('min-height: clamp(220px, 30vh, 320px);');
+    expect(styles).toContain('position: sticky;');
     expect(app).toContain("route.path.startsWith('/settings')");
     expect(main).toContain("import './styles/memory-workspace.css';");
   });

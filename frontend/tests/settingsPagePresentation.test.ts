@@ -50,4 +50,14 @@ describe('settings workspace presentation contract', () => {
     expect(styles).toContain('@media (max-width: 760px)');
     expect(main).toContain("import './styles/settings-workspace.css';");
   });
+
+  it('keeps model catalogs compact while making the active model legible', () => {
+    expect(page).toContain('class="settings-default-card__identity"');
+    expect(page).toContain('class="settings-default-card__model"');
+    expect(page).toContain('class="settings-model-catalog"');
+    expect(page).toContain('form.glmModels.length');
+    expect(page).toContain("autocomplete: 'new-password'");
+    expect(page).toContain("autocomplete: 'off'");
+    expect(styles).toContain('.settings-model-catalog > summary');
+  });
 });

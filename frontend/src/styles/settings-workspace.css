@@ -154,8 +154,9 @@
 
 .product-shell .settings-page--redesign .settings-provider-card {
   min-height: 100%;
-  padding: 0 10px 2px !important;
-  border-right: 1px solid var(--pa-line) !important;
+  padding: 0 12px 4px !important;
+  border: 1px solid var(--pa-line) !important;
+  border-radius: var(--pa-radius-sm) !important;
 }
 
 .product-shell .settings-page--redesign .settings-provider-card__head {
@@ -228,10 +229,123 @@
 .product-shell .settings-page--redesign .settings-default-card {
   display: grid;
   align-content: start;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 10px;
-  min-height: 100%;
-  padding: 0 0 0 10px !important;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(150px, 0.8fr) minmax(240px, 1.35fr) minmax(110px, 0.55fr) minmax(130px, 0.65fr);
+  align-items: end;
+  gap: 0 14px;
+  min-height: 0;
+  padding: 10px 12px 3px !important;
+  border-top: 1px solid var(--pa-line) !important;
+  border-bottom: 1px solid var(--pa-line) !important;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity {
+  display: grid;
+  align-self: center;
+  min-width: 0;
+  padding: 0 14px 5px 0;
+  border-right: 1px solid var(--pa-line);
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity > span {
+  color: var(--pa-accent);
+  font-size: 9px;
+  font-weight: 680;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity > strong {
+  margin-top: 2px;
+  color: var(--pa-text);
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity > small {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--pa-text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__model .n-base-selection-label {
+  min-width: 0;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__model .n-base-selection-input,
+.product-shell .settings-page--redesign .settings-default-card__model .n-base-selection-label__render-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog {
+  margin: 3px 0 7px;
+  border-top: 1px solid color-mix(in srgb, var(--pa-line) 72%, transparent);
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 45px;
+  padding: 7px 2px;
+  color: var(--pa-text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary::-webkit-details-marker {
+  display: none;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary > span:first-child {
+  display: grid;
+  min-width: 0;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary strong {
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary small {
+  overflow: hidden;
+  margin-top: 1px;
+  color: var(--pa-text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--pa-text-secondary);
+  font-size: 9px;
+  font-weight: 620;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__count::after {
+  content: '⌄';
+  color: var(--pa-text-muted);
+  transition: transform 160ms ease;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog[open] .settings-model-catalog__count::after {
+  transform: rotate(180deg);
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__body {
+  max-height: 168px;
+  overflow: auto;
+  padding: 2px 2px 10px;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__body .n-dynamic-tags {
+  width: 100%;
 }
 
 .product-shell .settings-page--redesign .settings-search-provider {
@@ -348,7 +462,15 @@
   }
 
   .product-shell .settings-page--redesign .settings-default-card {
-    padding: 10px 0 0 !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px 0 2px !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card__identity {
+    grid-column: 1 / -1;
+    padding: 0 0 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--pa-line);
   }
 
   .product-shell .settings-page--redesign .settings-search-provider {
@@ -361,6 +483,35 @@
     border-top: 1px solid var(--pa-line);
     border-left: 0;
     padding-top: 9px;
+  }
+}
+
+@media (max-width: 900px) {
+  .product-shell .settings-page--redesign .settings-page__layout {
+    display: block;
+    padding-top: 10px;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-nav {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    display: flex;
+    gap: 3px;
+    overflow-x: auto;
+    margin: 0 -8px 6px;
+    padding: 7px 8px;
+    border: 0;
+    border-bottom: 1px solid var(--pa-line);
+    background: var(--pa-canvas);
+    scrollbar-width: none;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-nav a {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 7px 9px;
+    white-space: nowrap;
   }
 }
 
@@ -441,6 +592,16 @@
 
   .product-shell .settings-page--redesign .settings-default-card {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card__identity {
+    grid-column: auto;
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card__identity > small,
+  .product-shell .settings-page--redesign .settings-model-catalog > summary small {
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .product-shell .settings-page--redesign .settings-search-provider {

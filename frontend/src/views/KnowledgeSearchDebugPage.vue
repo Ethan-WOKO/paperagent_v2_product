@@ -29,7 +29,7 @@
                   <NInput
                     v-model:value="form.query"
                     type="textarea"
-                    :autosize="{ minRows: 2, maxRows: 6 }"
+                    :autosize="{ minRows: 1, maxRows: 4 }"
                     placeholder="Example: What is the weekly lab meeting time?"
                   />
                 </NFormItem>
@@ -38,10 +38,10 @@
                     <NInputNumber v-model:value="form.topK" :min="1" :max="20" style="width: 100%" />
                   </NFormItemGi>
                   <NFormItemGi span="24 m:6" label="Document Scope">
-                    <div class="search-static-pill">Private + permitted public</div>
+                    <div class="search-static-pill" :title="isEnglish ? 'Private and permitted public documents' : '私有文档与获准公开文档'">Private + permitted public</div>
                   </NFormItemGi>
                   <NFormItemGi span="24 m:6" label="Embedding">
-                    <div class="search-static-pill">Configured backend model</div>
+                    <div class="search-static-pill" :title="isEnglish ? 'Configured backend embedding model' : '后端已配置的向量模型'">Configured backend model</div>
                   </NFormItemGi>
                   <NFormItemGi span="24 m:6" label="Action">
                     <NButton type="primary" block :loading="searching" @click="handleSearch">Search</NButton>
@@ -66,7 +66,7 @@
               </div>
             </NCard>
 
-            <NCard class="workbench-card scholar-card" :bordered="false">
+            <NCard v-if="searching || results.length > 0" class="workbench-card scholar-card" :bordered="false">
               <template #header>
                 <div class="section-title">Results</div>
               </template>

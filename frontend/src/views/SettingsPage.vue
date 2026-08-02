@@ -33,7 +33,40 @@
             </template>
 
             <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-              <NGridItem span="24 l:9">
+              <NGridItem span="24">
+                <article id="default-model-settings" class="settings-default-card">
+                  <div class="settings-default-card__identity">
+                    <span>{{ settingsCopy('当前生效', 'Active configuration') }}</span>
+                    <strong>{{ defaultProviderLabel }}</strong>
+                    <small>{{ defaultModel }}</small>
+                  </div>
+                  <NFormItem :label="settingsCopy('默认提供商', 'Default provider')">
+                    <NSelect
+                      v-model:value="form.defaultProvider"
+                      :options="providerOptions"
+                      :input-props="{ autocomplete: 'off', name: 'paperagent-default-provider' }"
+                    />
+                  </NFormItem>
+                  <NFormItem class="settings-default-card__model" :label="settingsCopy('默认模型', 'Default model')">
+                    <NSelect
+                      v-model:value="defaultModel"
+                      filterable
+                      tag
+                      :options="defaultModelOptions"
+                      :disabled="!isBuiltinDefaultProvider"
+                      :input-props="{ autocomplete: 'off', name: 'paperagent-default-model' }"
+                    />
+                  </NFormItem>
+                  <NFormItem :label="settingsCopy('温度', 'Temperature')">
+                    <NInputNumber v-model:value="form.deepseekTemperature" :min="0" :max="2" :step="0.1" style="width: 100%" />
+                  </NFormItem>
+                  <NFormItem :label="settingsCopy('最大计划步骤', 'Max plan steps')">
+                    <NInputNumber v-model:value="form.maxSteps" :min="1" :max="100" style="width: 100%" />
+                  </NFormItem>
+                </article>
+              </NGridItem>
+
+              <NGridItem span="24 l:12">
                 <article class="settings-provider-card">
                   <div class="settings-provider-card__head">
                     <div class="settings-provider-mark settings-provider-mark--deepseek">DS</div>
@@ -49,11 +82,14 @@
                     </NButton>
                   </div>
                   <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
-                    <NFormItemGi span="2 m:1" :label="settingsCopy('模型名称', 'Model name')">
-                      <NSelect v-model:value="form.deepseekModel" filterable tag :options="deepseekModelOptions" />
-                    </NFormItemGi>
-                    <NFormItemGi span="2 m:1" :label="settingsCopy('可用模型', 'Available models')">
-                      <NDynamicTags v-model:value="form.deepseekModels" :max="50" />
+                    <NFormItemGi span="2 m:1" :label="settingsCopy('当前模型', 'Current model')">
+                      <NSelect
+                        v-model:value="form.deepseekModel"
+                        filterable
+                        tag
+                        :options="deepseekModelOptions"
+                        :input-props="{ autocomplete: 'off', name: 'paperagent-deepseek-model' }"
+                      />
                     </NFormItemGi>
                     <NFormItemGi span="2 m:1" label="API Key">
                       <NInput
@@ -61,13 +97,30 @@
                         type="password"
                         show-password-on="click"
                         :placeholder="settingsCopy('留空以保留当前密钥', 'Leave blank to keep current key')"
+                        :input-props="{ autocomplete: 'new-password', name: 'paperagent-deepseek-api-key' }"
                       />
                     </NFormItemGi>
+                    <NGridItem span="2">
+                      <details class="settings-model-catalog">
+                        <summary>
+                          <span>
+                            <strong>{{ settingsCopy('可用模型目录', 'Available model catalog') }}</strong>
+                            <small>{{ settingsCopy(`当前使用 ${form.deepseekModel}`, `Selected ${form.deepseekModel}`) }}</small>
+                          </span>
+                          <span class="settings-model-catalog__count">
+                            {{ settingsCopy(`${form.deepseekModels.length} 个模型`, `${form.deepseekModels.length} models`) }}
+                          </span>
+                        </summary>
+                        <div class="settings-model-catalog__body">
+                          <NDynamicTags v-model:value="form.deepseekModels" :max="50" />
+                        </div>
+                      </details>
+                    </NGridItem>
                   </NGrid>
                 </article>
               </NGridItem>
 
-              <NGridItem span="24 l:9">
+              <NGridItem span="24 l:12">
                 <article class="settings-provider-card">
                   <div class="settings-provider-card__head">
                     <div class="settings-provider-mark settings-provider-mark--glm">GL</div>
@@ -83,11 +136,14 @@
                     </NButton>
                   </div>
                   <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
-                    <NFormItemGi span="2 m:1" :label="settingsCopy('模型名称', 'Model name')">
-                      <NSelect v-model:value="form.glmModel" filterable tag :options="glmModelOptions" />
-                    </NFormItemGi>
-                    <NFormItemGi span="2 m:1" :label="settingsCopy('可用模型', 'Available models')">
-                      <NDynamicTags v-model:value="form.glmModels" :max="50" />
+                    <NFormItemGi span="2 m:1" :label="settingsCopy('当前模型', 'Current model')">
+                      <NSelect
+                        v-model:value="form.glmModel"
+                        filterable
+                        tag
+                        :options="glmModelOptions"
+                        :input-props="{ autocomplete: 'off', name: 'paperagent-glm-model' }"
+                      />
                     </NFormItemGi>
                     <NFormItemGi span="2 m:1" label="API Key">
                       <NInput
@@ -95,32 +151,26 @@
                         type="password"
                         show-password-on="click"
                         :placeholder="settingsCopy('留空以保留当前密钥', 'Leave blank to keep current key')"
+                        :input-props="{ autocomplete: 'new-password', name: 'paperagent-glm-api-key' }"
                       />
                     </NFormItemGi>
+                    <NGridItem span="2">
+                      <details class="settings-model-catalog">
+                        <summary>
+                          <span>
+                            <strong>{{ settingsCopy('可用模型目录', 'Available model catalog') }}</strong>
+                            <small>{{ settingsCopy(`当前使用 ${form.glmModel}`, `Selected ${form.glmModel}`) }}</small>
+                          </span>
+                          <span class="settings-model-catalog__count">
+                            {{ settingsCopy(`${form.glmModels.length} 个模型`, `${form.glmModels.length} models`) }}
+                          </span>
+                        </summary>
+                        <div class="settings-model-catalog__body">
+                          <NDynamicTags v-model:value="form.glmModels" :max="50" />
+                        </div>
+                      </details>
+                    </NGridItem>
                   </NGrid>
-                </article>
-              </NGridItem>
-
-              <NGridItem span="24 l:6">
-                <article id="default-model-settings" class="settings-default-card">
-                  <NFormItem :label="settingsCopy('默认提供商', 'Default provider')">
-                    <NSelect v-model:value="form.defaultProvider" :options="providerOptions" />
-                  </NFormItem>
-                  <NFormItem :label="settingsCopy('默认模型', 'Default model')">
-                    <NSelect
-                      v-model:value="defaultModel"
-                      filterable
-                      tag
-                      :options="defaultModelOptions"
-                      :disabled="!isBuiltinDefaultProvider"
-                    />
-                  </NFormItem>
-                  <NFormItem :label="settingsCopy('温度', 'Temperature')">
-                    <NInputNumber v-model:value="form.deepseekTemperature" :min="0" :max="2" :step="0.1" style="width: 100%" />
-                  </NFormItem>
-                  <NFormItem :label="settingsCopy('最大计划步骤', 'Max plan steps')">
-                    <NInputNumber v-model:value="form.maxSteps" :min="1" :max="100" style="width: 100%" />
-                  </NFormItem>
                 </article>
               </NGridItem>
             </NGrid>
@@ -181,10 +231,11 @@
                   <NFormItem label="GitHub PAT">
                     <NInput
                       v-model:value="form.githubPat"
-                      type="password"
-                      show-password-on="click"
-                      :placeholder="settingsCopy('留空以保留当前令牌', 'Leave blank to keep current token')"
-                    />
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="settingsCopy('留空以保留当前令牌', 'Leave blank to keep current token')"
+                    :input-props="{ autocomplete: 'new-password', name: 'paperagent-github-pat' }"
+                  />
                   </NFormItem>
                   <NFormItem :label="settingsCopy('文件系统允许的根目录', 'Filesystem allowed roots')">
                     <NInput
@@ -269,7 +320,13 @@
             <NInput v-model:value="modelForm.modelName" placeholder="例如：deepseek-v4-flash" />
           </NFormItem>
           <NFormItem :label="editingModelId ? 'API Key（留空保持不变）' : 'API Key'">
-            <NInput v-model:value="modelForm.apiKey" type="password" show-password-on="click" placeholder="sk-..." />
+            <NInput
+              v-model:value="modelForm.apiKey"
+              type="password"
+              show-password-on="click"
+              placeholder="sk-..."
+              :input-props="{ autocomplete: 'new-password', name: 'paperagent-custom-model-api-key' }"
+            />
           </NFormItem>
           <NSpace justify="end">
             <NButton @click="modelModalVisible = false">取消</NButton>
@@ -394,6 +451,9 @@ const defaultModelOptions = computed(() => {
     .filter((model) => model.providerKey === form.defaultProvider)
     .map((model) => ({ label: model.modelName, value: model.modelName }));
 });
+const defaultProviderLabel = computed(() => (
+  providerOptions.value.find((provider) => provider.value === form.defaultProvider)?.label || form.defaultProvider
+));
 const defaultModel = computed<string>({
   get() {
     if (form.defaultProvider === 'deepseek') {

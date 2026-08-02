@@ -665,7 +665,7 @@ html:not(.canvas-scale-active) .search-page--redesign .search-console-card .n-fo
 }
 
 .search-page--redesign .search-console-card .n-input--textarea textarea {
-  min-height: 52px !important;
+  min-height: 36px !important;
 }
 
 .search-page--redesign .search-static-pill {
@@ -725,7 +725,7 @@ html:not(.canvas-scale-active) .search-page--redesign .search-run-strip {
 }
 
 .search-page--redesign .search-result-table {
-  overflow: hidden;
+  overflow: clip;
   border: 0;
   border-radius: 0;
 }
@@ -742,6 +742,9 @@ html:not(.canvas-scale-active) .search-page--redesign .search-result-row {
 }
 
 .search-page--redesign .search-result-table__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 6px 8px;
   border-bottom: 1px solid var(--pa-line);
   color: var(--pa-text-muted);
@@ -925,6 +928,11 @@ html:not(.canvas-scale-active) .search-page--redesign .diagnostic-grid > div {
 }
 
 @media (max-width: 900px) {
+  .search-page--redesign .search-console-card .n-form > .n-grid,
+  html:not(.canvas-scale-active) .search-page--redesign .search-console-card .n-form > .n-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
   .search-page--redesign .search-result-table__head,
   html:not(.canvas-scale-active) .search-page--redesign .search-result-table__head {
     display: none !important;

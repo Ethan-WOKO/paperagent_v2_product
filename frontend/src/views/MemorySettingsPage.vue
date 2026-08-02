@@ -138,7 +138,7 @@
             </div>
 
             <details class="memory-record__details">
-              <summary>{{ t('memory.content.showFull') }}</summary>
+              <summary>{{ t('memory.content.showDetails') }}</summary>
               <dl class="memory-fields">
               <div>
                 <dt>{{ t('memory.field.scope') }}</dt>

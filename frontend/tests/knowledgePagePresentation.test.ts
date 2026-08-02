@@ -17,6 +17,9 @@ describe('Knowledge workspace presentation contract', () => {
     expect(knowledgeSource).toContain('v-if="uploadPanelOpen"');
     expect(knowledgeSource).toContain('@click="toggleUploadPanel"');
     expect(knowledgeSource).toContain('accept=".pdf,.docx,.txt,.md"');
+    expect(knowledgeSource).toContain('v-if="documents.length > 0" class="scholar-metric-strip kb-metric-strip"');
+    expect(knowledgeSource).toContain("'上传第一份文档'");
+    expect(knowledgeSource).toContain('documents.length > 0 || !uploadPanelOpen || loading');
   });
 
   it('keeps file selection keyboard accessible and preserves upload visibility controls', () => {
@@ -47,6 +50,8 @@ describe('Knowledge workspace presentation contract', () => {
     expect(searchSource).toContain('@keydown.enter.prevent="selectedIndex = index"');
     expect(searchSource).toContain('@keydown.space.prevent="selectedIndex = index"');
     expect(searchSource).toContain('diagnosticsVisible = false');
+    expect(searchSource).toContain('v-if="searching || results.length > 0"');
+    expect(searchSource).toContain(':autosize="{ minRows: 1, maxRows: 4 }"');
   });
 
   it('uses responsive semantic-token styling for both knowledge routes', () => {
@@ -55,5 +60,6 @@ describe('Knowledge workspace presentation contract', () => {
     expect(styles).toContain('.search-page--redesign');
     expect(styles).toContain('background: var(--pa-canvas);');
     expect(styles).toContain('@media (max-width: 760px)');
+    expect(styles).toContain('@media (max-width: 900px)');
   });
 });

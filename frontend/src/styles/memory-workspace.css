@@ -105,21 +105,21 @@
 }
 
 .product-shell .memory-page--redesign .n-spin-container {
-  min-height: 380px;
+  min-height: 0;
 }
 
 .product-shell .memory-page--redesign .memory-empty {
-  min-height: min(620px, calc(100dvh - 220px));
-  padding: 80px 24px;
-  border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-sm);
-  background: var(--pa-surface);
+  min-height: clamp(220px, 30vh, 320px);
+  padding: 44px 24px;
+  border-top: 1px solid var(--pa-line);
+  border-bottom: 1px solid var(--pa-line);
+  background: transparent;
 }
 
 .product-shell .memory-page--redesign .memory-list {
   display: grid;
   gap: 0;
-  overflow: hidden;
+  overflow: clip;
   border: 1px solid var(--pa-line);
   border-radius: var(--pa-radius-sm);
   background: var(--pa-surface);
@@ -140,6 +140,9 @@
 }
 
 .product-shell .memory-page--redesign .memory-list__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   min-height: 42px;
   border-bottom: 1px solid var(--pa-line);
   color: var(--pa-text-secondary);
@@ -472,6 +475,10 @@
 
   .product-shell .memory-page--redesign .memory-record__summary-cells > span {
     min-height: 58px;
+  }
+
+  .product-shell .memory-page--redesign .memory-record__summary-cells > span:last-child {
+    grid-column: 1 / -1;
   }
 
   .product-shell .memory-page--redesign .memory-record__details {

@@ -32,7 +32,7 @@
           <strong>{{ progressPercent }}%</strong>
           <NProgress type="line" :percentage="progressPercent" :show-indicator="false" status="success" />
         </div>
-        <div class="paper-hero-actions">
+        <div v-if="currentTask" class="paper-hero-actions">
           <NButton size="small" secondary :disabled="!currentTaskId" @click="refreshTask">{{ t('paper.refreshTasks') }}</NButton>
           <NButton size="small" secondary :disabled="!currentTaskId" @click="connectSse">{{ isEnglish ? 'Reconnect SSE' : '重连 SSE' }}</NButton>
           <NButton size="small" tertiary :disabled="!canPause" @click="handlePause">{{ isEnglish ? 'Pause' : '暂停' }}</NButton>
@@ -82,10 +82,10 @@
         </div>
       </section>
 
-      <div class="paper-polish-shell">
+      <div class="paper-polish-shell" :class="{ 'paper-polish-shell--single': !currentTask }">
         <main class="paper-polish-main">
           <NGrid :cols="24" :x-gap="14" :y-gap="14" responsive="screen" item-responsive>
-            <NGridItem span="24 l:11">
+            <NGridItem :span="currentTask ? '24 l:11' : '24'">
               <NCard class="workbench-card scholar-card paper-polish-card paper-input-card" :bordered="false">
                 <template #header>
                   <div class="section-title">{{ t('paper.inputManuscript') }}</div>
@@ -158,7 +158,7 @@
               </NCard>
             </NGridItem>
 
-            <NGridItem span="24 l:13">
+            <NGridItem v-if="currentTask" span="24 l:13">
               <NCard class="workbench-card scholar-card paper-polish-card paper-status-card-v2" :bordered="false">
                 <template #header>
                   <div class="section-title">Task Status</div>
@@ -202,7 +202,7 @@
             </NGridItem>
           </NGrid>
 
-          <NCard class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2" :bordered="false">
+          <NCard v-if="currentTask" class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2" :bordered="false">
             <template #header>
               <div class="section-title">Workflow</div>
             </template>
@@ -220,6 +220,7 @@
           </NCard>
 
           <NCard
+            v-if="currentTask"
             class="workbench-card scholar-card paper-polish-card"
             :class="{ 'paper-polish-card--collapsed': revisionSuggestionsCollapsed }"
             :bordered="false"
@@ -283,7 +284,7 @@
 
         </main>
 
-        <aside class="paper-polish-side">
+        <aside v-if="currentTask" class="paper-polish-side">
           <NCard class="workbench-card scholar-card paper-polish-card paper-side-tabs" :bordered="false">
             <NTabs v-model:value="activeSideTab" type="line" animated>
               <NTabPane name="evidence" :tab="isEnglish ? 'Evidence' : '证据'">
@@ -342,7 +343,7 @@
         </aside>
       </div>
 
-      <NCard id="paper-structure-confirmation" class="workbench-card scholar-card paper-polish-card paper-review-workspace-v2" :bordered="false">
+      <NCard v-if="currentTask" id="paper-structure-confirmation" class="workbench-card scholar-card paper-polish-card paper-review-workspace-v2" :bordered="false">
         <template #header>
           <div class="section-title">Review Workspace</div>
         </template>

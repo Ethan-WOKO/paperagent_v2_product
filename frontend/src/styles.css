@@ -5527,12 +5527,6 @@ body.theme-dark .score-band-track {
   background: var(--scholar-card-bg);
 }
 
-.settings-provider-card,
-.settings-default-card {
-  min-height: 190px;
-  padding: 16px;
-}
-
 .settings-provider-card__head,
 .settings-search-provider,
 .settings-toggle-row,
@@ -9139,22 +9133,6 @@ html:not(.canvas-scale-active) .chat-messages,
   line-height: 1.5 !important;
 }
 
-.app-frame--non-chat .settings-provider-card,
-.app-frame--non-chat .settings-default-card,
-.app-frame--non-chat .settings-search-provider,
-.app-frame--non-chat .settings-toggle-row,
-.app-frame--non-chat .settings-tool-row,
-.app-frame--non-chat .settings-skill-pill,
-.app-scale-root--canvas .settings-provider-card,
-.app-scale-root--canvas .settings-default-card,
-.app-scale-root--canvas .settings-search-provider,
-.app-scale-root--canvas .settings-toggle-row,
-.app-scale-root--canvas .settings-tool-row,
-.app-scale-root--canvas .settings-skill-pill {
-  padding: 12px !important;
-  border-radius: 12px !important;
-}
-
 /* Workspace conversations stay in a bounded rail; the page itself must not grow with history. */
 @media (min-width: 981px) {
   .chat-page.research-chat-page {
@@ -9199,57 +9177,6 @@ html:not(.canvas-scale-active) .chat-messages,
   min-height: 0 !important;
   overflow-y: auto !important;
   overscroll-behavior: contain;
-}
-
-.app-frame--non-chat .settings-provider-card__head,
-.app-frame--non-chat .settings-search-provider,
-.app-frame--non-chat .settings-toggle-row,
-.app-frame--non-chat .settings-tool-row,
-.app-frame--non-chat .settings-skill-pill,
-.app-scale-root--canvas .settings-provider-card__head,
-.app-scale-root--canvas .settings-search-provider,
-.app-scale-root--canvas .settings-toggle-row,
-.app-scale-root--canvas .settings-tool-row,
-.app-scale-root--canvas .settings-skill-pill {
-  gap: 10px !important;
-}
-
-.app-frame--non-chat .settings-search-provider__controls,
-.app-scale-root--canvas .settings-search-provider__controls {
-  gap: 0 !important;
-}
-
-.app-frame--non-chat .settings-search-provider__controls div,
-.app-scale-root--canvas .settings-search-provider__controls div {
-  padding: 8px 10px !important;
-}
-
-.app-frame--non-chat .settings-provider-card strong,
-.app-frame--non-chat .settings-search-provider strong,
-.app-frame--non-chat .settings-toggle-row strong,
-.app-frame--non-chat .settings-tool-row strong,
-.app-frame--non-chat .settings-skill-pill strong,
-.app-scale-root--canvas .settings-provider-card strong,
-.app-scale-root--canvas .settings-search-provider strong,
-.app-scale-root--canvas .settings-toggle-row strong,
-.app-scale-root--canvas .settings-tool-row strong,
-.app-scale-root--canvas .settings-skill-pill strong {
-  font-size: 13px !important;
-}
-
-.app-frame--non-chat .settings-provider-card span,
-.app-frame--non-chat .settings-search-provider span,
-.app-frame--non-chat .settings-default-card span,
-.app-frame--non-chat .settings-toggle-row span,
-.app-frame--non-chat .settings-tool-row span,
-.app-frame--non-chat .settings-skill-pill span,
-.app-scale-root--canvas .settings-provider-card span,
-.app-scale-root--canvas .settings-search-provider span,
-.app-scale-root--canvas .settings-default-card span,
-.app-scale-root--canvas .settings-toggle-row span,
-.app-scale-root--canvas .settings-tool-row span,
-.app-scale-root--canvas .settings-skill-pill span {
-  font-size: 11px !important;
 }
 
 .app-frame--non-chat .paper-polish-shell,

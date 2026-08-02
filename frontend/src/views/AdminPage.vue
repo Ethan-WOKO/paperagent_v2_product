@@ -139,8 +139,8 @@
         <template #header>邀请码使用情况</template>
         <NEmpty v-if="invites.length === 0" description="暂无邀请码" />
         <div v-else class="admin-list">
-          <div v-for="invite in invites" :key="invite.id" class="admin-list__row">
-            <strong>{{ invite.code }}</strong>
+          <div v-for="invite in invites" :key="invite.id" class="admin-list__row admin-invite-row">
+            <strong :title="invite.code">{{ invite.code }}</strong>
             <span>已使用 {{ invite.usedCount }} / {{ invite.maxUses }} 人</span>
             <NTag size="small" :type="invite.enabled ? 'success' : 'default'">{{ invite.enabled ? '可用' : '已停用' }}</NTag>
           </div>
@@ -342,8 +342,8 @@ onMounted(refresh);
 .admin-layout {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  align-items: stretch;
-  min-height: 610px;
+  align-items: start;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--pa-line);
   border-radius: var(--pa-radius-sm);
@@ -371,8 +371,9 @@ onMounted(refresh);
 }
 
 .admin-users {
-  max-height: none;
+  max-height: min(62vh, 560px);
   overflow: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--pa-line) !important;
 }
 
@@ -411,7 +412,7 @@ onMounted(refresh);
 .admin-user-row small {
   grid-column: 1 / -1;
   color: var(--pa-text-muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .admin-detail :deep(.n-card-header) {
@@ -437,7 +438,7 @@ onMounted(refresh);
 
 .admin-detail__title small {
   color: var(--pa-text-muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .admin-stat-grid {
@@ -463,14 +464,14 @@ onMounted(refresh);
 
 .admin-stat-grid span {
   color: var(--pa-text-muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .admin-stat-grid strong {
   margin-top: 4px;
   overflow-wrap: anywhere;
   color: var(--pa-text);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 630;
 }
 
@@ -493,13 +494,13 @@ onMounted(refresh);
 
 .admin-quota-form strong {
   color: var(--pa-text);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .admin-quota-form small {
   margin-top: 3px;
   color: var(--pa-text-muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .admin-quota-input {
@@ -531,19 +532,19 @@ onMounted(refresh);
   padding: 9px 2px;
   border-bottom: 1px solid var(--pa-line);
   color: var(--pa-text-secondary);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .admin-list__row strong {
   min-width: 130px;
   color: var(--pa-text);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .admin-list__row small {
   margin-left: auto;
   color: var(--pa-text-muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .admin-chat-session {
@@ -565,7 +566,7 @@ onMounted(refresh);
 .admin-chat-session > header small,
 .admin-message small {
   color: var(--pa-text-muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .admin-message {
@@ -583,14 +584,14 @@ onMounted(refresh);
   margin: 6px 0;
   overflow-wrap: anywhere;
   color: var(--pa-text-secondary);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.55;
   white-space: pre-wrap;
 }
 
 .admin-empty {
   display: grid;
-  min-height: 610px;
+  min-height: clamp(240px, 36vh, 380px);
   place-items: center;
 }
 
@@ -603,6 +604,26 @@ onMounted(refresh);
 
 .admin-invites :deep(.n-card__content) {
   padding: 0 12px 10px !important;
+}
+
+.admin-invites .admin-list {
+  max-height: clamp(240px, 36vh, 420px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.admin-invite-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+
+.admin-invite-row strong {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--pa-font-mono, ui-monospace, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 1080px) {
@@ -712,6 +733,14 @@ onMounted(refresh);
   .admin-list__row small {
     width: 100%;
     margin-left: 0;
+  }
+
+  .admin-invite-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-invite-row > span {
+    grid-column: 1 / -1;
   }
 
   .admin-chat-session > header {
