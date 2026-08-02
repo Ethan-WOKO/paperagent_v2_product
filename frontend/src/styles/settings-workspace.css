@@ -1,0 +1,644 @@
+/* Settings workspace: a continuous configuration sheet with compact anchor navigation. */
+.product-shell .settings-page--redesign {
+  width: min(1500px, calc(100% - 40px));
+  max-width: none;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 20px 0 64px;
+  color: var(--pa-text);
+}
+
+.product-shell .settings-page--redesign .settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--pa-line);
+}
+
+.product-shell .settings-page--redesign .settings-header h1 {
+  margin: 0;
+  color: var(--pa-text);
+  font-size: 22px;
+  font-weight: 680;
+  letter-spacing: -.02em;
+}
+
+.product-shell .settings-page--redesign .settings-header p {
+  max-width: 760px;
+  margin: 4px 0 3px;
+  color: var(--pa-text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.product-shell .settings-page--redesign .settings-header__updated {
+  color: var(--pa-text-muted);
+  font-size: 9px;
+}
+
+.product-shell .settings-page--redesign .settings-header > .n-button,
+.product-shell .settings-page--redesign .settings-footer-bar .n-button {
+  min-height: 34px;
+  border-radius: var(--pa-radius-sm) !important;
+  background: var(--pa-accent) !important;
+  box-shadow: none !important;
+  font-size: 11px;
+}
+
+.product-shell .settings-page--redesign .settings-demo-alert {
+  margin: 12px 0 0;
+  border-radius: var(--pa-radius-sm);
+}
+
+.product-shell .settings-page--redesign .settings-page__layout {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 18px;
+  padding-top: 14px;
+}
+
+.product-shell .settings-page--redesign .settings-section-nav {
+  position: sticky;
+  top: 14px;
+  align-self: start;
+  display: grid;
+  gap: 2px;
+  padding: 2px 18px 0 0;
+  border-right: 1px solid var(--pa-line);
+}
+
+.product-shell .settings-page--redesign .settings-section-nav a {
+  position: relative;
+  min-height: 34px;
+  padding: 9px 10px;
+  border-radius: var(--pa-radius-xs);
+  color: var(--pa-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.product-shell .settings-page--redesign .settings-section-nav a:first-child {
+  color: var(--pa-accent);
+  background: var(--pa-accent-soft);
+  font-weight: 650;
+}
+
+.product-shell .settings-page--redesign .settings-section-nav a:first-child::before {
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--pa-accent);
+  content: "";
+}
+
+.product-shell .settings-page--redesign .settings-form {
+  min-width: 0;
+}
+
+.product-shell .settings-page--redesign .settings-form > .n-space {
+  gap: 0 !important;
+}
+
+.product-shell .settings-page--redesign .settings-form > .n-space > .n-card,
+.product-shell .settings-page--redesign .settings-form > .n-space > .n-grid,
+.product-shell .settings-page--redesign .settings-form > .n-space > .settings-footer-bar {
+  width: 100%;
+}
+
+.product-shell .settings-page--redesign .settings-form > .n-space > .n-grid {
+  display: block !important;
+}
+
+.product-shell .settings-page--redesign .settings-form > .n-space > .n-grid > .n-grid-item {
+  width: 100% !important;
+}
+
+.product-shell .settings-page--redesign .settings-section-card {
+  scroll-margin-top: 18px;
+  border: 0 !important;
+  border-bottom: 1px solid var(--pa-line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.product-shell .settings-page--redesign .settings-section-card > .n-card-header {
+  min-height: 42px;
+  padding: 14px 8px 8px !important;
+  border: 0 !important;
+}
+
+.product-shell .settings-page--redesign .settings-section-card > .n-card__content {
+  padding: 0 8px 16px !important;
+}
+
+.product-shell .settings-page--redesign .section-title {
+  color: var(--pa-text);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.product-shell .settings-page--redesign .settings-provider-card,
+.product-shell .settings-page--redesign .settings-default-card,
+.product-shell .settings-page--redesign .settings-search-provider,
+.product-shell .settings-page--redesign .settings-skill-pill {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.product-shell .settings-page--redesign .settings-provider-card {
+  min-height: 100%;
+  padding: 0 12px 4px !important;
+  border: 1px solid var(--pa-line) !important;
+  border-radius: var(--pa-radius-sm) !important;
+}
+
+.product-shell .settings-page--redesign .settings-provider-card__head {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  margin-bottom: 7px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--pa-line) 72%, transparent);
+}
+
+.product-shell .settings-page--redesign .settings-provider-card__head > div:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+
+.product-shell .settings-page--redesign .settings-provider-card__head strong,
+.product-shell .settings-page--redesign .settings-search-provider strong,
+.product-shell .settings-page--redesign .settings-tool-row strong,
+.product-shell .settings-page--redesign .settings-toggle-row strong,
+.product-shell .settings-page--redesign .settings-skill-pill strong {
+  color: var(--pa-text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.product-shell .settings-page--redesign .settings-provider-card__head span,
+.product-shell .settings-page--redesign .settings-search-provider span,
+.product-shell .settings-page--redesign .settings-tool-row span,
+.product-shell .settings-page--redesign .settings-toggle-row span,
+.product-shell .settings-page--redesign .settings-skill-pill span {
+  color: var(--pa-text-muted);
+  font-size: 9px;
+}
+
+.product-shell .settings-page--redesign .settings-provider-mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--pa-line);
+  border-radius: 50%;
+  color: var(--pa-accent);
+  background: var(--pa-accent-soft);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.product-shell .settings-page--redesign .settings-provider-card .n-form-item,
+.product-shell .settings-page--redesign .settings-default-card .n-form-item,
+.product-shell .settings-page--redesign .settings-section-card .n-form-item {
+  margin-bottom: 7px;
+}
+
+.product-shell .settings-page--redesign .n-form-item-label {
+  color: var(--pa-text-secondary) !important;
+  font-size: 9px !important;
+}
+
+.product-shell .settings-page--redesign .n-input,
+.product-shell .settings-page--redesign .n-input-number,
+.product-shell .settings-page--redesign .n-base-selection,
+.product-shell .settings-page--redesign .n-dynamic-tags {
+  border-radius: var(--pa-radius-xs) !important;
+  box-shadow: none !important;
+}
+
+.product-shell .settings-page--redesign .settings-default-card {
+  display: grid;
+  align-content: start;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(150px, 0.8fr) minmax(240px, 1.35fr) minmax(110px, 0.55fr) minmax(130px, 0.65fr);
+  align-items: end;
+  gap: 0 14px;
+  min-height: 0;
+  padding: 10px 12px 3px !important;
+  border-top: 1px solid var(--pa-line) !important;
+  border-bottom: 1px solid var(--pa-line) !important;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity {
+  display: grid;
+  align-self: center;
+  min-width: 0;
+  padding: 0 14px 5px 0;
+  border-right: 1px solid var(--pa-line);
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity > span {
+  color: var(--pa-accent);
+  font-size: 9px;
+  font-weight: 680;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity > strong {
+  margin-top: 2px;
+  color: var(--pa-text);
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__identity > small {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--pa-text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__model .n-base-selection-label {
+  min-width: 0;
+}
+
+.product-shell .settings-page--redesign .settings-default-card__model .n-base-selection-input,
+.product-shell .settings-page--redesign .settings-default-card__model .n-base-selection-label__render-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog {
+  margin: 3px 0 7px;
+  border-top: 1px solid color-mix(in srgb, var(--pa-line) 72%, transparent);
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 45px;
+  padding: 7px 2px;
+  color: var(--pa-text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary::-webkit-details-marker {
+  display: none;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary > span:first-child {
+  display: grid;
+  min-width: 0;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary strong {
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog > summary small {
+  overflow: hidden;
+  margin-top: 1px;
+  color: var(--pa-text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--pa-text-secondary);
+  font-size: 9px;
+  font-weight: 620;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__count::after {
+  content: '⌄';
+  color: var(--pa-text-muted);
+  transition: transform 160ms ease;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog[open] .settings-model-catalog__count::after {
+  transform: rotate(180deg);
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__body {
+  max-height: 168px;
+  overflow: auto;
+  padding: 2px 2px 10px;
+}
+
+.product-shell .settings-page--redesign .settings-model-catalog__body .n-dynamic-tags {
+  width: 100%;
+}
+
+.product-shell .settings-page--redesign .settings-search-provider {
+  display: grid;
+  grid-template-columns: 30px minmax(240px, 1fr) auto minmax(360px, 1.25fr);
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px 2px !important;
+}
+
+.product-shell .settings-page--redesign .settings-search-provider > div:nth-child(2) {
+  display: grid;
+}
+
+.product-shell .settings-page--redesign .settings-search-provider__controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border-left: 1px solid var(--pa-line);
+}
+
+.product-shell .settings-page--redesign .settings-search-provider__controls > div {
+  display: grid;
+  gap: 2px;
+  padding: 0 12px;
+  border-right: 1px solid var(--pa-line);
+}
+
+.product-shell .settings-page--redesign .settings-toggle-row,
+.product-shell .settings-page--redesign .settings-tool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--pa-line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.product-shell .settings-page--redesign .settings-toggle-row > div,
+.product-shell .settings-page--redesign .settings-tool-row > div:nth-child(2) {
+  display: grid;
+}
+
+.product-shell .settings-page--redesign .settings-tool-row {
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+}
+
+.product-shell .settings-page--redesign .settings-skill-grid {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-xs);
+}
+
+.product-shell .settings-page--redesign .settings-skill-pill {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 10px !important;
+  border-bottom: 1px solid var(--pa-line) !important;
+}
+
+.product-shell .settings-page--redesign .settings-skill-pill:last-child {
+  border-bottom: 0 !important;
+}
+
+.product-shell .settings-page--redesign .settings-skill-pill > div:first-child {
+  display: grid;
+  min-width: 0;
+}
+
+.product-shell .settings-page--redesign .settings-footer-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 52px;
+  padding: 8px;
+  border-top: 1px solid var(--pa-line);
+  background: color-mix(in srgb, var(--pa-canvas) 92%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+@media (max-width: 1180px) {
+  .product-shell .settings-page--redesign {
+    width: min(100% - 28px, 980px);
+  }
+
+  .product-shell .settings-page--redesign .settings-page__layout {
+    grid-template-columns: 170px minmax(0, 1fr);
+  }
+
+  .product-shell .settings-page--redesign .settings-section-card:first-child > .n-card__content > .n-grid {
+    grid-template-columns: repeat(24, minmax(0, 1fr)) !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-card:first-child > .n-card__content > .n-grid > .n-grid-item {
+    grid-column: span 24 / span 24 !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-provider-card {
+    padding: 0 0 10px !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--pa-line) !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px 0 2px !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card__identity {
+    grid-column: 1 / -1;
+    padding: 0 0 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--pa-line);
+  }
+
+  .product-shell .settings-page--redesign .settings-search-provider {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+  }
+
+  .product-shell .settings-page--redesign .settings-search-provider__controls {
+    grid-column: 1 / -1;
+    margin-top: 8px;
+    border-top: 1px solid var(--pa-line);
+    border-left: 0;
+    padding-top: 9px;
+  }
+}
+
+@media (max-width: 900px) {
+  .product-shell .settings-page--redesign .settings-page__layout {
+    display: block;
+    padding-top: 10px;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-nav {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    display: flex;
+    gap: 3px;
+    overflow-x: auto;
+    margin: 0 -8px 6px;
+    padding: 7px 8px;
+    border: 0;
+    border-bottom: 1px solid var(--pa-line);
+    background: var(--pa-canvas);
+    scrollbar-width: none;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-nav a {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 7px 9px;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .product-shell .settings-page--redesign {
+    width: 100%;
+    min-height: calc(100dvh - 60px);
+    padding: 12px 12px 72px !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 38px;
+  }
+
+  .product-shell .settings-page--redesign .settings-header > .n-button {
+    width: 100%;
+  }
+
+  .product-shell .settings-page--redesign .settings-page__layout {
+    display: block;
+    padding-top: 10px;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-nav {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    display: flex;
+    gap: 3px;
+    overflow-x: auto;
+    margin: 0 -12px 6px;
+    padding: 7px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--pa-line);
+    background: var(--pa-canvas);
+    scrollbar-width: none;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-nav a {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 7px 9px;
+    white-space: nowrap;
+  }
+
+  .product-shell .settings-page--redesign .settings-section-card > .n-card-header,
+  .product-shell .settings-page--redesign .settings-section-card > .n-card__content {
+    padding-right: 0 !important;
+    padding-left: 0 !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-provider-card__head {
+    grid-template-columns: 28px minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-provider-card__head > div:nth-child(2) {
+    grid-column: 2 / -1;
+    grid-row: 1;
+  }
+
+  .product-shell .settings-page--redesign .settings-provider-card__head > .n-tag {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    margin-left: 0 !important;
+  }
+
+  .product-shell .settings-page--redesign .settings-provider-card__head > .n-button {
+    grid-column: 2 / -1;
+    grid-row: 3;
+    width: 100%;
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card__identity {
+    grid-column: auto;
+  }
+
+  .product-shell .settings-page--redesign .settings-default-card__identity > small,
+  .product-shell .settings-page--redesign .settings-model-catalog > summary small {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .product-shell .settings-page--redesign .settings-search-provider {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .product-shell .settings-page--redesign .settings-search-provider > .n-tag {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .product-shell .settings-page--redesign .settings-search-provider__controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .product-shell .settings-page--redesign .settings-search-provider__controls > div {
+    min-height: 42px;
+    padding: 7px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--pa-line);
+  }
+
+  .product-shell .settings-page--redesign .settings-skill-pill {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .product-shell .settings-page--redesign .settings-skill-pill > .n-space {
+    width: 100%;
+  }
+
+  .product-shell .settings-page--redesign .settings-footer-bar {
+    bottom: 58px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .product-shell .settings-page--redesign .settings-footer-bar .n-button {
+    width: 100%;
+  }
+}

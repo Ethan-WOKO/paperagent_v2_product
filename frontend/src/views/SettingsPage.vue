@@ -1,120 +1,176 @@
 <template>
   <AppLayout>
-    <div class="settings-page workbench-page scholar-page scholar-page--settings">
-      <WorkspaceHero
-        kicker="Settings"
-        title="Settings"
-        subtitle="Configure model providers, agent behavior, MCP permissions, skills, and credentials without exposing secrets."
-        storage-key="yanban.hero.settings"
-      >
-        <template #actions>
-          <NSpace align="center">
-            <span class="chat-hint">Last updated: {{ updatedAtText }}</span>
-            <NButton type="primary" :loading="saving" :disabled="isDemoUser" @click="handleSave">Save settings</NButton>
-          </NSpace>
-        </template>
-      </WorkspaceHero>
+    <main class="settings-page settings-page--redesign workbench-page scholar-page scholar-page--settings">
+      <header class="settings-header">
+        <div>
+          <h1>{{ settingsCopy('设置', 'Settings') }}</h1>
+          <p>{{ settingsCopy('配置模型、Agent 工具权限与凭据。密钥只显示配置状态，不会回显原值。', 'Configure models, Agent tool permissions, and credentials without exposing stored secrets.') }}</p>
+          <span class="settings-header__updated">{{ settingsCopy('最后更新', 'Last updated') }} · {{ updatedAtText }}</span>
+        </div>
+        <NButton type="primary" :loading="saving" :disabled="isDemoUser" @click="handleSave">
+          {{ settingsCopy('保存设置', 'Save settings') }}
+        </NButton>
+      </header>
 
       <NAlert v-if="isDemoUser" type="info" class="settings-demo-alert" title="Demo 账号为只读配置">
         游客体验可以使用预置模型和样本文档，但不能修改 API Key、模型、MCP、Skills 或自定义模型。
       </NAlert>
 
-      <NForm :model="form" label-placement="top">
+      <div class="settings-page__layout">
+        <nav class="settings-section-nav" :aria-label="settingsCopy('设置分区', 'Settings sections')">
+          <a href="#provider-settings">{{ settingsCopy('模型提供商', 'Model providers') }}</a>
+          <a href="#default-model-settings">{{ settingsCopy('默认模型', 'Default model') }}</a>
+          <a href="#agent-settings">{{ settingsCopy('Agent 与 MCP / 工具', 'Agent & MCP / Tools') }}</a>
+          <a href="#skills-settings">{{ settingsCopy('技能', 'Skills') }}</a>
+          <a href="#custom-model-settings">{{ settingsCopy('自定义模型', 'Custom models') }}</a>
+        </nav>
+
+        <NForm class="settings-form" :model="form" label-placement="top">
         <NSpace vertical size="large">
-          <NCard class="workbench-card scholar-card settings-section-card" :bordered="false">
+          <NCard id="provider-settings" class="workbench-card scholar-card settings-section-card" :bordered="false">
             <template #header>
-              <div class="section-title">Model Providers</div>
+              <div class="section-title">{{ settingsCopy('模型提供商', 'Model providers') }}</div>
             </template>
 
             <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-              <NGridItem span="24 l:9">
-                <article class="settings-provider-card">
-                  <div class="settings-provider-card__head">
-                    <div class="settings-provider-mark settings-provider-mark--deepseek">DS</div>
-                    <div>
-                      <strong>DeepSeek</strong>
-                      <span>Reasoning and drafting provider</span>
-                    </div>
-                    <NTag :type="deepseekConfigured ? 'success' : 'warning'" round>
-                      {{ deepseekConfigured ? 'API key configured' : 'API key missing' }}
-                    </NTag>
-                    <NButton size="small" secondary :loading="refreshingProvider === 'deepseek'" :disabled="isDemoUser" @click="handleRefreshModels('deepseek')">
-                      Refresh models
-                    </NButton>
+              <NGridItem span="24">
+                <article id="default-model-settings" class="settings-default-card">
+                  <div class="settings-default-card__identity">
+                    <span>{{ settingsCopy('当前生效', 'Active configuration') }}</span>
+                    <strong>{{ defaultProviderLabel }}</strong>
+                    <small>{{ defaultModel }}</small>
                   </div>
-                  <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
-                    <NFormItemGi span="2 m:1" label="Model name">
-                      <NSelect v-model:value="form.deepseekModel" filterable tag :options="deepseekModelOptions" />
-                    </NFormItemGi>
-                    <NFormItemGi span="2 m:1" label="Available models">
-                      <NDynamicTags v-model:value="form.deepseekModels" :max="50" />
-                    </NFormItemGi>
-                    <NFormItemGi span="2 m:1" label="API Key">
-                      <NInput
-                        v-model:value="form.deepseekApiKey"
-                        type="password"
-                        show-password-on="click"
-                        placeholder="Leave blank to keep current key"
-                      />
-                    </NFormItemGi>
-                  </NGrid>
-                </article>
-              </NGridItem>
-
-              <NGridItem span="24 l:9">
-                <article class="settings-provider-card">
-                  <div class="settings-provider-card__head">
-                    <div class="settings-provider-mark settings-provider-mark--glm">GL</div>
-                    <div>
-                      <strong>GLM</strong>
-                      <span>Alternate provider for evaluation</span>
-                    </div>
-                    <NTag :type="glmConfigured ? 'success' : 'warning'" round>
-                      {{ glmConfigured ? 'API key configured' : 'API key missing' }}
-                    </NTag>
-                    <NButton size="small" secondary :loading="refreshingProvider === 'glm'" :disabled="isDemoUser" @click="handleRefreshModels('glm')">
-                      Sync catalog
-                    </NButton>
-                  </div>
-                  <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
-                    <NFormItemGi span="2 m:1" label="Model name">
-                      <NSelect v-model:value="form.glmModel" filterable tag :options="glmModelOptions" />
-                    </NFormItemGi>
-                    <NFormItemGi span="2 m:1" label="Available models">
-                      <NDynamicTags v-model:value="form.glmModels" :max="50" />
-                    </NFormItemGi>
-                    <NFormItemGi span="2 m:1" label="API Key">
-                      <NInput
-                        v-model:value="form.glmApiKey"
-                        type="password"
-                        show-password-on="click"
-                        placeholder="Leave blank to keep current key"
-                      />
-                    </NFormItemGi>
-                  </NGrid>
-                </article>
-              </NGridItem>
-
-              <NGridItem span="24 l:6">
-                <article class="settings-default-card">
-                  <NFormItem label="Default provider">
-                    <NSelect v-model:value="form.defaultProvider" :options="providerOptions" />
+                  <NFormItem :label="settingsCopy('默认提供商', 'Default provider')">
+                    <NSelect
+                      v-model:value="form.defaultProvider"
+                      :options="providerOptions"
+                      :input-props="{ autocomplete: 'off', name: 'paperagent-default-provider' }"
+                    />
                   </NFormItem>
-                  <NFormItem label="Default model">
+                  <NFormItem class="settings-default-card__model" :label="settingsCopy('默认模型', 'Default model')">
                     <NSelect
                       v-model:value="defaultModel"
                       filterable
                       tag
                       :options="defaultModelOptions"
                       :disabled="!isBuiltinDefaultProvider"
+                      :input-props="{ autocomplete: 'off', name: 'paperagent-default-model' }"
                     />
                   </NFormItem>
-                  <NFormItem label="Temperature">
+                  <NFormItem :label="settingsCopy('温度', 'Temperature')">
                     <NInputNumber v-model:value="form.deepseekTemperature" :min="0" :max="2" :step="0.1" style="width: 100%" />
                   </NFormItem>
-                  <NFormItem label="Max plan steps">
+                  <NFormItem :label="settingsCopy('最大计划步骤', 'Max plan steps')">
                     <NInputNumber v-model:value="form.maxSteps" :min="1" :max="100" style="width: 100%" />
                   </NFormItem>
+                </article>
+              </NGridItem>
+
+              <NGridItem span="24 l:12">
+                <article class="settings-provider-card">
+                  <div class="settings-provider-card__head">
+                    <div class="settings-provider-mark settings-provider-mark--deepseek">DS</div>
+                    <div>
+                      <strong>DeepSeek</strong>
+                      <span>{{ settingsCopy('用于推理与写作', 'Reasoning and drafting provider') }}</span>
+                    </div>
+                    <NTag :type="deepseekConfigured ? 'success' : 'warning'" round>
+                      {{ deepseekConfigured ? settingsCopy('API 密钥已配置', 'API key configured') : settingsCopy('缺少 API 密钥', 'API key missing') }}
+                    </NTag>
+                    <NButton size="small" secondary :loading="refreshingProvider === 'deepseek'" :disabled="isDemoUser" @click="handleRefreshModels('deepseek')">
+                      {{ settingsCopy('刷新模型', 'Refresh models') }}
+                    </NButton>
+                  </div>
+                  <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
+                    <NFormItemGi span="2 m:1" :label="settingsCopy('当前模型', 'Current model')">
+                      <NSelect
+                        v-model:value="form.deepseekModel"
+                        filterable
+                        tag
+                        :options="deepseekModelOptions"
+                        :input-props="{ autocomplete: 'off', name: 'paperagent-deepseek-model' }"
+                      />
+                    </NFormItemGi>
+                    <NFormItemGi span="2 m:1" label="API Key">
+                      <NInput
+                        v-model:value="form.deepseekApiKey"
+                        type="password"
+                        show-password-on="click"
+                        :placeholder="settingsCopy('留空以保留当前密钥', 'Leave blank to keep current key')"
+                        :input-props="{ autocomplete: 'new-password', name: 'paperagent-deepseek-api-key' }"
+                      />
+                    </NFormItemGi>
+                    <NGridItem span="2">
+                      <details class="settings-model-catalog">
+                        <summary>
+                          <span>
+                            <strong>{{ settingsCopy('可用模型目录', 'Available model catalog') }}</strong>
+                            <small>{{ settingsCopy(`当前使用 ${form.deepseekModel}`, `Selected ${form.deepseekModel}`) }}</small>
+                          </span>
+                          <span class="settings-model-catalog__count">
+                            {{ settingsCopy(`${form.deepseekModels.length} 个模型`, `${form.deepseekModels.length} models`) }}
+                          </span>
+                        </summary>
+                        <div class="settings-model-catalog__body">
+                          <NDynamicTags v-model:value="form.deepseekModels" :max="50" />
+                        </div>
+                      </details>
+                    </NGridItem>
+                  </NGrid>
+                </article>
+              </NGridItem>
+
+              <NGridItem span="24 l:12">
+                <article class="settings-provider-card">
+                  <div class="settings-provider-card__head">
+                    <div class="settings-provider-mark settings-provider-mark--glm">GL</div>
+                    <div>
+                      <strong>GLM</strong>
+                      <span>{{ settingsCopy('用于评测的备用提供商', 'Alternate provider for evaluation') }}</span>
+                    </div>
+                    <NTag :type="glmConfigured ? 'success' : 'warning'" round>
+                      {{ glmConfigured ? settingsCopy('API 密钥已配置', 'API key configured') : settingsCopy('缺少 API 密钥', 'API key missing') }}
+                    </NTag>
+                    <NButton size="small" secondary :loading="refreshingProvider === 'glm'" :disabled="isDemoUser" @click="handleRefreshModels('glm')">
+                      {{ settingsCopy('同步模型目录', 'Sync catalog') }}
+                    </NButton>
+                  </div>
+                  <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
+                    <NFormItemGi span="2 m:1" :label="settingsCopy('当前模型', 'Current model')">
+                      <NSelect
+                        v-model:value="form.glmModel"
+                        filterable
+                        tag
+                        :options="glmModelOptions"
+                        :input-props="{ autocomplete: 'off', name: 'paperagent-glm-model' }"
+                      />
+                    </NFormItemGi>
+                    <NFormItemGi span="2 m:1" label="API Key">
+                      <NInput
+                        v-model:value="form.glmApiKey"
+                        type="password"
+                        show-password-on="click"
+                        :placeholder="settingsCopy('留空以保留当前密钥', 'Leave blank to keep current key')"
+                        :input-props="{ autocomplete: 'new-password', name: 'paperagent-glm-api-key' }"
+                      />
+                    </NFormItemGi>
+                    <NGridItem span="2">
+                      <details class="settings-model-catalog">
+                        <summary>
+                          <span>
+                            <strong>{{ settingsCopy('可用模型目录', 'Available model catalog') }}</strong>
+                            <small>{{ settingsCopy(`当前使用 ${form.glmModel}`, `Selected ${form.glmModel}`) }}</small>
+                          </span>
+                          <span class="settings-model-catalog__count">
+                            {{ settingsCopy(`${form.glmModels.length} 个模型`, `${form.glmModels.length} models`) }}
+                          </span>
+                        </summary>
+                        <div class="settings-model-catalog__body">
+                          <NDynamicTags v-model:value="form.glmModels" :max="50" />
+                        </div>
+                      </details>
+                    </NGridItem>
+                  </NGrid>
                 </article>
               </NGridItem>
             </NGrid>
@@ -122,27 +178,27 @@
 
           <NCard class="workbench-card scholar-card settings-section-card" :bordered="false">
             <template #header>
-              <div class="section-title">Web Search Provider</div>
+              <div class="section-title">{{ settingsCopy('网页搜索提供商', 'Web search provider') }}</div>
             </template>
             <div class="settings-search-provider">
               <div class="settings-provider-mark settings-provider-mark--tavily">TV</div>
               <div>
-                <strong>Tavily / formal web search</strong>
-                <span>Configured through backend environment variables such as WEB_SEARCH_PROVIDER and TAVILY_API_KEY.</span>
+                <strong>{{ settingsCopy('Tavily / 正式网页搜索', 'Tavily / formal web search') }}</strong>
+                <span>{{ settingsCopy('通过 WEB_SEARCH_PROVIDER、TAVILY_API_KEY 等后端环境变量配置。', 'Configured through backend environment variables such as WEB_SEARCH_PROVIDER and TAVILY_API_KEY.') }}</span>
               </div>
-              <NTag type="info" round>Credit-saving defaults enabled</NTag>
+              <NTag type="info" round>{{ settingsCopy('已启用节省额度的默认配置', 'Credit-saving defaults enabled') }}</NTag>
               <div class="settings-search-provider__controls">
                 <div>
-                  <span>Search depth</span>
-                  <strong>basic by default</strong>
+                  <span>{{ settingsCopy('搜索深度', 'Search depth') }}</span>
+                  <strong>{{ settingsCopy('默认 basic', 'basic by default') }}</strong>
                 </div>
                 <div>
-                  <span>Cache TTL</span>
-                  <strong>15 min default</strong>
+                  <span>{{ settingsCopy('缓存有效期', 'Cache TTL') }}</span>
+                  <strong>{{ settingsCopy('默认 15 分钟', '15 min default') }}</strong>
                 </div>
                 <div>
-                  <span>Max results</span>
-                  <strong>8 default</strong>
+                  <span>{{ settingsCopy('最大结果数', 'Max results') }}</span>
+                  <strong>{{ settingsCopy('默认 8 条', '8 default') }}</strong>
                 </div>
               </div>
             </div>
@@ -150,15 +206,15 @@
 
           <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
             <NGridItem span="24 l:12">
-              <NCard class="workbench-card scholar-card settings-section-card" :bordered="false">
+              <NCard id="agent-settings" class="workbench-card scholar-card settings-section-card" :bordered="false">
                 <template #header>
-                  <div class="section-title">Agent and MCP / Tools</div>
+                  <div class="section-title">{{ settingsCopy('Agent 与 MCP / 工具', 'Agent and MCP / Tools') }}</div>
                 </template>
                 <NSpace vertical size="large">
                   <div class="settings-toggle-row">
                     <div>
-                      <strong>Knowledge Base RAG</strong>
-                      <span>New sessions can use private retrieval by default.</span>
+                      <strong>{{ settingsCopy('知识库 RAG', 'Knowledge Base RAG') }}</strong>
+                      <span>{{ settingsCopy('新会话默认可以使用私有检索。', 'New sessions can use private retrieval by default.') }}</span>
                     </div>
                     <NSwitch v-model:value="form.ragDefaultEnabled" />
                   </div>
@@ -166,26 +222,27 @@
                     <div class="settings-provider-mark settings-provider-mark--github">GH</div>
                     <div>
                       <strong>GitHub MCP</strong>
-                      <span>Repository access for code and documentation workflows.</span>
+                      <span>{{ settingsCopy('为代码和文档工作流提供仓库访问。', 'Repository access for code and documentation workflows.') }}</span>
                     </div>
                     <NTag :type="githubConfigured ? 'success' : 'warning'" round>
-                      {{ githubConfigured ? 'PAT configured' : 'PAT missing' }}
+                      {{ githubConfigured ? settingsCopy('PAT 已配置', 'PAT configured') : settingsCopy('缺少 PAT', 'PAT missing') }}
                     </NTag>
                   </div>
                   <NFormItem label="GitHub PAT">
                     <NInput
                       v-model:value="form.githubPat"
-                      type="password"
-                      show-password-on="click"
-                      placeholder="Leave blank to keep current token"
-                    />
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="settingsCopy('留空以保留当前令牌', 'Leave blank to keep current token')"
+                    :input-props="{ autocomplete: 'new-password', name: 'paperagent-github-pat' }"
+                  />
                   </NFormItem>
-                  <NFormItem label="Filesystem allowed roots">
+                  <NFormItem :label="settingsCopy('文件系统允许的根目录', 'Filesystem allowed roots')">
                     <NInput
                       v-model:value="filesystemRootsText"
                       type="textarea"
                       :autosize="{ minRows: 4, maxRows: 7 }"
-                      placeholder="One path per line, for example: workspace"
+                      :placeholder="settingsCopy('每行一个路径，例如：workspace', 'One path per line, for example: workspace')"
                     />
                   </NFormItem>
                 </NSpace>
@@ -193,22 +250,22 @@
             </NGridItem>
 
             <NGridItem span="24 l:12">
-              <NCard class="workbench-card scholar-card settings-section-card" :bordered="false">
+              <NCard id="skills-settings" class="workbench-card scholar-card settings-section-card" :bordered="false">
                 <template #header>
-                  <div class="section-title">Skills</div>
+                  <div class="section-title">{{ settingsCopy('技能', 'Skills') }}</div>
                 </template>
                 <template #header-extra>
-                  <span class="chat-hint">Loaded from backend skill registry</span>
+                  <span class="chat-hint">{{ settingsCopy('从后端 Skill 注册表加载', 'Loaded from backend skill registry') }}</span>
                 </template>
                 <div class="settings-skill-grid">
-                  <NEmpty v-if="skills.length === 0" description="No skills found." />
+                  <NEmpty v-if="skills.length === 0" :description="settingsCopy('暂无可用技能。', 'No skills found.')" />
                   <article v-for="skill in skills" :key="skill.id" class="settings-skill-pill">
                     <div>
                       <strong>{{ skill.name }}</strong>
                       <span>{{ skill.source }}</span>
                     </div>
                     <NCheckbox :checked="!disabledSkillsSet.has(skill.id)" @update:checked="(checked) => toggleSkill(skill.id, checked)">
-                      Enabled
+                      {{ settingsCopy('已启用', 'Enabled') }}
                     </NCheckbox>
                   </article>
                 </div>
@@ -216,9 +273,9 @@
             </NGridItem>
           </NGrid>
 
-          <NCard class="workbench-card scholar-card settings-section-card" :bordered="false">
+          <NCard id="custom-model-settings" class="workbench-card scholar-card settings-section-card" :bordered="false">
             <template #header>
-              <div class="section-title">Custom Models</div>
+              <div class="section-title">{{ settingsCopy('自定义模型', 'Custom models') }}</div>
             </template>
             <template #header-extra>
               <NButton size="small" type="primary" :disabled="isDemoUser" @click="openCreateModelModal">+ 添加模型</NButton>
@@ -233,7 +290,7 @@
                 </div>
                 <NSpace>
                   <NTag :type="model.apiKeyConfigured ? 'success' : 'warning'" round size="small">
-                    {{ model.apiKeyConfigured ? 'Key set' : 'Key missing' }}
+                  {{ model.apiKeyConfigured ? settingsCopy('密钥已配置', 'Key set') : settingsCopy('缺少密钥', 'Key missing') }}
                   </NTag>
                   <NButton size="small" :loading="testingModelId === model.id" @click="handleTestModel(model)">测试</NButton>
                   <NButton size="small" secondary :disabled="isDemoUser" @click="openEditModelModal(model)">编辑</NButton>
@@ -244,11 +301,12 @@
           </NCard>
 
           <div class="settings-footer-bar">
-            <span class="chat-hint">Changes are saved to the backend settings store. Blank secret fields keep existing values.</span>
-            <NButton type="primary" :loading="saving" @click="handleSave">Save settings</NButton>
+            <span class="chat-hint">{{ settingsCopy('更改将保存到后端设置；密钥字段留空会保留现有值。', 'Changes are saved to backend settings; blank secret fields keep existing values.') }}</span>
+            <NButton type="primary" :loading="saving" :disabled="isDemoUser" @click="handleSave">{{ settingsCopy('保存设置', 'Save settings') }}</NButton>
           </div>
         </NSpace>
-      </NForm>
+        </NForm>
+      </div>
 
       <NModal v-model:show="modelModalVisible" preset="card" :title="editingModelId ? '编辑自定义模型' : '添加自定义模型'" style="width: 520px" :bordered="false">
         <NForm label-placement="top">
@@ -262,7 +320,13 @@
             <NInput v-model:value="modelForm.modelName" placeholder="例如：deepseek-v4-flash" />
           </NFormItem>
           <NFormItem :label="editingModelId ? 'API Key（留空保持不变）' : 'API Key'">
-            <NInput v-model:value="modelForm.apiKey" type="password" show-password-on="click" placeholder="sk-..." />
+            <NInput
+              v-model:value="modelForm.apiKey"
+              type="password"
+              show-password-on="click"
+              placeholder="sk-..."
+              :input-props="{ autocomplete: 'new-password', name: 'paperagent-custom-model-api-key' }"
+            />
           </NFormItem>
           <NSpace justify="end">
             <NButton @click="modelModalVisible = false">取消</NButton>
@@ -270,7 +334,7 @@
           </NSpace>
         </NForm>
       </NModal>
-    </div>
+    </main>
   </AppLayout>
 </template>
 
@@ -297,7 +361,6 @@ import {
 } from 'naive-ui';
 import { computed, onMounted, reactive, ref } from 'vue';
 import AppLayout from '@/components/AppLayout.vue';
-import WorkspaceHero from '@/components/WorkspaceHero.vue';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { getSettings, updateSettings, refreshProviderModels, createModel, updateModel, deleteModel, testModel, type UserModelResponse, type UserSettingsResponse } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
@@ -339,6 +402,7 @@ const providerOptions = computed(() => {
 const saving = ref(false);
 const authStore = useAuthStore();
 const { isEnglish, locale } = useI18n();
+const settingsCopy = (zh: string, en: string) => isEnglish.value ? en : zh;
 const deepseekConfigured = ref(false);
 const glmConfigured = ref(false);
 const githubConfigured = ref(false);
@@ -387,6 +451,9 @@ const defaultModelOptions = computed(() => {
     .filter((model) => model.providerKey === form.defaultProvider)
     .map((model) => ({ label: model.modelName, value: model.modelName }));
 });
+const defaultProviderLabel = computed(() => (
+  providerOptions.value.find((provider) => provider.value === form.defaultProvider)?.label || form.defaultProvider
+));
 const defaultModel = computed<string>({
   get() {
     if (form.defaultProvider === 'deepseek') {

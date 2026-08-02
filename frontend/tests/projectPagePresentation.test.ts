@@ -6,10 +6,10 @@ const pagePath = fileURLToPath(new URL('../src/views/ProjectPreviewPage.vue', im
 const source = readFileSync(pagePath, 'utf8');
 
 describe('Project page presentation contract', () => {
-  it('keeps the frozen sidebar allocation while stabilizing every title row', () => {
-    expect(source).toContain('.project-sidebar-section--projects { flex: 0 1 25%; min-height: 86px; }');
-    expect(source).toContain('.project-sidebar-section--chats { flex: 0 1 25%; min-height: 86px; }');
-    expect(source).toContain('.project-sidebar-section--file-browser { flex: 1 1 50%; min-height: 0; }');
+  it('lets short project and chat lists size to content while files consume the remaining rail', () => {
+    expect(source).toContain('.project-sidebar-section--chats { flex: 0 0 auto; min-height: 0; max-height: 180px; }');
+    expect(source).toContain('.project-sidebar-section--file-browser { flex: 1 1 auto; min-height: 0; }');
+    expect(source).toContain('.project-sidebar-section--chats .project-conversation-history--sidebar { flex: 0 1 auto; max-height: 136px; }');
     expect(source).toContain('flex: 0 0 32px; min-width: 0; height: 32px; display: flex; align-items: center;');
     expect(source).not.toContain('.project-sidebar-section--collapsed .project-sidebar-section__toggle');
   });
@@ -39,9 +39,23 @@ describe('Project page presentation contract', () => {
     expect(source).toContain('class="v2-task-card__result"');
     expect(source).toContain(':content="task.finalText"');
     expect(source).toContain('class="v2-conversation__process"');
+    expect(source.indexOf('class="v2-conversation__process"')).toBeLessThan(source.indexOf('class="v2-task-card__result"'));
+    expect(source).toContain(':open="task.status === \'PLANNING\' || task.status === \'RUNNING\'"');
+    expect(source).toContain("? '正在处理'");
+    expect(source).toContain(": '已处理'");
     expect(source).not.toContain('class="v2-conversation__process" open');
     expect(source).toContain('v-for="step in task.steps"');
     expect(source).not.toContain('item.plan.finalAnswer');
+  });
+
+  it('supports a persistent focus view and consumes shared semantic tokens', () => {
+    expect(source).toContain("'project-workspace__grid--context-collapsed': contextRailCollapsed");
+    expect(source).toContain("contextRailCollapsed ? '展开项目资料' : '收起项目资料'");
+    expect(source).toContain('--project-canvas: var(--pa-canvas);');
+    expect(source).toContain('--project-surface: var(--pa-surface);');
+    expect(source).toContain('inspectorOpen.value = false;');
+    expect(source).toContain('.v2-conversation { flex: 1 1 auto;');
+    expect(source).toContain('.v2-conversation__tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto;');
   });
 
   it('prevents inspector pills and execution metadata from wrapping or overflowing', () => {

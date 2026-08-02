@@ -244,7 +244,9 @@ describe('V2 自然语言 API 与页面接入', () => {
   it('展示一一对应的结果、折叠过程、输出位置并复用 Candidate 检查入口', () => {
     expect(page).toContain('v-for="task in v2TurnHistory"');
     expect(page).toContain('<strong>Agent 结果</strong>');
-    expect(page).toContain('<summary>查看执行过程</summary>');
+    expect(page).toContain('class="v2-conversation__process"');
+    expect(page).toContain(':open="task.status === \'PLANNING\' || task.status === \'RUNNING\'"');
+    expect(page).toContain("task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理'");
     expect(page).toContain('结果：{{ step.detail }}');
     expect(page).toContain('生成内容位置');
     expect(page).toContain('原项目尚未修改');

@@ -1,0 +1,501 @@
+/* Public access: one calm research workspace, shared by login, registration, and Demo. */
+html:not(.canvas-scale-active):has(.public-shell),
+html:not(.canvas-scale-active) body:has(.public-shell),
+html:not(.canvas-scale-active) #app:has(.public-shell) {
+  width: 100% !important;
+  min-width: 0 !important;
+  overflow-x: hidden !important;
+}
+
+.public-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 100dvh;
+  max-width: 100vw;
+  overflow-x: hidden;
+  color: var(--pa-text);
+  background: var(--pa-canvas);
+}
+
+.public-shell__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: min(1440px, calc(100% - 40px));
+  min-height: 64px;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--pa-line);
+}
+
+.public-shell__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--pa-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.public-shell__brand img {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--pa-radius-sm);
+}
+
+.public-shell__tools {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.public-shell__tools .language-toggle {
+  width: 74px;
+  height: 30px;
+  border-color: var(--pa-line);
+  border-radius: var(--pa-radius-sm);
+  background: var(--pa-surface-muted);
+}
+
+.public-shell__tools .language-toggle button {
+  height: 24px;
+  border-radius: var(--pa-radius-xs);
+  color: var(--pa-text-muted);
+}
+
+.public-shell__tools .language-toggle button.active {
+  color: var(--pa-text);
+  background: var(--pa-surface);
+  box-shadow: none;
+}
+
+.public-shell__theme {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-sm);
+  color: var(--pa-text-secondary);
+  background: var(--pa-surface-muted);
+  cursor: pointer;
+}
+
+.public-shell__brand:focus-visible,
+.public-shell__theme:focus-visible,
+.public-demo__question-list button:focus-visible {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: 2px;
+}
+
+.public-shell__content {
+  display: grid;
+  min-height: 0;
+  place-items: center;
+}
+
+.public-shell .site-filing-footer {
+  padding: 8px 24px 12px;
+  color: var(--pa-text-muted);
+  font-size: 9px;
+}
+
+.public-access {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+  width: min(1080px, calc(100% - 40px));
+  min-height: 500px;
+  margin: 40px auto;
+  overflow: hidden;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-md);
+  background: var(--pa-surface);
+}
+
+.public-access__intro {
+  position: relative;
+  display: grid;
+  align-content: space-between;
+  min-width: 0;
+  padding: 42px;
+  border-right: 1px solid var(--pa-line);
+  background:
+    linear-gradient(var(--pa-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--pa-line) 1px, transparent 1px),
+    var(--pa-surface-muted);
+  background-size: 40px 40px;
+}
+
+.public-access__intro::after {
+  align-self: end;
+  width: 92px;
+  height: 2px;
+  margin-top: 80px;
+  background: var(--pa-accent);
+  content: "";
+}
+
+.public-access__eyebrow,
+.public-demo__eyebrow {
+  color: var(--pa-accent);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .13em;
+}
+
+.public-access__intro-copy {
+  align-self: center;
+  max-width: 500px;
+}
+
+.public-access__intro-copy h1 {
+  margin: 12px 0 10px;
+  color: var(--pa-text);
+  font-size: clamp(28px, 4vw, 42px);
+  font-weight: 680;
+  letter-spacing: -.035em;
+  line-height: 1.08;
+}
+
+.public-access__intro-copy p {
+  max-width: 440px;
+  margin: 0;
+  color: var(--pa-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.public-access__intro-copy span {
+  display: inline-block;
+  margin-top: 20px;
+  color: var(--pa-text-muted);
+  font-size: 9px;
+  letter-spacing: .08em;
+}
+
+.public-access__form {
+  align-self: center;
+  min-width: 0;
+  padding: 36px 34px;
+}
+
+.public-access__form-heading {
+  margin-bottom: 24px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--pa-line);
+}
+
+.public-access__form-heading span {
+  color: var(--pa-text);
+  font-size: 16px;
+  font-weight: 680;
+}
+
+.public-access__form-heading p {
+  margin: 5px 0 0;
+  color: var(--pa-text-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.public-access__form .n-form-item {
+  margin-bottom: 13px;
+}
+
+.public-access__form .n-form-item-label {
+  color: var(--pa-text-secondary) !important;
+  font-size: 10px !important;
+}
+
+.public-access__form .n-input {
+  min-height: 40px;
+  border-radius: var(--pa-radius-sm) !important;
+  box-shadow: none !important;
+}
+
+.public-access__actions {
+  gap: 8px !important;
+  margin-top: 5px;
+}
+
+.public-access__actions .n-button {
+  min-height: 38px;
+  border-radius: var(--pa-radius-sm) !important;
+  box-shadow: none !important;
+  font-size: 11px;
+}
+
+.public-access__actions .n-button--primary-type {
+  background: var(--pa-accent) !important;
+}
+
+.public-access__below {
+  grid-column: 1 / -1;
+}
+
+.public-demo {
+  width: min(1240px, calc(100% - 40px));
+  margin: 28px auto;
+}
+
+.public-demo__workspace {
+  overflow: hidden;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-md);
+  background: var(--pa-surface);
+}
+
+.public-demo__intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, .9fr);
+  min-height: 400px;
+}
+
+.public-demo__copy {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  padding: 42px;
+  border-right: 1px solid var(--pa-line);
+}
+
+.public-demo__copy h1 {
+  margin: 12px 0 10px;
+  color: var(--pa-text);
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 680;
+  letter-spacing: -.035em;
+}
+
+.public-demo__copy > p {
+  max-width: 600px;
+  margin: 0;
+  color: var(--pa-text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.public-demo__actions {
+  display: flex;
+  gap: 8px;
+  margin: 22px 0 14px;
+}
+
+.public-demo__actions .n-button {
+  min-height: 38px;
+  border-radius: var(--pa-radius-sm) !important;
+  box-shadow: none !important;
+  font-size: 11px;
+}
+
+.public-demo__copy .n-alert {
+  width: 100%;
+  border-radius: var(--pa-radius-sm);
+}
+
+.public-demo__questions {
+  min-width: 0;
+  padding: 28px 30px;
+  background: var(--pa-surface-muted);
+}
+
+.public-demo__questions > header {
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--pa-line);
+  color: var(--pa-text);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.public-demo__question-list {
+  display: grid;
+  gap: 0;
+}
+
+.public-demo__question-list button {
+  position: relative;
+  width: 100%;
+  min-height: 54px;
+  padding: 12px 28px 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--pa-line);
+  color: var(--pa-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.public-demo__question-list button::after {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  color: var(--pa-text-muted);
+  content: "›";
+  transform: translateY(-50%);
+}
+
+.public-demo__question-list button:hover {
+  color: var(--pa-accent);
+}
+
+.public-demo__features {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--pa-line);
+}
+
+.public-demo__features article {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 100px;
+  padding: 18px 20px;
+  border-right: 1px solid var(--pa-line);
+}
+
+.public-demo__features article:last-child {
+  border-right: 0;
+}
+
+.public-demo__features strong {
+  color: var(--pa-text);
+  font-size: 11px;
+}
+
+.public-demo__features span,
+.public-demo__limitations span {
+  color: var(--pa-text-muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.public-demo__limitations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 18px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--pa-line);
+  background: var(--pa-surface-muted);
+}
+
+.public-demo__limitations span::before {
+  margin-right: 6px;
+  color: var(--pa-accent);
+  content: "·";
+}
+
+@media (max-width: 900px) {
+  .public-access {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(680px, calc(100% - 32px));
+    margin: 24px auto;
+  }
+
+  .public-access__intro {
+    min-height: 200px;
+    padding: 28px 32px;
+    border-right: 0;
+    border-bottom: 1px solid var(--pa-line);
+  }
+
+  .public-access__intro::after {
+    margin-top: 30px;
+  }
+
+  .public-access__intro-copy h1 {
+    font-size: 28px;
+  }
+
+  .public-access__intro-copy p {
+    font-size: 11px;
+  }
+
+  .public-demo__intro {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .public-demo__copy {
+    border-right: 0;
+    border-bottom: 1px solid var(--pa-line);
+  }
+
+  .public-demo__features {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .public-demo__features article:nth-child(2) {
+    border-right: 0;
+  }
+
+  .public-demo__features article:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--pa-line);
+  }
+}
+
+@media (max-width: 600px) {
+  .public-shell__header {
+    width: calc(100% - 24px);
+    min-height: 56px;
+  }
+
+  .public-shell__brand span {
+    display: none;
+  }
+
+  .public-access,
+  .public-demo {
+    width: calc(100% - 24px);
+    margin: 12px auto;
+  }
+
+  .public-access__intro,
+  .public-access__form,
+  .public-demo__copy,
+  .public-demo__questions {
+    padding: 22px 20px;
+  }
+
+  .public-access__intro {
+    min-height: 170px;
+  }
+
+  .public-access__intro-copy h1,
+  .public-demo__copy h1 {
+    font-size: 25px;
+  }
+
+  .public-access__intro-copy span,
+  .public-access__intro::after {
+    display: none;
+  }
+
+  .public-demo__actions {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .public-demo__actions .n-button {
+    width: 100%;
+  }
+
+  .public-demo__features {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .public-demo__features article,
+  .public-demo__features article:nth-child(2) {
+    min-height: 78px;
+    border-right: 0;
+    border-bottom: 1px solid var(--pa-line);
+  }
+
+  .public-demo__features article:last-child {
+    border-bottom: 0;
+  }
+}

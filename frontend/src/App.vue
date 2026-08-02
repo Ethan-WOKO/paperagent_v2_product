@@ -10,13 +10,9 @@
             <template v-else-if="isAuthenticatedRoute">
               <RouterView />
             </template>
-            <div v-else class="public-page">
-              <div class="app-scale-root">
-                <RouterView />
-              </div>
-              <SiteFilingFooter />
-            </div>
-            <LanguageToggle v-if="!isAuthenticatedRoute" class="app-guest-language-toggle" />
+            <PublicShell v-else>
+              <RouterView />
+            </PublicShell>
           </NMessageProvider>
         </NNotificationProvider>
       </NDialogProvider>
@@ -42,8 +38,7 @@ import {
 import { RouterView } from 'vue-router';
 import { useRoute } from 'vue-router';
 import { useTheme } from '@/composables/useTheme';
-import LanguageToggle from '@/components/LanguageToggle.vue';
-import SiteFilingFooter from '@/components/SiteFilingFooter.vue';
+import PublicShell from '@/components/PublicShell.vue';
 import { useI18n } from '@/composables/useI18n';
 import { useUiTranslationBridge } from '@/composables/useUiTranslationBridge';
 
@@ -56,7 +51,6 @@ const route = useRoute();
 // viewport and centered — like zooming a photo. Component layout never
 // reflows; only the whole canvas scales.
 const DEFAULT_CANVAS_WIDTH = 1600;
-const CHAT_CANVAS_WIDTH = 1728;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 3.0;
 
@@ -64,17 +58,24 @@ const naiveTheme = computed(() => (isDark.value ? darkTheme : lightTheme));
 const naiveLocale = computed(() => (locale.value === 'zh-CN' ? zhCN : enUS));
 const naiveDateLocale = computed(() => (locale.value === 'zh-CN' ? dateZhCN : dateEnUS));
 const isAuthenticatedRoute = computed(() => route.meta.requiresAuth === true);
-const isProjectRoute = computed(() => route.path.startsWith('/projects'));
-// Project workspaces reflow as a real responsive interface. Every other
-// authenticated route retains the established fixed-canvas behavior.
-const useCanvasScale = computed(() => isAuthenticatedRoute.value && !isProjectRoute.value);
-const canvasWidth = computed(() => (route.path.startsWith('/chat') ? CHAT_CANVAS_WIDTH : DEFAULT_CANVAS_WIDTH));
+const isResponsiveWorkspaceRoute = computed(() => (
+  route.path.startsWith('/chat')
+  || route.path.startsWith('/projects')
+  || route.path.startsWith('/paper')
+  || route.path.startsWith('/knowledge-base')
+  || route.path.startsWith('/settings')
+  || route.path.startsWith('/admin')
+));
+// Each redesigned workspace opts into real responsive layout as it is
+// migrated. Routes not migrated yet retain the established canvas behavior.
+const useCanvasScale = computed(() => isAuthenticatedRoute.value && !isResponsiveWorkspaceRoute.value);
+const canvasWidth = computed(() => DEFAULT_CANVAS_WIDTH);
 
 function updateCanvasScale() {
   if (typeof window === 'undefined') return;
   const root = document.documentElement;
 
-  if (isProjectRoute.value) {
+  if (isResponsiveWorkspaceRoute.value) {
     // The Project workspace deliberately opts out of the fixed canvas. Reset
     // every canvas dimension so the global non-canvas rules remain viewport
     // sized instead of inheriting a pixel width from a previous route.
@@ -139,67 +140,54 @@ onBeforeUnmount(() => {
 
 const themeOverrides = computed(() => ({
   common: {
-    primaryColor: isDark.value ? '#6d5dfc' : '#5b5cf6',
-    primaryColorHover: isDark.value ? '#8275ff' : '#4f46e5',
-    primaryColorPressed: isDark.value ? '#5a4be7' : '#4338ca',
-    primaryColorSuppl: isDark.value ? '#22d3ee' : '#2563eb',
-    borderRadius: '12px',
-    fontFamily: 'Geist, Inter, Arial, "PingFang SC", "Microsoft YaHei", sans-serif',
+    primaryColor: isDark.value ? '#22aaac' : '#07888b',
+    primaryColorHover: isDark.value ? '#35bec0' : '#067579',
+    primaryColorPressed: isDark.value ? '#1b9699' : '#05666a',
+    primaryColorSuppl: isDark.value ? '#52c7ca' : '#087f86',
+    borderRadius: '7px',
+    fontFamily: 'Inter, "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif',
     fontFamilyMono: '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
     ...(isDark.value
       ? {
-          bodyColor: '#07101d',
-          cardColor: '#101827',
-          modalColor: '#101827',
-          popoverColor: '#101827',
-          tableColor: '#101827',
-          borderColor: 'rgba(148, 163, 184, 0.18)',
-          dividerColor: 'rgba(148, 163, 184, 0.16)',
-          textColorBase: '#eef4ff',
-          textColor1: '#eef4ff',
-          textColor2: '#aeb9cc',
-          textColor3: '#748198',
-          inputColor: '#0b1423',
-          hoverColor: '#172238',
+          bodyColor: '#0b1519',
+          cardColor: '#101e23',
+          modalColor: '#101e23',
+          popoverColor: '#101e23',
+          tableColor: '#101e23',
+          borderColor: '#26383e',
+          dividerColor: '#26383e',
+          textColorBase: '#e7efef',
+          textColor1: '#e7efef',
+          textColor2: '#afbec1',
+          textColor3: '#778b91',
+          inputColor: '#0f1d22',
+          hoverColor: '#193037',
         }
       : {
-          bodyColor: '#fafafa',
+          bodyColor: '#f7f9f8',
           cardColor: '#ffffff',
           modalColor: '#ffffff',
           popoverColor: '#ffffff',
           tableColor: '#ffffff',
-          borderColor: '#ebebeb',
-          dividerColor: '#ebebeb',
-          textColorBase: '#171717',
-          textColor1: '#171717',
-          textColor2: '#4d4d4d',
-          textColor3: '#8f8f8f',
+          borderColor: '#dfe7e5',
+          dividerColor: '#dfe7e5',
+          textColorBase: '#17272d',
+          textColor1: '#17272d',
+          textColor2: '#52666d',
+          textColor3: '#809096',
           inputColor: '#ffffff',
-          hoverColor: '#f2f2f2',
+          hoverColor: '#edf4f3',
         }),
   },
   Card: {
-    borderRadius: '18px',
+    borderRadius: '10px',
   },
   Input: {
-    borderRadius: '14px',
+    borderRadius: '7px',
   },
   Button: {
-    borderRadiusMedium: '12px',
-    borderRadiusLarge: '999px',
+    borderRadiusMedium: '7px',
+    borderRadiusLarge: '8px',
   },
 }));
 </script>
-
-<style scoped>
-.public-page {
-  display: grid;
-  min-height: 100dvh;
-  grid-template-rows: minmax(0, 1fr) auto;
-}
-
-.public-page :deep(.page-shell),
-.public-page :deep(.demo-page) {
-  min-height: 100%;
-}
-</style>
