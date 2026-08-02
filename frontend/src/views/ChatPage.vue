@@ -8,6 +8,7 @@
     >
       <button
         v-if="chatSidebarCollapsed"
+        ref="chatSidebarToggleRef"
         type="button"
         class="chat-rail-toggle chat-rail-toggle--sessions"
         :title="t('chat.showSessions')"
@@ -42,8 +43,8 @@
               tabindex="0"
               class="session-item"
               :class="{ 'session-item--active': selectedSessionId === session.id }"
-              @click="selectSession(session.id)"
-              @keydown.enter.prevent="selectSession(session.id)"
+              @click="selectSessionFromSidebar(session.id)"
+              @keydown.enter.prevent="selectSessionFromSidebar(session.id)"
             >
               <div class="session-item__content">
                 <div class="session-item__title">{{ session.title || ('会话 #' + session.id) }}</div>
@@ -58,7 +59,19 @@
         </NCard>
       </aside>
 
-      <section class="chat-main">
+      <button
+        v-if="mobileSidebarOpen"
+        type="button"
+        class="chat-sidebar-scrim"
+        :aria-label="t('chat.hideSessions')"
+        @click="closeMobileSidebar"
+      />
+
+      <section
+        class="chat-main"
+        :inert="mobileSidebarOpen"
+        :aria-hidden="mobileSidebarOpen ? 'true' : undefined"
+      >
         <NCard
           class="chat-panel chat-workspace-panel"
           :content-style="{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto', gap: '12px', minHeight: '0' }"
@@ -72,25 +85,71 @@
           </template>
           <template #header-extra>
             <div class="chat-toolbar">
-              <NButton
-                v-if="isDemoExperience"
-                secondary
-                round
-                class="demo-question-toggle"
-                :aria-expanded="demoQuestionPanelOpen"
-                @click="setDemoQuestionPanelOpen(!demoQuestionPanelOpen)"
-              >{{ t('chat.exampleQuestions') }}</NButton>
-              <NCheckbox v-model:checked="ragDisabled">{{ t('chat.disableKnowledge') }}</NCheckbox>
-              <NCheckbox v-model:checked="planMode">{{ t('chat.planMode') }}</NCheckbox>
-              <NSelect
-                v-model:value="selectedSkillId"
-                style="width: 190px"
-                clearable
-                :options="skillOptions"
-                :placeholder="t('chat.skillPlaceholder')"
-              />
-              <NCheckbox v-model:checked="showProcessMessages">{{ t('chat.process') }}</NCheckbox>
-              <NButton secondary round @click="() => reloadCurrentMessages()" :disabled="!selectedSessionId">{{ t('common.refresh') }}</NButton>
+              <div class="chat-toolbar__desktop-settings">
+                <NButton
+                  v-if="isDemoExperience"
+                  secondary
+                  round
+                  class="demo-question-toggle"
+                  :aria-expanded="demoQuestionPanelOpen"
+                  @click="setDemoQuestionPanelOpen(!demoQuestionPanelOpen)"
+                >{{ t('chat.exampleQuestions') }}</NButton>
+                <NCheckbox v-model:checked="ragDisabled">{{ t('chat.disableKnowledge') }}</NCheckbox>
+                <NCheckbox v-model:checked="planMode">{{ t('chat.planMode') }}</NCheckbox>
+                <NSelect
+                  v-model:value="selectedSkillId"
+                  class="chat-toolbar__skill-select"
+                  clearable
+                  :options="skillOptions"
+                  :placeholder="t('chat.skillPlaceholder')"
+                />
+                <NCheckbox v-model:checked="showProcessMessages">{{ t('chat.process') }}</NCheckbox>
+                <NButton secondary round @click="() => reloadCurrentMessages()" :disabled="!selectedSessionId">{{ t('common.refresh') }}</NButton>
+              </div>
+
+              <NPopover
+                trigger="click"
+                placement="bottom-end"
+                :show-arrow="false"
+                :style="{ width: 'min(300px, calc(100vw - 24px))' }"
+              >
+                <template #trigger>
+                  <NButton secondary class="chat-run-settings-trigger">
+                    <span aria-hidden="true">⚙</span>
+                    <span class="chat-run-settings-trigger__label">{{ uiText('运行设置', 'Run settings') }}</span>
+                  </NButton>
+                </template>
+                <div class="chat-run-settings-panel">
+                  <div class="chat-run-settings-panel__heading">
+                    <strong>{{ uiText('运行设置', 'Run settings') }}</strong>
+                    <span>{{ uiText('本次会话的检索、规划与执行选项', 'Retrieval, planning, and execution options') }}</span>
+                  </div>
+                  <NButton
+                    v-if="isDemoExperience"
+                    block
+                    secondary
+                    :aria-expanded="demoQuestionPanelOpen"
+                    @click="setDemoQuestionPanelOpen(!demoQuestionPanelOpen)"
+                  >{{ t('chat.exampleQuestions') }}</NButton>
+                  <div class="chat-run-settings-panel__checks">
+                    <NCheckbox v-model:checked="ragDisabled">{{ t('chat.disableKnowledge') }}</NCheckbox>
+                    <NCheckbox v-model:checked="planMode">{{ t('chat.planMode') }}</NCheckbox>
+                    <NCheckbox v-model:checked="showProcessMessages">{{ t('chat.process') }}</NCheckbox>
+                  </div>
+                  <label class="chat-run-settings-panel__skill">
+                    <span>Skill</span>
+                    <NSelect
+                      v-model:value="selectedSkillId"
+                      clearable
+                      :options="skillOptions"
+                      :placeholder="t('chat.skillPlaceholder')"
+                    />
+                  </label>
+                  <NButton block secondary @click="() => reloadCurrentMessages()" :disabled="!selectedSessionId">
+                    {{ t('common.refresh') }}
+                  </NButton>
+                </div>
+              </NPopover>
             </div>
           </template>
 
@@ -246,14 +305,23 @@
           <div class="chat-composer" :class="{ 'chat-composer--has-attachments': chatAttachments.length || chatUploading }">
             <div class="chat-composer__topline">
               <div class="chat-composer__model-picker">
-                <NSelect
-                  v-model:value="selectedModelKey"
-                  size="small"
-                  class="chat-model-select"
-                  :options="modelOptions"
-                  placeholder="选择模型"
-                  @update:value="handleModelChange"
-                />
+                <NTooltip :disabled="!selectedModelLabel" trigger="hover">
+                  <template #trigger>
+                    <div class="chat-model-select-shell" :title="selectedModelLabel">
+                      <NSelect
+                        v-model:value="selectedModelKey"
+                        size="small"
+                        class="chat-model-select"
+                        :options="modelOptions"
+                        :consistent-menu-width="false"
+                        :menu-props="{ class: 'chat-model-menu' }"
+                        placeholder="选择模型"
+                        @update:value="handleModelChange"
+                      />
+                    </div>
+                  </template>
+                  {{ selectedModelLabel }}
+                </NTooltip>
               </div>
               <div class="chat-composer__quick-actions">
                 <span
@@ -423,7 +491,7 @@
 </template>
 
 <script setup lang="ts">
-import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NSelect, NSpace } from 'naive-ui';
+import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NPopover, NSelect, NSpace, NTooltip } from 'naive-ui';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
@@ -573,6 +641,7 @@ const currentAssistantMessageSessionId = ref<number | null>(null);
 const currentProcessMessageId = ref<string | null>(null);
 const currentProcessMessageSessionId = ref<number | null>(null);
 const messagesContainerRef = ref<HTMLElement | null>(null);
+const chatSidebarToggleRef = ref<HTMLButtonElement | null>(null);
 const chatFileInputRef = ref<HTMLInputElement | null>(null);
 const chatMinimapRailRef = ref<HTMLElement | null>(null);
 const chatMinimapRef = ref<HTMLElement | null>(null);
@@ -623,6 +692,7 @@ const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
 const SESSION_STORAGE_KEY = 'yanban.chat.selectedSessionId';
 const LITERATURE_REQUEST_STORAGE_PREFIX = 'yanban.chat.v2Literature.';
 const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
+const compactChatViewport = ref(false);
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 const SUPPORTED_DEEPSEEK_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
 const DEFAULT_GLM_MODEL = 'glm-5.2';
@@ -632,6 +702,7 @@ const CHAT_UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024;
 let minimapHoverClearTimer: number | null = null;
 let minimapActiveLockUntil = 0;
 let messagesRequestSeq = 0;
+let compactChatMediaQuery: MediaQueryList | null = null;
 
 const sessionMenuOptions = computed(() => [
   { label: t('chat.rename'), key: 'rename' },
@@ -672,6 +743,12 @@ const modelOptions = computed(() => {
   }
   return options;
 });
+
+const selectedModelLabel = computed(() => (
+  modelOptions.value.find((option) => option.value === selectedModelKey.value)?.label || ''
+));
+
+const mobileSidebarOpen = computed(() => compactChatViewport.value && !chatSidebarCollapsed.value);
 
 const activeSessionTitle = computed(() => {
   const active = sessions.value.find((item) => item.id === selectedSessionId.value);
@@ -739,6 +816,10 @@ const literatureStatusLabel = computed(() => {
 });
 
 onMounted(async () => {
+  compactChatMediaQuery = window.matchMedia('(max-width: 980px)');
+  syncCompactChatViewport();
+  compactChatMediaQuery.addEventListener('change', syncCompactChatViewport);
+  window.addEventListener('keydown', handleChatViewportKeydown);
   applyMobileChatDefaults();
   void loadProductV2Availability();
   await Promise.all([loadSettings(), loadSkills()]);
@@ -791,6 +872,9 @@ watch(selectedSessionId, (sessionId, previousSessionId) => {
 });
 
 onBeforeUnmount(() => {
+  compactChatMediaQuery?.removeEventListener('change', syncCompactChatViewport);
+  window.removeEventListener('keydown', handleChatViewportKeydown);
+  compactChatMediaQuery = null;
   literatureStartSequence += 1;
   currentSocket.value?.close();
   stopLiteraturePolling();
@@ -2206,6 +2290,28 @@ function setStoredBoolean(key: string, value: boolean) {
 function setChatSidebarCollapsed(collapsed: boolean) {
   chatSidebarCollapsed.value = collapsed;
   setStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, collapsed);
+}
+
+function syncCompactChatViewport() {
+  compactChatViewport.value = compactChatMediaQuery?.matches ?? false;
+}
+
+function handleChatViewportKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && mobileSidebarOpen.value) {
+    closeMobileSidebar();
+  }
+}
+
+function closeMobileSidebar() {
+  setChatSidebarCollapsed(true);
+  void nextTick(() => chatSidebarToggleRef.value?.focus());
+}
+
+async function selectSessionFromSidebar(sessionId: number) {
+  if (compactChatViewport.value) {
+    setChatSidebarCollapsed(true);
+  }
+  await selectSession(sessionId);
 }
 
 function openRenameSession(session: AgentSessionResponse) {

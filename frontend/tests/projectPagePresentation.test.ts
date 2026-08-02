@@ -30,7 +30,9 @@ describe('Project page presentation contract', () => {
     expect(source).not.toContain('v-model:value="chatInput"');
     expect(source).not.toContain('centerTab');
     expect(source).not.toContain('project plan conversation');
-    expect(source.match(/class="project-utility-chip"/g)).toHaveLength(4);
+    expect(source.match(/aria-controls="project-inspector"/g)).toHaveLength(4);
+    expect(source).toContain('projectUtilityMenuOptions');
+    expect(source).toContain('class="project-utility-chip project-utility-more"');
     expect(source).not.toContain('@click="inspectorTab =');
   });
 
@@ -61,6 +63,7 @@ describe('Project page presentation contract', () => {
   it('prevents inspector pills and execution metadata from wrapping or overflowing', () => {
     expect(source).toContain('white-space: nowrap; cursor: pointer;');
     expect(source).toContain('.project-tabs__actions { width: 100%; flex-wrap: nowrap; }');
+    expect(source).toContain('.project-tabs__actions {\n    width: 100%;\n    flex-wrap: wrap;');
     expect(source).toContain('.project-execution-card__heading > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;');
   });
 });

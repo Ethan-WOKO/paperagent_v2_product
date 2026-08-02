@@ -19,8 +19,9 @@ describe('Paper page presentation contract', () => {
   });
 
   it('uses only task-backed facts instead of invented project metadata', () => {
-    expect(source).toContain("currentTask?.title || currentTask?.sourceFilename");
-    expect(source).toContain('currentTask?.targetLanguage || form.targetLanguage');
+    expect(source).toContain("currentTask?.sourceFilename || selectedTexFile?.name");
+    expect(source).toContain('#{{ currentTask.id }}');
+    expect(source).toContain('currentTask.targetLanguage || form.targetLanguage');
     expect(source).toContain('artifacts.length');
     expect(source).not.toContain('Full paper polish');
     expect(source).not.toContain("'Owner'");
@@ -44,8 +45,8 @@ describe('Paper page presentation contract', () => {
 
   it('progressively reveals task-only workspaces after a paper task exists', () => {
     expect(source).toContain("'paper-polish-shell--single': !currentTask");
-    expect(source).toContain('<NGridItem v-if="currentTask" span="24 l:13">');
-    expect(source).toContain('<NCard v-if="currentTask" class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2"');
+    expect(source).toContain('<details v-if="currentTask" class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2">');
+    expect(source).toContain("isEnglish ? 'View 9 stages' : '查看 9 个阶段'");
     expect(source).toContain('<aside v-if="currentTask" class="paper-polish-side">');
     expect(source).toContain('<NCard v-if="currentTask" id="paper-structure-confirmation"');
     expect(styles).toContain('.paper-polish-shell--single');

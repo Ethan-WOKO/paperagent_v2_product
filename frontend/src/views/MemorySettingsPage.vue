@@ -298,6 +298,8 @@
         v-model:show="editorVisible"
         preset="card"
         class="memory-modal"
+        :style="{ width: 'min(620px, calc(100vw - 24px))', maxHeight: 'calc(100dvh - 24px)' }"
+        content-scrollable
         :title="editingMemory ? t('memory.editor.correctTitle', { id: editingMemory.id }) : t('memory.editor.createTitle')"
         :bordered="false"
         :mask-closable="!editorSaving"
@@ -371,6 +373,8 @@
         v-model:show="expiryVisible"
         preset="card"
         class="memory-modal memory-modal--compact"
+        :style="{ width: 'min(500px, calc(100vw - 24px))', maxHeight: 'calc(100dvh - 24px)' }"
+        content-scrollable
         :title="expiryMemory ? t('memory.expiry.title', { id: expiryMemory.id }) : t('memory.expiry.fallbackTitle')"
         :bordered="false"
         :mask-closable="!expirySaving"
@@ -1053,10 +1057,24 @@ function clearOperationError() {
 
 .memory-modal {
   width: min(620px, calc(100vw - 32px));
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
 }
 
 .memory-modal--compact {
   width: min(500px, calc(100vw - 32px));
+}
+
+.memory-modal :deep(.n-card-header) {
+  flex: 0 0 auto;
+}
+
+.memory-modal :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .memory-modal__alert {
@@ -1086,9 +1104,15 @@ function clearOperationError() {
 }
 
 .memory-modal__actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   justify-content: flex-end;
   gap: 9px;
-  margin-top: 6px;
+  margin-top: 8px;
+  padding: 10px 0 2px;
+  border-top: 1px solid var(--pa-line);
+  background: var(--pa-surface);
 }
 
 .memory-modal__actions--spread {

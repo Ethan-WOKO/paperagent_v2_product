@@ -127,10 +127,21 @@ html:not(.canvas-scale-active) .paper-page--redesign .workspace-hero__copy h1 {
   white-space: nowrap;
 }
 
-.paper-page--redesign .paper-task-summary span:not(.paper-task-summary__file),
+.paper-page--redesign .paper-task-summary__status > span,
 .paper-page--redesign .paper-hero-progress span {
   color: var(--pa-text-muted);
   font-size: 11px;
+}
+
+.paper-page--redesign .paper-task-summary__status {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paper-page--redesign .paper-task-summary__status .n-tag {
+  max-width: 100%;
 }
 
 .paper-page--redesign .paper-hero-progress {
@@ -147,10 +158,10 @@ html:not(.canvas-scale-active) .paper-page--redesign .workspace-hero__copy h1 {
 
 .paper-page--redesign .paper-hero-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   align-items: center;
   justify-content: flex-end;
-  white-space: nowrap;
 }
 
 .paper-page--redesign .paper-hero-actions .n-button {
@@ -165,6 +176,11 @@ html:not(.canvas-scale-active) .paper-page--redesign .workspace-hero__copy h1 {
   border-radius: var(--pa-radius-sm);
   background: color-mix(in srgb, var(--pa-warning) 5%, var(--pa-surface));
   box-shadow: none;
+}
+
+.paper-page--redesign .paper-task-notices {
+  display: grid;
+  gap: 8px;
 }
 
 .paper-page--redesign .paper-task-board__head {
@@ -373,67 +389,72 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-polish-dropzone {
   margin-bottom: 3px;
 }
 
-.paper-page--redesign .paper-status-v2 {
-  display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-  gap: 12px;
-}
-
-.paper-page--redesign .paper-status-v2__meta,
-.paper-page--redesign .paper-status-v2__facts {
-  display: grid;
-  gap: 7px;
-}
-
-.paper-page--redesign .paper-status-v2__meta {
-  padding-right: 12px;
-  border-right: 1px solid var(--pa-line);
-}
-
-.paper-page--redesign .paper-status-v2__meta div,
-.paper-page--redesign .paper-status-v2__facts div {
-  min-width: 0;
-  display: grid;
-  gap: 1px;
-}
-
-.paper-page--redesign .paper-status-v2__facts {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-html:not(.canvas-scale-active) .paper-page--redesign .paper-status-v2__facts {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-}
-
-.paper-page--redesign .paper-status-v2__facts div {
-  padding: 7px 8px;
-  border: 0;
-  border-left: 2px solid var(--pa-line-strong);
-  border-radius: 0;
-  background: transparent;
-}
-
-.paper-page--redesign .paper-status-v2 span {
-  color: var(--pa-text-muted);
-  font-size: 10px;
-}
-
-.paper-page--redesign .paper-status-v2 strong {
-  overflow: hidden;
-  color: var(--pa-text);
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .paper-page--redesign .paper-structure-confirmation-callout {
   border-radius: var(--pa-radius-sm);
   background: color-mix(in srgb, var(--pa-warning) 9%, var(--pa-surface));
 }
 
-.paper-page--redesign .paper-workflow-card-v2 > .n-card__content {
-  overflow: hidden;
+.paper-page--redesign .paper-workflow-card-v2 > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.paper-page--redesign .paper-workflow-card-v2 > summary::-webkit-details-marker {
+  display: none;
+}
+
+.paper-page--redesign .paper-workflow-card-v2 > summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.paper-page--redesign .paper-workflow-card-v2 > summary small,
+.paper-page--redesign .paper-workflow-card-v2 > summary > span,
+.paper-page--redesign .paper-workflow-context {
+  color: var(--pa-text-muted);
+  font-size: 10px;
+}
+
+.paper-page--redesign .paper-workflow-card-v2 > summary > span {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paper-page--redesign .paper-workflow-card-v2 > summary > span::after {
+  content: "+";
+  font-size: 15px;
+  line-height: 1;
+}
+
+.paper-page--redesign .paper-workflow-card-v2[open] > summary {
+  border-bottom: 1px solid var(--pa-line);
+}
+
+.paper-page--redesign .paper-workflow-card-v2[open] > summary > span::after {
+  content: "−";
+}
+
+.paper-page--redesign .paper-workflow-card-v2__body {
+  min-width: 0;
+  overflow-x: auto;
+  padding: 10px 12px 12px;
+}
+
+.paper-page--redesign .paper-workflow-context {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  margin-bottom: 10px;
 }
 
 .paper-page--redesign .paper-workflow-v2 {
@@ -446,10 +467,6 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-status-v2__facts {
 
 html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
   grid-template-columns: repeat(9, minmax(72px, 1fr)) !important;
-}
-
-.paper-page--redesign .paper-workflow-card-v2 > .n-card__content {
-  overflow-x: auto;
 }
 
 .paper-page--redesign .paper-workflow-step-v2 {
@@ -724,6 +741,36 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
   color: var(--pa-text);
 }
 
+.paper-structure-modal {
+  width: min(720px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
+}
+
+.paper-structure-modal > .n-card-header,
+.paper-structure-modal > .n-card__footer {
+  flex: 0 0 auto;
+}
+
+.paper-structure-modal > .n-card__content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.paper-structure-modal > .n-card__footer {
+  border-top: 1px solid var(--pa-line);
+  background: var(--pa-surface);
+}
+
+.paper-structure-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 @media (max-width: 1240px) {
   .paper-page--redesign .paper-polish-shell {
     grid-template-columns: minmax(0, 1fr) 292px;
@@ -762,10 +809,6 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
 
   .paper-page--redesign .paper-side-tabs {
     min-height: 0;
-  }
-
-  html:not(.canvas-scale-active) .paper-page--redesign .paper-status-v2 {
-    grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr) !important;
   }
 
   .paper-page--redesign .paper-support-list-v2,
@@ -811,18 +854,13 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
   }
 
   .paper-page--redesign .workspace-hero__actions {
-    width: calc(100vw - 58px);
+    width: 100%;
     justify-content: flex-start !important;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .paper-page--redesign .workspace-hero__actions::-webkit-scrollbar {
-    display: none;
   }
 
   .paper-page--redesign .workspace-hero__actions > .n-space {
-    flex-wrap: nowrap;
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .paper-page--redesign .paper-hero-panel {
@@ -834,13 +872,15 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
   .paper-page--redesign .paper-hero-actions {
     grid-column: auto;
     width: 100%;
-    justify-content: flex-start;
-    overflow-x: auto;
-    scrollbar-width: none;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
 
-  .paper-page--redesign .paper-hero-actions::-webkit-scrollbar {
-    display: none;
+  .paper-page--redesign .paper-hero-actions .n-button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 4px;
   }
 
   .paper-page--redesign .paper-task-board__head {
@@ -858,25 +898,6 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
 
   .paper-page--redesign .paper-polish-main > .n-grid > .n-grid-item {
     grid-column: 1 !important;
-  }
-
-  .paper-page--redesign .paper-status-v2 {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  html:not(.canvas-scale-active) .paper-page--redesign .paper-status-v2 {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  .paper-page--redesign .paper-status-v2__meta {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: 0 0 9px;
-    border-right: 0;
-    border-bottom: 1px solid var(--pa-line);
-  }
-
-  .paper-page--redesign .paper-status-v2__meta > div:first-child {
-    grid-column: 1 / -1;
   }
 
   .paper-page--redesign .paper-suggestion-table-v2__head {
@@ -902,25 +923,28 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
 
   html:not(.canvas-scale-active) .paper-page--redesign .paper-input-actions,
   html:not(.canvas-scale-active) .paper-page--redesign .paper-sample-panel__actions {
-    display: flex !important;
-    grid-template-columns: none !important;
-    flex-wrap: nowrap !important;
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)) !important;
     gap: 6px !important;
-    align-items: center !important;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  html:not(.canvas-scale-active) .paper-page--redesign .paper-input-actions::-webkit-scrollbar,
-  html:not(.canvas-scale-active) .paper-page--redesign .paper-sample-panel__actions::-webkit-scrollbar {
-    display: none;
+    overflow: visible;
   }
 
   html:not(.canvas-scale-active) .paper-page--redesign .paper-input-actions .n-button,
   html:not(.canvas-scale-active) .paper-page--redesign .paper-sample-panel__actions .n-button {
-    width: auto !important;
-    flex: 0 0 auto;
-    white-space: nowrap;
+    width: 100% !important;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .paper-page--redesign .paper-workflow-card-v2__body {
+    overflow: visible;
+  }
+
+  .paper-page--redesign .paper-workflow-v2,
+  html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
+    min-width: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 12px 4px;
   }
 
   .paper-page--redesign .paper-citation-summary {
@@ -946,19 +970,32 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
     display: none;
   }
 
-  .paper-page--redesign .paper-status-v2__facts {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
   .paper-page--redesign .paper-input-actions,
   .paper-page--redesign .paper-sample-panel__actions {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
+    overflow: visible;
   }
 
   .paper-page--redesign .paper-input-actions .n-button,
   .paper-page--redesign .paper-sample-panel__actions .n-button {
-    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .paper-structure-modal__actions {
+    flex-direction: column;
+  }
+
+  .paper-structure-modal__actions .n-button {
+    width: 100%;
+  }
+}
+
+@media (max-height: 620px) {
+  .paper-structure-modal {
+    max-height: calc(100dvh - 12px);
+  }
+
+  .paper-structure-modal > .n-card-header,
+  .paper-structure-modal > .n-card__footer {
+    padding-block: 10px;
   }
 }

@@ -35,7 +35,7 @@
 
 .product-shell .settings-page--redesign .settings-header__updated {
   color: var(--pa-text-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .settings-page--redesign .settings-header > .n-button,
@@ -153,7 +153,8 @@
 }
 
 .product-shell .settings-page--redesign .settings-provider-card {
-  min-height: 100%;
+  min-height: 0;
+  align-self: start;
   padding: 0 12px 4px !important;
   border: 1px solid var(--pa-line) !important;
   border-radius: var(--pa-radius-sm) !important;
@@ -191,7 +192,7 @@
 .product-shell .settings-page--redesign .settings-toggle-row span,
 .product-shell .settings-page--redesign .settings-skill-pill span {
   color: var(--pa-text-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .settings-page--redesign .settings-provider-mark {
@@ -203,7 +204,7 @@
   border-radius: 50%;
   color: var(--pa-accent);
   background: var(--pa-accent-soft);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 750;
 }
 
@@ -215,7 +216,14 @@
 
 .product-shell .settings-page--redesign .n-form-item-label {
   color: var(--pa-text-secondary) !important;
-  font-size: 9px !important;
+  font-size: 11px !important;
+}
+
+.product-shell .settings-page--redesign .n-input__input-el,
+.product-shell .settings-page--redesign .n-input__textarea-el,
+.product-shell .settings-page--redesign .n-base-selection-input__content,
+.product-shell .settings-page--redesign .n-input-number-input {
+  font-size: 12px !important;
 }
 
 .product-shell .settings-page--redesign .n-input,
@@ -248,7 +256,7 @@
 
 .product-shell .settings-page--redesign .settings-default-card__identity > span {
   color: var(--pa-accent);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 680;
 }
 
@@ -260,12 +268,12 @@
 }
 
 .product-shell .settings-page--redesign .settings-default-card__identity > small {
-  overflow: hidden;
   margin-top: 2px;
+  overflow-wrap: anywhere;
   color: var(--pa-text-secondary);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-family: var(--pa-font-mono);
+  font-size: 11px;
+  white-space: normal;
 }
 
 .product-shell .settings-page--redesign .settings-default-card__model .n-base-selection-label {
@@ -306,7 +314,7 @@
 }
 
 .product-shell .settings-page--redesign .settings-model-catalog > summary strong {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -314,7 +322,7 @@
   overflow: hidden;
   margin-top: 1px;
   color: var(--pa-text-muted);
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -324,7 +332,7 @@
   align-items: center;
   gap: 5px;
   color: var(--pa-text-secondary);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 620;
 }
 
@@ -531,6 +539,7 @@
 
   .product-shell .settings-page--redesign .settings-header > .n-button {
     width: 100%;
+    min-height: 40px;
   }
 
   .product-shell .settings-page--redesign .settings-page__layout {
@@ -543,20 +552,22 @@
     top: 0;
     z-index: 4;
     display: flex;
+    flex-wrap: wrap;
     gap: 3px;
-    overflow-x: auto;
+    overflow: visible;
     margin: 0 -12px 6px;
     padding: 7px 12px;
     border: 0;
     border-bottom: 1px solid var(--pa-line);
     background: var(--pa-canvas);
-    scrollbar-width: none;
   }
 
   .product-shell .settings-page--redesign .settings-section-nav a {
-    flex: 0 0 auto;
-    min-height: 30px;
-    padding: 7px 9px;
+    flex: 1 1 calc(50% - 3px);
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 10px;
     white-space: nowrap;
   }
 
@@ -588,6 +599,7 @@
     grid-column: 2 / -1;
     grid-row: 3;
     width: 100%;
+    min-height: 40px;
   }
 
   .product-shell .settings-page--redesign .settings-default-card {
@@ -640,5 +652,6 @@
 
   .product-shell .settings-page--redesign .settings-footer-bar .n-button {
     width: 100%;
+    min-height: 40px;
   }
 }

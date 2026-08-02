@@ -23,12 +23,12 @@
   gap: 5px;
   margin: 0 0 -5px;
   color: var(--pa-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-breadcrumb .n-button {
   color: var(--pa-text-secondary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-header__row {
@@ -96,7 +96,7 @@
 .product-shell .memory-page--redesign .memory-updated,
 .product-shell .memory-page--redesign .memory-readonly-reason {
   color: var(--pa-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-alert {
@@ -153,7 +153,7 @@
   display: flex;
   align-items: center;
   padding: 0 12px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -196,13 +196,13 @@
 .product-shell .memory-page--redesign .memory-id {
   color: var(--pa-text-muted);
   font-family: var(--pa-font-mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-record .n-tag {
   --n-height: 20px !important;
   border-radius: var(--pa-radius-xs) !important;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-content {
@@ -226,7 +226,7 @@
 .product-shell .memory-page--redesign .memory-expand {
   margin: 4px 0 0;
   color: var(--pa-accent);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-tags {
@@ -257,14 +257,14 @@
 .product-shell .memory-page--redesign .memory-record__summary-cells small {
   display: none;
   color: var(--pa-text-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-record__summary-cells strong {
   min-width: 0;
   overflow: hidden;
   color: var(--pa-text-secondary);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 560;
   line-height: 1.45;
   text-overflow: ellipsis;
@@ -287,7 +287,7 @@
   padding: 0 7px;
   border-radius: var(--pa-radius-xs) !important;
   box-shadow: none !important;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-record__details {
@@ -304,7 +304,7 @@
   padding: 0 12px;
   color: var(--pa-text-muted);
   cursor: pointer;
-  font-size: 9px;
+  font-size: 11px;
   list-style: none;
 }
 
@@ -343,7 +343,7 @@
 .product-shell .memory-page--redesign .memory-fields dt {
   margin: 0 0 3px;
   color: var(--pa-text-muted);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: .02em;
   text-transform: none;
@@ -352,7 +352,7 @@
 .product-shell .memory-page--redesign .memory-fields dd {
   margin: 0;
   color: var(--pa-text-secondary);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -365,7 +365,7 @@
 .product-shell .memory-page--redesign .copyable-value code {
   color: var(--pa-text);
   font-family: var(--pa-font-mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .product-shell .memory-page--redesign .memory-modal {
@@ -393,13 +393,21 @@
     display: grid;
     grid-column: 1 / -1;
     grid-row: 2;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     border-top: 1px solid var(--pa-line);
   }
 
   .product-shell .memory-page--redesign .memory-record__summary-cells > span {
     border-left: 0;
     border-right: 1px solid var(--pa-line);
+  }
+
+  .product-shell .memory-page--redesign .memory-record__summary-cells > span:nth-child(n + 4) {
+    border-top: 1px solid var(--pa-line);
+  }
+
+  .product-shell .memory-page--redesign .memory-record__summary-cells > span:last-child {
+    grid-column: span 2;
   }
 
   .product-shell .memory-page--redesign .memory-record__summary-cells small {
@@ -417,6 +425,16 @@
 
   .product-shell .memory-page--redesign .memory-fields {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .product-shell .memory-page--redesign .memory-record__summary-cells {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .product-shell .memory-page--redesign .memory-record__summary-cells > span:last-child {
+    grid-column: 1 / -1;
   }
 }
 
@@ -443,6 +461,7 @@
 
   .product-shell .memory-page--redesign .memory-header__actions .n-button {
     flex: 1 1 0;
+    min-height: 40px;
   }
 
   .product-shell .memory-page--redesign .memory-toolbar {
@@ -454,6 +473,12 @@
   .product-shell .memory-page--redesign .memory-toolbar .n-button-group,
   .product-shell .memory-page--redesign .memory-toolbar .n-button {
     width: 100%;
+  }
+
+  .product-shell .memory-page--redesign .memory-toolbar .n-button,
+  .product-shell .memory-page--redesign .memory-record__actions .n-button,
+  .product-shell .memory-page--redesign .memory-record__details > summary {
+    min-height: 40px;
   }
 
   .product-shell .memory-page--redesign .memory-record {
