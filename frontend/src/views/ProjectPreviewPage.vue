@@ -514,11 +514,12 @@
                 aria-label="V2 project task"
                 type="textarea"
                 :maxlength="20000"
-                :autosize="{ minRows: 3, maxRows: 8 }"
+                :autosize="{ minRows: 2, maxRows: 8 }"
                 placeholder="例如：读取项目中的 Sort.java，找出编译失败的原因，修复后在沙箱中运行"
                 @keydown="handleV2TurnKeydown"
               />
               <NButton
+                class="project-send-button"
                 type="primary"
                 :loading="v2NaturalTurnBusy"
                 :disabled="!v2NaturalTurnAvailable || !activeProject || !v2TurnInput.trim() || v2NaturalTurnBusy"
@@ -2353,8 +2354,37 @@ onUnmounted(() => {
 .v2-conversation__outputs { display: flex; flex-direction: column; gap: 5px; padding: 9px; border-radius: 7px; background: var(--yb-bg-muted); font-size: 10px; }
 .v2-conversation__outputs code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
 .v2-conversation__candidate { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.v2-conversation__composer { display: flex; align-items: flex-end; gap: 9px; margin-top: auto; padding-top: 2px; }
-.v2-conversation__composer :deep(.n-input) { flex: 1; }
+.v2-conversation__composer {
+  width: min(1040px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin: auto auto 0;
+  padding: 8px;
+  border: 1px solid var(--project-rule);
+  border-radius: 10px;
+  background: var(--project-surface);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--project-ink) 5%, transparent);
+}
+.v2-conversation__composer :deep(.n-input) {
+  min-width: 0;
+  background: transparent !important;
+}
+.v2-conversation__composer :deep(.n-input__border),
+.v2-conversation__composer :deep(.n-input__state-border) { display: none; }
+.v2-conversation__composer .project-send-button {
+  width: 72px;
+  min-width: 72px;
+  height: 40px;
+  padding: 0;
+  border-radius: 8px !important;
+}
+.v2-conversation__composer .project-send-button :deep(.n-button__content) {
+  width: 100%;
+  justify-content: center;
+  line-height: 1;
+}
 
 .project-utility-chip { min-height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--yb-border); border-radius: 999px; background: transparent; color: var(--yb-text-secondary); font-size: 10px; line-height: 1; white-space: nowrap; cursor: pointer; }
 .project-utility-chip span { color: var(--yb-text-muted); }

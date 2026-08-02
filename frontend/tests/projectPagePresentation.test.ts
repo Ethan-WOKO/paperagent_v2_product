@@ -65,5 +65,7 @@ describe('Project page presentation contract', () => {
     expect(source).toContain('.project-tabs__actions { width: 100%; flex-wrap: nowrap; }');
     expect(source).toContain('.project-tabs__actions {\n    width: 100%;\n    flex-wrap: wrap;');
     expect(source).toContain('.project-execution-card__heading > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;');
+    expect(source).toContain('class="project-send-button"');
+    expect(source).toContain('width: min(1040px, 100%);');
   });
 });
