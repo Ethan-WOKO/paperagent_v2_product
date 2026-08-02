@@ -68,6 +68,7 @@ const isResponsiveWorkspaceRoute = computed(() => (
   || route.path.startsWith('/projects')
   || route.path.startsWith('/paper')
   || route.path.startsWith('/knowledge-base')
+  || route.path.startsWith('/settings')
 ));
 // Each redesigned workspace opts into real responsive layout as it is
 // migrated. Routes not migrated yet retain the established canvas behavior.

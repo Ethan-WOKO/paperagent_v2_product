@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <main class="memory-page workbench-page scholar-page" data-testid="memory-governance-page">
+    <main class="memory-page memory-page--redesign workbench-page scholar-page" data-testid="memory-governance-page">
       <header class="memory-header">
         <div class="memory-breadcrumb">
           <NButton text size="small" @click="router.push('/settings')">{{ t('memory.settings') }}</NButton>
@@ -76,6 +76,15 @@
         </NEmpty>
 
         <section v-else class="memory-list" aria-live="polite">
+          <div class="memory-list__head" aria-hidden="true">
+            <span>{{ t('memory.form.content') }}</span>
+            <span>{{ t('memory.field.scope') }}</span>
+            <span>{{ t('memory.field.memoryType') }}</span>
+            <span>{{ t('memory.field.confirmationStatus') }}</span>
+            <span>{{ t('memory.field.expiresAt') }}</span>
+            <span>{{ t('memory.field.updatedAt') }}</span>
+            <span>{{ t('memory.field.actions') }}</span>
+          </div>
           <article
             v-for="memory in memories"
             :id="`memory-${memory.id}`"
@@ -84,37 +93,53 @@
             :class="{ 'memory-record--readonly': !hasActions(memory) }"
             :data-testid="`memory-record-${memory.id}`"
           >
-            <div class="memory-record__head">
-              <div class="memory-record__identity">
-                <span class="memory-id">#{{ memory.id }}</span>
-                <NTag size="small" :type="statusTagType(memory.status)">{{ statusLabel(memory.status) }}</NTag>
+            <div class="memory-record__primary">
+              <div class="memory-record__head">
+                <div class="memory-record__identity">
+                  <span class="memory-id">#{{ memory.id }}</span>
+                  <NTag size="small" :type="statusTagType(memory.status)">{{ statusLabel(memory.status) }}</NTag>
+                  <NTag v-if="isMemoryExpired(memory)" size="small" type="warning">{{ t('memory.status.expired') }}</NTag>
+                  <NTag v-if="memory.invalidatedAt" size="small" type="error">{{ t('memory.status.invalidated') }}</NTag>
+                </div>
+              </div>
+
+              <div class="memory-content" :class="{ 'memory-content--collapsed': isCollapsible(memory) && !isExpanded(memory.id) }">
+                {{ memory.content }}
+              </div>
+              <NButton
+                v-if="isCollapsible(memory)"
+                text
+                size="tiny"
+                class="memory-expand"
+                @click="toggleExpanded(memory.id)"
+              >
+                {{ isExpanded(memory.id) ? t('memory.content.showLess') : t('memory.content.showFull') }}
+              </NButton>
+
+              <div v-if="memory.tags.length" class="memory-tags" :aria-label="t('memory.tagsAria')">
+                <NTag v-for="tag in memory.tags" :key="tag" size="small" :bordered="false">{{ tag }}</NTag>
+              </div>
+            </div>
+
+            <div class="memory-record__summary-cells">
+              <span><small>{{ t('memory.field.scope') }}</small><strong>{{ scopeLabel(memory.scope) }}</strong></span>
+              <span><small>{{ t('memory.field.memoryType') }}</small><strong>{{ memoryTypeLabel(memory.memoryType) }}</strong></span>
+              <span>
+                <small>{{ t('memory.field.confirmationStatus') }}</small>
                 <NTag size="small" :type="confirmationTagType(memory.confirmationStatus)">
                   {{ confirmationStatusLabel(memory.confirmationStatus) }}
                 </NTag>
-                <NTag v-if="isMemoryExpired(memory)" size="small" type="warning">{{ t('memory.status.expired') }}</NTag>
-                <NTag v-if="memory.invalidatedAt" size="small" type="error">{{ t('memory.status.invalidated') }}</NTag>
-              </div>
-              <span class="memory-updated">{{ t('memory.updated', { date: formatDate(memory.updatedAt) }) }}</span>
+              </span>
+              <span>
+                <small>{{ t('memory.field.expiresAt') }}</small>
+                <strong>{{ memory.expiresAt ? formatOptionalDate(memory.expiresAt) : statusLabel(memory.status) }}</strong>
+              </span>
+              <span><small>{{ t('memory.field.updatedAt') }}</small><strong>{{ formatDate(memory.updatedAt) }}</strong></span>
             </div>
 
-            <div class="memory-content" :class="{ 'memory-content--collapsed': isCollapsible(memory) && !isExpanded(memory.id) }">
-              {{ memory.content }}
-            </div>
-            <NButton
-              v-if="isCollapsible(memory)"
-              text
-              size="tiny"
-              class="memory-expand"
-              @click="toggleExpanded(memory.id)"
-            >
-              {{ isExpanded(memory.id) ? t('memory.content.showLess') : t('memory.content.showFull') }}
-            </NButton>
-
-            <div v-if="memory.tags.length" class="memory-tags" :aria-label="t('memory.tagsAria')">
-              <NTag v-for="tag in memory.tags" :key="tag" size="small" :bordered="false">{{ tag }}</NTag>
-            </div>
-
-            <dl class="memory-fields">
+            <details class="memory-record__details">
+              <summary>{{ t('memory.content.showFull') }}</summary>
+              <dl class="memory-fields">
               <div>
                 <dt>{{ t('memory.field.scope') }}</dt>
                 <dd>{{ scopeLabel(memory.scope) }}</dd>
@@ -193,7 +218,8 @@
                 <dt>{{ t('memory.field.deletedAt') }}</dt>
                 <dd>{{ formatOptionalDate(memory.deletedAt) }}</dd>
               </div>
-            </dl>
+              </dl>
+            </details>
 
             <footer class="memory-record__actions">
               <template v-if="hasActions(memory)">
