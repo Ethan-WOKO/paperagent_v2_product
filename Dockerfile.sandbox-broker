@@ -1,7 +1,9 @@
 FROM maven:3.9.16-eclipse-temurin-17 AS build
 WORKDIR /workspace
 COPY pom.xml ./
+COPY agent-v2 ./agent-v2
 COPY yanban-core ./yanban-core
+COPY yanban-agent-v2-adapter ./yanban-agent-v2-adapter
 COPY yanban-knowledge ./yanban-knowledge
 COPY yanban-paper ./yanban-paper
 COPY yanban-mcp ./yanban-mcp
