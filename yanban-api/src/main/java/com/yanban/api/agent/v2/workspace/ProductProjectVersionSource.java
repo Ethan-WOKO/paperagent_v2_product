@@ -3,7 +3,7 @@ package com.yanban.api.agent.v2.workspace;
 import com.yanban.api.project.ProjectFileEntry;
 import com.yanban.api.project.ProjectManifestResponse;
 import com.yanban.api.project.ProjectService;
-import com.yanban.api.project.ProjectService.SandboxWorkspaceMaterialization;
+import com.yanban.api.project.ProjectService.ProjectVersionByteMaterialization;
 import com.yanban.core.agent.sandbox.SandboxFileSnapshot;
 import com.yanban.core.research.FileHash;
 import com.yanban.core.research.ProjectManifestIdentity;
@@ -16,7 +16,6 @@ import io.paperagent.v2.workspace.ProjectVersionSnapshot;
 import io.paperagent.v2.workspace.ProjectVersionSource;
 import io.paperagent.v2.workspace.WorkspaceErrorCode;
 import io.paperagent.v2.workspace.WorkspaceException;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -70,18 +69,19 @@ final class ProductProjectVersionSource implements ProjectVersionSource {
         Set<String> paths = new LinkedHashSet<>();
         expected.forEach(file -> paths.add(file.path()));
 
-        SandboxWorkspaceMaterialization materialized =
-                projects.materializeSandbox(userId, projectId, paths);
-        validateMaterialization(materialized, expected);
-
-        Map<String, String> textFiles = materialized.textFiles();
+        ProjectVersionByteMaterialization materialized =
+                projects.materializeVersionBytes(userId, projectId, paths);
+        if (materialized == null) {
+            throw sourceFailure();
+        }
+        Map<String, byte[]> sourceFiles = materialized.files();
+        validateMaterialization(materialized, sourceFiles, expected);
         List<ProjectFileSnapshot> files = new ArrayList<>(expected.size());
         for (ManifestFile expectedFile : expected) {
-            String content = textFiles.get(expectedFile.path());
-            if (content == null) {
+            byte[] bytes = sourceFiles.get(expectedFile.path());
+            if (bytes == null) {
                 throw sourceFailure();
             }
-            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
             if (bytes.length != expectedFile.sizeBytes()
                     || !sha256(bytes).equals(expectedFile.sha256())) {
                 throw sourceFailure();
@@ -129,10 +129,11 @@ final class ProductProjectVersionSource implements ProjectVersionSource {
     }
 
     private void validateMaterialization(
-            SandboxWorkspaceMaterialization materialized,
+            ProjectVersionByteMaterialization materialized,
+            Map<String, byte[]> sourceFiles,
             List<ManifestFile> expected
     ) {
-        if (materialized == null || materialized.snapshot() == null || materialized.textFiles() == null
+        if (sourceFiles == null || materialized.snapshot() == null
                 || materialized.snapshot().workspace() == null
                 || materialized.snapshot().workspace().projectId() != projectId
                 || materialized.snapshot().workspace().projectVersion() == null
@@ -152,7 +153,7 @@ final class ProductProjectVersionSource implements ProjectVersionSource {
             }
         }
         if (!actualByPath.keySet().equals(expectedByPath.keySet())
-                || !materialized.textFiles().keySet().equals(expectedByPath.keySet())) {
+                || !sourceFiles.keySet().equals(expectedByPath.keySet())) {
             throw sourceFailure();
         }
         for (ManifestFile expectedFile : expected) {

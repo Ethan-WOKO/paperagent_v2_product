@@ -192,18 +192,18 @@ class AuthenticatedAgentTurnPlanExecutionContextCompositionTest {
             return new ProjectManifestResponse(
                     PROJECT_ID, version, List.of(entry));
         });
-        when(projects.materializeSandbox(
+        when(projects.materializeVersionBytes(
                 org.mockito.ArgumentMatchers.eq(USER_ID),
                 org.mockito.ArgumentMatchers.eq(PROJECT_ID),
                 anySet())).thenReturn(
-                        new ProjectService.SandboxWorkspaceMaterialization(
+                        new ProjectService.ProjectVersionByteMaterialization(
                                 new SandboxWorkspaceSnapshot(
                                         new SandboxWorkspaceRef(
                                                 PROJECT_ID,
                                                 new com.yanban.core.research
                                                         .ProjectVersionRef(version)),
                                         List.of(snapshot)),
-                                Map.of(PROJECT_PATH, PROJECT_CONTENT)));
+                                Map.of(PROJECT_PATH, bytes)));
     }
 
     @Test

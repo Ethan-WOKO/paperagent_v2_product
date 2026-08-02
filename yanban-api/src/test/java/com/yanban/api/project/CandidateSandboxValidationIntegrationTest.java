@@ -178,6 +178,38 @@ class CandidateSandboxValidationIntegrationTest {
     }
 
     @Test
+    void binaryProjectAssetsCannotBeSelectedAsCandidateChanges() {
+        String binaryVersion = ProjectManifestIdentity.derive(List.of(
+                new ProjectManifestIdentity.Entry(
+                        new ProjectRelativePath("paper.pdf"),
+                        new FileHash("4".repeat(64)), 16))).value();
+        CandidateArtifactResponse binaryCandidate = candidate(
+                FINGERPRINT, binaryVersion, "paper.pdf", "4".repeat(64));
+        when(candidates.getCurrent(USER, ARTIFACT))
+                .thenReturn(binaryCandidate);
+        when(projects.manifest(USER, PROJECT)).thenReturn(
+                new ProjectManifestResponse(PROJECT, binaryVersion,
+                        List.of(new ProjectFileEntry(
+                                "paper.pdf", 16, Instant.EPOCH,
+                                "4".repeat(64)))));
+
+        assertThatThrownBy(() -> service.create(
+                USER, PROJECT, ARTIFACT, "binary-key", binaryVersion,
+                new CreateCandidateValidationRequest(
+                        CandidateValidationProfile.DOCUMENT_INTEGRITY,
+                        List.of(0), true)))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        error -> {
+                            assertThat(error.getStatusCode()).isEqualTo(
+                                    HttpStatus.UNPROCESSABLE_ENTITY);
+                            assertThat(error.getReason()).contains(
+                                    "read-only");
+                        });
+        verify(projects, never()).materializeSandbox(any(), any(), any());
+        verifyNoInteractions(broker);
+    }
+
+    @Test
     void mavenProfileWithoutRootPomFailsBeforeE2b() {
         String documentVersion = ProjectManifestIdentity.derive(List.of(
                 new ProjectManifestIdentity.Entry(

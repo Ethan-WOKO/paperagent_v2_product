@@ -2,11 +2,12 @@ package com.yanban.api.project;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import org.springframework.stereotype.Service;
@@ -19,8 +20,6 @@ import org.springframework.web.multipart.MultipartFile;
 /** Imports a browser-selected folder into an isolated MinIO Project snapshot. */
 @Service
 public class ProjectUploadService {
-
-    private static final int TEXT_SAMPLE_BYTES = 8 * 1024;
 
     private final ProjectRepository projects;
     private final ProjectObjectStorage objectStorage;
@@ -110,17 +109,28 @@ public class ProjectUploadService {
             }
             long size = file.getSize();
             if (size < 0 || size > properties.getMaxFileBytes()
+                    || size > Integer.MAX_VALUE
                     || size > properties.getMaxTotalBytes() - admittedBytes) {
                 throw new ProjectTraversalLimitException("Project byte budget exceeded");
             }
-            if (!isReadableTextFile(file)) {
+            byte[] content = readUpload(file, size);
+            if (!ProjectAssetAdmissionPolicy.admits(
+                    portable(relative), content)) {
                 continue;
             }
             if (entries.size() >= properties.getMaxFiles()) {
                 throw new ProjectTraversalLimitException("Project file-count budget exceeded");
             }
             admittedBytes += size;
-            entries.add(objectStorage.storeFile(prefix, portable(relative), file));
+            ProjectObjectEntry stored = objectStorage.storeFile(
+                    prefix, portable(relative), file);
+            if (!portable(relative).equals(stored.path())
+                    || stored.sizeBytes() != content.length
+                    || !sha256(content).equals(stored.sha256())) {
+                throw new InvalidProjectPathException(
+                        "Project upload changed while being stored");
+            }
+            entries.add(stored);
         }
         if (entries.isEmpty()) {
             throw new InvalidProjectPathException("Project folder contains no readable files allowed by its rules");
@@ -129,15 +139,28 @@ public class ProjectUploadService {
         return List.copyOf(entries);
     }
 
-    private boolean isReadableTextFile(MultipartFile file) {
-        try (InputStream input = file.getInputStream()) {
-            byte[] sample = input.readNBytes((int) Math.min(TEXT_SAMPLE_BYTES, file.getSize()));
-            for (byte value : sample) {
-                if (value == 0) return false;
+    private byte[] readUpload(MultipartFile file, long expectedSize) {
+        try {
+            byte[] content = file.getBytes();
+            if (content.length != expectedSize) {
+                throw new InvalidProjectPathException(
+                        "Project upload file changed while being admitted");
             }
-            return true;
-        } catch (IOException ex) {
-            throw new InvalidProjectPathException("Project upload file is unreadable", ex);
+            return content;
+        } catch (java.io.IOException ex) {
+            throw new InvalidProjectPathException(
+                    "Project upload file is unreadable", ex);
+        }
+    }
+
+    private String sha256(byte[] content) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(content));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(
+                    "SHA-256 is unavailable", ex);
         }
     }
 

@@ -47,8 +47,7 @@ public class ProjectService {
 
     private static final Logger log = LoggerFactory.getLogger(ProjectService.class);
     private static final int MAX_SEARCH_LINE_LENGTH = 2_000;
-    private static final int TEXT_SAMPLE_BYTES = 8 * 1024;
-
+    private static final String LOWER_SHA_256 = "[a-f0-9]{64}";
     private final ProjectRepository projects;
     private final List<ProjectRootProvider> rootProviders;
     private final ProjectStorageProperties properties;
@@ -162,7 +161,8 @@ public class ProjectService {
         Project project = ownedProject(userId, projectId);
         ProjectPathPolicy policy = ProjectPathPolicy.from(project, objectMapper);
         List<ProjectFileEntry> files = project.getRootType() == ProjectRootType.MINIO_OBJECTS
-                ? listObjectFiles(project, policy) : listFiles(resolveLocal(project, policy));
+                ? listObjectFiles(project, policy)
+                : listFiles(resolveLocal(project, policy));
         return manifestResponse(projectId, files);
     }
 
@@ -180,13 +180,10 @@ public class ProjectService {
         ResolvedProject local = project.getRootType() == ProjectRootType.MINIO_OBJECTS
                 ? null : resolveLocal(project, policy);
         List<ProjectFileEntry> files = project.getRootType() == ProjectRootType.MINIO_OBJECTS
-                ? listObjectFiles(policy, objectEntries) : listFiles(local);
+                ? listObjectFiles(project, policy, objectEntries)
+                : listFiles(local);
         ProjectManifestResponse manifest = manifestResponse(projectId, files);
-        ProjectVersionRef version = new ProjectVersionRef(manifest.version());
-        SandboxWorkspaceSnapshot snapshot = new SandboxWorkspaceSnapshot(
-                new SandboxWorkspaceRef(projectId, version),
-                files.stream().map(file -> new SandboxFileSnapshot(new ProjectRelativePath(file.path()),
-                        new FileHash(file.sha256()), file.sizeBytes())).toList());
+        SandboxWorkspaceSnapshot snapshot = snapshot(projectId, manifest, files);
 
         Map<String, ProjectFileEntry> admitted = new LinkedHashMap<>();
         files.forEach(file -> admitted.put(file.path(), file));
@@ -196,6 +193,9 @@ public class ProjectService {
             String portablePath = new ProjectRelativePath(value).value();
             ProjectFileEntry expected = admitted.get(portablePath);
             if (expected == null) continue;
+            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(portablePath)) {
+                continue;
+            }
             ProjectFileResponse read = project.getRootType() == ProjectRootType.MINIO_OBJECTS
                     ? readObjectFile(project, policy, portablePath, objectEntries)
                     : readLocalFile(local, portablePath);
@@ -206,7 +206,9 @@ public class ProjectService {
             textFiles.put(portablePath, read.content());
         }
         List<ProjectFileEntry> currentFiles = project.getRootType() == ProjectRootType.MINIO_OBJECTS
-                ? listObjectFiles(policy, List.copyOf(requireObjectStorage().readManifest(project.getRootPath())))
+                ? listObjectFiles(project, policy,
+                        List.copyOf(requireObjectStorage().readManifest(
+                                project.getRootPath())))
                 : listFiles(local);
         ProjectManifestResponse currentManifest = manifestResponse(projectId, currentFiles);
         if (!manifest.version().equals(currentManifest.version()) || !files.equals(currentFiles)) {
@@ -215,6 +217,72 @@ public class ProjectService {
         }
         return new SandboxWorkspaceMaterialization(snapshot,
                 Collections.unmodifiableMap(new LinkedHashMap<>(textFiles)));
+    }
+
+    /**
+     * Materializes exact admitted bytes for the authenticated V2 source adapter.
+     * This method is intentionally not exposed by a Controller.
+     */
+    @Transactional(readOnly = true)
+    public ProjectVersionByteMaterialization materializeVersionBytes(
+            Long userId,
+            Long projectId,
+            Set<String> requestedRelativePaths) {
+        Project project = ownedProject(userId, projectId);
+        ProjectPathPolicy policy = ProjectPathPolicy.from(project, objectMapper);
+        List<ProjectObjectEntry> objectEntries =
+                project.getRootType() == ProjectRootType.MINIO_OBJECTS
+                        ? List.copyOf(requireObjectStorage().readManifest(
+                                project.getRootPath()))
+                        : List.of();
+        ResolvedProject local = project.getRootType()
+                == ProjectRootType.MINIO_OBJECTS
+                        ? null : resolveLocal(project, policy);
+        List<ProjectFileEntry> files = project.getRootType()
+                == ProjectRootType.MINIO_OBJECTS
+                        ? listObjectFiles(project, policy, objectEntries)
+                        : listFiles(local);
+        ProjectManifestResponse manifest = manifestResponse(projectId, files);
+        SandboxWorkspaceSnapshot snapshot = snapshot(projectId, manifest, files);
+
+        Map<String, ProjectFileEntry> admitted = new LinkedHashMap<>();
+        files.forEach(file -> admitted.put(file.path(), file));
+        Map<String, byte[]> selected = new LinkedHashMap<>();
+        Set<String> requested = requestedRelativePaths == null
+                ? Set.of() : new TreeSet<>(requestedRelativePaths);
+        for (String value : requested) {
+            String portablePath = new ProjectRelativePath(value).value();
+            ProjectFileEntry expected = admitted.get(portablePath);
+            if (expected == null) {
+                continue;
+            }
+            byte[] content = project.getRootType()
+                    == ProjectRootType.MINIO_OBJECTS
+                            ? readObjectAsset(project, policy, portablePath,
+                                    objectEntries)
+                            : readLocalAsset(local, portablePath);
+            if (content.length != expected.sizeBytes()
+                    || !sha256(content).equals(expected.sha256())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Project changed while materializing the V2 snapshot");
+            }
+            selected.put(portablePath, content);
+        }
+
+        List<ProjectFileEntry> currentFiles = project.getRootType()
+                == ProjectRootType.MINIO_OBJECTS
+                        ? listObjectFiles(project, policy,
+                                List.copyOf(requireObjectStorage().readManifest(
+                                        project.getRootPath())))
+                        : listFiles(local);
+        ProjectManifestResponse current = manifestResponse(
+                projectId, currentFiles);
+        if (!manifest.version().equals(current.version())
+                || !files.equals(currentFiles)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Project changed while materializing the V2 snapshot");
+        }
+        return new ProjectVersionByteMaterialization(snapshot, selected);
     }
 
     @Transactional(readOnly = true)
@@ -239,10 +307,14 @@ public class ProjectService {
             BasicFileAttributes attributes = Files.readAttributes(realPath, BasicFileAttributes.class);
             if (!resolved.policy().allows(relative) || !attributes.isRegularFile()
                     || attributes.size() > properties.getMaxFileBytes()
-                    || !isReadableTextFile(realPath, attributes.size())) {
+                    || ProjectAssetAdmissionPolicy.readOnlyBinaryPath(
+                            toPortablePath(relative))) {
                 throw inaccessibleFile();
             }
             byte[] content = readBoundedContent(realPath, attributes.size());
+            if (!ProjectAssetAdmissionPolicy.readableText(content)) {
+                throw inaccessibleFile();
+            }
             return new ProjectFileResponse(toPortablePath(relative),
                     decodeUtf8Strict(content), content.length,
                     Files.getLastModifiedTime(realPath).toInstant(), sha256(content));
@@ -268,13 +340,20 @@ public class ProjectService {
             if (hits.size() >= maxResults) {
                 break;
             }
+            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(entry.path())) {
+                continue;
+            }
             Path file = ProjectPathGuard.resolveExistingFile(resolved.root(), entry.path());
             try {
                 BasicFileAttributes attributes = Files.readAttributes(file, BasicFileAttributes.class);
-                if (attributes.size() > properties.getMaxFileBytes() || !isReadableTextFile(file, attributes.size())) {
+                if (attributes.size() > properties.getMaxFileBytes()) {
                     continue;
                 }
-                String[] lines = new String(readBoundedContent(file, attributes.size()), StandardCharsets.UTF_8)
+                byte[] content = readBoundedContent(file, attributes.size());
+                if (!ProjectAssetAdmissionPolicy.readableText(content)) {
+                    continue;
+                }
+                String[] lines = new String(content, StandardCharsets.UTF_8)
                         .split("\\R", -1);
                 for (int index = 0; index < lines.length && hits.size() < maxResults; index++) {
                     if (lines[index].contains(query)) {
@@ -342,15 +421,19 @@ public class ProjectService {
                         return FileVisitResult.CONTINUE;
                     }
                     Path relative = resolved.root().canonicalPath().relativize(file);
-                    if (!resolved.policy().allows(relative) || !isReadableTextFile(file, attrs.size())) {
+                    if (!resolved.policy().allows(relative)) {
                         return FileVisitResult.CONTINUE;
                     }
                     Path realPath = file.toRealPath();
                     if (!realPath.startsWith(resolved.root().canonicalPath())) {
                         return FileVisitResult.CONTINUE;
                     }
-                    budget.recordAdmittedBytes(attrs.size());
                     byte[] content = readBoundedContent(realPath, attrs.size());
+                    if (!ProjectAssetAdmissionPolicy.admits(
+                            toPortablePath(relative), content)) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    budget.recordAdmittedBytes(attrs.size());
                     files.add(new ProjectFileEntry(toPortablePath(relative), content.length,
                             Files.getLastModifiedTime(realPath).toInstant(), sha256(content)));
                     return FileVisitResult.CONTINUE;
@@ -366,13 +449,24 @@ public class ProjectService {
     }
 
     private List<ProjectFileEntry> listObjectFiles(Project project, ProjectPathPolicy policy) {
-        return listObjectFiles(policy, requireObjectStorage().readManifest(project.getRootPath()));
+        return listObjectFiles(project, policy,
+                requireObjectStorage().readManifest(project.getRootPath()));
     }
 
-    private List<ProjectFileEntry> listObjectFiles(ProjectPathPolicy policy, List<ProjectObjectEntry> objectEntries) {
+    private List<ProjectFileEntry> listObjectFiles(
+            Project project,
+            ProjectPathPolicy policy,
+            List<ProjectObjectEntry> objectEntries) {
         List<ProjectFileEntry> files = new ArrayList<>();
         TraversalBudget budget = new TraversalBudget();
         for (ProjectObjectEntry entry : objectEntries) {
+            if (entry == null || entry.path() == null
+                    || entry.sizeBytes() < 0
+                    || entry.modifiedAt() == null
+                    || entry.sha256() == null
+                    || !entry.sha256().matches(LOWER_SHA_256)) {
+                continue;
+            }
             Path relative = ProjectPathGuard.parseRelative(entry.path(), "Project object path");
             if (relative.getNameCount() > properties.getMaxTraversalDepth()) {
                 throw new ProjectTraversalLimitException("Project traversal depth exceeded");
@@ -380,11 +474,85 @@ public class ProjectService {
             if (!policy.allows(relative)) continue;
             budget.recordVisitedFile();
             if (entry.sizeBytes() > properties.getMaxFileBytes()) continue;
+            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(entry.path())) {
+                byte[] content = requireObjectStorage().readFile(
+                        project.getRootPath(), entry.path(),
+                        properties.getMaxFileBytes());
+                if (content == null
+                        || content.length != entry.sizeBytes()
+                        || !sha256(content).equals(entry.sha256())
+                        || !ProjectAssetAdmissionPolicy.admits(
+                                entry.path(), content)) {
+                    continue;
+                }
+            }
             budget.recordAdmittedBytes(entry.sizeBytes());
             files.add(entry.toFileEntry());
         }
         files.sort(Comparator.comparing(ProjectFileEntry::path));
         return List.copyOf(files);
+    }
+
+    private byte[] readLocalAsset(ResolvedProject resolved,
+                                  String relativePath) {
+        final Path realPath;
+        try {
+            realPath = ProjectPathGuard.resolveExistingFile(
+                    resolved.root(), relativePath);
+        } catch (ProjectFileUnavailableException ex) {
+            throw inaccessibleFile();
+        }
+        try {
+            Path relative = resolved.root().canonicalPath()
+                    .relativize(realPath);
+            BasicFileAttributes attributes = Files.readAttributes(
+                    realPath, BasicFileAttributes.class);
+            String portablePath = toPortablePath(relative);
+            if (!realPath.startsWith(resolved.root().canonicalPath())
+                    || !resolved.policy().allows(relative)
+                    || !attributes.isRegularFile()
+                    || attributes.size() > properties.getMaxFileBytes()) {
+                throw inaccessibleFile();
+            }
+            byte[] content = readBoundedContent(
+                    realPath, attributes.size());
+            if (!ProjectAssetAdmissionPolicy.admits(
+                    portablePath, content)) {
+                throw inaccessibleFile();
+            }
+            return content;
+        } catch (IOException ex) {
+            throw inaccessibleFile();
+        }
+    }
+
+    private byte[] readObjectAsset(Project project,
+                                   ProjectPathPolicy policy,
+                                   String relativePath,
+                                   List<ProjectObjectEntry> objectEntries) {
+        Path relative = ProjectPathGuard.parseRelative(
+                relativePath, "path");
+        if (!policy.allows(relative)) {
+            throw inaccessibleFile();
+        }
+        String portablePath = toPortablePath(relative);
+        ProjectObjectEntry entry = objectEntries.stream()
+                .filter(item -> portablePath.equals(item.path()))
+                .findFirst().orElseThrow(this::inaccessibleFile);
+        if (entry.sizeBytes() > properties.getMaxFileBytes()) {
+            throw inaccessibleFile();
+        }
+        byte[] content = requireObjectStorage().readFile(
+                project.getRootPath(), portablePath,
+                properties.getMaxFileBytes());
+        if (content == null
+                || content.length != entry.sizeBytes()
+                || !sha256(content).equals(entry.sha256())
+                || !ProjectAssetAdmissionPolicy.admits(
+                        portablePath, content)) {
+            throw inaccessibleFile();
+        }
+        return content;
     }
 
     private ProjectFileResponse readObjectFile(Project project, ProjectPathPolicy policy, String relativePath) {
@@ -397,14 +565,18 @@ public class ProjectService {
         Path relative = ProjectPathGuard.parseRelative(relativePath, "path");
         if (!policy.allows(relative)) throw inaccessibleFile();
         String portablePath = toPortablePath(relative);
+        if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(portablePath)) {
+            throw inaccessibleFile();
+        }
         ProjectObjectEntry entry = objectEntries.stream()
                 .filter(item -> portablePath.equals(item.path()))
                 .findFirst().orElseThrow(this::inaccessibleFile);
         if (entry.sizeBytes() > properties.getMaxFileBytes()) throw inaccessibleFile();
         byte[] content = requireObjectStorage().readFile(project.getRootPath(), portablePath,
                 properties.getMaxFileBytes());
-        if (content.length != entry.sizeBytes() || !sha256(content).equals(entry.sha256())
-                || !isReadableTextContent(content)) {
+        if (content.length != entry.sizeBytes()
+                || !sha256(content).equals(entry.sha256())
+                || !ProjectAssetAdmissionPolicy.readableText(content)) {
             throw inaccessibleFile();
         }
         return new ProjectFileResponse(portablePath, decodeUtf8Strict(content),
@@ -416,10 +588,13 @@ public class ProjectService {
         List<ProjectSearchHit> hits = new ArrayList<>();
         for (ProjectFileEntry entry : listObjectFiles(project, policy)) {
             if (hits.size() >= maxResults) break;
+            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(entry.path())) {
+                continue;
+            }
             byte[] content = requireObjectStorage().readFile(project.getRootPath(), entry.path(),
                     properties.getMaxFileBytes());
             if (content.length != entry.sizeBytes() || !sha256(content).equals(entry.sha256())
-                    || !isReadableTextContent(content)) {
+                    || !ProjectAssetAdmissionPolicy.readableText(content)) {
                 continue;
             }
             String[] lines = new String(content, StandardCharsets.UTF_8).split("\\R", -1);
@@ -433,35 +608,12 @@ public class ProjectService {
         return hits;
     }
 
-    private boolean isReadableTextContent(byte[] content) {
-        int sampleSize = Math.min(TEXT_SAMPLE_BYTES, content.length);
-        for (int index = 0; index < sampleSize; index++) {
-            if (content[index] == 0) return false;
-        }
-        return true;
-    }
-
     private ProjectObjectStorage requireObjectStorage() {
         if (objectStorage == null) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "Project object storage is not configured");
         }
         return objectStorage;
-    }
-
-    private boolean isReadableTextFile(Path file, long size) throws IOException {
-        ByteBuffer sample = ByteBuffer.allocate((int) Math.min(TEXT_SAMPLE_BYTES, size));
-        try (SeekableByteChannel channel = Files.newByteChannel(file, StandardOpenOption.READ)) {
-            while (sample.hasRemaining() && channel.read(sample) > 0) {
-                // Read only a bounded sample; full content is read once later for the response/hash.
-            }
-        }
-        for (byte value : sample.array()) {
-            if (value == 0) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private byte[] readBoundedContent(Path file, long expectedSize) throws IOException {
@@ -490,6 +642,20 @@ public class ProjectService {
                 .map(file -> new ProjectManifestIdentity.Entry(new ProjectRelativePath(file.path()),
                         new FileHash(file.sha256()), file.sizeBytes())).toList()).value();
         return new ProjectManifestResponse(projectId, version, files);
+    }
+
+    private SandboxWorkspaceSnapshot snapshot(
+            Long projectId,
+            ProjectManifestResponse manifest,
+            List<ProjectFileEntry> files) {
+        ProjectVersionRef version = new ProjectVersionRef(
+                manifest.version());
+        return new SandboxWorkspaceSnapshot(
+                new SandboxWorkspaceRef(projectId, version),
+                files.stream().map(file -> new SandboxFileSnapshot(
+                        new ProjectRelativePath(file.path()),
+                        new FileHash(file.sha256()),
+                        file.sizeBytes())).toList());
     }
 
     private String decodeUtf8Strict(byte[] content) {
@@ -535,6 +701,43 @@ public class ProjectService {
                 throw new IllegalArgumentException("sandbox materialization is incomplete");
             }
             textFiles = Collections.unmodifiableMap(new LinkedHashMap<>(textFiles));
+        }
+    }
+
+    public static final class ProjectVersionByteMaterialization {
+        private final SandboxWorkspaceSnapshot snapshot;
+        private final Map<String, byte[]> files;
+
+        public ProjectVersionByteMaterialization(
+                SandboxWorkspaceSnapshot snapshot,
+                Map<String, byte[]> files) {
+            if (snapshot == null || files == null) {
+                throw new IllegalArgumentException(
+                        "Project version materialization is incomplete");
+            }
+            this.snapshot = snapshot;
+            this.files = copyBytes(files);
+        }
+
+        public SandboxWorkspaceSnapshot snapshot() {
+            return snapshot;
+        }
+
+        public Map<String, byte[]> files() {
+            return copyBytes(files);
+        }
+
+        private static Map<String, byte[]> copyBytes(
+                Map<String, byte[]> source) {
+            Map<String, byte[]> copy = new LinkedHashMap<>();
+            source.forEach((path, content) -> {
+                if (path == null || content == null) {
+                    throw new IllegalArgumentException(
+                            "Project version materialization contains a null entry");
+                }
+                copy.put(path, content.clone());
+            });
+            return Collections.unmodifiableMap(copy);
         }
     }
 

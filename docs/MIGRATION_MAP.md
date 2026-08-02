@@ -563,3 +563,33 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   natural-language history, Candidate/Workspace authority, and the 15-entry V2
   product tool catalog remain authoritative and unchanged.
 - Data boundary: no schema or data migration, deletion, or backfill is added.
+
+## Immutable binary Project assets for V2 Workspace source
+
+- Issue: `#123`.
+- Status: `NEW_PRODUCT_SOURCE_BOUNDARY`.
+- Scope: the authoritative Project manifest may now admit bounded, validated
+  `.pdf`, `.docx`, and `.xlsx` assets alongside existing text files. PDF is
+  checked by signature; DOCX/XLSX are checked as bounded OOXML containers with
+  safe entry names and the required package parts. Unsupported or disguised
+  binary files remain outside the Project cut.
+- Version authority: admitted binary bytes contribute path, size, and SHA-256
+  to the same existing `ProjectVersion` identity. Local and MinIO-backed
+  Projects enforce the same policy and recheck the complete manifest before
+  and after materialization.
+- V2 adaptation: `ProductProjectVersionSource` uses a product-internal raw-byte
+  materialization method and passes exact bytes into the stable V2
+  `ProjectVersionSource`. The method has no Controller and exposes neither host
+  paths nor object keys.
+- Compatibility: existing Project `readFile` and literal search stay
+  text-only. Existing sandbox dispatch stays a text map. Binary assets are
+  preserved when a revision is created but cannot be selected, validated, or
+  applied as Candidate text, including previously persisted Candidate facts.
+- Reuse decision: retain the current Project ownership, path policy, traversal
+  budgets, manifest identity, object storage, V2 Workspace, Candidate gate,
+  and immutable revision services. Do not introduce a second asset table,
+  version model, Workspace provider, or Candidate format.
+- Excluded: PDF/DOCX/XLSX parsing, OCR, image inspection, tool registration,
+  network access, frontend changes, schema changes, and legacy `/chat`
+  orchestration. Those remain separate capabilities; Issue `#122` consumes
+  this source boundary for bounded document and spreadsheet inspection.

@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -83,7 +84,11 @@ class ProjectRevisionWorkflowServiceTest {
         owner = users.saveAndFlush(new SysUser("owner-" + UUID.randomUUID(), "hash"));
         configureStorage();
         String prefix = "projects/" + owner.getId() + "/" + UUID.randomUUID();
-        putSnapshot(prefix, Map.of("a.txt", bytes("A"), "delete.txt", bytes("DELETE"), "keep.txt", bytes("KEEP")));
+        putSnapshot(prefix, Map.of(
+                "a.txt", bytes("A"),
+                "delete.txt", bytes("DELETE"),
+                "keep.txt", bytes("KEEP"),
+                "paper.pdf", bytes("%PDF-1.7\n%%EOF")));
         project = projects.saveAndFlush(Project.minioUpload(owner.getId(), "Study", prefix, "[\"**\"]", "[]"));
         baseVersion = version(manifests.get(prefix));
         candidateResponse = candidate(project.getId(), baseVersion);
@@ -101,7 +106,9 @@ class ProjectRevisionWorkflowServiceTest {
         Project current = projects.findById(project.getId()).orElseThrow();
         assertThat(current.getRootPath()).isNotEqualTo(project.getRootPath());
         assertThat(objects.get(current.getRootPath())).containsEntry("a.txt", bytes("A2"))
-                .containsEntry("new.txt", bytes("NEW")).containsEntry("delete.txt", bytes("DELETE"));
+                .containsEntry("new.txt", bytes("NEW"))
+                .containsEntry("delete.txt", bytes("DELETE"))
+                .containsEntry("paper.pdf", bytes("%PDF-1.7\n%%EOF"));
         assertThat(objects.get(project.getRootPath())).containsEntry("a.txt", bytes("A"));
         assertThat(revisions.findByProjectIdAndUserIdOrderByCreatedAtDescIdDesc(project.getId(), owner.getId())).hasSize(2);
 
@@ -121,6 +128,35 @@ class ProjectRevisionWorkflowServiceTest {
                 "apply-key-0001", baseVersion, new ApplyCandidateRequest(List.of(0))))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void applyRejectsHistoricalValidatedBinaryCandidateBeforeGateOrStorage() {
+        CandidateArtifactResponse response = candidate(
+                project.getId(), baseVersion);
+        CandidateFileChange binary = CandidateFileChange.add(
+                new ProjectVersionRef(baseVersion),
+                new ProjectRelativePath("paper.pdf"),
+                CandidateTextPayload.fromText("%PDF-fake"),
+                response.changes().get(0).evidenceRefs());
+        when(response.changes()).thenReturn(List.of(binary));
+        when(candidates.getCurrent(owner.getId(), 55L))
+                .thenReturn(response);
+
+        assertThatThrownBy(() -> service.applyCandidate(
+                owner.getId(), project.getId(), 55L,
+                "binary-apply-key", baseVersion,
+                new ApplyCandidateRequest(List.of(0), "old-validation")))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        error -> {
+                            assertThat(error.getStatusCode()).isEqualTo(
+                                    HttpStatus.UNPROCESSABLE_ENTITY);
+                            assertThat(error.getReason()).contains(
+                                    "read-only");
+                        });
+        verify(validationGate, never()).requireSuccessful(
+                anyLong(), anyLong(), anyLong(), anyString(),
+                anyString(), any(), any());
     }
 
     @Test
@@ -146,7 +182,8 @@ class ProjectRevisionWorkflowServiceTest {
             List<String> names = new ArrayList<>();
             java.util.zip.ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) names.add(entry.getName());
-            assertThat(names).containsExactly("a.txt", "delete.txt", "keep.txt");
+            assertThat(names).containsExactly(
+                    "a.txt", "delete.txt", "keep.txt", "paper.pdf");
         }
     }
 
@@ -211,7 +248,10 @@ class ProjectRevisionWorkflowServiceTest {
             java.util.zip.ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) names.add(entry.getName());
         }
-        assertThat(names).containsExactly("a.txt", "keep.txt", "new.txt").allMatch(name -> !name.contains("..") && !name.contains(":"));
+        assertThat(names).containsExactly(
+                        "a.txt", "keep.txt", "new.txt", "paper.pdf")
+                .allMatch(name -> !name.contains("..")
+                        && !name.contains(":"));
 
         ProjectRevisionOperationResponse rolledBack = service.rollback(owner.getId(), project.getId(), initial.id(),
                 "rollback-key-1", applied.resultVersion());

@@ -1323,3 +1323,30 @@ semantic correctness, grammar, novelty, or publication-quality judgments.
 This boundary adds no schema, Controller, frontend, network, RAG, literature,
 Sandbox, Candidate, ProjectVersion mutation, V2 core change, paper-task
 orchestration, or legacy Agent execution path.
+
+## Immutable binary Project source boundary
+
+The product Project manifest and the authenticated V2 source adapter now share
+one narrow read-only asset policy. Existing admitted text files remain
+unchanged. Valid bounded PDF, DOCX, and XLSX bytes may additionally enter the
+same immutable Project cut; arbitrary binary formats and files whose extension
+does not match their signature or OOXML package structure remain excluded.
+
+The ProjectVersion identity continues to derive from normalized relative path,
+exact size, and SHA-256 for every admitted entry. Both local and MinIO-backed
+materialization revalidate ownership, path policy, size, hash, format, and the
+complete before/after manifest cut. A product-internal byte materializer feeds
+the stable V2 `ProjectVersionSource` without exposing a Controller, host path,
+object key, log body, message body, or Receipt body.
+
+The existing Project read and literal-search APIs remain text-only. The older
+sandbox dispatch contract also remains text-only and omits binary entries from
+its file map while retaining them in the authoritative Workspace snapshot.
+Candidate changes remain text payloads: supported binary asset paths are
+rejected by validation and apply, while unchanged binary bytes are copied into
+new immutable revisions created from accepted text Candidates.
+
+This boundary adds no parser, OCR, image analysis, network call, tool
+descriptor, frontend behavior, schema, second asset table, second Project
+version model, or V2 core dependency on product code. Document and spreadsheet
+inspection are layered later as read-only tools over this frozen Workspace.
