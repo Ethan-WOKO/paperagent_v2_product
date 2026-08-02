@@ -1,12 +1,12 @@
 <template>
-  <div class="demo-page">
-    <main class="demo-shell">
-      <section class="demo-hero">
-        <div class="demo-hero__copy">
-          <div class="workbench-kicker">ScholarAI Demo</div>
+  <main class="public-demo">
+    <section class="public-demo__workspace">
+      <div class="public-demo__intro">
+        <div class="public-demo__copy">
+          <div class="public-demo__eyebrow">PAPERAGENT DEMO</div>
           <h1>{{ t('demo.title') }}</h1>
           <p>{{ t('demo.description') }}</p>
-          <div class="demo-actions">
+          <div class="public-demo__actions">
             <NButton type="primary" size="large" :loading="starting" :disabled="config?.enabled === false" @click="handleStartDemo">
               {{ t('demo.start') }}
             </NButton>
@@ -20,12 +20,10 @@
           </NAlert>
         </div>
 
-        <NCard class="demo-preview-card" :bordered="false">
-          <template #header>
-            <div class="section-title">{{ t('demo.questions') }}</div>
-          </template>
+        <section class="public-demo__questions">
+          <header>{{ t('demo.questions') }}</header>
           <NSpin :show="loadingConfig">
-            <div class="demo-question-list">
+            <div class="public-demo__question-list">
               <button
                 v-for="question in exampleQuestions"
                 :key="question"
@@ -36,10 +34,10 @@
               </button>
             </div>
           </NSpin>
-        </NCard>
-      </section>
+        </section>
+      </div>
 
-      <section class="demo-feature-grid">
+      <section class="public-demo__features">
         <article>
           <strong>{{ t('demo.featureKnowledge') }}</strong>
           <span>{{ t('demo.featureKnowledgeBody') }}</span>
@@ -58,16 +56,16 @@
         </article>
       </section>
 
-      <section v-if="config?.limitations?.length" class="demo-limitations">
+      <section v-if="config?.limitations?.length" class="public-demo__limitations">
         <span v-for="item in config.limitations" :key="item">{{ item }}</span>
       </section>
-    </main>
-  </div>
+    </section>
+  </main>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { NAlert, NButton, NCard, NSpin } from 'naive-ui';
+import { NAlert, NButton, NSpin } from 'naive-ui';
 import { useRouter } from 'vue-router';
 import { getDemoConfig, type DemoConfigResponse } from '@/api/demo';
 import { useAuthStore } from '@/stores/auth';
