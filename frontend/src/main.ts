@@ -8,6 +8,7 @@ import './styles/paper-workspace.css';
 import './styles/knowledge-workspace.css';
 import './styles/chat-workspace.css';
 import './styles/memory-workspace.css';
+import './styles/settings-workspace.css';
 import { useAuthStore } from './stores/auth';
 import { AUTH_EXPIRED_EVENT } from './auth/session';
 
