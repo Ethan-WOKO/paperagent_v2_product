@@ -13,7 +13,7 @@ import static org.mockito.Mockito.when;
 import com.yanban.api.project.ProjectFileEntry;
 import com.yanban.api.project.ProjectManifestResponse;
 import com.yanban.api.project.ProjectService;
-import com.yanban.api.project.ProjectService.SandboxWorkspaceMaterialization;
+import com.yanban.api.project.ProjectService.ProjectVersionByteMaterialization;
 import com.yanban.core.agent.sandbox.SandboxFileSnapshot;
 import com.yanban.core.agent.sandbox.SandboxWorkspaceRef;
 import com.yanban.core.agent.sandbox.SandboxWorkspaceSnapshot;
@@ -49,7 +49,7 @@ class ProductProjectVersionSourceTest {
     void mapsExactCutCanonicallyAndDefensivelyWithoutCaching() {
         Fixture fixture = fixture();
         doReturn(fixture.manifest()).when(projects).manifest(USER_ID, PROJECT_ID);
-        when(projects.materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
+        when(projects.materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
                 .thenReturn(fixture.materialized());
         ProductProjectVersionSource source = source(fixture.version());
 
@@ -74,11 +74,46 @@ class ProductProjectVersionSourceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Set<String>> paths = ArgumentCaptor.forClass(Set.class);
         verify(projects, times(2)).manifest(USER_ID, PROJECT_ID);
-        verify(projects, times(2)).materializeSandbox(
+        verify(projects, times(2)).materializeVersionBytes(
                 org.mockito.ArgumentMatchers.eq(USER_ID),
                 org.mockito.ArgumentMatchers.eq(PROJECT_ID),
                 paths.capture());
         assertThat(paths.getAllValues()).allSatisfy(value -> assertThat(value).containsExactly(A_PATH, Z_PATH));
+    }
+
+    @Test
+    void mapsBinaryProjectAssetWithoutTextRoundTrip() {
+        byte[] pdf = new byte[] {
+                '%', 'P', 'D', 'F', '-', '1', '.', '7', '\n',
+                0, 1, 2, 3
+        };
+        ProjectFileEntry entry = new ProjectFileEntry(
+                "paper.pdf", pdf.length, Instant.EPOCH, sha256(pdf));
+        String version = ProjectManifestIdentity.derive(List.of(
+                new ProjectManifestIdentity.Entry(
+                        new ProjectRelativePath(entry.path()),
+                        new FileHash(entry.sha256()), entry.sizeBytes())))
+                .value();
+        ProjectManifestResponse manifest = new ProjectManifestResponse(
+                PROJECT_ID, version, List.of(entry));
+        SandboxWorkspaceSnapshot snapshot = new SandboxWorkspaceSnapshot(
+                new SandboxWorkspaceRef(PROJECT_ID,
+                        new com.yanban.core.research.ProjectVersionRef(
+                                version)),
+                List.of(snapshot(entry)));
+        when(projects.manifest(USER_ID, PROJECT_ID)).thenReturn(manifest);
+        when(projects.materializeVersionBytes(
+                USER_ID, PROJECT_ID, Set.of("paper.pdf")))
+                .thenReturn(new ProjectVersionByteMaterialization(
+                        snapshot, Map.of("paper.pdf", pdf)));
+
+        ProjectVersionSnapshot loaded = source(version)
+                .load(reference(version));
+
+        assertThat(loaded.files()).hasSize(1);
+        assertThat(loaded.files().get(0).path().value())
+                .isEqualTo("paper.pdf");
+        assertThat(loaded.files().get(0).content()).isEqualTo(pdf);
     }
 
     @Test
@@ -97,7 +132,7 @@ class ProductProjectVersionSourceTest {
                 WorkspaceErrorCode.SOURCE_REFERENCE_MISMATCH);
 
         verify(projects, never()).manifest(USER_ID, PROJECT_ID);
-        verify(projects, never()).materializeSandbox(
+        verify(projects, never()).materializeVersionBytes(
                 org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(),
                 anySet());
@@ -113,7 +148,7 @@ class ProductProjectVersionSourceTest {
 
         assertSourceFailure(() -> source.load(reference(fixture.version())));
 
-        verify(projects, never()).materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH));
+        verify(projects, never()).materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH));
     }
 
     @Test
@@ -132,27 +167,27 @@ class ProductProjectVersionSourceTest {
         when(projects.manifest(USER_ID, PROJECT_ID)).thenReturn(
                 new ProjectManifestResponse(PROJECT_ID, fixture.version(), List.of(uppercase)));
         assertSourceFailure(() -> source.load(reference(fixture.version())));
-        verify(projects, never()).materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH));
+        verify(projects, never()).materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH));
     }
 
     @Test
-    void rejectsMissingOrExtraTextContentWithoutExposingIt() {
+    void rejectsMissingOrExtraContentWithoutExposingIt() {
         Fixture fixture = fixture();
         when(projects.manifest(USER_ID, PROJECT_ID)).thenReturn(fixture.manifest());
         ProductProjectVersionSource source = source(fixture.version());
-        when(projects.materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
-                .thenReturn(new SandboxWorkspaceMaterialization(
+        when(projects.materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
+                .thenReturn(new ProjectVersionByteMaterialization(
                         fixture.materialized().snapshot(),
-                        Map.of(A_PATH, A_CONTENT)));
+                        Map.of(A_PATH, A_CONTENT.getBytes(StandardCharsets.UTF_8))));
 
         WorkspaceException missing = captureSourceFailure(
                 () -> source.load(reference(fixture.version())));
         assertThat(missing.getMessage()).doesNotContain(A_CONTENT).doesNotContain(Z_CONTENT);
 
-        Map<String, String> extra = new LinkedHashMap<>(fixture.materialized().textFiles());
-        extra.put("extra.txt", "unrelated-extra-content");
-        when(projects.materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
-                .thenReturn(new SandboxWorkspaceMaterialization(
+        Map<String, byte[]> extra = new LinkedHashMap<>(fixture.materialized().files());
+        extra.put("extra.txt", "unrelated-extra-content".getBytes(StandardCharsets.UTF_8));
+        when(projects.materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
+                .thenReturn(new ProjectVersionByteMaterialization(
                         fixture.materialized().snapshot(),
                         extra));
         WorkspaceException extraFailure = captureSourceFailure(
@@ -166,10 +201,10 @@ class ProductProjectVersionSourceTest {
         when(projects.manifest(USER_ID, PROJECT_ID)).thenReturn(fixture.manifest());
         ProductProjectVersionSource source = source(fixture.version());
 
-        Map<String, String> corruptContent = new LinkedHashMap<>(fixture.materialized().textFiles());
-        corruptContent.put(A_PATH, "changed");
-        when(projects.materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
-                .thenReturn(new SandboxWorkspaceMaterialization(
+        Map<String, byte[]> corruptContent = new LinkedHashMap<>(fixture.materialized().files());
+        corruptContent.put(A_PATH, "changed".getBytes(StandardCharsets.UTF_8));
+        when(projects.materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
+                .thenReturn(new ProjectVersionByteMaterialization(
                         fixture.materialized().snapshot(),
                         corruptContent));
         assertSourceFailure(() -> source.load(reference(fixture.version())));
@@ -178,10 +213,10 @@ class ProductProjectVersionSourceTest {
         when(crossCut.workspace()).thenReturn(
                 new SandboxWorkspaceRef(99L, new com.yanban.core.research.ProjectVersionRef(fixture.version())));
         when(crossCut.files()).thenReturn(fixture.materialized().snapshot().files());
-        when(projects.materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
-                .thenReturn(new SandboxWorkspaceMaterialization(
+        when(projects.materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
+                .thenReturn(new ProjectVersionByteMaterialization(
                         crossCut,
-                        fixture.materialized().textFiles()));
+                        fixture.materialized().files()));
         assertSourceFailure(() -> source.load(reference(fixture.version())));
     }
 
@@ -197,12 +232,12 @@ class ProductProjectVersionSourceTest {
 
         RuntimeException materializationFailure = new IllegalArgumentException("authorization changed");
         doReturn(fixture.manifest()).when(projects).manifest(USER_ID, PROJECT_ID);
-        when(projects.materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
+        when(projects.materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH)))
                 .thenThrow(materializationFailure);
 
         assertThatThrownBy(() -> source.load(reference(fixture.version())))
                 .isSameAs(materializationFailure);
-        verify(projects).materializeSandbox(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH));
+        verify(projects).materializeVersionBytes(USER_ID, PROJECT_ID, Set.of(A_PATH, Z_PATH));
     }
 
     private ProductProjectVersionSource source(String version) {
@@ -230,9 +265,11 @@ class ProductProjectVersionSourceTest {
         return new Fixture(
                 version,
                 manifest,
-                new SandboxWorkspaceMaterialization(
+                new ProjectVersionByteMaterialization(
                         snapshot,
-                        Map.of(Z_PATH, Z_CONTENT, A_PATH, A_CONTENT)));
+                        Map.of(
+                                Z_PATH, Z_CONTENT.getBytes(StandardCharsets.UTF_8),
+                                A_PATH, A_CONTENT.getBytes(StandardCharsets.UTF_8))));
     }
 
     private static ProjectFileEntry entry(String path, String content) {
@@ -248,10 +285,14 @@ class ProductProjectVersionSourceTest {
     }
 
     private static String sha256(String content) {
+        return sha256(content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String sha256(byte[] content) {
         try {
             return java.util.HexFormat.of().formatHex(
                     MessageDigest.getInstance("SHA-256")
-                            .digest(content.getBytes(StandardCharsets.UTF_8)));
+                            .digest(content));
         } catch (Exception exception) {
             throw new AssertionError(exception);
         }
@@ -293,7 +334,7 @@ class ProductProjectVersionSourceTest {
     private record Fixture(
             String version,
             ProjectManifestResponse manifest,
-            SandboxWorkspaceMaterialization materialized
+            ProjectVersionByteMaterialization materialized
     ) {
     }
 }

@@ -125,6 +125,13 @@ public class CandidateSandboxValidationService {
         if (!expectedVersion.equals(manifest.version())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Project current version changed");
         }
+        for (Integer index : accepted) {
+            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(
+                    candidate.changes().get(index)
+                            .relativePath().value())) {
+                invalid("Binary Project assets are read-only and cannot be Candidate changes");
+            }
+        }
         if (profile.localOnly()) {
             requireDocumentOnly(manifest, candidate, accepted);
             return storeDocumentValidation(userId, projectId, artifactId, key, expectedVersion,
@@ -139,8 +146,12 @@ public class CandidateSandboxValidationService {
                 .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
         ProjectService.SandboxWorkspaceMaterialization materialized =
                 projects.materializeSandbox(userId, projectId, allPaths);
+        long expectedTextFiles = manifest.files().stream()
+                .filter(file -> !ProjectAssetAdmissionPolicy
+                        .readOnlyBinaryPath(file.path()))
+                .count();
         if (!expectedVersion.equals(materialized.snapshot().workspace().projectVersion().value())
-                || materialized.textFiles().size() != manifest.files().size()) {
+                || materialized.textFiles().size() != expectedTextFiles) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "The complete trusted ProjectVersion cannot be materialized for validation");
         }

@@ -10,7 +10,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -18,6 +20,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -85,6 +89,65 @@ class ProjectServiceTest {
     }
 
     @Test
+    void localManifestAndV2SourcePreserveValidatedBinaryAssetsAsExactBytes()
+            throws Exception {
+        Path serverRoot = Files.createDirectories(
+                tempDir.resolve("server-root"));
+        Path projectRoot = Files.createDirectories(
+                serverRoot.resolve("study"));
+        byte[] pdf = "%PDF-1.7\n%%EOF".getBytes(
+                StandardCharsets.US_ASCII);
+        byte[] docx = ooxml("word/document.xml");
+        byte[] xlsx = ooxml("xl/workbook.xml");
+        Files.writeString(projectRoot.resolve("notes.md"),
+                "needle text\n");
+        Files.write(projectRoot.resolve("paper.pdf"), pdf);
+        Files.write(projectRoot.resolve("paper.docx"), docx);
+        Files.write(projectRoot.resolve("results.xlsx"), xlsx);
+        Files.writeString(projectRoot.resolve("fake.pdf"), "not-pdf");
+        properties.setLocalServerRoot(serverRoot.toString());
+        ProjectService service = serviceFor(
+                projectRoot, "[\"**\"]", "[]");
+
+        ProjectManifestResponse manifest = service.manifest(7L, 42L);
+        assertThat(manifest.files()).extracting(ProjectFileEntry::path)
+                .containsExactly("notes.md", "paper.docx", "paper.pdf",
+                        "results.xlsx");
+        assertThat(service.search(7L, 42L, "needle", 10))
+                .extracting(ProjectSearchHit::path)
+                .containsExactly("notes.md");
+        assertThatThrownBy(() -> service.readFile(
+                7L, 42L, "paper.pdf"))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error)
+                        .getStatusCode().value())
+                .isEqualTo(404);
+
+        Set<String> allPaths = Set.of(
+                "notes.md", "paper.docx", "paper.pdf", "results.xlsx");
+        ProjectService.SandboxWorkspaceMaterialization sandbox =
+                service.materializeSandbox(7L, 42L, allPaths);
+        assertThat(sandbox.snapshot().files()).hasSize(4);
+        assertThat(sandbox.textFiles()).containsOnlyKeys("notes.md");
+
+        ProjectService.ProjectVersionByteMaterialization source =
+                service.materializeVersionBytes(7L, 42L, allPaths);
+        assertThat(source.snapshot().files()).hasSize(4);
+        assertThat(source.files()).containsOnlyKeys(allPaths);
+        assertThat(source.files().get("paper.pdf")).isEqualTo(pdf);
+        assertThat(source.files().get("paper.docx")).isEqualTo(docx);
+        assertThat(source.files().get("results.xlsx")).isEqualTo(xlsx);
+        byte[] callerCopy = source.files().get("paper.pdf");
+        callerCopy[0] = 0;
+        assertThat(source.files().get("paper.pdf")).isEqualTo(pdf);
+
+        Files.write(projectRoot.resolve("paper.pdf"),
+                "%PDF-2.0\n%%EOF".getBytes(StandardCharsets.US_ASCII));
+        assertThat(service.manifest(7L, 42L).version())
+                .isNotEqualTo(manifest.version());
+    }
+
+    @Test
     void managedUploadSandboxMaterializationRemainsReadOnlyAndRootFree() throws Exception {
         Path storageRoot = Files.createDirectories(tempDir.resolve("managed-projects"));
         Path snapshot = Files.createDirectories(storageRoot.resolve("snapshot-1"));
@@ -135,6 +198,45 @@ class ProjectServiceTest {
         verify(objectStorage).readFile(prefix, "docs/selected.md", properties.getMaxFileBytes());
         verify(objectStorage, never()).readFile(prefix, "docs/other.md", properties.getMaxFileBytes());
         assertThat(objectMapper.writeValueAsString(materialized)).doesNotContain(prefix);
+    }
+
+    @Test
+    void minioManifestAndV2SourceValidateBinaryObjectContent()
+            throws Exception {
+        byte[] notes = "text\n".getBytes(StandardCharsets.UTF_8);
+        byte[] pdf = "%PDF-1.7\n%%EOF".getBytes(
+                StandardCharsets.US_ASCII);
+        byte[] fakeDocx = "not-docx".getBytes(StandardCharsets.UTF_8);
+        String prefix = "projects/7/11111111-1111-1111-1111-111111111111";
+        Project project = Project.minioUpload(
+                7L, "MinIO Study", prefix, "[\"**\"]", "[]");
+        ProjectObjectEntry notesEntry = objectEntry("notes.md", notes);
+        ProjectObjectEntry pdfEntry = objectEntry("paper.pdf", pdf);
+        ProjectObjectEntry fakeEntry = objectEntry("fake.docx", fakeDocx);
+        ProjectObjectStorage objectStorage =
+                org.mockito.Mockito.mock(ProjectObjectStorage.class);
+        when(projects.findByIdAndUserId(42L, 7L))
+                .thenReturn(Optional.of(project));
+        when(objectStorage.readManifest(prefix))
+                .thenReturn(List.of(notesEntry, pdfEntry, fakeEntry));
+        when(objectStorage.readFile(prefix, "notes.md",
+                properties.getMaxFileBytes())).thenReturn(notes);
+        when(objectStorage.readFile(prefix, "paper.pdf",
+                properties.getMaxFileBytes())).thenReturn(pdf);
+        when(objectStorage.readFile(prefix, "fake.docx",
+                properties.getMaxFileBytes())).thenReturn(fakeDocx);
+        ProjectService service = new ProjectService(
+                projects, List.of(), properties, objectMapper, objectStorage);
+
+        assertThat(service.manifest(7L, 42L).files())
+                .extracting(ProjectFileEntry::path)
+                .containsExactly("notes.md", "paper.pdf");
+        ProjectService.ProjectVersionByteMaterialization source =
+                service.materializeVersionBytes(
+                        7L, 42L, Set.of("notes.md", "paper.pdf"));
+        assertThat(source.files().get("notes.md")).isEqualTo(notes);
+        assertThat(source.files().get("paper.pdf")).isEqualTo(pdf);
+        assertThat(source.snapshot().files()).hasSize(2);
     }
 
     @Test
@@ -578,6 +680,27 @@ class ProjectServiceTest {
 
     private static String describe(Exception exception) {
         return exception.getClass().getSimpleName() + ": " + exception.getMessage();
+    }
+
+    private static byte[] ooxml(String part) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(output)) {
+            for (String name : List.of("[Content_Types].xml", part)) {
+                zip.putNextEntry(new ZipEntry(name));
+                zip.write("content".getBytes(StandardCharsets.UTF_8));
+                zip.closeEntry();
+            }
+        }
+        return output.toByteArray();
+    }
+
+    private static ProjectObjectEntry objectEntry(
+            String path, byte[] content) throws Exception {
+        String hash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(content));
+        return new ProjectObjectEntry(
+                path, content.length, java.time.Instant.EPOCH, hash);
     }
 
     private ProjectService serviceFor(Path projectRoot, String includeRules, String ignoreRules) throws IOException {

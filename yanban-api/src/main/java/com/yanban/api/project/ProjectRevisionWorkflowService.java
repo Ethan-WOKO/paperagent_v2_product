@@ -77,6 +77,15 @@ public class ProjectRevisionWorkflowService {
         requireManagedProject(userId, projectId);
         CandidateArtifactResponse candidate = candidates.getCurrent(userId, artifactId);
         requireAcceptedIndexes(candidate.changes().size(), accepted);
+        for (Integer index : accepted) {
+            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(
+                    candidate.changes().get(index)
+                            .relativePath().value())) {
+                throw new ResponseStatusException(
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Binary Project assets are read-only and cannot be applied as Candidate changes");
+            }
+        }
         List<Integer> rejected = complement(candidate.changes().size(), accepted);
         if (candidate.projectId() != projectId || !candidate.projectVersion().value().equals(expectedVersion)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Candidate does not match the current Project version");
