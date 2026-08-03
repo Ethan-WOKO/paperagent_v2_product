@@ -7,6 +7,7 @@ import com.yanban.api.agent.v2.adaptive.reflection.ReflectionContext;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionProvider;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanRevisionId;
+import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.TaskFrameId;
 import io.paperagent.v2.providers.*;
 import java.nio.charset.StandardCharsets;
@@ -144,20 +145,43 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
     private final Optional<TaskFrameId> taskFrameId;
     private final Optional<PlanId> planId;
     private final Optional<PlanRevisionId> revisionId;
+    private final ReflectionModelCallGuard modelCallGuard;
+    private final Long userId;
+    private final Long turnId;
 
     public V2ModelReflectionProvider(
             ModelProvider provider, ObjectMapper json,
             TaskFrameId taskFrameId, PlanId planId,
             PlanRevisionId revisionId) {
+        this(provider, json, taskFrameId, planId, revisionId,
+                null, null, null);
+    }
+
+    public V2ModelReflectionProvider(
+            ModelProvider provider, ObjectMapper json,
+            TaskFrameId taskFrameId, PlanId planId,
+            PlanRevisionId revisionId,
+            ReflectionModelCallGuard modelCallGuard,
+            Long userId, Long turnId) {
         this.provider = provider;
         this.json = json;
         this.taskFrameId = Optional.ofNullable(taskFrameId);
         this.planId = Optional.ofNullable(planId);
         this.revisionId = Optional.ofNullable(revisionId);
+        this.modelCallGuard = modelCallGuard;
+        this.userId = userId;
+        this.turnId = turnId;
     }
 
     @Override
     public String reflect(ReflectionContext context) {
+        Optional<PlanStepId> activeStepId = taskFrameId.isPresent()
+                && planId.isPresent() && revisionId.isPresent()
+                ? Optional.ofNullable(factValue(
+                                context.recentExecutionFacts(),
+                                "activeStepId="))
+                        .map(PlanStepId::new)
+                : Optional.empty();
         String facts;
         try {
             facts = json.writeValueAsString(context);
@@ -177,7 +201,8 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                 new GenerationOptions(
                         4096, 0, 0.1d, OptionalLong.empty(), Map.of()),
                 taskFrameId, planId, revisionId,
-                Optional.empty(), false);
+                activeStepId, false);
+        request = guarded("main", request);
         long modelStarted = System.nanoTime();
         log.info(
                 "V2 reflection model call started planId={} revisionId={}",
@@ -221,7 +246,7 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
         } else if (Set.of("COMPLETE", "CONTINUE").contains(
                 proposedAction)) {
             decision = auditStepState(
-                    auditFacts(context), decision, suffix);
+                    auditFacts(context), decision, suffix, activeStepId);
         }
         log.info(
                 "V2 reflection model decision planId={} revisionId={} "
@@ -372,7 +397,8 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
     }
 
     private String auditStepState(
-            String facts, String proposedDecision, String suffix) {
+            String facts, String proposedDecision, String suffix,
+            Optional<PlanStepId> activeStepId) {
         ModelRequest request = new ModelRequest(
                 new ModelRequestId("adaptive-step-state-audit-" + suffix),
                 new CorrelationId("adaptive-step-state-audit-" + suffix),
@@ -389,7 +415,8 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                 new GenerationOptions(
                         4096, 0, 0.1d, OptionalLong.empty(), Map.of()),
                 taskFrameId, planId, revisionId,
-                Optional.empty(), false);
+                activeStepId, false);
+        request = guarded("audit-" + suffix, request);
         long modelStarted = System.nanoTime();
         log.info(
                 "V2 reflection step-state audit started planId={} "
@@ -426,7 +453,7 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                     revisionId.map(PlanRevisionId::value).orElse("none"),
                     elapsedMillis(modelStarted), digest(audited));
             audit = repairStepStateAudit(
-                    facts, proposedDecision, audited, suffix);
+                    facts, proposedDecision, audited, suffix, activeStepId);
         }
         String action = audit.complete() ? "COMPLETE" : "CONTINUE";
         log.info(
@@ -454,7 +481,7 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
 
     private StepStateAudit repairStepStateAudit(
             String facts, String proposedDecision, String invalidAudit,
-            String suffix) {
+            String suffix, Optional<PlanStepId> activeStepId) {
         String repairSuffix = hash(
                 suffix + "\n" + proposedDecision + "\n" + invalidAudit)
                 .substring(0, 32);
@@ -478,7 +505,8 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
                 new GenerationOptions(
                         4096, 0, 0.1d, OptionalLong.empty(), Map.of()),
                 taskFrameId, planId, revisionId,
-                Optional.empty(), false);
+                activeStepId, false);
+        request = guarded("audit-repair-" + repairSuffix, request);
         long modelStarted = System.nanoTime();
         log.info(
                 "V2 reflection step-state audit format repair started "
@@ -522,6 +550,13 @@ public class V2ModelReflectionProvider implements ReflectionProvider {
         return response.assistantText()
                 .filter(value -> !value.isBlank())
                 .orElseThrow(ReflectionAuditFormatException::new);
+    }
+
+    private ModelRequest guarded(String phase, ModelRequest request) {
+        if (modelCallGuard == null) return request;
+        return modelCallGuard.requireReady(
+                new ReflectionModelCallGuard.Call(
+                        userId, turnId, phase, request));
     }
 
     private StepStateAudit parseStepStateAudit(String raw) {

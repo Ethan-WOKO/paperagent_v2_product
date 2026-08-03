@@ -35,6 +35,7 @@ public class V2AdaptiveExecutionService {
     private final NaturalLanguageCandidateAuthorityStore candidateAuthorities;
     private final V2StepResultService stepResults;
     private final V2AdaptiveFinalSynthesisService finalSynthesis;
+    private final ReflectionModelCallGuard reflectionContexts;
 
     public V2AdaptiveExecutionService(
             V2AdaptiveExecutionStore store,
@@ -71,7 +72,6 @@ public class V2AdaptiveExecutionService {
                 candidateAuthorities, stepResults, null);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
     public V2AdaptiveExecutionService(
             V2AdaptiveExecutionStore store,
             AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
@@ -82,6 +82,22 @@ public class V2AdaptiveExecutionService {
             NaturalLanguageCandidateAuthorityStore candidateAuthorities,
             V2StepResultService stepResults,
             V2AdaptiveFinalSynthesisService finalSynthesis) {
+        this(store, starts, contexts, cycles, json, candidates,
+                candidateAuthorities, stepResults, finalSynthesis, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public V2AdaptiveExecutionService(
+            V2AdaptiveExecutionStore store,
+            AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
+            AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
+            V2AdaptiveRuntimeCycleFactory cycles,
+            ObjectMapper json,
+            ProjectCandidateCompositionEffect candidates,
+            NaturalLanguageCandidateAuthorityStore candidateAuthorities,
+            V2StepResultService stepResults,
+            V2AdaptiveFinalSynthesisService finalSynthesis,
+            ReflectionModelCallGuard reflectionContexts) {
         this.store = store;
         this.starts = starts;
         this.contexts = contexts;
@@ -91,6 +107,7 @@ public class V2AdaptiveExecutionService {
         this.candidateAuthorities = candidateAuthorities;
         this.stepResults = stepResults;
         this.finalSynthesis = finalSynthesis;
+        this.reflectionContexts = reflectionContexts;
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
@@ -116,8 +133,19 @@ public class V2AdaptiveExecutionService {
             logFailure(command, "adaptive.execute", failure);
             result = failed(initial, "ADAPTIVE_EXECUTION_FAILED");
         }
-        result = publishCandidateIfNeeded(command, result);
-        result = synthesizeFinalAnswer(command, result);
+        PreparedCandidate preparedCandidate = null;
+        if ("SUCCEEDED".equals(result.status())) {
+            try {
+                preparedCandidate = preparedCandidate(command);
+            } catch (RuntimeException failure) {
+                logFailure(command, "candidate.authority", failure);
+                result = failedResult(result,
+                        "FINAL_SYNTHESIS_CANDIDATE_AUTHORITY_FAILED");
+            }
+        }
+        result = synthesizeFinalAnswer(command, result, preparedCandidate);
+        result = publishCandidateIfNeeded(
+                command, result, preparedCandidate);
         if ("RUNNING".equals(result.status())) {
             store.progress(
                     command.userId(), command.sessionId(),
@@ -137,24 +165,31 @@ public class V2AdaptiveExecutionService {
     }
 
     private V2AdaptiveExecutionResult synthesizeFinalAnswer(
-            Command command, V2AdaptiveExecutionResult result) {
+            Command command, V2AdaptiveExecutionResult result,
+            PreparedCandidate candidate) {
         if (finalSynthesis == null
-                || !("SUCCEEDED".equals(result.status())
-                || "WAITING_CONFIRMATION".equals(result.status()))) {
+                || !"SUCCEEDED".equals(result.status())) {
             return result;
         }
-        Optional<String> synthesized = finalSynthesis.synthesize(
+        V2AdaptiveFinalSynthesisService.Outcome synthesized =
+                finalSynthesis.synthesizeRequired(
                 new V2AdaptiveFinalSynthesisService.Request(
+                        command.userId(), command.turnId(),
                         command.bootstrap().taskFrame(),
                         command.bootstrap().plan(),
-                        result.candidateArtifactId(),
-                        result.outputPaths(), command.modelProvider()));
-        if (synthesized.isEmpty()) {
-            return result;
+                        candidate == null ? null
+                                : candidate.authoritySha256(),
+                        candidate == null ? null
+                                : candidate.diffFingerprint(),
+                        candidate == null ? List.of()
+                                : candidate.paths(),
+                        command.modelProvider()));
+        if (synthesized.answer() == null) {
+            return failedResult(result, synthesized.errorCode());
         }
         return new V2AdaptiveExecutionResult(
                 result.status(), result.steps(),
-                synthesized.orElseThrow(), result.errorCode(),
+                synthesized.answer(), result.errorCode(),
                 result.reflections(), result.replans(),
                 result.repairs(), result.candidateArtifactId(),
                 result.outputPaths());
@@ -166,22 +201,17 @@ public class V2AdaptiveExecutionService {
     }
 
     private V2AdaptiveExecutionResult publishCandidateIfNeeded(
-            Command command, V2AdaptiveExecutionResult result) {
+            Command command, V2AdaptiveExecutionResult result,
+            PreparedCandidate prepared) {
         if (!"SUCCEEDED".equals(result.status())) {
             return result;
         }
-        if (candidateAuthorities == null || candidates == null) {
+        if (prepared == null || candidateAuthorities == null
+                || candidates == null) {
             return result;
         }
         try {
             String planId = command.bootstrap().plan().id().value();
-            var authority = command.bindings().containsValue(
-                    "project.candidate.compose")
-                    ? candidateAuthorities.require(planId)
-                    : candidateAuthorities.find(planId).orElse(null);
-            if (authority == null) {
-                return result;
-            }
             var published = candidates.publishNatural(
                     command.bootstrap().plan().id().value(),
                     command.userId(), command.turnId(),
@@ -193,12 +223,12 @@ public class V2AdaptiveExecutionService {
                     "V2 Candidate published intakeId={} turnId={} "
                             + "planId={} artifactId={} pathCount={}",
                     command.intakeId(), command.turnId(), planId,
-                    published.artifactId(), authority.paths().size());
+                    published.artifactId(), prepared.paths().size());
             return new V2AdaptiveExecutionResult(
                     "WAITING_CONFIRMATION", result.steps(),
                     result.finalText(), null, result.reflections(),
                     result.replans(), result.repairs(),
-                    published.artifactId(), authority.paths());
+                    published.artifactId(), prepared.paths());
         } catch (RuntimeException failure) {
             logFailure(command, "candidate.publish", failure);
             return candidateFailed(result);
@@ -212,6 +242,39 @@ public class V2AdaptiveExecutionService {
                 "CANDIDATE_PUBLISH_FAILED",
                 source.reflections(), source.replans(),
                 source.repairs());
+    }
+
+    private PreparedCandidate preparedCandidate(Command command) {
+        if (candidateAuthorities == null || candidates == null) {
+            return null;
+        }
+        String planId = command.bootstrap().plan().id().value();
+        var authority = command.bindings().containsValue(
+                "project.candidate.compose")
+                ? candidateAuthorities.require(planId)
+                : candidateAuthorities.find(planId).orElse(null);
+        if (authority == null) {
+            return null;
+        }
+        var prepared = candidateAuthorities.requirePrepared(planId);
+        return new PreparedCandidate(
+                authority.authoritySha256(), authority.paths(),
+                prepared.diffFingerprint());
+    }
+
+    private static V2AdaptiveExecutionResult failedResult(
+            V2AdaptiveExecutionResult source, String code) {
+        return new V2AdaptiveExecutionResult(
+                "FAILED", source.steps(), null, code,
+                source.reflections(), source.replans(), source.repairs());
+    }
+
+    private record PreparedCandidate(
+            String authoritySha256, List<String> paths,
+            String diffFingerprint) {
+        private PreparedCandidate {
+            paths = List.copyOf(paths);
+        }
     }
 
     private V2AdaptiveExecutionResult executeStarted(
@@ -294,7 +357,9 @@ public class V2AdaptiveExecutionService {
                         command.bootstrap().taskFrame().id(),
                         command.bootstrap().plan().id(),
                         command.bootstrap().plan()
-                                .latestRevision().id()),
+                                .latestRevision().id(),
+                        reflectionContexts, command.userId(),
+                        command.turnId()),
                 new StrictReflectionDecisionParser(json),
                 stepResults);
         try {
@@ -374,7 +439,9 @@ public class V2AdaptiveExecutionService {
         int index = 1;
         for (PlanStep step : revision.steps()) {
             result.add(new V2AdaptiveTurnResponse.Step(
-                    index++, step.intent(), "PENDING", ""));
+                    index, step.intent(), index == 1
+                            ? "RUNNING" : "PENDING", ""));
+            index++;
         }
         return List.copyOf(result);
     }

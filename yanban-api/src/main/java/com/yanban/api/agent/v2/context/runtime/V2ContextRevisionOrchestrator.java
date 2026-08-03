@@ -29,10 +29,16 @@ public class V2ContextRevisionOrchestrator {
     }
 
     public V2ContextBoundaryResult prepare(V2ContextBoundaryRequest request) {
+        return prepare(request, null);
+    }
+
+    public V2ContextBoundaryResult prepare(
+            V2ContextBoundaryRequest request,
+            V2SectionCompactionResult precomputedCompaction) {
         String logicalKey = keys.logicalKey(request.stage(),
                 request.canonicalAuthorityTuple(), request.subCall());
         Map<V2ContextRevisionStatus, Integer> numbers = phaseNumbers(request);
-        PlannedCompaction plan = planCompaction(request);
+        PlannedCompaction plan = planCompaction(request, precomputedCompaction);
         validateExplicitPlan(request, numbers, plan);
         List<V2ContextRevisionSnapshot> snapshots = new ArrayList<>();
         Parent parent = new Parent(request.parentSnapshotId(), request.parentDigest());
@@ -174,7 +180,9 @@ public class V2ContextRevisionOrchestrator {
         }
     }
 
-    private PlannedCompaction planCompaction(V2ContextBoundaryRequest request) {
+    private PlannedCompaction planCompaction(
+            V2ContextBoundaryRequest request,
+            V2SectionCompactionResult precomputedCompaction) {
         List<V2ContextSectionDraft> overflowing = request.sections().stream()
                 .filter(section -> section.tokensAfter() > section.tokenLimit()
                         || section.status() == V2ContextSectionStatus.COMPACTION_REQUIRED)
@@ -189,7 +197,8 @@ public class V2ContextRevisionOrchestrator {
                     request.sections(), false);
         }
         V2ContextSectionDraft target = overflowing.get(0);
-        V2SectionCompactionResult result = compactor.compact(target);
+        V2SectionCompactionResult result = precomputedCompaction == null
+                ? compactor.compact(target) : precomputedCompaction;
         List<V2ContextSectionDraft> sections = replaceOnly(
                 request.sections(), target.type(), result.section());
         return new PlannedCompaction(true, target, result, sections,

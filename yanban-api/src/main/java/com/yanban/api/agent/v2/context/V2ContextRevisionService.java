@@ -62,6 +62,15 @@ public class V2ContextRevisionService {
         return transactions.readLatest(userId, sessionId, turnId);
     }
 
+    public Optional<V2ContextRevisionSnapshot> findById(
+            Long userId, Long sessionId, Long turnId, Long snapshotId) {
+        if (userId == null || sessionId == null || turnId == null
+                || snapshotId == null) {
+            return Optional.empty();
+        }
+        return transactions.readById(userId, sessionId, turnId, snapshotId);
+    }
+
     private static V2ContextRevisionSnapshot replayOrConflict(
             V2ContextRevisionSnapshot existing, String requestedDigest) {
         if (!existing.contextDigest().equals(requestedDigest)) {

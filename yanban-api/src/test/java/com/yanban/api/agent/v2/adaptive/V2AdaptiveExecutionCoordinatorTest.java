@@ -604,6 +604,23 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
+    void reflectionContextFailureLeavesExecutionRecoverable() {
+        V2AdaptiveCyclePort cycle = ignored ->
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.FAILED,
+                        "step-1", "EFFECT_REJECTED", false, null,
+                        List.of("failed receipt"), true, true);
+
+        var result = coordinator(cycle, ignored -> {
+            throw new ReflectionModelCallGuardException(
+                    "REFLECTION_CONTEXT_NOT_READY");
+        }).execute(command(Map.of("step-1", "project.search")));
+
+        assertEquals("RUNNING", result.status());
+        assertNull(result.errorCode());
+    }
+
+    @Test
     void reflectionAuditFormatFailureHasItsOwnTerminalCode() {
         AtomicInteger providerCalls = new AtomicInteger();
         V2AdaptiveCyclePort cycle = ignored ->

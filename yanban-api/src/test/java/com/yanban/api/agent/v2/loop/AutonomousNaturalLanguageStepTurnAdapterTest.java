@@ -130,7 +130,8 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
 
     @Test
     void pendingIntentIsReplayedWithoutAnotherModelCall() {
-        Fixture fixture = fixture();
+        StepModelCallGuard guard = mock(StepModelCallGuard.class);
+        Fixture fixture = fixture(guard);
         EffectIntent pending = intent(
                 fixture, "pending-call", "project.read", arguments());
         PersistedEffectIntent persisted = mock(PersistedEffectIntent.class);
@@ -146,8 +147,29 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
 
         assertEquals(pending, decision.intent());
         verify(fixture.provider(), never()).complete(any());
+        verify(guard, never()).requireReady(any());
         assertTrue(fixture.adapter().diagnostics().contains(
                 "EFFECT_INTENT_PENDING_RECONCILIATION"));
+    }
+
+    @Test
+    void readyContextGuardRunsImmediatelyBeforeTheRealProviderCall() {
+        StepModelCallGuard guard = mock(StepModelCallGuard.class);
+        when(guard.requireReady(any())).thenAnswer(invocation ->
+                ((StepModelCallGuard.Call) invocation.getArgument(0))
+                        .material().request());
+        Fixture fixture = fixture(guard);
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId())).thenReturn(List.of());
+        ModelResponse response = response("project.read", arguments());
+        when(fixture.provider().complete(any())).thenReturn(response);
+
+        fixture.adapter().decide(fixture.input());
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(
+                guard, fixture.provider());
+        order.verify(guard).requireReady(any());
+        order.verify(fixture.provider()).complete(any());
     }
 
     @Test
@@ -185,7 +207,7 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
     }
 
     @Test
-    void completeProjectReadOutputReachesTheNextModelTurn() {
+    void completeProjectReadOutputUsesBoundedSafeProjection() {
         Fixture fixture = fixture();
         String completeSource = "class Sort {\n"
                 + "x".repeat(12_000)
@@ -205,8 +227,34 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                 ArgumentCaptor.forClass(ModelRequest.class);
         verify(fixture.provider()).complete(request.capture());
         String prompt = request.getValue().messages().get(1).content();
-        assertTrue(prompt.contains(completeSource));
-        assertTrue(prompt.contains("COMPLETE_FILE_END"));
+        assertTrue(prompt.contains("outputDigest="));
+        assertTrue(prompt.contains("safeText=class Sort"));
+        assertTrue(!prompt.contains(completeSource));
+        assertTrue(!prompt.contains("COMPLETE_FILE_END"));
+    }
+
+    @Test
+    void unsafeToolOutputIsRedactedBeforeTheModelCall() {
+        Fixture fixture = fixture();
+        String unsafe = "password=fake-value C:\\Users\\name\\private.txt";
+        var planId = fixture.planId();
+        var stepId = fixture.stepId();
+        var completed = completed(fixture, "unsafe-call", "project.read",
+                arguments(), ReceiptStatus.SUCCESS, unsafe);
+        when(fixture.history().inspect(planId, stepId))
+                .thenReturn(List.of(completed));
+        var response = response("project.search", arguments());
+        when(fixture.provider().complete(any())).thenReturn(response);
+
+        fixture.adapter().decide(fixture.input());
+
+        ArgumentCaptor<ModelRequest> request =
+                ArgumentCaptor.forClass(ModelRequest.class);
+        verify(fixture.provider()).complete(request.capture());
+        String prompt = request.getValue().messages().get(1).content();
+        assertTrue(prompt.contains("safeText=[redacted:"));
+        assertTrue(!prompt.contains("fake-value"));
+        assertTrue(!prompt.contains("C:\\Users"));
     }
 
     @Test
@@ -338,6 +386,10 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
     }
 
     private static Fixture fixture() {
+        return fixture(null);
+    }
+
+    private static Fixture fixture(StepModelCallGuard guard) {
         ModelProvider provider = mock(ModelProvider.class);
         V2EffectHistorySource history =
                 mock(V2EffectHistorySource.class);
@@ -368,6 +420,19 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
         when(input.taskFrame()).thenReturn(frame);
         when(input.plan()).thenReturn(plan);
         when(input.activeStep()).thenReturn(step);
+        io.paperagent.v2.contracts.Checkpoint checkpoint =
+                mock(io.paperagent.v2.contracts.Checkpoint.class);
+        when(checkpoint.lastEventSequence()).thenReturn(7L);
+        when(input.checkpoint()).thenReturn(
+                new io.paperagent.v2.persistence.VersionedCheckpoint(
+                        4L, checkpoint));
+        StepDecisionActivationScope scope = guard == null
+                ? null : mock(StepDecisionActivationScope.class);
+        if (scope != null) {
+            when(scope.require()).thenReturn(
+                    new StepDecisionActivationScope.Cut(
+                            "activation-test", 7L, 4L));
+        }
         var adapter = new AutonomousNaturalLanguageStepTurnAdapter(
                 provider, history,
                 List.of(
@@ -383,7 +448,8 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                                 new ToolId("project.candidate.compose")),
                         NaturalLanguageStepKernelFactory.descriptor(
                                 new ToolId("sandbox.execute"))),
-                false);
+                false, guard, guard == null ? null : 1L,
+                guard == null ? null : 3L, scope);
         return new Fixture(
                 provider, history, input, adapter, planId, stepId);
     }
@@ -415,6 +481,7 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                 : OutputCapture.inline(output, false));
         when(receipt.standardError()).thenReturn(
                 io.paperagent.v2.contracts.OutputCapture.empty());
+        when(receipt.artifactReferences()).thenReturn(List.of());
         PersistedEffectResult result = mock(PersistedEffectResult.class);
         when(result.receipt()).thenReturn(receipt);
         return new V2EffectHistorySource.Entry(persisted, result);

@@ -307,8 +307,10 @@ public class V2PlannerContextBoundaryFactory {
             ContextSectionType target = overflowing.size() == 1
                     ? overflowing.get(0).type() : null;
             boolean compacting = target != null;
+            V2SectionCompactionResult compaction = compacting
+                    ? compactor.compact(overflowing.get(0)) : null;
             boolean readyTerminal = overflowing.isEmpty()
-                    || compacting && compactor.compact(overflowing.get(0)).success();
+                    || compaction != null && compaction.success();
             List<V2ContextPhaseRevision> phases = new ArrayList<>();
             phases.add(new V2ContextPhaseRevision(
                     V2ContextRevisionStatus.ASSEMBLING, nextRevision++));
@@ -330,7 +332,7 @@ public class V2PlannerContextBoundaryFactory {
                             profile.contextWindowTokens(), profile.maxOutputTokens(),
                             profile.tokenCounterVersion(), profile.budgetProfile().version(),
                             budget(profile, ContextSectionType.OUTPUT_RESERVE),
-                            sections, target, phases));
+                            sections, target, phases), compaction);
             if (result instanceof V2ContextBoundaryFailure failure) {
                 throw new V2PlannerContextBoundaryException(
                         "PLANNER_CONTEXT_" + failure.code());
