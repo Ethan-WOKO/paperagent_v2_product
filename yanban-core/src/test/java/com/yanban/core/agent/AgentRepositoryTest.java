@@ -229,6 +229,33 @@ class AgentRepositoryTest {
     }
 
     @Test
+    void latestSnapshotQueryReturnsOnlyHighestRevisionForEachTurn() {
+        AgentSession session = sessions.saveAndFlush(new AgentSession(
+                1027L, "latest revision per turn", "deepseek",
+                "deepseek-v4-flash", 20, false));
+        AgentContextSnapshot revisionOne = contextSnapshots.saveAndFlush(
+                new AgentContextSnapshot(
+                        2701L, session.getId(), 1027L, 1, null,
+                        "PLANNER", "planner:1", "READY", "deepseek",
+                        "deepseek-v4-flash", 1_000_000L, 384_000L,
+                        "utf8-byte-v1", "layered-v1", 10L, 50_000L,
+                        null, "a".repeat(64)));
+        AgentContextSnapshot revisionTwo = contextSnapshots.saveAndFlush(
+                new AgentContextSnapshot(
+                        2701L, session.getId(), 1027L, 2,
+                        revisionOne.getId(), "STEP_DECISION", "step:1",
+                        "READY", "deepseek", "deepseek-v4-flash",
+                        1_000_000L, 384_000L, "utf8-byte-v1",
+                        "layered-v1", 20L, 50_000L, "a".repeat(64),
+                        "b".repeat(64)));
+
+        assertThat(contextSnapshots.findLatestRevisionPerTurn(
+                session.getId(), 1027L, PageRequest.of(0, 10)))
+                .extracting(AgentContextSnapshot::getId)
+                .containsExactly(revisionTwo.getId());
+    }
+
+    @Test
     void insertLongTermMemoryThenSoftDeleteAndQueryByStatus() {
         AgentLongTermMemory memory = longTermMemories.saveAndFlush(new AgentLongTermMemory(
                 1004L,

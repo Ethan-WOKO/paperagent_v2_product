@@ -36,6 +36,11 @@ public class AgentContextSnapshotService {
                                              Long userId,
                                              String traceId,
                                              AgentContextPackage contextPackage) {
+        var existing = snapshots.findByTurnIdAndSessionIdAndUserId(
+                turnId, sessionId, userId);
+        if (existing.isPresent()) {
+            return existing.orElseThrow();
+        }
         AgentContextPackage safePackage = contextPackage == null
                 ? new AgentContextPackage(List.of(), List.of(), List.of(), 0, 0, 0)
                 : contextPackage;
@@ -57,7 +62,8 @@ public class AgentContextSnapshotService {
     @Transactional(readOnly = true)
     public AgentContextSnapshotResponse getTurnSnapshot(Long userId, Long sessionId, Long turnId) {
         assertOwnedSession(userId, sessionId);
-        return snapshots.findByTurnIdAndSessionIdAndUserId(turnId, sessionId, userId)
+        return snapshots.findByTurnIdAndSessionIdAndUserId(
+                        turnId, sessionId, userId)
                 .map(this::toResponse)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "context snapshot not found"));
     }
@@ -65,7 +71,7 @@ public class AgentContextSnapshotService {
     @Transactional(readOnly = true)
     public List<AgentContextSnapshotResponse> listSessionSnapshots(Long userId, Long sessionId, Integer limit) {
         assertOwnedSession(userId, sessionId);
-        return snapshots.findBySessionIdAndUserIdOrderByCreatedAtDescIdDesc(
+        return snapshots.findLatestRevisionPerTurn(
                         sessionId,
                         userId,
                         PageRequest.of(0, safeLimit(limit))

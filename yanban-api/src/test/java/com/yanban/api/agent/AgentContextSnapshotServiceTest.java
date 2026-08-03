@@ -111,4 +111,28 @@ class AgentContextSnapshotServiceTest {
         assertThat(response.droppedItems()).isEmpty();
         assertThat(response.estimatedCharacters()).isEqualTo(512);
     }
+
+    @Test
+    void listSessionSnapshotsUsesOnlyLatestRevisionPerTurn() {
+        when(sessions.findByIdAndUserId(22L, 33L)).thenReturn(Optional.of(
+                new AgentSession(33L, "session", "deepseek",
+                        "deepseek-chat", 20, false)));
+        AgentContextSnapshot revisionTwo = new AgentContextSnapshot(
+                11L, 22L, 33L, 2, 91L, "STEP_DECISION", "step:1",
+                "READY", "deepseek", "deepseek-v4-flash",
+                1_000_000L, 384_000L, "utf8-byte-v1", "layered-v1",
+                20L, 50_000L, "a".repeat(64), "b".repeat(64));
+        when(snapshots.findLatestRevisionPerTurn(
+                org.mockito.ArgumentMatchers.eq(22L),
+                org.mockito.ArgumentMatchers.eq(33L), any()))
+                .thenReturn(List.of(revisionTwo));
+
+        List<AgentContextSnapshotResponse> result =
+                service.listSessionSnapshots(33L, 22L, 10);
+
+        assertThat(result).hasSize(1);
+        verify(snapshots).findLatestRevisionPerTurn(
+                org.mockito.ArgumentMatchers.eq(22L),
+                org.mockito.ArgumentMatchers.eq(33L), any());
+    }
 }
