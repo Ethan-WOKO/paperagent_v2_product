@@ -107,6 +107,20 @@ public class V2ContextRevisionTransactions {
                         V2ContextRevisionOutcome.REPLAYED));
     }
 
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            readOnly = true)
+    public Optional<V2ContextRevisionSnapshot> readLatest(
+            Long userId, Long sessionId, Long turnId) {
+        return headers.findByTurnIdAndSessionIdAndUserId(
+                        turnId, sessionId, userId)
+                .map(header -> codec.decode(
+                        header,
+                        sections.findBySnapshotIdOrderBySectionOrdinalAsc(
+                                header.getId()),
+                        V2ContextRevisionOutcome.REPLAYED));
+    }
+
     private void verifyParent(V2ContextRevisionDraft draft) {
         if (draft.revisionNumber() == 1) return;
         AgentContextSnapshot parent = headers

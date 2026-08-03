@@ -64,6 +64,11 @@ class V2ContextRevisionServiceH2Test {
                 "step:1", "{\"step\":1}"));
         assertThat(second.revision().parentSnapshotId()).isEqualTo(applied.id());
         assertThat(second.revision().revisionNumber()).isEqualTo(2);
+        assertThat(service.findLatest(authority.userId(),
+                authority.sessionId(), authority.turnId()))
+                .map(V2ContextRevisionSnapshot::id).contains(second.id());
+        assertThat(service.findLatest(authority.userId() + 1000,
+                authority.sessionId(), authority.turnId())).isEmpty();
         assertThat(service.find(authority.userId() + 1000,
                 authority.sessionId(), authority.turnId(), "step:1"))
                 .isEmpty();

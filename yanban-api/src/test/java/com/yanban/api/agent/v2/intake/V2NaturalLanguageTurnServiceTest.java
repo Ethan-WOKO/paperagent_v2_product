@@ -30,6 +30,10 @@ import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionResult;
 import com.yanban.api.agent.v2.context.ContextSectionType;
 import com.yanban.api.agent.v2.context.Utf8ByteTokenCounter;
+import com.yanban.api.agent.v2.context.runtime.V2ContextBoundaryPrepared;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerContextBoundaryException;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerContextBoundaryFactory;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerCallMaterial;
 import com.yanban.api.agent.v2.persistence.ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.settings.UserSettingsService;
@@ -62,6 +66,7 @@ import java.util.function.Function;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 class V2NaturalLanguageTurnServiceTest {
     private final AgentSessionRepository sessions = mock(AgentSessionRepository.class);
@@ -202,6 +207,60 @@ class V2NaturalLanguageTurnServiceTest {
                 .filter(value -> "user".equals(value.role()))
                 .filter(value -> "question".equals(value.content()))
                 .count()).isEqualTo(1);
+    }
+
+    @Test
+    void plannerProviderCallRequiresReadyContextFirst() throws Exception {
+        V2PlannerContextBoundaryFactory boundaries =
+                mock(V2PlannerContextBoundaryFactory.class);
+        V2PlannerContextBoundaryFactory.Session boundary =
+                mock(V2PlannerContextBoundaryFactory.Session.class);
+        V2ContextBoundaryPrepared prepared = mock(V2ContextBoundaryPrepared.class);
+        when(boundaries.open(any())).thenReturn(boundary);
+        when(boundary.prepare(any(V2PlannerCallMaterial.class)))
+                .thenReturn(prepared);
+        when(model.chat(any())).thenReturn(new ChatResponse(
+                ChatMessage.assistant(directAnswer("ready")), "stop", null));
+        when(transactions.saveAssistant(
+                eq(intake), eq("ready"), any())).thenAnswer(invocation -> {
+            AgentMessage message = new AgentMessage(
+                    9L, 7L, "assistant", "ready", null, null);
+            setId(message, 13L);
+            intake.completeDirect(13L, invocation.getArgument(2), Instant.now());
+            when(transactions.message(13L)).thenReturn(message);
+            return message;
+        });
+
+        service(boundaries).execute(7L, 9L, request());
+
+        InOrder order = org.mockito.Mockito.inOrder(boundary, model);
+        order.verify(boundary).prepare(any(V2PlannerCallMaterial.class));
+        order.verify(boundary).requireReady(prepared);
+        order.verify(model).chat(any());
+    }
+
+    @Test
+    void plannerContextFailureBlocksProviderAndPlanAuthority() {
+        V2PlannerContextBoundaryFactory boundaries =
+                mock(V2PlannerContextBoundaryFactory.class);
+        V2PlannerContextBoundaryFactory.Session boundary =
+                mock(V2PlannerContextBoundaryFactory.Session.class);
+        when(boundaries.open(any())).thenReturn(boundary);
+        when(boundary.prepare(any(V2PlannerCallMaterial.class))).thenThrow(
+                new V2PlannerContextBoundaryException(
+                        "PLANNER_CONTEXT_NOT_READY"));
+
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> service(boundaries).execute(7L, 9L, request()));
+
+        verify(model, never()).chat(any());
+        verify(bootstraps, never()).bootstrap(any(), any(), any());
+        verify(transactions, never()).saveAssistant(any(), any(), any());
+        verify(transactions, never()).savePersistent(any(), any(), any(), any());
+        verify(transactions).saveFailure(
+                intake, "PLANNER_CONTEXT_NOT_READY");
+        assertThat(intake.planId()).isNull();
+        assertThat(intake.plannerOutputJson()).isNull();
     }
 
     @Test
@@ -724,6 +783,14 @@ class V2NaturalLanguageTurnServiceTest {
                 sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
                 model);
+    }
+
+    private V2NaturalLanguageTurnService service(
+            V2PlannerContextBoundaryFactory boundaries) {
+        return new V2NaturalLanguageTurnService(
+                sessions, transactions, contexts, contextBuilder, summaries,
+                memories, experiments, skills, settings, bootstraps, json,
+                model, null, null, boundaries);
     }
 
     private static String directAnswer(String answer) {

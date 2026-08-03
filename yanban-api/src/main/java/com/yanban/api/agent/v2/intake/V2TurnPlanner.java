@@ -39,6 +39,8 @@ import io.paperagent.v2.providers.ProviderFailureCode;
 import io.paperagent.v2.providers.ModelRequest;
 import io.paperagent.v2.providers.ModelRequestId;
 import io.paperagent.v2.providers.ModelResponse;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerContextBoundaryFactory;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerCallMaterial;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -157,6 +159,16 @@ final class V2TurnPlanner {
             ResolvedSkill skill,
             boolean projectSession,
             String traceId) {
+        return plan(context, endpoint, skill, projectSession, traceId, null);
+    }
+
+    PlannedTurn plan(
+            AgentContextPackage context,
+            UserSettingsService.ModelEndpoint endpoint,
+            ResolvedSkill skill,
+            boolean projectSession,
+            String traceId,
+            V2PlannerContextBoundaryFactory.Session contextBoundary) {
         List<ChatMessage> prompt = new ArrayList<>();
         prompt.add(ChatMessage.system(SYSTEM_PROMPT));
         prompt.add(ChatMessage.system(capabilityCatalog()));
@@ -200,7 +212,8 @@ final class V2TurnPlanner {
         try {
             raw = complete(
                     planningProvider, modelRequest, traceId,
-                    projectSession, "initial");
+                    projectSession, "initial", contextBoundary,
+                    V2PlannerCallMaterial.ordinary(modelRequest, "initial"));
         } catch (V2TurnPlanningException failure) {
             if (!"MODEL_RESULT_INVALID".equals(failure.diagnostic())) {
                 throw failure;
@@ -209,12 +222,13 @@ final class V2TurnPlanner {
                     "V2 intake planner protocol retry requested "
                             + "traceId={} projectSession={} diagnostic={}",
                     traceId, projectSession, failure.diagnostic());
+            ModelRequest retryRequest = protocolRetryRequest(
+                    modelRequest, traceId, projectSession, skill != null);
             raw = complete(
-                    planningProvider,
-                    protocolRetryRequest(
-                            modelRequest, traceId, projectSession,
-                            skill != null),
-                    traceId, projectSession, "protocol-retry");
+                    planningProvider, retryRequest,
+                    traceId, projectSession, "protocol-retry",
+                    contextBoundary, V2PlannerCallMaterial.ordinary(
+                            retryRequest, "protocol-retry"));
         }
         PlannedTurn planned;
         try {
@@ -230,7 +244,9 @@ final class V2TurnPlanner {
                     modelRequest, traceId, firstFailure.diagnostic(), raw);
             raw = complete(
                     planningProvider, repairRequest, traceId,
-                    projectSession, "format-repair");
+                    projectSession, "format-repair", contextBoundary,
+                    V2PlannerCallMaterial.repair(modelRequest,
+                            firstFailure.diagnostic(), hash(raw)));
             try {
                 planned = parse(raw).withRawOutput(raw);
             } catch (V2TurnPlanningException repairFailure) {
@@ -251,6 +267,19 @@ final class V2TurnPlanner {
     private String complete(
             ModelProvider planningProvider, ModelRequest modelRequest,
             String traceId, boolean projectSession, String phase) {
+        return complete(planningProvider, modelRequest, traceId,
+                projectSession, phase, null,
+                V2PlannerCallMaterial.ordinary(modelRequest, phase));
+    }
+
+    private String complete(
+            ModelProvider planningProvider, ModelRequest modelRequest,
+            String traceId, boolean projectSession, String phase,
+            V2PlannerContextBoundaryFactory.Session contextBoundary,
+            V2PlannerCallMaterial callMaterial) {
+        if (contextBoundary != null) {
+            contextBoundary.requireReady(contextBoundary.prepare(callMaterial));
+        }
         io.paperagent.v2.providers.ModelProviderResult result;
         long modelStarted = System.nanoTime();
         log.info(

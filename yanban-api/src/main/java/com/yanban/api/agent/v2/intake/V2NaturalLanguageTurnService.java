@@ -23,6 +23,8 @@ import com.yanban.api.agent.v2.context.KnownModelContextProfileRegistry;
 import com.yanban.api.agent.v2.context.ShadowContextAccountant;
 import com.yanban.api.agent.v2.context.ShadowContextMeasurement;
 import com.yanban.api.agent.v2.context.Utf8ByteTokenCounter;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerContextBoundaryFactory;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerContextBoundaryException;
 import com.yanban.api.agent.v2.persistence
         .ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
@@ -95,6 +97,7 @@ public class V2NaturalLanguageTurnService {
     private final V2AdaptiveExecutionService adaptive;
     private final ChatModelProvider modelProvider;
     private final ProductPlanBootstrapRepositoryAdapter resumeBootstraps;
+    private final V2PlannerContextBoundaryFactory plannerContexts;
 
     public V2NaturalLanguageTurnService(
             AgentSessionRepository sessions,
@@ -111,7 +114,27 @@ public class V2NaturalLanguageTurnService {
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider) {
         this(sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
-                modelProvider, null, null);
+                modelProvider, null, null, null);
+    }
+
+    public V2NaturalLanguageTurnService(
+            AgentSessionRepository sessions,
+            V2TurnIntakeTransactions transactions,
+            AgentTurnProductContextResolver contexts,
+            AgentContextBuilder contextBuilder,
+            AgentSessionSummaryService summaries,
+            LongTermMemoryRetrievalService memories,
+            AgentExperimentService experiments,
+            SkillsService skills,
+            UserSettingsService settings,
+            AuthenticatedAgentTurnPlanBootstrapComposer bootstraps,
+            ObjectMapper json,
+            @Qualifier("chatModelProvider") ChatModelProvider modelProvider,
+            V2AdaptiveExecutionService adaptive,
+            ProductPlanBootstrapRepositoryAdapter resumeBootstraps) {
+        this(sessions, transactions, contexts, contextBuilder, summaries,
+                memories, experiments, skills, settings, bootstraps, json,
+                modelProvider, adaptive, resumeBootstraps, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -129,7 +152,8 @@ public class V2NaturalLanguageTurnService {
             ObjectMapper json,
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider,
             V2AdaptiveExecutionService adaptive,
-            ProductPlanBootstrapRepositoryAdapter resumeBootstraps) {
+            ProductPlanBootstrapRepositoryAdapter resumeBootstraps,
+            V2PlannerContextBoundaryFactory plannerContexts) {
         this.sessions = sessions;
         this.transactions = transactions;
         this.contexts = contexts;
@@ -145,6 +169,7 @@ public class V2NaturalLanguageTurnService {
         this.adaptive = adaptive;
         this.modelProvider = modelProvider;
         this.resumeBootstraps = resumeBootstraps;
+        this.plannerContexts = plannerContexts;
     }
 
     public V2NaturalLanguageTurnResponse execute(
@@ -301,17 +326,21 @@ public class V2NaturalLanguageTurnService {
                             request.experiment());
             UserSettingsService.ModelEndpoint endpoint =
                     resolveTurnEndpoint(intake, session);
+            String summaryContent = summary(intake);
+            AgentLongTermMemoryContext memoryContext = memory(intake);
+            com.yanban.api.agent.AgentRagExperimentResult ragResult =
+                    experiment.ragResult();
             AgentContextPackage context = contextBuilder.build(
                     new AgentContextBuildRequest(
                             intake.sessionId(),
                             intake.userId(),
                             endpoint.providerKey(),
                             endpoint.modelName(),
-                            summary(intake),
-                            memory(intake),
-                            experiment.ragResult() == null
+                            summaryContent,
+                            memoryContext,
+                            ragResult == null
                                     ? null
-                                    : experiment.ragResult().ragContext(),
+                                    : ragResult.ragContext(),
                             null,
                             INTAKE_MAX_RECENT_MESSAGES,
                             INTAKE_MAX_CONTEXT_CHARACTERS,
@@ -322,13 +351,26 @@ public class V2NaturalLanguageTurnService {
             recordShadowContext(endpoint, context, projectSession);
             logPlannerContext(
                     session, intake, endpoint, context, projectSession);
+            V2PlannerContextBoundaryFactory.Session plannerContext =
+                    plannerContexts == null ? null : plannerContexts.open(
+                            new V2PlannerContextBoundaryFactory.Input(
+                                    intake.userId(), intake.sessionId(),
+                                    intake.turnId(), intake.id(),
+                                    intake.clientRequestId(),
+                                    intake.requestSha256(),
+                                    endpoint.providerKey(), endpoint.modelName(),
+                                    intake.content(), verified.projectVersionId()
+                                            .map(Object::toString).orElse(null),
+                                    context, summaryContent, memoryContext,
+                                    ragResult));
             V2TurnPlanner.PlannedTurn planned = planner.plan(
                     context,
                     endpoint,
                     skill,
                     projectSession,
                     "v2-intake-" + shortHash(
-                            intake.userId() + "\0" + intake.turnId()));
+                            intake.userId() + "\0" + intake.turnId()),
+                    plannerContext);
             log.info(
                     "V2 intake planner decision intakeId={} turnId={} "
                             + "sessionId={} route={} requirementsAny={} "
@@ -761,6 +803,9 @@ public class V2NaturalLanguageTurnService {
     }
 
     private static String failureCode(RuntimeException failure) {
+        if (failure instanceof V2PlannerContextBoundaryException context) {
+            return context.code();
+        }
         return failure instanceof V2TurnPlanningException planning
                 ? planning.failureCode() : "INTAKE_FAILED";
     }
