@@ -628,8 +628,9 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
 
 ## V2 分层上下文、独立压缩与恢复合同
 
-- Issue: `#133`.
-- Status: `DESIGN_REVISED_AWAITING_REVIEW`.
+- Issues: design `#133`/`#134`; implementation umbrella `#135`, with
+  checkpoints `#136`-`#141`.
+- Status: `IMPLEMENTED_ON_INTEGRATION_BRANCH_AWAITING_REVIEW`.
 - Current finding: V2 intake reuses `AgentContextBuilder`, session summary,
   governed memory and RAG, but resume rebuilds those mutable auxiliary inputs.
   The adaptive handoff also truncates each conversation item to 2,000
@@ -657,11 +658,28 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   memory/RAG and only relevant historical terminal facts.
 - Compaction state: Plan and Step authority do not change during compaction.
   The Context Revision progresses through ASSEMBLING, COMPACTION_REQUIRED,
-  COMPACTING, READY or COMPACTION_FAILED, and the UI may expose that phase
-  without creating an assistant message.
+  COMPACTING, READY or FAILED. The owner-qualified turn API exposes the latest
+  persisted phase at the RUNNING task level without creating an assistant
+  message or Step Result. The first version deliberately does not attach that
+  phase to one timeline row because the durable timeline is not updated inside
+  every coordinator iteration.
 - Delivery workflow: after design approval, all V1 implementation sub-Issues
   use one user-approved long-lived integration branch and one Draft PR, with
   independent commits and test checkpoints before one final merge to main.
-- Excluded: Java/schema/API/frontend implementation, tokenizer or semantic
-  dynamic budget borrowing, extreme section-flood handling, Project memory,
-  Skill, MCP, sub-Agent, tool-catalog, Candidate apply and V2 core changes.
+- Implemented reuse: `agent_context_snapshots` is the revision header,
+  `agent_context_snapshot_sections` is the single section ledger, and V67
+  preserves the legacy snapshot insert default. Existing message, summary,
+  memory, RAG, TaskFrame, Plan/Step, Receipt and Candidate stores remain the
+  authority sources.
+- Implemented runtime boundaries: intake Planner (including retry and format
+  repair), autonomous Step decision, Reflection main/audit/audit-repair, and
+  Final Synthesis all require a persisted READY revision immediately before
+  the real provider call. Replan has no independent provider call and therefore
+  does not fabricate a model revision.
+- Implemented failure ordering: Step context failure remains recoverable with
+  the Step ACTIVE; Final Synthesis context/provider failure happens before
+  Candidate publication; Candidate publication failure discards the generated
+  final answer. None of these paths applies a ProjectVersion.
+- Excluded: semantic dynamic budget borrowing, extreme section-flood handling,
+  Project memory, Skill, MCP, sub-Agent, tool-catalog expansion, Candidate apply
+  and V2 core changes.

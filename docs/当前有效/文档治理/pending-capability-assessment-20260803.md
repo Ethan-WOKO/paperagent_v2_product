@@ -22,10 +22,10 @@
 
 | 优先级 | 能力 | 当前状态 | 为什么有必要 | 实施前提 |
 | --- | --- | --- | --- | --- |
-| P0 | V2 Context Revision/ledger | Planner、Step、Reflection 和 Final Synthesis 各有局部上下文，但没有贯穿 turn 的可重放 revision | 是摘要、记忆和子 Agent 的共同基础；解决恢复时上下文漂移和调试不可解释 | 先冻结不可裁剪事实、辅助上下文、版本和 digest 合同 |
-| P0 | V2 语义压缩和确定性预算 | intake 主要使用最近 12 条/12000 字符；adaptive 上下文仍有单条 2000 字符截断 | 长会话会丢语义或截坏结构，模型成本和行为不可预测 | provider/model-aware token 预算；结构化裁剪；保留 TaskFrame/Step Result/Receipt 引用 |
+| P0 | V2 Context Revision/ledger | `#135` 集成分支已实现九层 revision、真实模型调用门禁、父链/digest replay 和前端 phase，等待审查合入 | 是摘要、记忆和子 Agent 的共同基础；解决恢复时上下文漂移和调试不可解释 | 合入前完成 Draft PR 审查和真实用户视角验收 |
+| P0 | V2 语义压缩和确定性预算 | `#135` 第一版已实现 provider/model profile、固定比例、不借用、近期对话完整 turn 压缩和工具结果独立压缩；真实 1M profile 普通任务较难触发阈值 | 长会话会丢语义或截坏结构，模型成本和行为不可预测 | 用真实失败样本评估比例；第一版不增加动态借用或生产测试后门 |
 | P0 | V2 滚动会话摘要 | summary 表和服务已存在，但只有旧 `AgentService` 更新；V2 只读取 | V2 新任务无法把 DIRECT、Plan 成功、等待确认和失败稳定带入后续对话 | 复用现表；CAS/coverage 单调推进；失败不写成成功事实 |
-| P0 | V2 context snapshot 接入 | snapshot 表/API 已存在，但 V2 不保存 | 无法解释 planner/恢复阶段到底使用了哪些 summary、memory、RAG 和消息 | 复用现表或增加明确 revision 子模型；默认只存安全元数据 |
+| P0 | V2 context snapshot 接入 | `#135` 已演进原 snapshot header 并增加单一 section 子表；V67 保留旧写入默认值，owner-qualified API 可读取当前 phase | 无法解释 planner/恢复阶段到底使用了哪些 summary、memory、RAG 和消息 | 合入前核对 migration、权限、刷新恢复和敏感投影审计 |
 | P1 | 长期记忆闭环 | 用户 CRUD、确认、纠正、过期和 USER 检索已存在；Project 检索未接线，无自动提议 | 论文助手需要跨会话研究方向、术语和风格偏好 | 自动提取只生成未确认提议；ProjectVersion 绑定；防止 Project/tool 内容污染全局记忆 |
 | P1 | V2 产品 Skill 合同 | `skillId` 已持久化，Skill prompt 已注入 intake Planner；但旧 `allowed_tools` 仍使用 legacy/MCP 工具名，未约束 V2 autonomous tool catalog | 论文审查、代码复核等可复用工作方式需要稳定模板，同时必须避免“提示词说受限、后端实际暴露全部工具”的权限分裂 | 建立在 Context Revision 上；持久化 Skill revision/digest；只允许映射现有 V2 ToolId；后端按用户权限、Skill 和产品 catalog 取交集 |
 | P1 | 只读子 Agent 合同 | V2 没有子 Agent；旧 worker prompt 不是独立任务系统 | 可并行处理论文、代码、实验材料，并让主 Agent 只接收结构化摘要和证据引用 | 必须建立在 Context Revision、Step Result、Receipt、lease 和权限收窄之上 |
