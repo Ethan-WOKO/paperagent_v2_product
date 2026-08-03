@@ -5,9 +5,9 @@
 Before changing the repository, read:
 
 1. the active GitHub Issue and its frozen implementation contract;
-2. `docs/design/v2-agent-core-integration.md`;
-3. `docs/document-map-20260708.md`;
-4. `docs/process/verification-matrix.md`.
+2. `docs/README.md`;
+3. `docs/当前有效/架构设计/v2-agent-core-integration.md`;
+4. `docs/当前有效/开发流程/verification-matrix.md`.
 
 ## Product and runtime boundaries
 

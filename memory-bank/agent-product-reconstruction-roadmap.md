@@ -1,5 +1,7 @@
 # Agent Product Reconstruction Roadmap
 
+> 文档分类：**已被替代**。旧 roadmap 的大部分阶段已经完成，Agent 主架构已迁移到 V2。尚有价值的未完成想法见 `docs/当前有效/文档治理/pending-capability-assessment-20260803.md`。
+
 > 面向 AI 开发者的产品定位、架构边界和阶段重构规划。
 >
 > 本文档用于沉淀当前讨论形成的共识。后续拆 issue、写实现方案、做代码修改、设计测试和 merge gate，都应以本文档为上层依据。本文档不是一次性开发清单，也不是最终需求冻结文档；每个阶段开始前必须先复盘上一阶段结果，再细化本阶段 issue。

@@ -26,7 +26,7 @@ agent-v2/
 依赖 `com.yanban`、Controller、产品数据库实体或旧 Agent Service。
 
 本次导入仅建立构建与代码边界，尚未切换任何生产 API 或运行时流量。详细决策见
-`docs/design/v2-agent-core-integration.md`。
+`docs/当前有效/架构设计/v2-agent-core-integration.md`。
 
 ## 2. 阶段 B 当前能力
 
@@ -84,7 +84,7 @@ agent-v2/
 
 详细说明见：
 
-- `docs/SETUP.md`
+- `docs/当前有效/部署运维/SETUP.md`
 
 ## 4. 本地配置
 
@@ -105,7 +105,6 @@ cp .env.example .env
 - `DASHSCOPE_API_KEY`
 - `GITHUB_TOKEN`
 - `YANBAN_MCP_GITHUB_ENABLED=true`
-- `YANBAN_MCP_FILESYSTEM_ENABLED=true`
 
 > 不要把真实 `.env` 提交到 Git。
 
@@ -114,7 +113,7 @@ cp .env.example .env
 阶段 B 本地联调建议直接启动全量依赖：
 
 ```bash
-docker compose -f docs/docker-compose.yml up -d
+docker compose -f docs/当前有效/部署运维/docker-compose.yml up -d
 ```
 
 默认组件：
@@ -290,17 +289,16 @@ mvn clean test
 mvn test -Dgroups=manual
 ```
 
-> 真实 GitHub MCP / filesystem MCP 手测仍需在具备 Node 环境后补记录。
+> MCP 不属于 Project V2 当前发布门；外部能力必须按明确用例单独审计，Project V2 不使用 filesystem MCP。
 
 ## 12. 文档索引
 
-- V2 Agent 核心集成：`docs/design/v2-agent-core-integration.md`
-- 当前文档地图：`docs/document-map-20260708.md`
-- 按变更类型选择测试：`docs/process/verification-matrix.md`
-- 环境说明：`docs/SETUP.md`
-- API 冒烟：`docs/API-smoke.md`
-- WebSocket 协议：`docs/WEBSOCKET.md`
-- v1 评测与上线门禁：`docs/evaluation/README.md`
+- 统一文档入口：`docs/README.md`
+- V2 Agent 核心集成：`docs/当前有效/架构设计/v2-agent-core-integration.md`
+- 按变更类型选择测试：`docs/当前有效/开发流程/verification-matrix.md`
+- 环境说明：`docs/当前有效/部署运维/SETUP.md`
+- 待重新评估的 API/WebSocket 说明：`docs/待重新评估/`
+- 历史 v1 评测与上线门禁：`docs/历史归档/已被替代/旧评测体系/`
 
 ## 13. 开源卫生
 

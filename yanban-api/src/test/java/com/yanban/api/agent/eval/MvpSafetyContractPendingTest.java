@@ -20,7 +20,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Pending deterministic contracts. Each case is intentionally disabled: see
- * 0708后续计划及实施详情/MVP-0 确定性安全评测基线.md for the owning blocker and enable condition.
+ * docs/历史归档/0708阶段/已完成归档/评测与审查/MVP-0 确定性安全评测基线.md
+ * for the owning blocker and enable condition.
  */
 class MvpSafetyContractPendingTest {
 

@@ -46,7 +46,7 @@ coverage/
 .jacoco/
 __pycache__/
 *.py[cod]
-docs/evaluation/runs/
+docs/测试资产/运行结果/
 .mvp-*-tmp/
 
 # Local paper-polish test cases and downloaded artifacts
