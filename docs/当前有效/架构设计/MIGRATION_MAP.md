@@ -625,3 +625,43 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   OCR, image understanding, formula evaluation, macro execution, external-link
   resolution, frontend changes, schema, Sandbox, RAG, paper-polish, legacy
   `/chat`, V2 core changes, or LangChain4j annotation registration.
+
+## V2 分层上下文、独立压缩与恢复合同
+
+- Issue: `#133`.
+- Status: `DESIGN_REVISED_AWAITING_REVIEW`.
+- Current finding: V2 intake reuses `AgentContextBuilder`, session summary,
+  governed memory and RAG, but resume rebuilds those mutable auxiliary inputs.
+  The adaptive handoff also truncates each conversation item to 2,000
+  characters, while Reflection and Final Synthesis maintain separate local
+  budgets. There is no turn-wide replayable context revision.
+- Allocation decision: use a versioned provider/model context window and a
+  fixed percentage for each section. Sections do not borrow unused budget.
+  Only the section that exceeds its limit is compacted, with a target of 70%
+  of that section's limit. The first DeepSeek V4 profile is based on the
+  official 1M-token context window.
+- Reuse decision: keep `AgentContextBuilder` as a product-side normalization
+  and safe-projection component. Evolve `agent_context_snapshots` in place as
+  the revision header and add one section child table; do not create a table
+  per context kind or a second context ledger. Existing message, summary,
+  memory, Plan/Step, Receipt, ProjectVersion, Workspace and Candidate stores
+  remain authoritative.
+- Authority: Context Revision references TaskFrame, Plan/revision/active Step,
+  accepted Step Results, required Receipts, ProjectVersion, Workspace,
+  Candidate and Artifact authorities. It never copies or rewrites those
+  facts. Summary, memory, RAG, conversation and non-authoritative observations
+  remain budgeted auxiliary data.
+- Recovery: exact replay of one stage key must reuse its persisted revision.
+  Authority advancement appends a child revision. A new user turn rebuilds
+  from recent complete turns, the latest summary coverage, current governed
+  memory/RAG and only relevant historical terminal facts.
+- Compaction state: Plan and Step authority do not change during compaction.
+  The Context Revision progresses through ASSEMBLING, COMPACTION_REQUIRED,
+  COMPACTING, READY or COMPACTION_FAILED, and the UI may expose that phase
+  without creating an assistant message.
+- Delivery workflow: after design approval, all V1 implementation sub-Issues
+  use one user-approved long-lived integration branch and one Draft PR, with
+  independent commits and test checkpoints before one final merge to main.
+- Excluded: Java/schema/API/frontend implementation, tokenizer or semantic
+  dynamic budget borrowing, extreme section-flood handling, Project memory,
+  Skill, MCP, sub-Agent, tool-catalog, Candidate apply and V2 core changes.
