@@ -625,3 +625,36 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   OCR, image understanding, formula evaluation, macro execution, external-link
   resolution, frontend changes, schema, Sandbox, RAG, paper-polish, legacy
   `/chat`, V2 core changes, or LangChain4j annotation registration.
+
+## V2 Context Assembly、预算与恢复合同
+
+- Issue: `#133`.
+- Status: `DESIGN_FROZEN_IMPLEMENTATION_PENDING`.
+- Current finding: V2 intake reuses `AgentContextBuilder`, session summary,
+  governed memory and RAG, but resume rebuilds those mutable auxiliary inputs.
+  The adaptive handoff also truncates each conversation item to 2,000
+  characters, while Reflection and Final Synthesis maintain separate local
+  budgets. There is no turn-wide replayable context revision.
+- Reuse decision: keep `AgentContextBuilder` as a product-side normalization
+  and safe-projection component. Evolve the existing
+  `agent_context_snapshots` capability in place to support append-only staged
+  revisions; do not create a second context ledger. Continue to reuse the
+  existing summary and governed memory stores, but freeze the exact bounded
+  projection used by a running turn.
+- Authority: Context Revision references TaskFrame, Plan/revision/active Step,
+  accepted Step Results, required Receipts, ProjectVersion, Workspace,
+  Candidate and Artifact authorities. It never copies or rewrites those
+  facts. Summary, memory, RAG, conversation and non-authoritative observations
+  remain budgeted auxiliary data.
+- Recovery: exact replay of one stage key must reuse its persisted revision.
+  Authority advancement appends a child revision. Mutable auxiliary changes
+  affect future turns unless an explicitly authorized refresh appends a new
+  revision; silent reconstruction is forbidden.
+- Adversarial boundary: corrupt digests or parent chains, cross-owner/Plan
+  references, concurrent changed replay, prompt injection, structural
+  truncation and authority-over-budget conditions fail closed without
+  rewriting facts or expanding permissions.
+- Excluded: Java/schema/API/frontend implementation, tokenizer or semantic
+  compression, V2 rolling-summary writes, Project memory, Skill, MCP,
+  sub-Agent, tool-catalog, Candidate apply and V2 core changes. Those remain
+  later Issues after the contract is reviewed.

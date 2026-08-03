@@ -10,10 +10,11 @@
 
 1. 根目录 `AGENTS.md`：仓库纪律、安全和开发流程；
 2. `docs/当前有效/架构设计/v2-agent-core-integration.md`：V2 核心与产品适配边界；
-3. `docs/当前有效/架构设计/MIGRATION_MAP.md`：旧能力的复用、适配和退役结论；
-4. `docs/当前有效/开发流程/verification-matrix.md`：按变更范围选择验证；
-5. `docs/当前有效/文档治理/pending-capability-assessment-20260803.md`：尚未完成能力及实施顺序；
-6. `docs/交接文档/v2-main-dialog-handoff-20260803.md`：新主对话的当前停止位置。
+3. `docs/当前有效/架构设计/v2-context-assembly-contract.md`：V2 上下文、预算和恢复合同；
+4. `docs/当前有效/架构设计/MIGRATION_MAP.md`：旧能力的复用、适配和退役结论；
+5. `docs/当前有效/开发流程/verification-matrix.md`：按变更范围选择验证；
+6. `docs/当前有效/文档治理/pending-capability-assessment-20260803.md`：尚未完成能力及实施顺序；
+7. `docs/交接文档/v2-main-dialog-handoff-20260803.md`：新主对话的当前停止位置。
 
 不要从历史 roadmap、旧 progress、Worker 编号或历史报告中的“下一步”直接启动开发。
 
@@ -32,6 +33,7 @@
 ### 架构设计
 
 - `当前有效/架构设计/v2-agent-core-integration.md`
+- `当前有效/架构设计/v2-context-assembly-contract.md`
 - `当前有效/架构设计/MIGRATION_MAP.md`
 - `当前有效/架构设计/agent-event-cancel-protocol.md`
 
