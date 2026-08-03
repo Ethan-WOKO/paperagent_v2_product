@@ -21,6 +21,7 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -28,6 +29,7 @@ public class V2NewTurnContextAssembler {
     private final ObjectMapper json;
     private final VersionedTokenCounter tokens;
 
+    @Autowired
     public V2NewTurnContextAssembler(ObjectMapper json) {
         this(json, new Utf8ByteTokenCounter());
     }
