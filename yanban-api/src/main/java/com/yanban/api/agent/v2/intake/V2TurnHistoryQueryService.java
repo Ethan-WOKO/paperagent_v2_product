@@ -91,6 +91,7 @@ public class V2TurnHistoryQueryService {
         Long candidateArtifactId = null;
         List<String> outputPaths = List.of();
         String errorCode = null;
+        V2AdaptiveTurnResponse.Context context = null;
         Instant updatedAt = intake.updatedAt();
 
         if (V2TurnIntakeEntity.DIRECT.equals(intake.status())) {
@@ -117,6 +118,7 @@ public class V2TurnHistoryQueryService {
                 candidateArtifactId = response.candidateArtifactId();
                 outputPaths = response.outputPaths();
                 errorCode = response.errorCode();
+                context = response.context();
                 updatedAt = later(updatedAt, snapshot.updatedAt());
             }
         } else {
@@ -143,7 +145,8 @@ public class V2TurnHistoryQueryService {
                 intake.clientRequestId(), intake.content(), status, route,
                 planId, projectVersion, steps, finalText,
                 candidateArtifactId, outputPaths, errorCode,
-                intake.createdAt(), updatedAt, automatic, confirmation);
+                intake.createdAt(), updatedAt, automatic, confirmation,
+                context);
     }
 
     private String directAnswer(V2TurnIntakeEntity intake) {

@@ -426,6 +426,15 @@
                     <span>{{ task.status === 'PLANNING' || task.status === 'RUNNING' ? '正在处理' : task.status === 'FAILED' ? '处理失败' : task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理' }}</span>
                     <small>{{ task.steps.length ? `${task.steps.length} 个步骤` : '直接回答' }}</small>
                   </summary>
+                  <p
+                    v-if="task.status === 'RUNNING' && task.context"
+                    class="v2-conversation__context-phase"
+                  >
+                    {{ v2ContextPhaseLabel(task.context.phase) }}
+                    <template v-if="v2ContextCompactedSectionText(task.context)">
+                      · {{ v2ContextCompactedSectionText(task.context) }}
+                    </template>
+                  </p>
                   <ol v-if="task.steps.length">
                     <li v-for="step in task.steps" :key="`${task.clientRequestId}:${step.index}:${step.title}`" :data-status="step.status">
                       <span>{{ step.index }}</span>
@@ -666,6 +675,8 @@ import {
   startThenPollV2NaturalLanguageTurn,
   v2NaturalLanguageStatusLabel,
   v2NaturalLanguageStepStatusLabel,
+  v2ContextCompactedSectionText,
+  v2ContextPhaseLabel,
   type V2NaturalLanguageRequestIdentity,
 } from '@/utils/v2NaturalLanguageTurn';
 

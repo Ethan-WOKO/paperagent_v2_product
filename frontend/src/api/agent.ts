@@ -339,6 +339,19 @@ export interface V2NaturalLanguageTurnStep {
   detail: string | null;
 }
 
+export type V2ContextPhase =
+  | 'ASSEMBLING'
+  | 'COMPACTION_REQUIRED'
+  | 'COMPACTING'
+  | 'READY'
+  | 'FAILED';
+
+export interface V2NaturalLanguageTurnContext {
+  phase: V2ContextPhase;
+  stepId: string;
+  compactedSections: string[];
+}
+
 export interface V2NaturalLanguageTurnResponse {
   status: V2NaturalLanguageTurnStatus;
   route: 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE';
@@ -349,6 +362,7 @@ export interface V2NaturalLanguageTurnResponse {
   candidateArtifactId: number | null;
   outputPaths: string[];
   errorCode: string | null;
+  context?: V2NaturalLanguageTurnContext | null;
 }
 
 export interface V2AgentAutomaticValidation {

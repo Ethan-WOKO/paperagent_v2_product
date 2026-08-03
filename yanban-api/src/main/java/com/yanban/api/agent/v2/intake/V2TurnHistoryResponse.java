@@ -19,7 +19,22 @@ public record V2TurnHistoryResponse(
         Instant createdAt,
         Instant updatedAt,
         AgentAutomaticValidation agentAutomaticValidation,
-        ConfirmationValidation confirmationValidation) {
+        ConfirmationValidation confirmationValidation,
+        V2AdaptiveTurnResponse.Context context) {
+
+    public V2TurnHistoryResponse(
+            String clientRequestId, String question, String status,
+            String route, String planId, String projectVersion,
+            List<V2AdaptiveTurnResponse.Step> steps, String finalText,
+            Long candidateArtifactId, List<String> outputPaths,
+            String errorCode, Instant createdAt, Instant updatedAt,
+            AgentAutomaticValidation agentAutomaticValidation,
+            ConfirmationValidation confirmationValidation) {
+        this(clientRequestId, question, status, route, planId,
+                projectVersion, steps, finalText, candidateArtifactId,
+                outputPaths, errorCode, createdAt, updatedAt,
+                agentAutomaticValidation, confirmationValidation, null);
+    }
 
     public V2TurnHistoryResponse {
         steps = steps == null ? List.of() : List.copyOf(steps);
