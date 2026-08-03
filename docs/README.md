@@ -10,7 +10,7 @@
 
 1. 根目录 `AGENTS.md`：仓库纪律、安全和开发流程；
 2. `docs/当前有效/架构设计/v2-agent-core-integration.md`：V2 核心与产品适配边界；
-3. `docs/当前有效/架构设计/v2-context-assembly-contract.md`：V2 上下文、预算和恢复合同；
+3. `docs/当前有效/架构设计/v2-context-assembly-contract.md`：V2 分层上下文、独立压缩和恢复合同；
 4. `docs/当前有效/架构设计/MIGRATION_MAP.md`：旧能力的复用、适配和退役结论；
 5. `docs/当前有效/开发流程/verification-matrix.md`：按变更范围选择验证；
 6. `docs/当前有效/文档治理/pending-capability-assessment-20260803.md`：尚未完成能力及实施顺序；

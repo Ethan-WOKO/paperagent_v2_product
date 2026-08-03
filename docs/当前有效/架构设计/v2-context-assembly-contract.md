@@ -1,6 +1,6 @@
-# V2 Context Assembly、预算与恢复合同
+# V2 分层上下文、独立压缩与恢复合同
 
-状态：**设计冻结，待实现**
+状态：**设计冻结，待用户审核**
 
 Issue：`#133`
 
@@ -10,271 +10,310 @@ Issue：`#133`
 
 ## 1. 目标
 
-本合同规定 V2 一次持久化 turn 在 Planner、Step model、Reflection、
-Replan 和 Final Synthesis 阶段如何选择、预算、记录和恢复上下文。
+V2 从一次请求开始就按固定区域管理上下文。每个区域占模型上下文窗口的固定
+百分比，不互相借用。一个区域超限时只整理该区域，其他区域保持不变。
 
-核心目标只有两个：
+Context Revision 不是主体功能。它只记录每次 Planner、Step、Reflection、
+Replan 或 Final Synthesis 实际使用了哪些上下文，保证刷新、重试和服务重启后
+可以恢复同一份输入。
 
-1. 同一阶段发生刷新、重试或服务重启时，模型重新看到同一份上下文；
-2. 摘要、记忆、RAG 和模型输出不能覆盖 TaskFrame、Plan、Step Result、
-   Receipt、Workspace、Candidate 或 ProjectVersion 等权威事实。
+## 2. 第一版非目标
 
-## 2. 非目标
+- 不做区域间预算借用或动态调度；
+- 不处理故意填满某个区域等极端攻击场景；
+- 不实现递归摘要、无限历史恢复或自动扩大模型窗口；
+- 不修改 V2 核心的 TaskFrame、Plan、Step、Receipt、Workspace、Candidate 或
+  ProjectVersion 权威；
+- 不同时实现 Project memory、Skill、MCP 或子 Agent。
 
-本 Issue 不修改 Java、数据库、API、前端或 Prompt，也不实现 tokenizer、
-自动摘要、语义压缩、Project memory、Skill、MCP 或子 Agent。
+第一版仍保留最基本的失败闭合：身份或事实引用不匹配、结构损坏、权威区超限、
+压缩失败时停止本次模型调用，不伪造成功事实，也不扩大权限。
 
-本合同不改变工具权限、Candidate apply gate、Workspace 隔离或
-ProjectVersion 的不可变边界。
+## 3. 模型窗口来源
 
-## 3. 当前代码事实
+模型窗口来自版本化的产品配置，值必须有公开 Provider 文档来源，不由模型输出、
+用户消息或 Prompt 决定。
 
-| 阶段 | 当前输入 | 当前预算/裁剪 | 当前恢复行为 | 主要问题 |
-| --- | --- | --- | --- | --- |
-| Planner | 当前请求、最近消息、session summary、用户 memory、RAG、Skill prompt、Project 状态 | 最近 12 条、总计约 12,000 字符 | resume 重新读取当前 summary、memory 和 RAG | 同一 turn 的辅助上下文可能漂移 |
-| Step model | TaskFrame、当前 Plan/Step、工具目录、conversation context、已有执行事实 | conversation 每项直接截到 2,000 字符；工具和事实各有局部上限 | 从持久化 Plan 恢复，但 conversation 由 intake 重建 | 可能截坏结构，也没有统一总预算 |
-| Reflection | TaskFrame、Plan、conversation、accepted results、Receipts、当前 Step result、未完成 Steps | 多处局部 2,000/12,000/20,000 字符上限 | 从当前持久化事实重新聚合 | 没有记录本次判断到底使用了哪些投影 |
-| Replan | Reflection 的 REPLAN 结果与当前 ACTIVE authority | replacement 字段有解析上限 | 依赖持久化 replan marker | 上下文来源仍沿用未冻结的 Reflection 输入 |
-| Final Synthesis | TaskFrame、accepted Step Results、Candidate/输出路径 | 总事实约 24,000 字符；单结果约 4,000 字符 | 重新读取 accepted results | 有确定性事实来源，但没有统一 revision 和预算说明 |
+DeepSeek 官方当前将 `deepseek-v4-flash` 和 `deepseek-v4-pro` 的上下文长度列为
+1M token，最大输出列为 384K token。输入和输出合计受上下文窗口限制：
 
-现有 `AgentContextBuilder` 已具备消息规范化、section、dropped item 和安全
-debug projection，应该复用。现有 `agent_context_snapshots` 对 `turn_id` 唯一，
-只能表达一条快照，不能表达一个 turn 内多个模型阶段的追加 revision。
+- <https://api-docs.deepseek.com/zh-cn/quick_start/pricing>
+- <https://api-docs.deepseek.com/api/create-chat-completion>
 
-## 4. 最小改动决策
+第一版为每个已支持的 provider/model 保存：
 
-1. 不修改 `agent-v2` 核心事实模型。Context Assembly 先作为 product-side
-   adapter 接入 `yanban-api`，只引用稳定 V2 标识。
-2. 不新建第二套 summary、memory、Receipt、Workspace、Candidate 或
-   ProjectVersion 表。
-3. 后续实现优先演进现有 `agent_context_snapshots`，使其能够追加保存多个
-   revision；不另建平行的 context ledger 表。
-4. 继续复用 `AgentContextBuilder` 的规范化和安全投影能力，但把字符窗口升级为
-   统一预算器的一个输入，而不是最终事实源。
-5. 初次实现只解决“冻结、恢复、审计和确定性裁剪”，不同时实现模型生成摘要。
+- `contextWindowTokens`；
+- `maxOutputTokens`；
+- `tokenCounterVersion`；
+- 固定分区 profile 版本。
 
-## 5. 上下文层级
+未知模型没有可信窗口配置时不得假装使用 1M；应使用明确的保守 profile 或拒绝
+进入分层执行，并返回安全错误。
 
-### 5.1 必须保留的运行合同
+## 4. 固定分区
 
-- 已认证 user/session/turn；
-- permission tier 与允许的 capability/tool 集合；
-- TaskFrame；
-- 当前 Plan revision、active Step 和 completion criteria；
-- 当前用户请求。
+以 1M token 模型为例，第一版默认 profile 如下：
 
-如果这些内容无法放入预算，必须停止模型调用并返回安全的
-`CONTEXT_AUTHORITY_OVER_BUDGET` 类失败；不得裁掉其中一部分继续执行。
+| 区域 | 比例 | 1M 对应上限 | 内容 |
+| --- | ---: | ---: | --- |
+| `CORE_AUTHORITY` | 10% | 100K | system/safety、权限、当前请求、TaskFrame、当前 Plan/Step、工具 schema |
+| `RECENT_CONVERSATION` | 20% | 200K | 最近的完整 canonical user/assistant turns |
+| `CONVERSATION_SUMMARY` | 10% | 100K | 已被覆盖的较早对话摘要及 coverage |
+| `TOOL_RESULTS` | 20% | 200K | 当前和历史相关工具结果的受控投影 |
+| `STEP_STATE` | 15% | 150K | Step 状态、accepted Step Result、Receipt/Candidate/Workspace 引用 |
+| `LONG_TERM_MEMORY` | 10% | 100K | 本轮检索命中的 governed memory |
+| `RAG_EVIDENCE` | 5% | 50K | 本轮检索命中的 RAG/evidence 投影 |
+| `OUTPUT_RESERVE` | 5% | 50K | 当前模型调用允许使用的输出空间 |
+| `SAFETY_MARGIN` | 5% | 50K | tokenizer 偏差、固定协议和 Provider 额外开销 |
 
-### 5.2 不可改写的事实引用
+总计 100%。第一版各区域不借用：一个区域未使用的 token 保持空闲，不能转给
+另一个区域。
 
-- accepted Step Result；
-- 当前判断必须使用的 Receipt；
-- 冻结 ProjectVersion；
-- Workspace、Candidate 和 Artifact 引用；
-- 已持久化 replan/completion 状态。
+这些比例是首版工程基线，不是永久产品事实。后续只能根据真实运行数据和评测在
+新的 profile 版本中调整，已经开始的 turn 继续使用其冻结 profile。
 
-默认保存稳定标识、版本和 digest，不复制完整文件或原始工具输出。只有当前模型
-调用确实需要的受控投影才进入 assembled content。
+## 5. 各区域超限后的处理
 
-### 5.3 可预算的辅助上下文
+每个区域在组装时计算 token。未超过自身上限时不处理；超过时只处理该区域，
+目标是降到该区域上限的 70%，避免下一次调用立即再次压缩。
 
-- frozen session summary projection；
-- governed memory hits；
-- RAG/evidence snippets；
-- recent canonical conversation turns；
-- 非权威工具观察和失败诊断。
+### 5.1 `CORE_AUTHORITY`
 
-辅助上下文可以按确定性顺序省略或压缩，但必须记录原因。它不能改变身份、权限、
-事实状态或完成判断。
+不得语义压缩。允许通过稳定引用替代重复展示文本，但当前请求、权限、TaskFrame、
+当前 Plan/Step 和完成条件必须完整。仍超过 10% 时，本次模型调用失败，不占用
+其他区域。
 
-## 6. `V2ContextRevision` 逻辑合同
+### 5.2 `RECENT_CONVERSATION`
 
-后续实现可以使用不同 Java 类型名，但必须表达以下字段和语义：
+保留最新完整 turn，从最旧的完整 turn 开始移出。被移出的 turn 进入
+`CONVERSATION_SUMMARY` 的待摘要集合。user/assistant turn 作为一个对象处理，
+不能截成半轮对话。
 
-| 字段 | 语义 |
+### 5.3 `CONVERSATION_SUMMARY`
+
+摘要记录必须包含覆盖到的 message ID、来源范围和摘要版本。超过上限时只合并
+最早的摘要段，保留较新的摘要段和 coverage 单调性。摘要是辅助信息，不能声称
+工具成功、文件已修改或 Candidate 已应用。
+
+### 5.4 `TOOL_RESULTS`
+
+先去掉重复展示文本，再将较旧且与当前 Step 无直接关系的输出转换为结构化投影。
+始终保留 ToolCall/Receipt ID、工具种类、状态、关键返回值、错误码和截断标记。
+原始 Receipt 仍是权威来源。
+
+### 5.5 `STEP_STATE`
+
+当前 Step、目标、完成条件和状态不压缩。较早已完成 Step 可以缩短说明，但必须
+保留 Step ID、终态、accepted Step Result 和 Receipt/Candidate/Workspace 引用。
+若权威引用投影仍超过 15%，停止本次调用。
+
+### 5.6 `LONG_TERM_MEMORY`
+
+不修改 memory 表中的原始记录。根据当前请求的治理条件和相关性排序，减少本轮
+注入的记录，直到不超过 10%。保存实际选中的 memory ID、版本和投影 digest。
+
+### 5.7 `RAG_EVIDENCE`
+
+不重新摘要知识库正文。按相关性、来源治理和稳定排序减少本轮片段，直到不超过
+5%。保存 evidence ref、来源版本和投影 digest。
+
+### 5.8 输出与安全余量
+
+`OUTPUT_RESERVE` 和 `SAFETY_MARGIN` 提前扣除，不参与压缩，也不能被其他区域
+使用。每个调用阶段仍可在该固定上限内设置更小的实际输出上限。
+
+## 6. 不同执行阶段使用哪些区域
+
+所有阶段使用同一份 profile，但只装配该阶段需要的区域内容：
+
+| 阶段 | 主要区域 |
 | --- | --- |
-| `turnId` | owner-qualified 的持久化 turn |
-| `revisionNumber` | 从 1 开始、同 turn 单调递增 |
-| `parentRevisionNumber` | 首个 revision 为空，其余必须指向直接父 revision |
-| `stage` | `PLANNER`、`STEP_DECISION`、`REFLECTION`、`REPLAN`、`FINAL_SYNTHESIS` |
-| `stageKey` | 阶段稳定键；至少绑定 Plan/revision/Step/ToolCall 或 terminal cut 中适用的身份 |
-| `reason` | `INITIAL`、`AUTHORITY_ADVANCED` 或受控的 `EXPLICIT_AUXILIARY_REFRESH` |
-| `modelEndpointRef` | provider/model 的非秘密快照；不得包含 key 或完整 URL 凭据 |
-| `budget` | 模型窗口、系统指令、工具 schema、输入、输出和 repair reserve 的预算 |
-| `sections` | 有序 section manifest 与受控投影 |
-| `sourceRefs` | summary coverage、message、memory、RAG evidence、Plan、Result、Receipt 等来源引用 |
-| `parentDigest` | 父 revision 的 canonical digest；首个 revision 为空 |
-| `digest` | 当前 canonical document 的小写 SHA-256 |
-| `createdAt` | 持久化时间，只用于审计，不参与内容选择 |
+| Planner | CORE、最近对话、对话摘要、长期记忆、RAG；只读取相关历史任务最终状态 |
+| Step model | CORE、当前 Step、相关 accepted results、相关工具结果、少量最近对话和记忆 |
+| Reflection | CORE、当前 Step 完成条件、当前 Step Result、相关 Receipt、当前失败诊断 |
+| Replan | CORE、已完成不可改写事实、当前失败原因和未完成目标 |
+| Final Synthesis | CORE 中的目标/交付物、accepted Step Results、最终 Artifact/Candidate 引用 |
 
-### 6.1 Section 合同
+没有被某阶段使用的区域保持空，不自动把额度转给其他区域。
 
-每个 section 至少记录：
+## 7. 同一任务恢复与下一轮对话
 
-- `type`、稳定排序位置和 authority/auxiliary 分类；
-- 来源标识、来源版本或覆盖上限；
-- `INCLUDED`、`DROPPED` 或 `TRUNCATED`；
-- 原始项目数、纳入项目数、预算和实际 token/字符估算；
-- 省略或截断原因；
-- 受控投影 digest；
-- 仅在 exact replay 必需且允许持久化时保存的 bounded projection。
+### 7.1 同一持久化 turn 的恢复
+
+刷新、重复 POST、服务重启或相同步骤重试属于同一 turn。必须读取原来的 Context
+Revision、固定 profile、summary coverage、memory/RAG 选择和受控投影，不能用
+数据库此刻的最新值静默重建。
+
+权威状态推进后，例如产生新 Receipt、accepted Step Result 或 replan，下一次
+模型调用追加子 revision。旧 revision 不覆盖。
+
+### 7.2 用户发起下一轮新对话
+
+新 turn 重新组装上下文：
+
+1. 在 20% 区域内读取最近完整 user/assistant turns；
+2. 更早对话只读取最新有效 summary 及其 coverage；
+3. 根据新请求重新检索当前有效长期记忆；
+4. 根据新请求重新检索 RAG；
+5. 只带入相关历史任务的最终状态、accepted Step Result、未解决问题和待确认
+   Candidate；
+6. 不带入全部 Reflection、工具原始输出、中间轮询状态和已经无关的失败诊断；
+7. Project 请求冻结新 turn 开始时的当前 ProjectVersion。
+
+memory 被用户删除、纠正或拒绝后影响新的 turn，但不改变已经运行中的旧 turn。
+
+## 8. 压缩发生时的状态
+
+压缩是模型调用前的上下文子阶段，不是新的 Plan 或 Step 状态。Plan/Step 权威状态
+保持原样，例如当前 Step 继续是 `ACTIVE`。
+
+Context Revision 使用独立状态：
+
+```text
+ASSEMBLING
+  -> READY
+
+ASSEMBLING
+  -> COMPACTION_REQUIRED
+  -> COMPACTING
+  -> READY
+
+COMPACTING
+  -> COMPACTION_FAILED
+```
+
+压缩期间：
+
+- 不执行新工具；
+- 不完成 Step；
+- 不创建成功 Step Result；
+- 不修改原 ProjectVersion；
+- 已有 Plan、Receipt、Candidate 和 Workspace 事实保持不变。
+
+压缩失败时保留最后成功的 Context Revision，本次模型调用停止。后续重试使用稳定
+stage key，不重复执行已经完成的工具。
+
+## 9. 用户可见状态
+
+任务仍显示“执行中”。页面在当前 Step 的折叠执行信息内显示独立 phase：
+
+- 正在组装上下文；
+- 正在整理历史对话；
+- 正在整理工具执行结果；
+- 上下文整理完成；
+- 上下文整理失败。
+
+压缩状态不是 assistant 消息，不进入对话历史，也不能被当作 Step Result。为了
+避免闪烁，第一版可以只展示持续超过 1 秒的压缩 phase；无论是否展示，状态都要
+持久化以支持刷新恢复。
+
+## 10. 存储设计
+
+不为每个区域新建一张业务表。现有事实继续留在原表：
+
+- 对话：`agent_messages`；
+- 摘要：`agent_session_summaries`；
+- 长期记忆：现有 memory 表；
+- Plan/Step：V2 Plan 生命周期表；
+- 工具结果：Receipt/EffectOutcome；
+- ProjectVersion、Workspace、Candidate：各自现有权威表。
+
+后续实现原地演进 `agent_context_snapshots` 为 revision header，并新增一个 section
+子表，而不是建立第二套平行 context ledger。
+
+### 10.1 Revision header
+
+至少记录：turn、revision number、parent revision、stage、stable stage key、状态、
+provider/model profile、context window、总 token、输出预留、profile 版本、父 digest、
+当前 digest 和创建时间。
+
+### 10.2 Section row
+
+每个 revision 每个区域一行，至少记录：section type、固定比例、token limit、压缩前
+token、压缩后 token、状态、来源引用、summary coverage 或选择结果、受控投影、
+projection digest 和压缩原因。
 
 禁止保存 API key、`.env`、host path、用户文件全文、Provider 原始响应、模型
 reasoning 或未裁剪工具输出。
 
-## 7. Revision 创建和恢复规则
+## 11. `V2ContextRevision` 合同
 
-1. Planner 首次调用前创建 revision 1，冻结该 turn 使用的 summary coverage、
-   memory 命中、RAG 投影、最近对话、Skill revision 和 model endpoint。
-2. 同一 `stageKey` 的 exact replay 必须返回原 revision，不重新读取当前 summary、
-   memory、RAG、Skill 或设置。
-3. Plan/Step/Result/Receipt 等权威状态推进后，下一模型阶段追加子 revision；不得
-   覆盖旧 revision。
-4. 辅助数据变化默认只影响未来 turn。若产品以后允许运行中刷新，必须使用
-   `EXPLICIT_AUXILIARY_REFRESH` 追加 revision，并记录用户或服务器授权原因。
-5. 找到占用但 digest、父链、stageKey 或来源绑定不一致的 revision 时失败闭合；
-   不自动修复、覆盖或重新组装。
-6. Final Synthesis 必须引用 terminal cut 与全部 accepted Step Result 的稳定集合；
-   重放时不得因为新的 summary 或 memory 而改变答案输入。
+后续 Java 类型名可以调整，但必须表达：
 
-## 8. 预算合同
+- owner-qualified turn；
+- 单调 revision number 和直接 parent；
+- `PLANNER`、`STEP_DECISION`、`REFLECTION`、`REPLAN` 或
+  `FINAL_SYNTHESIS` stage；
+- 绑定 Plan/revision/Step/ToolCall 或 terminal cut 的 stable stage key；
+- 冻结的 model profile 和固定分区 profile；
+- 有序 section manifest；
+- 来源 ID、版本、coverage、选择/压缩结果；
+- parent digest 和 canonical lowercase SHA-256 digest。
 
-预算按实际 provider/model profile 解析，至少分为：
+同一 stage key、相同内容永久 replay；同一 stage key 的不同内容冲突。占用但
+digest、父链、owner、Plan 或来源绑定不一致时失败闭合，不覆盖或自动修复。
 
-```text
-model input window
-  - system/safety reserve
-  - tool schema reserve
-  - required authority facts
-  - required Receipt/result projections
-  - auxiliary context allowance
-  - output reserve
-  - structured-output repair reserve
-```
+## 12. 实施顺序
 
-规则：
+设计审核后，实施使用一个长期集成分支和一个 Draft PR；多个子 Issue 作为阶段
+检查点，不单独创建分支和 PR。这是用户为 V2 分层上下文 V1 明确批准的阶段性
+例外，不适用于其他功能。
 
-1. 先预留输出和 repair，再组装输入。
-2. 权威层按固定顺序完整纳入；不足时失败，不降级为辅助信息。
-3. 辅助层使用稳定优先级、稳定排序和稳定 tie-breaker。
-4. JSON、tool call/result、消息 turn 和 Receipt projection 只能在对象边界裁剪，
-   不允许任意 `substring` 产生半个结构。
-5. estimator 与 provider 实际计数存在偏差时使用安全余量；超限失败不能自动扩大
-   模型、网络或工具权限。
-6. 相同输入、相同 profile 和相同来源 revision 必须产生相同 section 顺序和 digest。
+建议顺序：
 
-第一版不要求跨 provider 完全相同的 token 数，但要求同一 provider/model profile
-内确定性，并记录估算器版本。
+1. **模型 profile 与 token 统计**：建立 1M 等窗口配置、固定比例计算和影子统计，
+   暂不改变运行行为；
+2. **Context Revision 存储**：演进 snapshot header、增加 section 子表、实现
+   exact replay 和 digest；
+3. **对话层**：最近完整对话、summary coverage 和独立对话压缩；
+4. **新 turn 组装**：重新选择最新摘要、当前 memory、RAG 和相关历史终态；
+5. **执行层**：接入 Step、tool result、Reflection 和 Final Synthesis 的独立区域；
+6. **恢复与压缩状态**：同 turn 恢复、压缩失败和稳定重试；
+7. **前端 phase**：显示持续压缩状态；
+8. **整体验收**：长对话、长工具输出、重启、Candidate 等待确认和失败路径。
 
-## 9. 现有能力复用结论
+每个子 Issue 使用独立提交并记录测试命令和 checkpoint。整个分支稳定后一次合入
+`main`。
 
-| 能力 | 结论 | 后续最小变化 |
-| --- | --- | --- |
-| `AgentContextBuilder` | `REUSE_WITH_ADAPTER` | 保留规范化与安全 debug projection；由 revision assembler 提供冻结来源和预算 |
-| `agent_context_snapshots` | `EVOLVE_IN_PLACE` | 后续迁移为同 turn 多 revision；保留现表和查询能力，旧行按 legacy revision 读取 |
-| `AgentSessionSummaryService` | `REUSE_AFTER_MONOTONIC_GUARD` | summary 仍是一 session 一行；后续增加 coverage/CAS 防倒退，不作为执行事实 |
-| long-term memory | `REUSE_GOVERNED_PROJECTION` | 冻结本 turn 实际命中的受控投影和来源版本；删除/纠正影响未来 turn |
-| RAG/evidence | `REUSE_BY_REFERENCE` | 优先保存稳定 evidence ref 与 bounded projection，不复制知识库或用户文件 |
-| TaskFrame/Plan/Step Result/Receipt | `REFERENCE_ONLY` | Context Revision 只引用，不复制或改写权威事实 |
+## 13. 最小测试矩阵
 
-## 10. 对抗性原理与失败行为
+- 1M profile 的各区域 token 上限计算准确，总和为 100%；
+- 一个区域超限只改变该区域，其他 section digest 不变；
+- 不发生预算借用；
+- 最近对话按完整 turn 移入摘要，不产生半条消息；
+- summary coverage 单调且不会重复包含同一消息；
+- memory/RAG 只减少本轮选择，不修改原记录；
+- tool/Step 压缩保留 Receipt 和 accepted Step Result 引用；
+- 当前请求、TaskFrame、当前 Plan/Step 不被语义压缩；
+- 同 turn 重启恢复得到相同 revision digest；
+- 新 turn 使用最新有效 memory/summary，但不继承全部旧执行日志；
+- 压缩时 Step 保持 ACTIVE，工具不重复执行；
+- COMPACTING/READY/FAILED phase 刷新后可恢复；
+- 压缩失败不创建成功 Step Result、Candidate 或新 ProjectVersion。
 
-设计默认所有非权威输入和所有恢复边界都可能被攻击或发生竞争：
-
-| 场景 | 必须行为 |
-| --- | --- |
-| summary/memory 在任务运行中被修改或删除 | 当前 stage exact replay 仍使用冻结 revision；变化只影响未来 turn 或显式新 revision |
-| memory、RAG、文件或工具输出包含“忽略规则”等指令 | 标记为 untrusted data；不能改变 system policy、权限、工具集合或事实状态 |
-| 超长字符串把关键字段挤出窗口 | 权威层保留；辅助层按确定性顺序丢弃；权威层本身超限则失败 |
-| JSON 或 tool call/result 在边界处被截断 | 整项省略或按字段重建合法投影，绝不保存半个结构 |
-| 恢复时 provider/model 设置已变化 | 使用 revision 中冻结的非秘密 endpoint profile；无法安全恢复时停止，不静默换模型 |
-| forged source ID、跨用户 memory 或跨 Plan Receipt | owner、turn、Plan、Step、ProjectVersion 和 digest 任一不符即拒绝 |
-| 两个请求并发创建同一 stage revision | 数据库唯一约束决定赢家；完全相同者 replay，不同内容者 conflict |
-| revision 已占用但正文、digest 或父链损坏 | 返回 sanitized partial-state failure，不读取正文到日志，不自动覆盖 |
-| snapshot 写入成功但模型调用失败 | revision 保留供重试；不得制造 Step Result 或成功事实 |
-| 模型调用成功但后续事实未提交 | 不能根据未持久化输出推进；恢复从最后权威 cut 和已存 revision 重试 |
-| estimator 低估导致 provider 拒绝 | 记录安全错误并停止；不得随机裁剪后无痕重试 |
-
-## 11. 后续实现拆分
-
-### Issue B1：revision 持久化与初始冻结
-
-- 演进现有 snapshot 表和服务，支持 append-only revision、stageKey、父 digest 和
-  exact replay；
-- intake 首次组装时保存 revision 1；resume 读取 revision 1；
-- 不改变上下文选择算法，不接自动摘要。
-
-### Issue B2：统一预算与各阶段接线
-
-- 增加 provider/model-aware budget profile；
-- 按对象边界替换 conversation/JSON 的任意字符串截断；
-- Step、Reflection、Replan 和 Final Synthesis 使用显式子 revision；
-- 日志只记录 stage、计数、预算、digest 和安全错误码。
-
-### Issue C：滚动摘要与语义压缩
-
-- 在 revision/replay 稳定后接入 V2 summary coverage；
-- 增加 CAS/单调推进和失败语义；
-- 自动提取记忆、Skill、MCP 和子 Agent 继续保持独立 Issue。
-
-## 12. 后续测试矩阵
-
-### 合同测试
-
-- canonical 排序和 digest 稳定；
-- authority section 不能被 dropped/truncated；
-- structured item 只按对象边界裁剪；
-- 相同来源/profile 生成相同 revision；
-- 不同 stageKey 不能复用同一 revision。
-
-### 仓储与并发测试
-
-- exact replay、changed replay conflict；
-- revisionNumber 和 parentDigest 单调；
-- 同 stage 并发只有一个赢家；
-- torn/corrupt/cross-owner/cross-Plan 数据失败闭合；
-- 旧 snapshot 行可安全读取但不能冒充新的 canonical revision。
-
-### 行为和恢复测试
-
-- intake 后修改 summary、memory、Skill 或 model settings，resume 仍使用冻结输入；
-- accepted Step Result/Receipt 推进后只追加新 revision；
-- 重启前后 revision digest 与模型输入一致；
-- prompt injection 不扩大权限；
-- 超预算、缺失权威来源和 estimator/provider 不一致均有稳定失败结果；
-- DIRECT、Plan 成功、等待确认和失败都不会制造或覆盖权威事实。
-
-## 13. 优点、缺点与剩余风险
+## 14. 优点、缺点和剩余风险
 
 ### 优点
 
-- 改动集中在 product adapter 和现有 snapshot 能力，避免侵入 V2 核心。
-- 同一任务可重放、可解释，解决 summary/memory 静默漂移。
-- 权威事实和辅助上下文分层，降低提示注入和错误摘要污染完成判断的风险。
-- 先冻结合同，再分别实现预算、摘要、Skill 和子 Agent，减少重复数据模型。
-- append-only revision 与现有 Plan/Step/Receipt 的事实风格一致。
+- 规则简单：固定比例、互不借用、哪个区域超限就只处理哪个区域；
+- 实现和测试比动态预算分配容易；
+- 对话、记忆、RAG、工具结果和 Step 状态各自使用适合的处理方式；
+- 同 turn 可稳定恢复，新 turn 又能使用最新有效记忆；
+- 复用现有事实表，只增加 revision/section 管理，不重做 Agent 核心。
 
 ### 缺点
 
-- 同一 turn 会保存多条 revision，数据库容量和查询复杂度会上升。
-- 为 exact replay 保存 bounded conversation/summary/memory 投影，会增加隐私和保留期治理责任。
-- provider tokenizer 和工具 schema 成本不同，预算实现与测试成本高于简单字符截断。
-- 现有 snapshot API 和 `turn_id` 唯一约束需要兼容迁移，不能只改 service。
-- 设计优先保证确定性；运行中 memory 更新默认不会立即影响已经开始的任务。
+- 某个区域空闲时额度会浪费，另一个区域仍可能因为固定上限失败；
+- 默认比例未经过真实任务长期评测，可能需要后续 profile 版本调整；
+- 1M 窗口仍有显著 token 成本和延迟，不能因为窗口大就默认装满；
+- summary 和工具投影的质量会影响后续回答；
+- snapshot 兼容迁移、token 统计、恢复和前端 phase 仍是中等规模改动。
 
-### 剩余风险
+### 第一版接受的剩余风险
 
-- tokenizer 版本或 provider 服务端计数变化仍可能造成少量估算偏差；需要安全余量和显式失败。
-- 数据库只保证已持久化 revision；模型调用与事实提交之间仍需要现有幂等身份和恢复协议配合。
-- 若未来需要按法规删除已冻结的辅助文本，exact replay 与删除权之间需要单独的数据保留设计。
-- 大型 Project 仍可能因权威事实本身超预算而失败；本合同不引入第二套索引或无限上下文。
+- 暂不处理恶意填满单一区域和复杂动态抢占；
+- tokenizer 与 Provider 服务端计数可能有小幅偏差，由固定 5% 安全余量承担；
+- 已开始 turn 默认看不到运行中后来修改的 memory；
+- 固定比例可能不是所有 Planner/Step/Reflection 场景的最优利用方式。
 
-## 14. 被拒绝的替代方案
-
-1. **每次 resume 重新组装当前上下文**：改动最小但不能保证行为一致，拒绝。
-2. **只保存最终完整 prompt**：重放简单，但会复制策略文本、用户数据和工具正文，
-   难以审计来源，拒绝。
-3. **新建独立 context ledger 表并保留旧 snapshot 不动**：会形成两个事实源，拒绝。
-4. **立刻换成框架 ChatMemory/tokenizer**：无法表达 V2 权威引用和恢复协议，拒绝。
-5. **先实现自动摘要或子 Agent**：会在没有稳定上下文合同前制造更多漂移来源，拒绝。
+这些问题只有出现真实失败样本后才进入后续优化，第一版不提前实现动态预算借用。
