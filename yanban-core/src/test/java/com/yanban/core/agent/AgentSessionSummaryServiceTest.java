@@ -1,6 +1,7 @@
 package com.yanban.core.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -83,6 +84,53 @@ class AgentSessionSummaryServiceTest {
         assertThat(saved.getCoveredMessageId()).isEqualTo(30L);
         assertThat(saved.getMessageCount()).isEqualTo(4);
         assertThat(saved.getModelProviderSnapshot()).isEqualTo("glm");
+    }
+
+    @Test
+    void upsertRejectsCoverageAndMessageCountRegression() {
+        AgentSessionSummary existing = new AgentSessionSummary(
+                10L, 1001L, "current", 30L, 4,
+                "deepseek", "deepseek-chat");
+        when(summaries.findBySessionIdAndUserId(10L, 1001L))
+                .thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> service.upsert(new AgentSessionSummaryUpdate(
+                10L, 1001L, "unknown", null, 4,
+                "deepseek", "deepseek-chat")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unknown");
+        assertThatThrownBy(() -> service.upsert(new AgentSessionSummaryUpdate(
+                10L, 1001L, "older", 29L, 4,
+                "deepseek", "deepseek-chat")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("coverage");
+        assertThatThrownBy(() -> service.upsert(new AgentSessionSummaryUpdate(
+                10L, 1001L, "fewer", 30L, 3,
+                "deepseek", "deepseek-chat")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("messageCount");
+    }
+
+    @Test
+    void legacyUnknownCoverageCanAdvanceButIsNeverGuessed() {
+        AgentSessionSummary existing = new AgentSessionSummary(
+                10L, 1001L, "legacy", null, 2,
+                "deepseek", "deepseek-chat");
+        when(summaries.findBySessionIdAndUserId(10L, 1001L))
+                .thenReturn(Optional.of(existing));
+        when(summaries.saveAndFlush(existing)).thenReturn(existing);
+
+        AgentSessionSummary unchangedUnknown = service.upsert(
+                new AgentSessionSummaryUpdate(
+                        10L, 1001L, "still unknown", null, 2,
+                        "deepseek", "deepseek-chat"));
+        assertThat(unchangedUnknown.getCoveredMessageId()).isNull();
+
+        AgentSessionSummary advanced = service.upsert(
+                new AgentSessionSummaryUpdate(
+                        10L, 1001L, "known", 40L, 3,
+                        "deepseek", "deepseek-chat"));
+        assertThat(advanced.getCoveredMessageId()).isEqualTo(40L);
     }
 
     @Test

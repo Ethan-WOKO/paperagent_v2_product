@@ -23,7 +23,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class V2ContextRevisionCodec {
-    private static final int MAX_SECTION_JSON = 65_536;
+    private static final int MAX_SOURCE_REFS_BYTES = 65_536;
+    private static final long MAX_PROJECTION_BYTES = 1_000_000L;
     private static final Set<String> FORBIDDEN_FIELDS = Set.of(
             "apikey", "api_key", "password", "secret", "environment",
             "env", "hostpath", "host_path", "rawproviderresponse",
@@ -50,8 +51,12 @@ public class V2ContextRevisionCodec {
         List<EncodedSection> sections = new ArrayList<>();
         int ordinal = 0;
         for (V2ContextSectionDraft section : ordered) {
-            String sourceRefs = canonicalJson(section.sourceRefsJson(), "sourceRefsJson");
-            String projection = canonicalJson(section.projectionJson(), "projectionJson");
+            String sourceRefs = canonicalJson(
+                    section.sourceRefsJson(), "sourceRefsJson",
+                    MAX_SOURCE_REFS_BYTES);
+            String projection = canonicalJson(
+                    section.projectionJson(), "projectionJson",
+                    projectionLimit(section));
             String projectionDigest = sha256(projection);
             ObjectNode node = json.createObjectNode();
             node.put("ordinal", ordinal);
@@ -106,7 +111,8 @@ public class V2ContextRevisionCodec {
                 .sorted(Comparator.comparingInt(AgentContextSnapshotSection::getSectionOrdinal))
                 .map(value -> {
                     String canonicalProjection = canonicalJson(
-                            value.getProjectionJson(), "projectionJson");
+                            value.getProjectionJson(), "projectionJson",
+                            projectionLimit(value.getTokenLimit()));
                     if (!sha256(canonicalProjection).equals(value.getProjectionDigest())) {
                         throw new IllegalStateException("context section digest is invalid");
                     }
@@ -139,13 +145,32 @@ public class V2ContextRevisionCodec {
                         .map(EncodedSection::projectionDigest).toList());
     }
 
-    private String canonicalJson(String value, String field) {
-        if (value == null || value.isBlank() || value.length() > MAX_SECTION_JSON) {
+    private String canonicalJson(String value, String field, long maximumBytes) {
+        if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(field + " is invalid");
         }
         JsonNode node = read(value);
         inspectSafe(node);
-        return write(canonical(node));
+        String canonical = write(canonical(node));
+        if (canonical.getBytes(StandardCharsets.UTF_8).length > maximumBytes) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        return canonical;
+    }
+
+    private static long projectionLimit(V2ContextSectionDraft section) {
+        return projectionLimit(section.tokenLimit());
+    }
+
+    private static long projectionLimit(long tokenLimit) {
+        long derived;
+        try {
+            derived = Math.multiplyExact(tokenLimit, 4L);
+        } catch (ArithmeticException overflow) {
+            derived = Long.MAX_VALUE;
+        }
+        return Math.min(MAX_PROJECTION_BYTES,
+                Math.max(MAX_SOURCE_REFS_BYTES, derived));
     }
 
     private JsonNode read(String value) {

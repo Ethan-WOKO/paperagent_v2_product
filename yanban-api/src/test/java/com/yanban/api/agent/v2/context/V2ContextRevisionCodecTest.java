@@ -47,6 +47,31 @@ class V2ContextRevisionCodecTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void recentConversationProjectionUsesItsTokenDerivedLimit() {
+        String projection = "{\"conversation\":\""
+                + "a".repeat(200_000) + "\"}";
+        V2ContextSectionDraft recent = new V2ContextSectionDraft(
+                ContextSectionType.RECENT_CONVERSATION, 20, 200_000,
+                200_000, 200_000, V2ContextSectionStatus.READY,
+                "[]", projection, null);
+
+        assertThat(codec.encode(draft(List.of(recent))).canonicalJson())
+                .contains("conversation");
+    }
+
+    @Test
+    void sourceRefsKeepTheirIndependentSmallLimit() {
+        V2ContextSectionDraft recent = new V2ContextSectionDraft(
+                ContextSectionType.RECENT_CONVERSATION, 20, 200_000,
+                10, 10, V2ContextSectionStatus.READY,
+                "[\"" + "r".repeat(70_000) + "\"]", "{}", null);
+
+        assertThatThrownBy(() -> codec.encode(draft(List.of(recent))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sourceRefsJson");
+    }
+
     private static V2ContextRevisionDraft draft(
             List<V2ContextSectionDraft> sections) {
         return new V2ContextRevisionDraft(
