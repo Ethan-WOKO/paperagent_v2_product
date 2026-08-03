@@ -6,6 +6,7 @@ import com.yanban.agent.v2.adapter.provider.ProductModelEndpoint;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
 import com.yanban.api.agent.AgentContextBuildRequest;
 import com.yanban.api.agent.AgentContextBuilder;
+import com.yanban.api.agent.AgentContextDebugView;
 import com.yanban.api.agent.AgentContextPackage;
 import com.yanban.api.agent.AgentContextProjectState;
 import com.yanban.api.agent.AgentExperimentContext;
@@ -17,6 +18,11 @@ import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
+import com.yanban.api.agent.v2.context.ContextSectionType;
+import com.yanban.api.agent.v2.context.KnownModelContextProfileRegistry;
+import com.yanban.api.agent.v2.context.ShadowContextAccountant;
+import com.yanban.api.agent.v2.context.ShadowContextMeasurement;
+import com.yanban.api.agent.v2.context.Utf8ByteTokenCounter;
 import com.yanban.api.agent.v2.persistence
         .ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
@@ -46,6 +52,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -66,6 +73,10 @@ public class V2NaturalLanguageTurnService {
     private static final int INTAKE_MAX_CONTEXT_CHARACTERS = 12_000;
     private static final Logger log = LoggerFactory.getLogger(
             V2NaturalLanguageTurnService.class);
+    private static final KnownModelContextProfileRegistry CONTEXT_PROFILES =
+            new KnownModelContextProfileRegistry();
+    private static final ShadowContextAccountant SHADOW_CONTEXT_ACCOUNTANT =
+            new ShadowContextAccountant(new Utf8ByteTokenCounter());
     private static final String FAILURE_MESSAGE =
             "V2 无法根据本次请求创建有效任务";
 
@@ -227,6 +238,9 @@ public class V2NaturalLanguageTurnService {
                                 : experiment.ragResult().ragContext(),
                         null, null, null, null, List.of(),
                         intake.content(), projectState(verified)));
+        recordShadowContext(
+                endpoint, context,
+                verified.projectVersionId().isPresent());
         Map<String, String> bindings = readBindings(
                 intake.capabilityBindingsJson());
         List<String> conversation = context.messages().stream()
@@ -305,6 +319,7 @@ public class V2NaturalLanguageTurnService {
                             List.of(),
                             intake.content(),
                             projectState(verified)));
+            recordShadowContext(endpoint, context, projectSession);
             logPlannerContext(
                     session, intake, endpoint, context, projectSession);
             V2TurnPlanner.PlannedTurn planned = planner.plan(
@@ -419,6 +434,104 @@ public class V2NaturalLanguageTurnService {
                 context.sections().size(), currentMessageCharacters,
                 INTAKE_MAX_RECENT_MESSAGES,
                 INTAKE_MAX_CONTEXT_CHARACTERS);
+    }
+
+    private static void recordShadowContext(
+            UserSettingsService.ModelEndpoint endpoint,
+            AgentContextPackage context,
+            boolean projectSession) {
+        Optional<ShadowContextMeasurement> measured =
+                shadowContextMeasurement(endpoint, context, projectSession);
+        if (measured.isEmpty()) {
+            log.info("V2 context shadow profileKnown=0");
+            return;
+        }
+        ShadowContextMeasurement measurement = measured.orElseThrow();
+        log.info(
+                "V2 context shadow profileVersion={} counterVersion={} "
+                        + "contextWindowTokens={} maxOutputTokens={} "
+                        + "estimatedInputTokens={} coreTokens={} "
+                        + "recentTokens={} summaryTokens={} toolTokens={} "
+                        + "stepTokens={} memoryTokens={} ragTokens={} "
+                        + "overLimitSections={}",
+                measurement.profileVersion(),
+                measurement.tokenCounterVersion(),
+                measurement.contextWindowTokens(),
+                measurement.maxOutputTokens(),
+                measurement.estimatedInputTokens(),
+                measurement.section(ContextSectionType.CORE_AUTHORITY)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.RECENT_CONVERSATION)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.CONVERSATION_SUMMARY)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.TOOL_RESULTS)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.STEP_STATE)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.LONG_TERM_MEMORY)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.RAG_EVIDENCE)
+                        .estimatedTokens(),
+                measurement.overLimitSectionCount());
+    }
+
+    static Optional<ShadowContextMeasurement> shadowContextMeasurement(
+            UserSettingsService.ModelEndpoint endpoint,
+            AgentContextPackage context,
+            boolean projectSession) {
+        var profile = CONTEXT_PROFILES.find(
+                endpoint.providerKey(), endpoint.modelName());
+        if (profile.isEmpty()) {
+            return Optional.empty();
+        }
+        EnumMap<ContextSectionType, List<String>> content =
+                new EnumMap<>(ContextSectionType.class);
+        List<String> core = new ArrayList<>();
+        List<String> recent = new ArrayList<>();
+        if (!context.messages().isEmpty()) {
+            core.add(context.messages().get(0).content());
+        }
+        AgentContextDebugView debug = context.debugView();
+        if (debug != null && debug.currentMessage() != null) {
+            core.add(debug.currentMessage().content());
+        } else if (context.currentUserMessage() != null) {
+            core.add(context.currentUserMessage().content());
+        }
+        if (debug != null) {
+            if (debug.sessionSummary() != null) {
+                content.put(
+                        ContextSectionType.CONVERSATION_SUMMARY,
+                        java.util.Collections.singletonList(
+                                debug.sessionSummary().content()));
+            }
+            if (debug.longTermMemory() != null) {
+                content.put(
+                        ContextSectionType.LONG_TERM_MEMORY,
+                        java.util.Collections.singletonList(
+                                debug.longTermMemory().content()));
+            }
+            if (!debug.recentTurns().isEmpty()) {
+                for (AgentContextDebugView.DebugTurn turn
+                        : debug.recentTurns()) {
+                    recent.add(turn.user());
+                    recent.add(turn.assistant());
+                }
+            }
+        }
+        if (recent.isEmpty() && !projectSession) {
+            context.messages().stream()
+                    .skip(2)
+                    .map(message -> message.content())
+                    .forEach(recent::add);
+        }
+        content.put(ContextSectionType.CORE_AUTHORITY, core);
+        content.put(ContextSectionType.RECENT_CONVERSATION, recent);
+        // The current safe projection exposes evidence references, not RAG or
+        // tool bodies. Those sections remain zero until the dedicated context
+        // assembler supplies bounded projections in a later checkpoint.
+        return Optional.of(SHADOW_CONTEXT_ACCOUNTANT.measure(
+                profile.orElseThrow(), content));
     }
 
     private UserSettingsService.ModelEndpoint resolveTurnEndpoint(

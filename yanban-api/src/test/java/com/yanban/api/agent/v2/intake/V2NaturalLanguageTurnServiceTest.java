@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
 import com.yanban.api.agent.AgentContextBuildRequest;
 import com.yanban.api.agent.AgentContextBuilder;
+import com.yanban.api.agent.AgentContextDebugView;
 import com.yanban.api.agent.AgentContextPackage;
 import com.yanban.api.agent.AgentContextSection;
 import com.yanban.api.agent.AgentExperimentContext;
@@ -27,6 +28,8 @@ import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionResult;
+import com.yanban.api.agent.v2.context.ContextSectionType;
+import com.yanban.api.agent.v2.context.Utf8ByteTokenCounter;
 import com.yanban.api.agent.v2.persistence.ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.settings.UserSettingsService;
@@ -199,6 +202,143 @@ class V2NaturalLanguageTurnServiceTest {
                 .filter(value -> "user".equals(value.role()))
                 .filter(value -> "question".equals(value.content()))
                 .count()).isEqualTo(1);
+    }
+
+    @Test
+    void knownContextProfileOnlyObservesTheAlreadyBuiltPlannerInput()
+            throws Exception {
+        V2TurnIntakeEntity profiledIntake = new V2TurnIntakeEntity(
+                7L, 9L, "request-1", "a".repeat(64), "question",
+                false, "skill-1", "{}", 11L, 12L,
+                "deepseek", "deepseek-v4-flash", Instant.EPOCH);
+        UserSettingsService.ModelEndpoint endpoint =
+                new UserSettingsService.ModelEndpoint(
+                        "deepseek", "deepseek-v4-flash", null,
+                        "SECRET-KEY", "builtin", "DeepSeek");
+        when(transactions.open(
+                eq(7L), eq(9L), eq("request-1"), any(), eq("question"),
+                eq(false), eq("skill-1"), any(), any(), any()))
+                .thenReturn(profiledIntake);
+        when(transactions.locked(eq(profiledIntake), any()))
+                .thenAnswer(invocation -> {
+                    Function<V2TurnIntakeEntity, Object> operation =
+                            invocation.getArgument(1);
+                    return operation.apply(profiledIntake);
+                });
+        when(settings.resolveModelEndpoint(
+                7L, "deepseek", "deepseek-v4-flash"))
+                .thenReturn(endpoint);
+        when(model.chat(any())).thenReturn(new ChatResponse(
+                ChatMessage.assistant(directAnswer("answer")),
+                "stop", null));
+        when(transactions.saveAssistant(
+                eq(profiledIntake), eq("answer"), any()))
+                .thenAnswer(invocation -> {
+                    AgentMessage message = new AgentMessage(
+                            9L, 7L, "assistant", "answer", null, null);
+                    setId(message, 13L);
+                    profiledIntake.completeDirect(
+                            13L, invocation.getArgument(2), Instant.now());
+                    when(transactions.message(13L)).thenReturn(message);
+                    return message;
+                });
+
+        service().execute(7L, 9L, request());
+
+        ArgumentCaptor<ChatRequest> plannerInput =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(plannerInput.capture());
+        assertThat(plannerInput.getValue().messages())
+                .extracting(ChatMessage::content)
+                .contains("context identity", "recent dialogue", "question");
+        verify(contextBuilder).build(any());
+        verify(transactions).saveAssistant(
+                eq(profiledIntake), eq("answer"), any());
+    }
+
+    @Test
+    void shadowClassificationExcludesUntrustedEnvelopeFromCore() {
+        UserSettingsService.ModelEndpoint endpoint =
+                new UserSettingsService.ModelEndpoint(
+                        "deepseek", "deepseek-v4-flash", null,
+                        "unused", "builtin", "DeepSeek");
+        AgentContextDebugView debug = new AgentContextDebugView(
+                12_000, 12_000, 100,
+                new AgentContextDebugView.DebugText(
+                        "current request", true, false, "active_request"),
+                List.of(new AgentContextDebugView.DebugTurn(
+                        1L, 2L, 3L, "recent user", "recent assistant", 27)),
+                new AgentContextDebugView.DebugText(
+                        "summary", true, false,
+                        "agent_session_summaries"),
+                null,
+                new AgentContextDebugView.DebugMemory(
+                        "memory", 1, 0, false,
+                        "governed_long_term_memory", "confirmed"),
+                List.of(), List.of(), List.of());
+        AgentContextPackage assembled = new AgentContextPackage(
+                List.of(
+                        ChatMessage.system("runtime guard"),
+                        ChatMessage.user("untrusted data envelope"),
+                        ChatMessage.user("fallback history")),
+                List.of(), List.of(), 3, 3, 100,
+                com.yanban.api.agent.EvidenceLedger.empty(),
+                ChatMessage.user("current request"), debug);
+
+        var measurement = V2NaturalLanguageTurnService
+                .shadowContextMeasurement(endpoint, assembled, false)
+                .orElseThrow();
+        Utf8ByteTokenCounter counter = new Utf8ByteTokenCounter();
+
+        assertThat(measurement.section(ContextSectionType.CORE_AUTHORITY)
+                .estimatedTokens()).isEqualTo(
+                        counter.count("runtime guard")
+                                + counter.count("current request"));
+        assertThat(measurement.section(
+                ContextSectionType.RECENT_CONVERSATION).estimatedTokens())
+                .isEqualTo(counter.count("recent user")
+                        + counter.count("recent assistant"));
+        assertThat(measurement.section(
+                ContextSectionType.CONVERSATION_SUMMARY).estimatedTokens())
+                .isEqualTo(counter.count("summary"));
+        assertThat(measurement.section(ContextSectionType.LONG_TERM_MEMORY)
+                .estimatedTokens()).isEqualTo(counter.count("memory"));
+        assertThat(measurement.section(ContextSectionType.RAG_EVIDENCE)
+                .estimatedTokens()).isZero();
+        assertThat(measurement.section(ContextSectionType.TOOL_RESULTS)
+                .estimatedTokens()).isZero();
+    }
+
+    @Test
+    void nonProjectShadowFallsBackToAssembledRecentMessages() {
+        UserSettingsService.ModelEndpoint endpoint =
+                new UserSettingsService.ModelEndpoint(
+                        "deepseek", "deepseek-v4-flash", null,
+                        "unused", "builtin", "DeepSeek");
+        AgentContextDebugView debug = new AgentContextDebugView(
+                12_000, 12_000, 100,
+                new AgentContextDebugView.DebugText(
+                        "current", true, false, "active_request"),
+                List.of(), null, null, null,
+                List.of(), List.of(), List.of());
+        AgentContextPackage assembled = new AgentContextPackage(
+                List.of(
+                        ChatMessage.system("guard"),
+                        ChatMessage.user("envelope"),
+                        ChatMessage.user("history one"),
+                        ChatMessage.assistant("history two")),
+                List.of(), List.of(), 4, 4, 100,
+                com.yanban.api.agent.EvidenceLedger.empty(),
+                ChatMessage.user("current"), debug);
+
+        var measurement = V2NaturalLanguageTurnService
+                .shadowContextMeasurement(endpoint, assembled, false)
+                .orElseThrow();
+
+        assertThat(measurement.section(
+                ContextSectionType.RECENT_CONVERSATION).estimatedTokens())
+                .isEqualTo(new Utf8ByteTokenCounter().count("history one")
+                        + new Utf8ByteTokenCounter().count("history two"));
     }
 
     @Test
