@@ -81,9 +81,12 @@ public class V2AdaptiveRuntimeCycleFactory {
                 } else {
                     NaturalLanguageStepKernelFactory.AutonomousKernel
                             autonomous = requestProvider == null
-                            ? kernels.createAutonomous(pending != null)
+                            ? kernels.createAutonomous(
+                                    pending != null, command.userId(),
+                                    command.turnId())
                             : kernels.createAutonomous(
-                                    requestProvider, pending != null);
+                                    requestProvider, pending != null,
+                                    command.userId(), command.turnId());
                     result = loop.executeAutonomousEffect(
                             command.userId(), command.turnId(), loopCommand,
                             autonomous.kernel(),
@@ -96,6 +99,13 @@ public class V2AdaptiveRuntimeCycleFactory {
             } catch (PersistentPlanAgentLoopException failure) {
                 logCycleFailure(
                         command, failure.diagnosticStage(), failure);
+                if (failure.stepContextGuardFailure()) {
+                    return new V2AdaptiveCyclePort.CycleResult(
+                            V2AdaptiveCyclePort.CycleResult.State.RECOVERY_PENDING,
+                            null, "STEP_CONTEXT_RECOVERY_PENDING", false,
+                            null, List.of("stepContext=NOT_READY"),
+                            false, false);
+                }
                 throw new CycleStageException(
                         agentLoopStage(failure.diagnosticStage()));
             } catch (RuntimeException failure) {

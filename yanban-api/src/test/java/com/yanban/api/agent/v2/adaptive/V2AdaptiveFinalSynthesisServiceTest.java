@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,6 +46,8 @@ class V2AdaptiveFinalSynthesisServiceTest {
     void synthesizesOneAnswerFromAcceptedResultsAndCandidateState() {
         V2StepResultService results = mock(V2StepResultService.class);
         ModelProvider provider = mock(ModelProvider.class);
+        FinalSynthesisModelCallGuard guard = mock(
+                FinalSynthesisModelCallGuard.class);
         Plan plan = plan();
         when(results.acceptedCompletedFacts(plan.id())).thenReturn(List.of(
                 accepted("result-1", "step-1", "已读取目标文件。"),
@@ -52,12 +55,16 @@ class V2AdaptiveFinalSynthesisServiceTest {
                         "该程序使用回溯生成所有排列。")));
         when(provider.complete(any())).thenReturn(response(
                 "该程序使用回溯算法生成并打印所有排列。候选修改尚未应用。"));
+        when(guard.requireReady(any())).thenAnswer(invocation ->
+                ((FinalSynthesisModelCallGuard.Call)
+                        invocation.getArgument(0)).request());
         var service = new V2AdaptiveFinalSynthesisService(
-                results, new ObjectMapper());
+                results, new ObjectMapper(), guard);
 
         Optional<String> answer = service.synthesize(
                 new V2AdaptiveFinalSynthesisService.Request(
-                        taskFrame(), plan, 42L,
+                        7L, 11L, taskFrame(), plan, "a".repeat(64),
+                        "d".repeat(64),
                         List.of("src/main/java/Example.java"), provider));
 
         assertEquals(
@@ -66,17 +73,24 @@ class V2AdaptiveFinalSynthesisServiceTest {
         ArgumentCaptor<ModelRequest> request = ArgumentCaptor.forClass(
                 ModelRequest.class);
         verify(provider).complete(request.capture());
+        ArgumentCaptor<FinalSynthesisModelCallGuard.Call> guarded =
+                ArgumentCaptor.forClass(
+                        FinalSynthesisModelCallGuard.Call.class);
+        verify(guard).requireReady(guarded.capture());
+        assertEquals(guarded.getValue().request(), request.getValue());
         String facts = request.getValue().messages().get(1).content();
         String instructions = request.getValue().messages().get(0).content();
         assertTrue(facts.contains("已读取目标文件"));
         assertTrue(facts.contains("回溯生成所有排列"));
-        assertTrue(facts.contains("42"));
+        assertTrue(facts.contains("candidateAuthoritySha256"));
+        assertTrue(facts.contains("candidateDiffFingerprint"));
+        assertTrue(!facts.contains("candidateArtifactId"));
         assertTrue(facts.contains("src/main/java/Example.java"));
         assertTrue(instructions.contains("reproduce source files"));
     }
 
     @Test
-    void providerFailureLeavesTheAcceptedFallbackAvailable() {
+    void providerFailureDoesNotExposeTheAcceptedFallbackAsSuccess() {
         V2StepResultService results = mock(V2StepResultService.class);
         ModelProvider provider = mock(ModelProvider.class);
         Plan plan = plan();
@@ -90,9 +104,35 @@ class V2AdaptiveFinalSynthesisServiceTest {
 
         Optional<String> answer = service.synthesize(
                 new V2AdaptiveFinalSynthesisService.Request(
-                        taskFrame(), plan, null, List.of(), provider));
+                        taskFrame(), plan, null, null,
+                        List.of(), provider));
 
         assertTrue(answer.isEmpty());
+    }
+
+    @Test
+    void contextFailureBlocksTheRealFinalProviderCall() {
+        V2StepResultService results = mock(V2StepResultService.class);
+        ModelProvider provider = mock(ModelProvider.class);
+        FinalSynthesisModelCallGuard guard = mock(
+                FinalSynthesisModelCallGuard.class);
+        Plan plan = plan();
+        when(results.acceptedCompletedFacts(plan.id())).thenReturn(
+                List.of(accepted("result-1", "step-1", "accepted")));
+        when(guard.requireReady(any())).thenThrow(
+                new FinalSynthesisModelCallGuardException(
+                        "FINAL_SYNTHESIS_CONTEXT_NOT_READY"));
+        var service = new V2AdaptiveFinalSynthesisService(
+                results, new ObjectMapper(), guard);
+
+        V2AdaptiveFinalSynthesisService.Outcome outcome =
+                service.synthesizeRequired(
+                        new V2AdaptiveFinalSynthesisService.Request(
+                                7L, 11L, taskFrame(), plan(), null, null,
+                                List.of(), provider));
+
+        assertEquals("FINAL_SYNTHESIS_CONTEXT_FAILED", outcome.errorCode());
+        verifyNoInteractions(provider);
     }
 
     private static V2StepResultSnapshot accepted(

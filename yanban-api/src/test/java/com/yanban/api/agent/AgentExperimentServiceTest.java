@@ -78,6 +78,15 @@ class AgentExperimentServiceTest {
         assertThat(context.enabled()).isTrue();
         assertThat(context.ragResult()).isNotNull();
         assertThat(context.ragResult().retrievedChunks()).hasSize(1);
+        assertThat(context.ragResult().selectedRefs()).hasSize(1);
+        assertThat(context.ragResult().selectedRefs().get(0).stableId())
+                .isEqualTo("rag:11:2");
+        assertThat(context.ragResult().selectedRefs().get(0).version())
+                .isEqualTo("1");
+        assertThat(context.ragResult().selectedRefs().get(0).rank())
+                .isEqualTo(1);
+        assertThat(context.ragResult().selectedRefs().get(0).digest())
+                .matches("[a-f0-9]{64}");
         assertThat(context.ragResult().ragContext()).contains(
                 "RAG mode: langchain4j-augmentor",
                 "Use the following retrieved knowledge snippets when they are relevant.",
@@ -95,6 +104,33 @@ class AgentExperimentServiceTest {
                 "citation=fda-note.md#chunk-2",
                 "Polarimetric FDA-MIMO improves angle-range-polarization estimation."
         );
+    }
+
+    @Test
+    void ragRefDoesNotDependOnFilenameOrHostPath() {
+        KnowledgeSearchService search = mock(KnowledgeSearchService.class);
+        KnowledgeSearchResult localPath = new KnowledgeSearchResult(
+                31L, "C:\\Users\\alice\\private.md", 4,
+                "Same governed chunk.", 1.0, false);
+        KnowledgeSearchResult safeName = new KnowledgeSearchResult(
+                31L, "renamed.md", 4,
+                "Same governed chunk.", 1.0, false);
+        when(search.search(eq("first"), eq(5L), eq(6)))
+                .thenReturn(List.of(localPath));
+        when(search.search(eq("second"), eq(5L), eq(6)))
+                .thenReturn(List.of(safeName));
+        AgentExperimentService service = new AgentExperimentService(
+                search, mock(LangChain4jChatModelAdapter.class));
+        AgentExperimentRequest request = new AgentExperimentRequest(
+                true, null, null, null, null, List.of(), true);
+
+        AgentRagSelectionRef first = service.prepare(5L, "first", request)
+                .ragResult().selectedRefs().get(0);
+        AgentRagSelectionRef second = service.prepare(5L, "second", request)
+                .ragResult().selectedRefs().get(0);
+
+        assertThat(first).isEqualTo(second);
+        assertThat(first.stableId()).doesNotContain("Users", "private.md");
     }
 
     @Test

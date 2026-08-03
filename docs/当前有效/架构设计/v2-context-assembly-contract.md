@@ -317,3 +317,43 @@ digest、父链、owner、Plan 或来源绑定不一致时失败闭合，不覆�
 - 固定比例可能不是所有 Planner/Step/Reflection 场景的最优利用方式。
 
 这些问题只有出现真实失败样本后才进入后续优化，第一版不提前实现动态预算借用。
+
+## 15. 第一版实施结果（2026-08-03）
+
+第一版已在 `codex/issue-135-layered-context` 集成分支实现，等待 Draft PR
+审查，尚未合入 `main`：
+
+- 九个固定区域继续使用 10/20/10/20/15/10/5/5/5 百分比，不借用额度；
+- Context Revision 使用一个 header 表和一个 section 子表，没有按区域拆表；
+- 新 turn 重新选择近期完整对话、摘要 coverage、当前 memory/RAG 和相关历史终态；
+- Planner、Step、Reflection 主调用/审计/格式修复、Final Synthesis 的真实
+  Provider 调用前都必须得到 READY revision；
+- 同一稳定 stage key 重放同一安全请求；父 digest、九层唯一性和未替换层继承
+  不一致时失败闭合；
+- 工具结果超限时只压缩 TOOL_RESULTS，并把压缩后的同一内容交给模型；
+- 压缩与上下文失败不完成 Step、不重复工具、不发布 Candidate、不应用
+  ProjectVersion；
+- Final Synthesis 成功后才允许发布 Candidate；发布失败会丢弃未持久化答复；
+- owner-qualified turn API 和项目对话 UI 在当前 RUNNING 任务级显示持久化
+  ASSEMBLING、COMPACTION_REQUIRED、COMPACTING、READY 或 FAILED；启动 POST
+  未返回时前端也并行查询，刷新后可恢复。第一版不把 phase 绑定到某个步骤行，
+  避免协调循环内 timeline 尚未逐轮持久化时把后续步骤状态贴到旧步骤。
+
+验证结果：直接相关的 21 个后端测试类共 134 项通过；前端状态映射/展示 19 项
+通过；前端生产构建通过；V2 Context H2 迁移、并发与 replay 测试通过。完整
+reactor 仍会被仓库既有的 RAG fixture 缺失阻断；`yanban-api` 全量测试仍包含旧
+Project 路由、Kafka、本地 demo 数据和独立旧 Step vertical 的环境/基线失败，均
+不在本能力改动路径内，必须在 PR 证据中原样列出，不能写成全量通过。
+
+真实 1M profile 下，近期对话进入 Planner 前仍受 12 条/12,000 字符上限约束，
+普通用户任务很难稳定触发 200K 的 RECENT_CONVERSATION 压缩；工具原始 stdout
+也不会直接进入 TOOL_RESULTS。第一版不增加生产测试后门或动态缩小窗口。用户
+视角验收应验证正常 V2 项目任务、状态组件和刷新恢复；真实压缩阈值由自动化
+超限测试覆盖，并把这一限制列为剩余风险。
+
+用户视角验收使用本地管理员登录和仅含合成 README 的临时项目：登录、导入和
+任务提交成功；任务执行时显示“上下文已就绪”；刷新后同一任务继续可见，并把
+真实 Reflection 失败明确显示为 `REFLECTION_FAILED`，没有伪造成功。该环境未能
+完成正常模型终态，也没有在真实 1M profile 下触发压缩阈值。验收后删除合成
+Project 时既有删除接口返回 HTTP 500，因此合成 Project 仍留在本地测试数据库；
+临时源文件、测试进程和容器已清理，此删除故障不属于本能力改动路径。

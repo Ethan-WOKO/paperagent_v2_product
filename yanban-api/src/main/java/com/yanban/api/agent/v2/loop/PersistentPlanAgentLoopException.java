@@ -14,6 +14,7 @@ public final class PersistentPlanAgentLoopException
     private final SingleTurnStepKernelStage kernelStage;
     private final SingleTurnStepKernelProtocolCode kernelCode;
     private final String kernelPath;
+    private final boolean stepContextGuardFailure;
 
     PersistentPlanAgentLoopException(String stage) {
         super("Persistent Plan Agent Loop failed at " + stage);
@@ -21,16 +22,28 @@ public final class PersistentPlanAgentLoopException
         this.kernelStage = null;
         this.kernelCode = null;
         this.kernelPath = null;
+        this.stepContextGuardFailure = false;
     }
 
     PersistentPlanAgentLoopException(
             String stage,
             SingleTurnStepKernelProtocolException kernelFailure) {
-        super("Persistent Plan Agent Loop failed at " + stage);
+        super("Persistent Plan Agent Loop failed at " + stage, kernelFailure);
         this.stage = stage;
         this.kernelStage = kernelFailure.stage();
         this.kernelCode = kernelFailure.code();
         this.kernelPath = kernelFailure.path();
+        this.stepContextGuardFailure = causedByStepContext(kernelFailure);
+    }
+
+    PersistentPlanAgentLoopException(
+            String stage, StepModelCallGuardException guardFailure) {
+        super("Persistent Plan Agent Loop failed at " + stage, guardFailure);
+        this.stage = stage;
+        this.kernelStage = null;
+        this.kernelCode = null;
+        this.kernelPath = null;
+        this.stepContextGuardFailure = causedByStepContext(guardFailure);
     }
 
     public String stage() {
@@ -56,5 +69,18 @@ public final class PersistentPlanAgentLoopException
 
     public Optional<String> kernelPath() {
         return Optional.ofNullable(kernelPath);
+    }
+
+    public boolean stepContextGuardFailure() {
+        return stepContextGuardFailure;
+    }
+
+    private static boolean causedByStepContext(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof StepModelCallGuardException) return true;
+            current = current.getCause();
+        }
+        return false;
     }
 }

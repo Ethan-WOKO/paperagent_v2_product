@@ -60,9 +60,13 @@ class V2AdaptiveExecutionServiceTest {
         verify(fixture.starts).recover(eq(7L), eq(11L), start.capture());
         assertEquals(0, start.getValue().attempt().orElseThrow()
                 .leaseExpiresAt().getNano() % 1_000);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<V2AdaptiveTurnResponse.Step>> openedSteps =
+                ArgumentCaptor.forClass(List.class);
         verify(fixture.store).open(
                 eq(5L), eq(7L), eq(9L), eq("request-1"),
-                eq("plan-1"), eq("version-1"), anyList());
+                eq("plan-1"), eq("version-1"), openedSteps.capture());
+        assertEquals("RUNNING", openedSteps.getValue().get(0).status());
         verify(fixture.store).finish(
                 eq(7L), eq(9L), eq("request-1"), eq("SUCCEEDED"),
                 anyList(), eq("任务完成"), isNull(), eq(List.of()),
@@ -93,8 +97,9 @@ class V2AdaptiveExecutionServiceTest {
                 .thenReturn(port);
         V2AdaptiveFinalSynthesisService synthesis = mock(
                 V2AdaptiveFinalSynthesisService.class);
-        when(synthesis.synthesize(any())).thenReturn(
-                Optional.of("final synthesized answer"));
+        when(synthesis.synthesizeRequired(any())).thenReturn(
+                new V2AdaptiveFinalSynthesisService.Outcome(
+                        "final synthesized answer", null));
         var service = new V2AdaptiveExecutionService(
                 fixture.store, fixture.starts, fixture.contexts,
                 fixture.cycles, new ObjectMapper(), null, null,
@@ -273,18 +278,27 @@ class V2AdaptiveExecutionServiceTest {
         var authority = mock(ProjectCandidateEffectAuthority.class);
         when(authority.paths()).thenReturn(
                 List.of("src/Main.java", "README.md"));
+        when(authority.authoritySha256()).thenReturn("a".repeat(64));
         when(authorities.require("plan-1"))
                 .thenReturn(authority);
+        when(authorities.requirePrepared("plan-1")).thenReturn(
+                new NaturalLanguageCandidateAuthorityStore.Prepared(
+                        Map.of(), "d".repeat(64)));
         var candidates = mock(ProjectCandidateCompositionEffect.class);
         when(candidates.publishNatural(
                 "plan-1", 7L, 11L, authorities))
                 .thenReturn(
                         new ProjectCandidateCompositionEffect.CandidateResult(
                                 77L, "c".repeat(64), "d".repeat(64)));
+        V2AdaptiveFinalSynthesisService synthesis = mock(
+                V2AdaptiveFinalSynthesisService.class);
+        when(synthesis.synthesizeRequired(any())).thenReturn(
+                new V2AdaptiveFinalSynthesisService.Outcome(
+                        "final candidate answer", null));
         var service = new V2AdaptiveExecutionService(
                 fixture.store, fixture.starts, fixture.contexts,
                 fixture.cycles, new ObjectMapper(),
-                candidates, authorities);
+                candidates, authorities, null, synthesis);
 
         V2AdaptiveExecutionResult result = service.execute(
                 command(fixture.bootstrap, "version-1",
@@ -293,6 +307,7 @@ class V2AdaptiveExecutionServiceTest {
                         fixture.modelProvider));
 
         assertEquals("WAITING_CONFIRMATION", result.status());
+        assertEquals("final candidate answer", result.finalText());
         assertEquals(77L, result.candidateArtifactId());
         assertEquals(
                 List.of("src/Main.java", "README.md"),
@@ -300,9 +315,63 @@ class V2AdaptiveExecutionServiceTest {
         verify(fixture.store).finish(
                 eq(7L), eq(9L), eq("request-1"),
                 eq("WAITING_CONFIRMATION"), anyList(),
-                eq("candidate ready"), eq(77L),
+                eq("final candidate answer"), eq(77L),
                 eq(List.of("src/Main.java", "README.md")),
                 isNull(), eq(1), eq(0), eq(0));
+        org.mockito.InOrder order = inOrder(
+                synthesis, candidates, fixture.store);
+        order.verify(synthesis).synthesizeRequired(any());
+        order.verify(candidates).publishNatural(
+                "plan-1", 7L, 11L, authorities);
+        order.verify(fixture.store).finish(
+                eq(7L), eq(9L), eq("request-1"),
+                eq("WAITING_CONFIRMATION"), anyList(),
+                eq("final candidate answer"), eq(77L),
+                eq(List.of("src/Main.java", "README.md")),
+                isNull(), eq(1), eq(0), eq(0));
+
+        clearInvocations(candidates);
+        when(synthesis.synthesizeRequired(any())).thenReturn(
+                new V2AdaptiveFinalSynthesisService.Outcome(
+                        null, "FINAL_SYNTHESIS_CONTEXT_FAILED"));
+        when(fixture.modelProvider.complete(any())).thenReturn(
+                complete("candidate ready"),
+                auditComplete("candidate ready"));
+        V2AdaptiveExecutionResult contextFailed = service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.candidate.compose"),
+                        fixture.modelProvider));
+
+        assertEquals("FAILED", contextFailed.status());
+        assertEquals("FINAL_SYNTHESIS_CONTEXT_FAILED",
+                contextFailed.errorCode());
+        assertNull(contextFailed.finalText());
+        verifyNoInteractions(candidates);
+
+        reset(candidates);
+        when(synthesis.synthesizeRequired(any())).thenReturn(
+                new V2AdaptiveFinalSynthesisService.Outcome(
+                        "discarded after publish failure", null));
+        when(fixture.modelProvider.complete(any())).thenReturn(
+                complete("candidate ready"),
+                auditComplete("candidate ready"));
+        when(candidates.publishNatural(
+                "plan-1", 7L, 11L, authorities)).thenThrow(
+                new IllegalStateException("publish failed"));
+        V2AdaptiveExecutionResult failed = service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.candidate.compose"),
+                        fixture.modelProvider));
+
+        assertEquals("FAILED", failed.status());
+        assertEquals("CANDIDATE_PUBLISH_FAILED", failed.errorCode());
+        assertNull(failed.finalText());
+        assertNull(failed.candidateArtifactId());
+        verify(fixture.store).finish(
+                eq(7L), eq(9L), eq("request-1"), eq("FAILED"),
+                anyList(), isNull(), isNull(), eq(List.of()),
+                eq("CANDIDATE_PUBLISH_FAILED"),
+                eq(1), eq(0), eq(0));
     }
 
     @Test
@@ -348,14 +417,15 @@ class V2AdaptiveExecutionServiceTest {
                         fixture.modelProvider));
 
         assertEquals("FAILED", result.status());
-        assertEquals("CANDIDATE_PUBLISH_FAILED", result.errorCode());
+        assertEquals("FINAL_SYNTHESIS_CANDIDATE_AUTHORITY_FAILED",
+                result.errorCode());
         assertNull(result.candidateArtifactId());
         assertEquals(List.of(), result.outputPaths());
         verifyNoInteractions(candidates);
         verify(fixture.store).finish(
                 eq(7L), eq(9L), eq("request-1"), eq("FAILED"),
                 anyList(), isNull(), isNull(), eq(List.of()),
-                eq("CANDIDATE_PUBLISH_FAILED"),
+                eq("FINAL_SYNTHESIS_CANDIDATE_AUTHORITY_FAILED"),
                 eq(1), eq(0), eq(0));
     }
 

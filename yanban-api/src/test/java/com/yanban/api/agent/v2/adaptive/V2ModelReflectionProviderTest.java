@@ -1,12 +1,16 @@
 package com.yanban.api.agent.v2.adaptive;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionAuditFormatException;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionContext;
+import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.PlanRevisionId;
+import io.paperagent.v2.contracts.TaskFrameId;
 import io.paperagent.v2.providers.FinishReason;
 import io.paperagent.v2.providers.ModelRequest;
 import io.paperagent.v2.providers.ModelResponse;
@@ -19,6 +23,60 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class V2ModelReflectionProviderTest {
+    @Test
+    void everyRealReflectionProviderCallPassesItsOwnContextPhase() {
+        AtomicInteger providerCalls = new AtomicInteger();
+        List<String> phases = new java.util.ArrayList<>();
+        List<String> stepIds = new java.util.ArrayList<>();
+        ReflectionModelCallGuard guard = call -> {
+            phases.add(call.phase());
+            stepIds.add(call.request().stepId().orElseThrow().value());
+            return call.request();
+        };
+        var provider = new V2ModelReflectionProvider(request -> response(
+                switch (providerCalls.incrementAndGet()) {
+                    case 1 -> "{\"decision\":\"CONTINUE\","
+                            + "\"reason\":\"check\",\"finalText\":null,"
+                            + "\"replacementSteps\":[]}";
+                    case 2 -> "invalid audit";
+                    default -> "{\"complete\":false,"
+                            + "\"reason\":\"continue\",\"stepResult\":null}";
+                }), new ObjectMapper(), new TaskFrameId("frame-1"),
+                new PlanId("plan-1"),
+                new PlanRevisionId("revision-1"),
+                guard, 1L, 2L);
+
+        provider.reflect(new ReflectionContext(
+                "task", "plan", List.of(), List.of(),
+                List.of("activeStepId=step-1"), List.of("step")));
+
+        assertEquals(3, providerCalls.get());
+        assertEquals("main", phases.get(0));
+        assertTrue(phases.get(1).startsWith("audit-"));
+        assertTrue(phases.get(2).startsWith("audit-repair-"));
+        assertEquals(List.of("step-1", "step-1", "step-1"), stepIds);
+    }
+
+    @Test
+    void contextFailureBlocksReflectionProvider() {
+        AtomicInteger providerCalls = new AtomicInteger();
+        ReflectionModelCallGuard guard = call -> {
+            throw new ReflectionModelCallGuardException(
+                    "REFLECTION_CONTEXT_NOT_READY");
+        };
+        var provider = new V2ModelReflectionProvider(request -> {
+            providerCalls.incrementAndGet();
+            return response("unused");
+        }, new ObjectMapper(), null, null, null,
+                guard, 1L, 2L);
+
+        assertThrows(ReflectionModelCallGuardException.class,
+                () -> provider.reflect(new ReflectionContext(
+                        "task", "plan", List.of(), List.of(),
+                        List.of(), List.of("step"))));
+        assertEquals(0, providerCalls.get());
+    }
+
     @Test
     void promptDefinesCompleteAsCurrentStepCompletionNotPlanTerminal() {
         String system = captureSystemPrompt();

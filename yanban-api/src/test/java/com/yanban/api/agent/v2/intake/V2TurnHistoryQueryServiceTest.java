@@ -137,6 +137,32 @@ class V2TurnHistoryQueryServiceTest {
     }
 
     @Test
+    void refreshedRunningHistoryPreservesCurrentStepContextPhase() {
+        V2TurnIntakeEntity intake = intake("running", "read project");
+        intake.completePersistent("plan-1", "{}", "[]", Instant.now());
+        when(intakes
+                .findByUserIdAndSessionIdAndHistoryVisibleTrueOrderByCreatedAtDescIdDesc(
+                        eq(7L), eq(9L), any(Pageable.class)))
+                .thenReturn(List.of(intake));
+        var context = new V2AdaptiveTurnResponse.Context(
+                "COMPACTING", "step-1", List.of("TOOL_RESULTS"));
+        when(adaptive.find(7L, 9L, "running")).thenReturn(Optional.of(
+                new V2AdaptiveTurnSnapshot(
+                        new V2AdaptiveTurnResponse(
+                                "RUNNING", "PERSISTENT_PLAN_EXECUTE",
+                                "plan-1", "version-1",
+                                List.of(new V2AdaptiveTurnResponse.Step(
+                                        1, "read", "RUNNING", null)),
+                                null, null, List.of(), null, context),
+                        Instant.EPOCH, Instant.EPOCH)));
+
+        V2TurnHistoryResponse result = service.list(7L, 9L).get(0);
+
+        assertThat(result.status()).isEqualTo("RUNNING");
+        assertThat(result.context()).isEqualTo(context);
+    }
+
+    @Test
     void projectsAppliedCandidateRevisionWithoutMutatingAdaptiveTurn() {
         V2TurnIntakeEntity intake = intake("applied", "change code");
         intake.completePersistent(

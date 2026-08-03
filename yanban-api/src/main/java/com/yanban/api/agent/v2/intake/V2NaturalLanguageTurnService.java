@@ -6,6 +6,7 @@ import com.yanban.agent.v2.adapter.provider.ProductModelEndpoint;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
 import com.yanban.api.agent.AgentContextBuildRequest;
 import com.yanban.api.agent.AgentContextBuilder;
+import com.yanban.api.agent.AgentContextDebugView;
 import com.yanban.api.agent.AgentContextPackage;
 import com.yanban.api.agent.AgentContextProjectState;
 import com.yanban.api.agent.AgentExperimentContext;
@@ -17,6 +18,13 @@ import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
 import com.yanban.api.agent.v2.adaptive.V2AdaptiveExecutionService;
+import com.yanban.api.agent.v2.context.ContextSectionType;
+import com.yanban.api.agent.v2.context.KnownModelContextProfileRegistry;
+import com.yanban.api.agent.v2.context.ShadowContextAccountant;
+import com.yanban.api.agent.v2.context.ShadowContextMeasurement;
+import com.yanban.api.agent.v2.context.Utf8ByteTokenCounter;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerContextBoundaryFactory;
+import com.yanban.api.agent.v2.context.runtime.V2PlannerContextBoundaryException;
 import com.yanban.api.agent.v2.persistence
         .ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
@@ -46,6 +54,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -66,6 +75,10 @@ public class V2NaturalLanguageTurnService {
     private static final int INTAKE_MAX_CONTEXT_CHARACTERS = 12_000;
     private static final Logger log = LoggerFactory.getLogger(
             V2NaturalLanguageTurnService.class);
+    private static final KnownModelContextProfileRegistry CONTEXT_PROFILES =
+            new KnownModelContextProfileRegistry();
+    private static final ShadowContextAccountant SHADOW_CONTEXT_ACCOUNTANT =
+            new ShadowContextAccountant(new Utf8ByteTokenCounter());
     private static final String FAILURE_MESSAGE =
             "V2 无法根据本次请求创建有效任务";
 
@@ -84,6 +97,7 @@ public class V2NaturalLanguageTurnService {
     private final V2AdaptiveExecutionService adaptive;
     private final ChatModelProvider modelProvider;
     private final ProductPlanBootstrapRepositoryAdapter resumeBootstraps;
+    private final V2PlannerContextBoundaryFactory plannerContexts;
 
     public V2NaturalLanguageTurnService(
             AgentSessionRepository sessions,
@@ -100,7 +114,27 @@ public class V2NaturalLanguageTurnService {
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider) {
         this(sessions, transactions, contexts, contextBuilder, summaries,
                 memories, experiments, skills, settings, bootstraps, json,
-                modelProvider, null, null);
+                modelProvider, null, null, null);
+    }
+
+    public V2NaturalLanguageTurnService(
+            AgentSessionRepository sessions,
+            V2TurnIntakeTransactions transactions,
+            AgentTurnProductContextResolver contexts,
+            AgentContextBuilder contextBuilder,
+            AgentSessionSummaryService summaries,
+            LongTermMemoryRetrievalService memories,
+            AgentExperimentService experiments,
+            SkillsService skills,
+            UserSettingsService settings,
+            AuthenticatedAgentTurnPlanBootstrapComposer bootstraps,
+            ObjectMapper json,
+            @Qualifier("chatModelProvider") ChatModelProvider modelProvider,
+            V2AdaptiveExecutionService adaptive,
+            ProductPlanBootstrapRepositoryAdapter resumeBootstraps) {
+        this(sessions, transactions, contexts, contextBuilder, summaries,
+                memories, experiments, skills, settings, bootstraps, json,
+                modelProvider, adaptive, resumeBootstraps, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -118,7 +152,8 @@ public class V2NaturalLanguageTurnService {
             ObjectMapper json,
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider,
             V2AdaptiveExecutionService adaptive,
-            ProductPlanBootstrapRepositoryAdapter resumeBootstraps) {
+            ProductPlanBootstrapRepositoryAdapter resumeBootstraps,
+            V2PlannerContextBoundaryFactory plannerContexts) {
         this.sessions = sessions;
         this.transactions = transactions;
         this.contexts = contexts;
@@ -134,6 +169,7 @@ public class V2NaturalLanguageTurnService {
         this.adaptive = adaptive;
         this.modelProvider = modelProvider;
         this.resumeBootstraps = resumeBootstraps;
+        this.plannerContexts = plannerContexts;
     }
 
     public V2NaturalLanguageTurnResponse execute(
@@ -227,6 +263,9 @@ public class V2NaturalLanguageTurnService {
                                 : experiment.ragResult().ragContext(),
                         null, null, null, null, List.of(),
                         intake.content(), projectState(verified)));
+        recordShadowContext(
+                endpoint, context,
+                verified.projectVersionId().isPresent());
         Map<String, String> bindings = readBindings(
                 intake.capabilityBindingsJson());
         List<String> conversation = context.messages().stream()
@@ -287,17 +326,21 @@ public class V2NaturalLanguageTurnService {
                             request.experiment());
             UserSettingsService.ModelEndpoint endpoint =
                     resolveTurnEndpoint(intake, session);
+            String summaryContent = summary(intake);
+            AgentLongTermMemoryContext memoryContext = memory(intake);
+            com.yanban.api.agent.AgentRagExperimentResult ragResult =
+                    experiment.ragResult();
             AgentContextPackage context = contextBuilder.build(
                     new AgentContextBuildRequest(
                             intake.sessionId(),
                             intake.userId(),
                             endpoint.providerKey(),
                             endpoint.modelName(),
-                            summary(intake),
-                            memory(intake),
-                            experiment.ragResult() == null
+                            summaryContent,
+                            memoryContext,
+                            ragResult == null
                                     ? null
-                                    : experiment.ragResult().ragContext(),
+                                    : ragResult.ragContext(),
                             null,
                             INTAKE_MAX_RECENT_MESSAGES,
                             INTAKE_MAX_CONTEXT_CHARACTERS,
@@ -305,15 +348,29 @@ public class V2NaturalLanguageTurnService {
                             List.of(),
                             intake.content(),
                             projectState(verified)));
+            recordShadowContext(endpoint, context, projectSession);
             logPlannerContext(
                     session, intake, endpoint, context, projectSession);
+            V2PlannerContextBoundaryFactory.Session plannerContext =
+                    plannerContexts == null ? null : plannerContexts.open(
+                            new V2PlannerContextBoundaryFactory.Input(
+                                    intake.userId(), intake.sessionId(),
+                                    intake.turnId(), intake.id(),
+                                    intake.clientRequestId(),
+                                    intake.requestSha256(),
+                                    endpoint.providerKey(), endpoint.modelName(),
+                                    intake.content(), verified.projectVersionId()
+                                            .map(Object::toString).orElse(null),
+                                    context, summaryContent, memoryContext,
+                                    ragResult));
             V2TurnPlanner.PlannedTurn planned = planner.plan(
                     context,
                     endpoint,
                     skill,
                     projectSession,
                     "v2-intake-" + shortHash(
-                            intake.userId() + "\0" + intake.turnId()));
+                            intake.userId() + "\0" + intake.turnId()),
+                    plannerContext);
             log.info(
                     "V2 intake planner decision intakeId={} turnId={} "
                             + "sessionId={} route={} requirementsAny={} "
@@ -419,6 +476,104 @@ public class V2NaturalLanguageTurnService {
                 context.sections().size(), currentMessageCharacters,
                 INTAKE_MAX_RECENT_MESSAGES,
                 INTAKE_MAX_CONTEXT_CHARACTERS);
+    }
+
+    private static void recordShadowContext(
+            UserSettingsService.ModelEndpoint endpoint,
+            AgentContextPackage context,
+            boolean projectSession) {
+        Optional<ShadowContextMeasurement> measured =
+                shadowContextMeasurement(endpoint, context, projectSession);
+        if (measured.isEmpty()) {
+            log.info("V2 context shadow profileKnown=0");
+            return;
+        }
+        ShadowContextMeasurement measurement = measured.orElseThrow();
+        log.info(
+                "V2 context shadow profileVersion={} counterVersion={} "
+                        + "contextWindowTokens={} maxOutputTokens={} "
+                        + "estimatedInputTokens={} coreTokens={} "
+                        + "recentTokens={} summaryTokens={} toolTokens={} "
+                        + "stepTokens={} memoryTokens={} ragTokens={} "
+                        + "overLimitSections={}",
+                measurement.profileVersion(),
+                measurement.tokenCounterVersion(),
+                measurement.contextWindowTokens(),
+                measurement.maxOutputTokens(),
+                measurement.estimatedInputTokens(),
+                measurement.section(ContextSectionType.CORE_AUTHORITY)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.RECENT_CONVERSATION)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.CONVERSATION_SUMMARY)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.TOOL_RESULTS)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.STEP_STATE)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.LONG_TERM_MEMORY)
+                        .estimatedTokens(),
+                measurement.section(ContextSectionType.RAG_EVIDENCE)
+                        .estimatedTokens(),
+                measurement.overLimitSectionCount());
+    }
+
+    static Optional<ShadowContextMeasurement> shadowContextMeasurement(
+            UserSettingsService.ModelEndpoint endpoint,
+            AgentContextPackage context,
+            boolean projectSession) {
+        var profile = CONTEXT_PROFILES.find(
+                endpoint.providerKey(), endpoint.modelName());
+        if (profile.isEmpty()) {
+            return Optional.empty();
+        }
+        EnumMap<ContextSectionType, List<String>> content =
+                new EnumMap<>(ContextSectionType.class);
+        List<String> core = new ArrayList<>();
+        List<String> recent = new ArrayList<>();
+        if (!context.messages().isEmpty()) {
+            core.add(context.messages().get(0).content());
+        }
+        AgentContextDebugView debug = context.debugView();
+        if (debug != null && debug.currentMessage() != null) {
+            core.add(debug.currentMessage().content());
+        } else if (context.currentUserMessage() != null) {
+            core.add(context.currentUserMessage().content());
+        }
+        if (debug != null) {
+            if (debug.sessionSummary() != null) {
+                content.put(
+                        ContextSectionType.CONVERSATION_SUMMARY,
+                        java.util.Collections.singletonList(
+                                debug.sessionSummary().content()));
+            }
+            if (debug.longTermMemory() != null) {
+                content.put(
+                        ContextSectionType.LONG_TERM_MEMORY,
+                        java.util.Collections.singletonList(
+                                debug.longTermMemory().content()));
+            }
+            if (!debug.recentTurns().isEmpty()) {
+                for (AgentContextDebugView.DebugTurn turn
+                        : debug.recentTurns()) {
+                    recent.add(turn.user());
+                    recent.add(turn.assistant());
+                }
+            }
+        }
+        if (recent.isEmpty() && !projectSession) {
+            context.messages().stream()
+                    .skip(2)
+                    .map(message -> message.content())
+                    .forEach(recent::add);
+        }
+        content.put(ContextSectionType.CORE_AUTHORITY, core);
+        content.put(ContextSectionType.RECENT_CONVERSATION, recent);
+        // The current safe projection exposes evidence references, not RAG or
+        // tool bodies. Those sections remain zero until the dedicated context
+        // assembler supplies bounded projections in a later checkpoint.
+        return Optional.of(SHADOW_CONTEXT_ACCOUNTANT.measure(
+                profile.orElseThrow(), content));
     }
 
     private UserSettingsService.ModelEndpoint resolveTurnEndpoint(
@@ -648,6 +803,9 @@ public class V2NaturalLanguageTurnService {
     }
 
     private static String failureCode(RuntimeException failure) {
+        if (failure instanceof V2PlannerContextBoundaryException context) {
+            return context.code();
+        }
         return failure instanceof V2TurnPlanningException planning
                 ? planning.failureCode() : "INTAKE_FAILED";
     }

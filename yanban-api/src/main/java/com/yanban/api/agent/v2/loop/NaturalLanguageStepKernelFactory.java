@@ -19,19 +19,28 @@ public class NaturalLanguageStepKernelFactory {
     private final ModelProvider provider;
     private final EffectIntentRepository intents;
     private final V2EffectHistorySource history;
+    private final StepModelCallGuard modelCallGuard;
 
     public NaturalLanguageStepKernelFactory(
             ModelProvider provider, EffectIntentRepository intents) {
-        this(provider, intents, null);
+        this(provider, intents, null, null);
+    }
+
+    public NaturalLanguageStepKernelFactory(
+            ModelProvider provider, EffectIntentRepository intents,
+            V2EffectHistorySource history) {
+        this(provider, intents, history, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public NaturalLanguageStepKernelFactory(
             ModelProvider provider, EffectIntentRepository intents,
-            V2EffectHistorySource history) {
+            V2EffectHistorySource history,
+            StepModelCallGuard modelCallGuard) {
         this.provider = provider;
         this.intents = intents;
         this.history = history;
+        this.modelCallGuard = modelCallGuard;
     }
 
     public SingleTurnStepKernel create(Map<PlanStepId, ToolId> bindings) {
@@ -59,20 +68,53 @@ public class NaturalLanguageStepKernelFactory {
     public AutonomousKernel createAutonomous(
             ModelProvider requestProvider,
             boolean replayLatestForReplan) {
+        return createAutonomous(
+                requestProvider, replayLatestForReplan, null, null);
+    }
+
+    public AutonomousKernel createAutonomous(
+            ModelProvider requestProvider,
+            boolean replayLatestForReplan,
+            Long userId,
+            Long turnId) {
         if (history == null) {
             throw new IllegalStateException(
                     "V2 effect history is unavailable");
         }
+        StepDecisionActivationScope activationScope =
+                new StepDecisionActivationScope();
         var turn = new AutonomousNaturalLanguageStepTurnAdapter(
                 requestProvider, history, autonomousTools(),
-                replayLatestForReplan);
-        return new AutonomousKernel(
-                new DefaultSingleTurnStepKernel(turn, intents), turn);
+                replayLatestForReplan, modelCallGuard, userId, turnId,
+                activationScope);
+        SingleTurnStepKernel delegate =
+                new DefaultSingleTurnStepKernel(turn, intents);
+        SingleTurnStepKernel kernel = request -> {
+            try {
+                activationScope.capture(request);
+                return delegate.run(request);
+            } catch (io.paperagent.v2.runtime.execution.kernel
+                    .SingleTurnStepKernelProtocolException failure) {
+                if (turn.guardFailure() != null) {
+                    throw turn.guardFailure();
+                }
+                throw failure;
+            } finally {
+                activationScope.clear();
+            }
+        };
+        return new AutonomousKernel(kernel, turn);
     }
 
     public AutonomousKernel createAutonomous(
             boolean replayLatestForReplan) {
         return createAutonomous(provider, replayLatestForReplan);
+    }
+
+    public AutonomousKernel createAutonomous(
+            boolean replayLatestForReplan, Long userId, Long turnId) {
+        return createAutonomous(
+                provider, replayLatestForReplan, userId, turnId);
     }
 
     private static List<ToolDescriptor> autonomousTools() {

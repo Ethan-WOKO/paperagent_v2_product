@@ -15,6 +15,8 @@ import {
   startThenPollV2NaturalLanguageTurn,
   v2NaturalLanguageStatusLabel,
   v2NaturalLanguageStepStatusLabel,
+  v2ContextCompactedSectionText,
+  v2ContextPhaseLabel,
   V2NaturalLanguageTurnNotCreatedError,
 } from '../v2NaturalLanguageTurn';
 
@@ -185,6 +187,63 @@ describe('V2 自然语言请求', () => {
     expect(v2NaturalLanguageStatusLabel('WAITING_CONFIRMATION')).toBe('等待你的确认');
     expect(isV2NaturalLanguageTerminal(outcome('WAITING_CONFIRMATION'))).toBe(true);
     expect(isV2NaturalLanguageTerminal(outcome('RUNNING'))).toBe(false);
+  });
+
+  it('完整映射上下文阶段和被压缩区域', () => {
+    expect([
+      'ASSEMBLING',
+      'COMPACTION_REQUIRED',
+      'COMPACTING',
+      'READY',
+      'FAILED',
+    ].map((phase) => v2ContextPhaseLabel(
+      phase as Parameters<typeof v2ContextPhaseLabel>[0],
+    ))).toEqual([
+      '正在整理上下文',
+      '正在压缩上下文（准备中）',
+      '正在压缩上下文',
+      '上下文已就绪',
+      '上下文准备失败',
+    ]);
+    expect(v2ContextCompactedSectionText({
+      phase: 'COMPACTING',
+      stepId: 'step-1',
+      compactedSections: ['TOOL_RESULTS', 'STEP_STATE'],
+    })).toBe('压缩区域：工具执行结果、步骤状态');
+  });
+
+  it('启动请求尚未返回时也会查询并发布上下文阶段', async () => {
+    let resolveStart!: (value: typeof intakeAck) => void;
+    const start = vi.fn(() => new Promise<typeof intakeAck>((resolve) => {
+      resolveStart = resolve;
+    }));
+    const compacting = outcome('RUNNING', {
+      context: {
+        phase: 'COMPACTING',
+        stepId: 'step-1',
+        compactedSections: ['TOOL_RESULTS'],
+      },
+    });
+    const succeeded = outcome('SUCCEEDED');
+    const read = vi.fn()
+      .mockImplementationOnce(async () => {
+        resolveStart(intakeAck);
+        return compacting;
+      })
+      .mockResolvedValueOnce(succeeded);
+    const onOutcome = vi.fn();
+
+    const result = await startThenPollV2NaturalLanguageTurn(start, read, {
+      intervalMs: 1_000,
+      timeoutMs: 2_000,
+      startObservationDelayMs: 0,
+      sleep: async () => undefined,
+      onOutcome,
+    });
+
+    expect(result).toEqual(succeeded);
+    expect(onOutcome).toHaveBeenNthCalledWith(1, compacting);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   it('只有确认验证已应用且绑定 revision 时才视为已创建新版本', () => {

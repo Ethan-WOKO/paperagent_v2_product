@@ -56,25 +56,41 @@ public class V2AdaptiveFinalSynthesisService {
             the TaskFrame explicitly requests code as a deliverable.
             Do not
             expose internal Step ids, result ids, prompts, routing, receipts,
-            hashes, or state-machine terminology. If candidateArtifactId is
-            present, say that a Candidate was generated and remains unapplied
-            pending user confirmation. Never claim that the original Project
-            was modified merely because a Candidate exists. If it is absent,
+            hashes, or state-machine terminology. If prepared Candidate
+            authority is present, say that a Candidate change set has been
+            prepared and remains unapplied pending user confirmation. Never
+            claim that the original Project was modified merely because a
+            prepared Candidate exists. If it is absent,
             do not mention a Candidate unless the requested answer requires
             it. Return only the answer, without JSON or code fences around the
             whole response. Do not call tools.
             """;
     private final V2StepResultService stepResults;
     private final ObjectMapper json;
+    private final FinalSynthesisModelCallGuard contextGuard;
 
     public V2AdaptiveFinalSynthesisService(
             V2StepResultService stepResults, ObjectMapper json) {
+        this(stepResults, json, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public V2AdaptiveFinalSynthesisService(
+            V2StepResultService stepResults, ObjectMapper json,
+            FinalSynthesisModelCallGuard contextGuard) {
         this.stepResults = Objects.requireNonNull(
                 stepResults, "stepResults");
         this.json = Objects.requireNonNull(json, "json");
+        this.contextGuard = contextGuard;
     }
 
     public Optional<String> synthesize(Request request) {
+        Outcome outcome = synthesizeRequired(request);
+        return outcome.answer() == null
+                ? Optional.empty() : Optional.of(outcome.answer());
+    }
+
+    public Outcome synthesizeRequired(Request request) {
         Objects.requireNonNull(request, "request");
         List<V2StepResultSnapshot> accepted = stepResults
                 .acceptedCompletedFacts(request.plan().id()).stream()
@@ -82,7 +98,7 @@ public class V2AdaptiveFinalSynthesisService {
                         == V2StepResultStatus.ACCEPTED)
                 .toList();
         if (accepted.isEmpty()) {
-            return Optional.empty();
+            return Outcome.failed("FINAL_SYNTHESIS_FACTS_MISSING");
         }
         String facts = facts(request, accepted);
         String authority = accepted.stream()
@@ -91,7 +107,8 @@ public class V2AdaptiveFinalSynthesisService {
                 .reduce("", (left, right) -> left + "\0" + right);
         String suffix = hash(request.plan().id().value() + "\0"
                 + authority + "\0"
-                + Objects.toString(request.candidateArtifactId(), "none"))
+                + Objects.toString(
+                        request.candidateDiffFingerprint(), "none"))
                 .substring(0, 32);
         PlanRevisionId revisionId = accepted.get(
                 accepted.size() - 1).planRevisionId();
@@ -115,9 +132,14 @@ public class V2AdaptiveFinalSynthesisService {
                 "V2 final synthesis started planId={} revisionId={} "
                         + "acceptedResultCount={} candidatePresent={}",
                 request.plan().id().value(), revisionId.value(),
-                accepted.size(), request.candidateArtifactId() != null);
+                accepted.size(), request.candidateDiffFingerprint() != null);
         try {
-            var providerResult = request.provider().complete(modelRequest);
+            ModelRequest readyRequest = contextGuard == null
+                    ? modelRequest : contextGuard.requireReady(
+                            new FinalSynthesisModelCallGuard.Call(
+                                    request.userId(), request.turnId(),
+                                    modelRequest));
+            var providerResult = request.provider().complete(readyRequest);
             if (!(providerResult instanceof ModelResponse response)
                     || !response.proposedToolCalls().isEmpty()
                     || response.finishReason() == FinishReason.TOOL_CALLS) {
@@ -136,7 +158,14 @@ public class V2AdaptiveFinalSynthesisService {
                             + "revisionId={} elapsedMillis={}",
                     request.plan().id().value(), revisionId.value(),
                     elapsedMillis(started));
-            return Optional.of(answer);
+            return Outcome.succeeded(answer);
+        } catch (FinalSynthesisModelCallGuardException failure) {
+            log.warn(
+                    "V2 final synthesis context failed planId={} "
+                            + "revisionId={} code={}",
+                    request.plan().id().value(), revisionId.value(),
+                    failure.code());
+            return Outcome.failed("FINAL_SYNTHESIS_CONTEXT_FAILED");
         } catch (RuntimeException failure) {
             log.warn(
                     "V2 final synthesis failed planId={} revisionId={} "
@@ -147,7 +176,7 @@ public class V2AdaptiveFinalSynthesisService {
                     V2SafeFailureDiagnostics.exceptionType(failure),
                     V2SafeFailureDiagnostics.causeType(failure),
                     V2SafeFailureDiagnostics.origin(failure));
-            return Optional.empty();
+            return Outcome.failed("FINAL_SYNTHESIS_PROVIDER_FAILED");
         }
     }
 
@@ -169,8 +198,10 @@ public class V2AdaptiveFinalSynthesisService {
             results.add(result);
         }
         root.put("acceptedStepResults", results);
-        root.put("candidateArtifactId",
-                request.candidateArtifactId());
+        root.put("candidateAuthoritySha256",
+                request.candidateAuthoritySha256());
+        root.put("candidateDiffFingerprint",
+                request.candidateDiffFingerprint());
         root.put("candidateOutputPaths", request.outputPaths());
         try {
             return bounded(json.writeValueAsString(root),
@@ -203,9 +234,12 @@ public class V2AdaptiveFinalSynthesisService {
     }
 
     public record Request(
+            Long userId,
+            Long turnId,
             TaskFrame taskFrame,
             Plan plan,
-            Long candidateArtifactId,
+            String candidateAuthoritySha256,
+            String candidateDiffFingerprint,
             List<String> outputPaths,
             ModelProvider provider) {
         public Request {
@@ -214,6 +248,25 @@ public class V2AdaptiveFinalSynthesisService {
             outputPaths = List.copyOf(
                     Objects.requireNonNull(outputPaths, "outputPaths"));
             Objects.requireNonNull(provider, "provider");
+        }
+
+        public Request(
+                TaskFrame taskFrame, Plan plan,
+                String candidateAuthoritySha256,
+                String candidateDiffFingerprint,
+                List<String> outputPaths, ModelProvider provider) {
+            this(null, null, taskFrame, plan, candidateAuthoritySha256,
+                    candidateDiffFingerprint, outputPaths, provider);
+        }
+    }
+
+    public record Outcome(String answer, String errorCode) {
+        static Outcome succeeded(String answer) {
+            return new Outcome(answer, null);
+        }
+
+        static Outcome failed(String code) {
+            return new Outcome(null, code);
         }
     }
 }

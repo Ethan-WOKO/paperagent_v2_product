@@ -57,6 +57,35 @@ class LongTermMemoryRetrievalServiceTest {
     }
 
     @Test
+    void returnsStableRankedRefsWithoutMutatingSourceMemory() {
+        AgentLongTermMemory source = memory(
+                "FACT", "GraphRAG uses a governed benchmark.",
+                "[\"GraphRAG\"]", "0.90");
+        ReflectionTestUtils.setField(source, "id", 71L);
+        ReflectionTestUtils.setField(source, "updatedAt",
+                Instant.parse("2026-08-03T08:00:00Z"));
+        String originalContent = source.getContent();
+        String originalTags = source.getTagsJson();
+        when(memories.findGovernedUserCandidates(
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(source));
+
+        AgentLongTermMemoryContext first = service.retrieve(USER_ID, "GraphRAG");
+        AgentLongTermMemoryContext second = service.retrieve(USER_ID, "GraphRAG");
+
+        assertThat(first.selectedRefs()).hasSize(1);
+        assertThat(first.selectedRefs().get(0).stableId()).isEqualTo("memory:71");
+        assertThat(first.selectedRefs().get(0).version())
+                .isEqualTo("2026-08-03T08:00:00Z");
+        assertThat(first.selectedRefs().get(0).rank()).isEqualTo(1);
+        assertThat(first.selectedRefs().get(0).digest())
+                .matches("[a-f0-9]{64}");
+        assertThat(second.selectedRefs()).isEqualTo(first.selectedRefs());
+        assertThat(source.getContent()).isEqualTo(originalContent);
+        assertThat(source.getTagsJson()).isEqualTo(originalTags);
+    }
+
+    @Test
     void alwaysInjectsConfirmedGlobalLanguagePreferenceButNotUnrelatedOrdinaryMemory() {
         when(memories.findGovernedUserCandidates(eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(

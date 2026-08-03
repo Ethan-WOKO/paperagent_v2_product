@@ -3,13 +3,17 @@ package com.yanban.api.memory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.AgentLongTermMemoryContext;
+import com.yanban.api.agent.AgentMemorySelectionRef;
 import com.yanban.core.agent.AgentLongTermMemory;
 import com.yanban.core.agent.AgentLongTermMemoryRepository;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -176,6 +180,7 @@ public class LongTermMemoryRetrievalService {
         List<ScoredMemory> selected = uniqueRanked.stream().limit(MAX_HITS).toList();
         StringBuilder content = new StringBuilder(CONTEXT_HEADER);
         List<String> debugItems = new ArrayList<>();
+        List<AgentMemorySelectionRef> selectedRefs = new ArrayList<>();
         int omittedByBudget = 0;
         for (ScoredMemory item : selected) {
             String line = formatMemoryLine(item);
@@ -188,6 +193,8 @@ public class LongTermMemoryRetrievalService {
             }
             content.append(line);
             debugItems.add(formatDebugItem(item));
+            selectedRefs.add(toSelectionRef(
+                    item.memory(), selectedRefs.size() + 1, line));
         }
         int omitted = omittedDuplicates + Math.max(0, uniqueRanked.size() - selected.size()) + omittedByBudget;
         if (content.isEmpty()) {
@@ -196,7 +203,47 @@ public class LongTermMemoryRetrievalService {
         }
         String note = "Injected long-term memories: hits=%d, candidates=%d, omitted=%d, minConfidence=%s, items=%s"
                 .formatted(debugItems.size(), candidates.size(), omitted, MIN_CONFIDENCE, String.join(" | ", debugItems));
-        return new AgentLongTermMemoryContext(content.toString(), debugItems.size(), candidates.size(), omitted, note);
+        return new AgentLongTermMemoryContext(
+                content.toString(), debugItems.size(), candidates.size(),
+                omitted, note, selectedRefs);
+    }
+
+    private AgentMemorySelectionRef toSelectionRef(
+            AgentLongTermMemory memory,
+            int rank,
+            String projection) {
+        String fallbackIdentity = sha256(String.join("\n",
+                nullToEmpty(memory.getMemoryType()),
+                nullToEmpty(memory.getContent()),
+                nullToEmpty(memory.getTagsJson())));
+        String id = memory.getId() == null
+                ? "memory:unpersisted:" + fallbackIdentity
+                : "memory:" + memory.getId();
+        String version = memory.getUpdatedAt() == null
+                ? "legacy" : memory.getUpdatedAt().toString();
+        String canonical = String.join("\n",
+                id,
+                version,
+                nullToEmpty(memory.getMemoryType()),
+                nullToEmpty(memory.getContent()),
+                nullToEmpty(memory.getTagsJson()),
+                nullToEmpty(memory.getProjectVersion()));
+        return new AgentMemorySelectionRef(
+                id, version, rank, sha256(canonical), projection);
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest
+                    .getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
     }
 
     /**

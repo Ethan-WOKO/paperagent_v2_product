@@ -3,7 +3,6 @@ package com.yanban.api.agent.v2.loop;
 import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
 import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import io.paperagent.v2.contracts.EffectIntent;
-import io.paperagent.v2.contracts.OutputCapture;
 import io.paperagent.v2.contracts.ToolCallId;
 import io.paperagent.v2.contracts.ToolDescriptor;
 import io.paperagent.v2.providers.CorrelationId;
@@ -32,6 +31,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,8 +48,6 @@ final class AutonomousNaturalLanguageStepTurnAdapter
         implements StepTurnPort {
     private static final Logger log = LoggerFactory.getLogger(
             AutonomousNaturalLanguageStepTurnAdapter.class);
-    private static final String TRUNCATION_MARKER =
-            "\n[OUTPUT_TRUNCATED]";
     private static final String SYSTEM = """
             Continue the current persisted V2 goal. Choose the next useful
             tool from the complete catalog based on the goal and the durable
@@ -83,6 +82,11 @@ final class AutonomousNaturalLanguageStepTurnAdapter
     private final V2EffectHistorySource historySource;
     private final List<ToolDescriptor> tools;
     private final boolean replayLatestForReplan;
+    private final StepModelCallGuard modelCallGuard;
+    private final Long userId;
+    private final Long turnId;
+    private final StepDecisionActivationScope activationScope;
+    private StepModelCallGuardException guardFailure;
     private final List<String> diagnostics = new ArrayList<>();
 
     AutonomousNaturalLanguageStepTurnAdapter(
@@ -90,16 +94,38 @@ final class AutonomousNaturalLanguageStepTurnAdapter
             V2EffectHistorySource historySource,
             List<ToolDescriptor> tools,
             boolean replayLatestForReplan) {
+        this(provider, historySource, tools, replayLatestForReplan,
+                null, null, null, null);
+    }
+
+    AutonomousNaturalLanguageStepTurnAdapter(
+            ModelProvider provider,
+            V2EffectHistorySource historySource,
+            List<ToolDescriptor> tools,
+            boolean replayLatestForReplan,
+            StepModelCallGuard modelCallGuard,
+            Long userId,
+            Long turnId,
+            StepDecisionActivationScope activationScope) {
         this.provider = java.util.Objects.requireNonNull(
                 provider, "provider");
         this.historySource = java.util.Objects.requireNonNull(
                 historySource, "historySource");
         this.tools = List.copyOf(tools);
         this.replayLatestForReplan = replayLatestForReplan;
+        if (modelCallGuard != null && (userId == null || turnId == null)) {
+            throw new IllegalArgumentException(
+                    "guarded step model call requires owner and turn");
+        }
+        this.modelCallGuard = modelCallGuard;
+        this.userId = userId;
+        this.turnId = turnId;
+        this.activationScope = activationScope;
     }
 
     @Override
     public StepTurnDecision decide(StepTurnInput input) {
+        guardFailure = null;
         List<V2EffectHistorySource.Entry> history = historySource.inspect(
                 input.plan().id(), input.activeStep().id());
         List<V2EffectHistorySource.Entry> pending = history.stream()
@@ -119,7 +145,26 @@ final class AutonomousNaturalLanguageStepTurnAdapter
                     history.get(history.size() - 1).intent().intent());
         }
 
-        ModelRequest request = request(input, history);
+        V2StepModelCallMaterial material = material(input, history);
+        ModelRequest request = material.request();
+        if (modelCallGuard != null) {
+            if (userId == null || turnId == null) {
+                throw new StepModelCallGuardException(
+                        "STEP_CONTEXT_OWNER_MISSING");
+            }
+            try {
+                StepDecisionActivationScope.Cut activation =
+                        activationScope.require();
+                request = modelCallGuard.requireReady(
+                        new StepModelCallGuard.Call(
+                                userId, turnId, activation.eventId(),
+                                activation.sequence(),
+                                activation.checkpointVersion(), material));
+            } catch (StepModelCallGuardException failure) {
+                guardFailure = failure;
+                throw failure;
+            }
+        }
         ModelProviderResult result;
         long modelStarted = System.nanoTime();
         log.info(
@@ -203,9 +248,14 @@ final class AutonomousNaturalLanguageStepTurnAdapter
         return List.copyOf(diagnostics);
     }
 
+    StepModelCallGuardException guardFailure() {
+        return guardFailure;
+    }
+
     private ModelRequest request(
             StepTurnInput input,
-            List<V2EffectHistorySource.Entry> history) {
+            V2StepModelCallMaterial.Step step,
+            List<V2StepModelCallMaterial.HistoryItem> history) {
         String binding = binding(input, history.size() + 1);
         return new ModelRequest(
                 new ModelRequestId("v2-autonomous-turn."
@@ -216,7 +266,8 @@ final class AutonomousNaturalLanguageStepTurnAdapter
                         new ModelMessage(MessageRole.SYSTEM, SYSTEM),
                         new ModelMessage(
                                 MessageRole.USER,
-                                userMessage(input, history))),
+                                V2StepModelCallMaterial.userMessage(
+                                        step, history))),
                 tools,
                 new GenerationOptions(
                         4096, 0, 0.2d, OptionalLong.empty(), Map.of()),
@@ -228,20 +279,18 @@ final class AutonomousNaturalLanguageStepTurnAdapter
     }
 
     private static String userMessage(
-            StepTurnInput input,
-            List<V2EffectHistorySource.Entry> history) {
-        var task = input.taskFrame();
-        var step = input.activeStep();
+            V2StepModelCallMaterial.Step step,
+            List<V2StepModelCallMaterial.HistoryItem> history) {
         StringBuilder value = new StringBuilder();
-        value.append("Objective: ").append(task.objective())
+        value.append("Objective: ").append(step.objective())
                 .append("\nTargets: ")
-                .append(String.join("; ", task.targets()))
+                .append(String.join("; ", step.targets()))
                 .append("\nDeliverables: ")
-                .append(String.join("; ", task.deliverables()))
+                .append(String.join("; ", step.deliverables()))
                 .append("\nConstraints: ")
-                .append(String.join("; ", task.constraints()))
+                .append(String.join("; ", step.constraints()))
                 .append("\nCompleted Plan Steps:\n")
-                .append(completedPlanSteps(input))
+                .append(completedPlanSteps(step))
                 .append("\nCurrent goal: ").append(step.intent())
                 .append("\nExpected outcome: ")
                 .append(step.expectedOutcome())
@@ -251,28 +300,32 @@ final class AutonomousNaturalLanguageStepTurnAdapter
         if (history.isEmpty()) {
             value.append("- none\n");
         } else {
-            for (V2EffectHistorySource.Entry entry : history) {
+            for (V2StepModelCallMaterial.HistoryItem entry : history) {
                 value.append("- tool=")
-                        .append(entry.intent().intent().kind())
-                        .append("; arguments=")
-                        .append(entry.intent().intent()
-                                .arguments().toString());
+                        .append(entry.toolKind())
+                        .append("; argumentFields=")
+                        .append(String.join(",", entry.allowlistedArgumentFields()))
+                        .append("; argumentsDigest=")
+                        .append(entry.argumentsDigest());
                 if (!entry.completed()) {
                     value.append("; status=PENDING\n");
                     continue;
                 }
-                var receipt = entry.result().receipt();
                 value.append("; status=")
-                        .append(receipt.status())
+                        .append(entry.receiptStatus())
                         .append("; resultCode=")
-                        .append(receipt.resultCode().orElse(""))
+                        .append(entry.resultCode() == null ? "" : entry.resultCode())
                         .append("; exitCode=")
-                        .append(receipt.exitCode()
-                                .map(String::valueOf).orElse(""))
-                        .append("; stdout=")
-                        .append(capture(receipt.standardOutput()))
-                        .append("; stderr=")
-                        .append(capture(receipt.standardError()))
+                        .append(entry.exitCode() == null ? "" : entry.exitCode())
+                        .append("; outputDigest=")
+                        .append(entry.outputDigest())
+                        .append("; truncated=")
+                        .append(entry.outputTruncated())
+                        .append("; artifacts=")
+                        .append(String.join(",", entry.artifactRefs()))
+                        .append("; safeText=")
+                        .append(entry.boundedSafeText() == null
+                                ? "" : entry.boundedSafeText())
                         .append('\n');
             }
         }
@@ -281,21 +334,220 @@ final class AutonomousNaturalLanguageStepTurnAdapter
         return value.toString();
     }
 
-    private static String completedPlanSteps(StepTurnInput input) {
-        var revision = input.plan().latestRevision();
-        if (revision.completedFacts().isEmpty()) {
+    private static String completedPlanSteps(V2StepModelCallMaterial.Step step) {
+        if (step.completedFacts().isEmpty()) {
             return "- none";
         }
         StringBuilder value = new StringBuilder();
-        revision.steps().stream()
-                .filter(step -> revision.completedFacts().containsKey(
-                        step.id()))
-                .forEach(step -> value.append("- ")
-                        .append(step.id().value())
+        step.completedFacts().forEach(fact -> value.append("- ")
+                        .append(fact.stepId())
                         .append(": ")
-                        .append(step.intent())
+                        .append(fact.intent())
+                        .append("; acceptedRefs=")
+                        .append(String.join(",", fact.acceptedRefs()))
                         .append('\n'));
         return value.toString().stripTrailing();
+    }
+
+    private V2StepModelCallMaterial material(
+            StepTurnInput input,
+            List<V2EffectHistorySource.Entry> durableHistory) {
+        V2StepModelCallMaterial.Step step = safeStep(input);
+        List<V2StepModelCallMaterial.HistoryItem> safeHistory =
+                safeHistory(durableHistory);
+        String canonical = safeHistory.stream()
+                .map(AutonomousNaturalLanguageStepTurnAdapter::canonicalHistory)
+                .reduce("history-v1", (left, right) ->
+                        left + "\u001e" + right);
+        ModelRequest request = request(input, step, safeHistory);
+        return new V2StepModelCallMaterial(
+                request, V2StepModelCallMaterial.requestDigest(request),
+                step, safeHistory,
+                hash(canonical),
+                safeHistory.size() + 1L);
+    }
+
+    private static V2StepModelCallMaterial.Step safeStep(StepTurnInput input) {
+        var task = input.taskFrame();
+        var revision = input.plan().latestRevision();
+        var current = input.activeStep();
+        List<V2StepModelCallMaterial.CompletedFact> completed =
+                revision.steps().stream()
+                        .filter(value -> revision.completedFacts()
+                                .containsKey(value.id()))
+                        .map(value -> {
+                            var fact = revision.completedFacts().get(value.id());
+                            return new V2StepModelCallMaterial.CompletedFact(
+                                    value.id().value(),
+                                    safeAuthority(value.intent()),
+                                    fact.receiptReferences().stream()
+                                            .map(reference -> reference.value())
+                                            .toList());
+                        }).toList();
+        long sequence = input.checkpoint().checkpoint().lastEventSequence();
+        return new V2StepModelCallMaterial.Step(
+                task.id().value(), safeAuthority(task.objective()),
+                task.targets().stream().map(
+                        AutonomousNaturalLanguageStepTurnAdapter::safeAuthority).toList(),
+                task.deliverables().stream().map(
+                        AutonomousNaturalLanguageStepTurnAdapter::safeAuthority).toList(),
+                task.constraints().stream().map(
+                        AutonomousNaturalLanguageStepTurnAdapter::safeAuthority).toList(),
+                input.plan().id().value(), revision.id().value(),
+                revision.number(), current.id().value(),
+                safeAuthority(current.intent()),
+                safeAuthority(current.expectedOutcome()),
+                current.completionCriteria().stream().map(
+                        AutonomousNaturalLanguageStepTurnAdapter::safeAuthority).toList(),
+                completed, input.checkpoint().version(), sequence);
+    }
+
+    private static List<V2StepModelCallMaterial.HistoryItem> safeHistory(
+            List<V2EffectHistorySource.Entry> history) {
+        List<V2StepModelCallMaterial.HistoryItem> values = new ArrayList<>();
+        for (int i = 0; i < history.size(); i++) {
+            V2EffectHistorySource.Entry entry = history.get(i);
+            var intent = entry.intent().intent();
+            String argumentsDigest = hash(canonicalValue(intent.arguments()));
+            List<String> fields = allowlistedFields(intent.arguments().values());
+            String receiptId = null;
+            String status = null;
+            String resultCode = null;
+            Integer exitCode = null;
+            String outputDigest = null;
+            boolean truncated = false;
+            List<String> artifacts = List.of();
+            String boundedText = null;
+            if (entry.result() != null) {
+                var receipt = entry.result().receipt();
+                receiptId = receipt.id().value();
+                status = receipt.status().name();
+                resultCode = receipt.resultCode().orElse(null);
+                exitCode = receipt.exitCode().orElse(null);
+                String stdout = receipt.standardOutput().inlineText().orElse("");
+                String stderr = receipt.standardError().inlineText().orElse("");
+                outputDigest = hash(stdout + "\u001f" + stderr);
+                truncated = receipt.standardOutput().truncated()
+                        || receipt.standardError().truncated();
+                artifacts = java.util.stream.Stream.concat(
+                                receipt.artifactReferences().stream()
+                                        .map(reference -> reference.value()),
+                                java.util.stream.Stream.of(
+                                                receipt.standardOutput(),
+                                                receipt.standardError())
+                                        .flatMap(output -> output.artifactRef().stream())
+                                        .map(reference -> reference.value()))
+                        .distinct().map(AutonomousNaturalLanguageStepTurnAdapter::safeRef)
+                        .toList();
+                boundedText = safeBoundedText(stdout, stderr);
+            }
+            values.add(new V2StepModelCallMaterial.HistoryItem(
+                    i + 1, intent.toolCallId().value(), intent.kind(),
+                    fields, argumentsDigest, entry.completed(),
+                    entry.successful(), receiptId, status, resultCode,
+                    exitCode, outputDigest, truncated, artifacts, boundedText));
+        }
+        return List.copyOf(values);
+    }
+
+    private static final Set<String> ALLOWLIST = Set.of(
+            "query", "keywords", "title", "language", "limit");
+    private static final Pattern UNSAFE = Pattern.compile(
+            "(?i)(?:[a-z]:[\\\\/]|file://|/(?:home|users?|var|etc|opt|tmp|workspace|mnt|root|data)(?:/|$)|bearer\\s+\\S+|sk-[a-z0-9_-]{8,}|(?:api[_ -]?key|password|secret|token)\\s*[:=]\\s*\\S+)");
+
+    private static List<String> allowlistedFields(
+            Map<String, io.paperagent.v2.contracts.ContractValue> arguments) {
+        return arguments.entrySet().stream()
+                .filter(entry -> ALLOWLIST.contains(entry.getKey()))
+                .map(entry -> entry.getKey() + "=" + scalar(entry.getValue()))
+                .filter(value -> !UNSAFE.matcher(value).find())
+                .map(value -> value.length() <= 240
+                        ? value : value.substring(0, 240))
+                .sorted().toList();
+    }
+
+    private static String scalar(io.paperagent.v2.contracts.ContractValue value) {
+        if (value instanceof io.paperagent.v2.contracts.TextValue text) {
+            return text.value();
+        }
+        if (value instanceof io.paperagent.v2.contracts.NumberValue number) {
+            return number.value().toPlainString();
+        }
+        if (value instanceof io.paperagent.v2.contracts.BooleanValue bool) {
+            return String.valueOf(bool.value());
+        }
+        return "[non-scalar]";
+    }
+
+    private static String canonicalHistory(
+            V2StepModelCallMaterial.HistoryItem value) {
+        return String.join("\u001f",
+                value.toolCallId(), value.toolKind(),
+                String.join("\u001d", value.allowlistedArgumentFields()),
+                value.argumentsDigest(), String.valueOf(value.completed()),
+                String.valueOf(value.successful()),
+                String.valueOf(value.receiptId()),
+                String.valueOf(value.receiptStatus()),
+                String.valueOf(value.resultCode()),
+                String.valueOf(value.exitCode()),
+                String.valueOf(value.outputDigest()),
+                String.valueOf(value.outputTruncated()),
+                String.join("\u001d", value.artifactRefs()),
+                hash(value.boundedSafeText() == null
+                        ? "" : value.boundedSafeText()));
+    }
+
+    private static String canonicalValue(
+            io.paperagent.v2.contracts.ContractValue value) {
+        if (value instanceof io.paperagent.v2.contracts.TextValue text) {
+            return "t:" + text.value().length() + ":" + text.value();
+        }
+        if (value instanceof io.paperagent.v2.contracts.NumberValue number) {
+            return "n:" + number.value().toPlainString();
+        }
+        if (value instanceof io.paperagent.v2.contracts.BooleanValue bool) {
+            return "b:" + bool.value();
+        }
+        if (value instanceof io.paperagent.v2.contracts.NullValue) {
+            return "z";
+        }
+        if (value instanceof io.paperagent.v2.contracts.ListValue list) {
+            return "l:[" + list.values().stream()
+                    .map(AutonomousNaturalLanguageStepTurnAdapter::canonicalValue)
+                    .reduce((left, right) -> left + "," + right)
+                    .orElse("") + "]";
+        }
+        if (value instanceof io.paperagent.v2.contracts.ObjectValue object) {
+            return "o:{" + object.values().entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .map(entry -> entry.getKey().length() + ":"
+                            + entry.getKey() + "="
+                            + canonicalValue(entry.getValue()))
+                    .reduce((left, right) -> left + "," + right)
+                    .orElse("") + "}";
+        }
+        throw new IllegalArgumentException("unsupported contract value");
+    }
+
+    private static String safeAuthority(String value) {
+        if (value == null) return "";
+        if (value.length() > 4_000 || UNSAFE.matcher(value).find()) {
+            return "[redacted:" + hash(value) + "]";
+        }
+        return value;
+    }
+
+    private static String safeBoundedText(String stdout, String stderr) {
+        String value = (stdout + "\n" + stderr).strip();
+        if (value.isBlank()) return null;
+        if (UNSAFE.matcher(value).find()) return "[redacted:" + hash(value) + "]";
+        return value.length() <= 1_000 ? value : value.substring(0, 1_000);
+    }
+
+    private static String safeRef(String value) {
+        return value != null && value.length() <= 240
+                && !UNSAFE.matcher(value).find()
+                ? value : "ref:" + hash(value == null ? "" : value);
     }
 
     private static boolean repeatsFailedCall(
@@ -308,14 +560,6 @@ final class AutonomousNaturalLanguageStepTurnAdapter
                                 call.toolId().value())
                         && entry.intent().intent().arguments().equals(
                                 call.arguments()));
-    }
-
-    private static String capture(OutputCapture capture) {
-        String value = capture.inlineText()
-                .orElse(capture.artifactRef()
-                        .map(reference -> "artifact:" + reference.value())
-                        .orElse(""));
-        return capture.truncated() ? value + TRUNCATION_MARKER : value;
     }
 
     private static ToolCallId toolCallId(

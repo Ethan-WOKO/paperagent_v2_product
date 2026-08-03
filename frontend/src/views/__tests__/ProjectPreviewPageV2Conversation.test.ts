@@ -30,6 +30,10 @@ describe('ProjectPreviewPage V2-only 中文任务界面', () => {
     expect(source).toContain("task.status === 'SUCCEEDED'");
     expect(source).toContain("task.status === 'FAILED'");
     expect(source).toContain("task.status === 'WAITING_CONFIRMATION'");
+    expect(source).toContain("task.status === 'RUNNING' && task.context");
+    expect(source).not.toContain("step.status === 'RUNNING' && task.context");
+    expect(source).toContain('v2ContextPhaseLabel(task.context.phase)');
+    expect(source).toContain('v2ContextCompactedSectionText(task.context)');
     expect(source).toContain('class="v2-conversation__process"');
     expect(source).toContain(':open="task.status === \'PLANNING\' || task.status === \'RUNNING\'"');
     expect(source).toContain("task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理'");

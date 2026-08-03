@@ -15,6 +15,9 @@ import dev.langchain4j.rag.query.router.DefaultQueryRouter;
 import dev.langchain4j.rag.query.transformer.CompressingQueryTransformer;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import org.springframework.stereotype.Service;
@@ -101,13 +104,20 @@ public class AgentExperimentService {
         List<AgentRetrievedChunkDebug> chunks = (result == null ? List.<Content>of() : result.contents()).stream()
                 .map(this::toChunkDebug)
                 .sorted(Comparator.comparing(AgentRetrievedChunkDebug::score,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(AgentRetrievedChunkDebug::documentId,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(AgentRetrievedChunkDebug::chunkIndex,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(AgentRetrievedChunkDebug::citationId,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
                 .toList();
         String injectedContext = buildInjectedContext(chunks, "langchain4j-augmentor");
         if (!StringUtils.hasText(injectedContext)) {
             injectedContext = extractAugmentedText(result == null ? null : result.chatMessage());
         }
-        return new AgentRagExperimentResult(injectedContext, chunks);
+        return new AgentRagExperimentResult(
+                injectedContext, chunks, selectionRefs(chunks));
     }
 
     private AgentRetrievedChunkDebug toChunkDebug(Content content) {
@@ -121,8 +131,44 @@ public class AgentExperimentService {
                 metadataInteger(content, KnowledgeSearchServiceContentRetriever.META_CHUNK_INDEX),
                 metadataString(content, KnowledgeSearchServiceContentRetriever.META_CITATION_ID, null),
                 numericScore,
-                text
+                text,
+                metadataInteger(content, KnowledgeSearchServiceContentRetriever.META_VERSION_NO),
+                metadataString(content, KnowledgeSearchServiceContentRetriever.META_VERSION_STATUS, null)
         );
+    }
+
+    private List<AgentRagSelectionRef> selectionRefs(
+            List<AgentRetrievedChunkDebug> chunks) {
+        List<AgentRagSelectionRef> refs = new ArrayList<>();
+        for (int index = 0; index < chunks.size(); index++) {
+            AgentRetrievedChunkDebug chunk = chunks.get(index);
+            String contentDigest = sha256(defaultString(chunk.content(), ""));
+            String stableId = chunk.documentId() == null
+                    ? "rag:unpersisted:" + contentDigest + ":"
+                            + (chunk.chunkIndex() == null ? "unknown" : chunk.chunkIndex())
+                    : "rag:" + chunk.documentId() + ":"
+                            + (chunk.chunkIndex() == null ? "unknown" : chunk.chunkIndex());
+            String version = chunk.versionNo() == null
+                    ? "legacy" : String.valueOf(chunk.versionNo());
+            String canonical = String.join("\n",
+                    stableId,
+                    version,
+                    defaultString(chunk.versionStatus(), ""),
+                    defaultString(chunk.content(), ""));
+            refs.add(new AgentRagSelectionRef(
+                    stableId, version, index + 1, sha256(canonical)));
+        }
+        return List.copyOf(refs);
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest
+                    .getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
     }
 
     private String buildInjectedContext(List<AgentRetrievedChunkDebug> chunks, String modeLabel) {

@@ -1,5 +1,7 @@
 import type {
   V2NaturalLanguageStepStatus,
+  V2ContextPhase,
+  V2NaturalLanguageTurnContext,
   V2NaturalLanguageTurnHistoryItem,
   V2NaturalLanguageTurnRequest,
   V2NaturalLanguageTurnResponse,
@@ -21,6 +23,7 @@ export interface V2NaturalLanguageRequestIdentity {
 interface PollOptions {
   intervalMs?: number;
   timeoutMs?: number;
+  startObservationDelayMs?: number;
   signal?: AbortSignal;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -97,6 +100,36 @@ export function v2NaturalLanguageStepStatusLabel(statusValue: V2NaturalLanguageS
   return '已被新计划替代';
 }
 
+export function v2ContextPhaseLabel(phase: V2ContextPhase) {
+  if (phase === 'ASSEMBLING') return '正在整理上下文';
+  if (phase === 'COMPACTION_REQUIRED') return '正在压缩上下文（准备中）';
+  if (phase === 'COMPACTING') return '正在压缩上下文';
+  if (phase === 'READY') return '上下文已就绪';
+  return '上下文准备失败';
+}
+
+export function v2ContextSectionLabel(section: string) {
+  const labels: Record<string, string> = {
+    CORE_AUTHORITY: '核心任务信息',
+    RECENT_CONVERSATION: '近期完整对话',
+    CONVERSATION_SUMMARY: '对话摘要',
+    TOOL_RESULTS: '工具执行结果',
+    STEP_STATE: '步骤状态',
+    LONG_TERM_MEMORY: '长期记忆',
+    RAG_EVIDENCE: '检索证据',
+    OUTPUT_RESERVE: '输出预留',
+    SAFETY_MARGIN: '安全余量',
+  };
+  return labels[section] || section;
+}
+
+export function v2ContextCompactedSectionText(
+  context: V2NaturalLanguageTurnContext,
+) {
+  if (!context.compactedSections.length) return '';
+  return `压缩区域：${context.compactedSections.map(v2ContextSectionLabel).join('、')}`;
+}
+
 export function isDefinitiveV2NaturalLanguageStartRejection(cause: unknown) {
   const value = status(cause);
   return value != null && value >= 400 && value < 500 && value !== 404;
@@ -146,11 +179,49 @@ export async function startThenPollV2NaturalLanguageTurn(
   read: () => Promise<V2NaturalLanguageTurnResponse>,
   options: PollOptions = {},
 ): Promise<V2NaturalLanguageTurnResponse> {
-  let acknowledgement: V2NaturalLanguageTurnStartResponse;
-  try {
-    acknowledgement = await start();
-  } catch (cause) {
+  let startSettled = false;
+  const startAttempt = start()
+    .then((acknowledgement) => ({ acknowledgement, cause: null as unknown }))
+    .catch((cause: unknown) => ({ acknowledgement: null, cause }))
+    .finally(() => {
+      startSettled = true;
+    });
+  let observedWhileStarting: V2NaturalLanguageTurnResponse | null = null;
+  const observationDelayMs = options.startObservationDelayMs ?? 250;
+  if (observationDelayMs < 0 || observationDelayMs > 1_000) {
+    throw new Error('start-observation-delay-out-of-range');
+  }
+  const startFinishedBeforeObservation = await Promise.race([
+    startAttempt.then(() => true),
+    new Promise<boolean>((resolve) => globalThis.setTimeout(
+      () => resolve(false), observationDelayMs,
+    )),
+  ]);
+  while (!startFinishedBeforeObservation && !startSettled) {
+    if (options.signal?.aborted) throw abortError();
+    try {
+      const observed = await read();
+      options.onOutcome?.(observed);
+      observedWhileStarting = observed;
+      if (isV2NaturalLanguageTerminal(observed)) break;
+    } catch (cause) {
+      if (isDefinitiveV2NaturalLanguageStartRejection(cause)) throw cause;
+    }
+    if (!startSettled) {
+      await Promise.race([
+        startAttempt.then(() => undefined),
+        (options.sleep ?? defaultSleep)(
+          options.intervalMs ?? V2_NATURAL_LANGUAGE_POLL_INTERVAL_MS,
+        ),
+      ]);
+    }
+  }
+  const { acknowledgement, cause } = await startAttempt;
+  if (cause) {
     if (isDefinitiveV2NaturalLanguageStartRejection(cause)) throw cause;
+    if (observedWhileStarting && isV2NaturalLanguageTerminal(observedWhileStarting)) {
+      return observedWhileStarting;
+    }
     try {
       const recovered = await read();
       options.onOutcome?.(recovered);
@@ -161,6 +232,7 @@ export async function startThenPollV2NaturalLanguageTurn(
     }
     return pollV2NaturalLanguageTurn(read, options);
   }
+  if (!acknowledgement) throw new Error('v2-intake-acknowledgement-required');
   if (acknowledgement.route === 'DIRECT') {
     if (!acknowledgement.answer?.trim()) throw new Error('v2-direct-answer-required');
     return {

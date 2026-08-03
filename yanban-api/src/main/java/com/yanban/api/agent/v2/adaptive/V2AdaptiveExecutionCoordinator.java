@@ -196,6 +196,12 @@ public final class V2AdaptiveExecutionCoordinator {
             ReflectionResolution reflection = reflect(
                     reflectionContext, command.planId());
             if (reflection.failureCode() != null) {
+                if ("REFLECTION_CONTEXT_NOT_READY".equals(
+                        reflection.failureCode())) {
+                    return new V2AdaptiveExecutionResult(
+                            "RUNNING", timeline, null, null,
+                            executionCycles, replanCount, repairCount);
+                }
                 return failed(timeline, reflection.failureCode(),
                         executionCycles, replanCount, repairCount);
             }
@@ -205,6 +211,12 @@ public final class V2AdaptiveExecutionCoordinator {
                         withNoProgressGuard(reflectionContext),
                         command.planId());
                 if (reconsidered.failureCode() != null) {
+                    if ("REFLECTION_CONTEXT_NOT_READY".equals(
+                            reconsidered.failureCode())) {
+                        return new V2AdaptiveExecutionResult(
+                                "RUNNING", timeline, null, null,
+                                executionCycles, replanCount, repairCount);
+                    }
                     return failed(timeline, reconsidered.failureCode(),
                             executionCycles, replanCount, repairCount);
                 }
@@ -377,6 +389,11 @@ public final class V2AdaptiveExecutionCoordinator {
             String raw;
             try {
                 raw = reflections.reflect(context);
+            } catch (ReflectionModelCallGuardException contextFailure) {
+                logFailure("reflection.context", planId,
+                        attempt, contextFailure);
+                return new ReflectionResolution(
+                        null, "REFLECTION_CONTEXT_NOT_READY");
             } catch (ReflectionAuditFormatException auditFormatFailure) {
                 logFailure("reflection.audit-format", planId,
                         attempt, auditFormatFailure);

@@ -331,6 +331,9 @@ public class AuthenticatedPersistentPlanAgentLoopComposer {
             try {
                 kernelOutcome = turnKernel.run(
                         new SingleTurnStepKernelRequest(active));
+            } catch (StepModelCallGuardException exception) {
+                throw new PersistentPlanAgentLoopException(
+                        "kernel", exception);
             } catch (SingleTurnStepKernelProtocolException exception) {
                 throw new PersistentPlanAgentLoopException(
                         "kernel", exception);
