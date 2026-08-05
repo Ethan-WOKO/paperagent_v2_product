@@ -47,7 +47,7 @@ class SandboxOutputAnalysisServiceTest {
     private SandboxReceipt receipt() {
         Instant now = Instant.now();
         return new SandboxReceipt("exec", "key", "a".repeat(64), 7, 9, 11, 12, 13, 1,
-                "b".repeat(64), "c".repeat(64), "docker-sbx", SandboxExecutionStatus.SUCCEEDED,
+                "b".repeat(64), "c".repeat(64), "e2b", SandboxExecutionStatus.SUCCEEDED,
                 0, "[1, 2, 3]", "", false, Map.of(), now, now, null);
     }
 }

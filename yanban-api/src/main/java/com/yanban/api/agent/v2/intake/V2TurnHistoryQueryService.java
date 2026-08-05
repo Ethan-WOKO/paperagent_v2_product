@@ -139,11 +139,30 @@ public class V2TurnHistoryQueryService {
                                 value.appliedProjectVersion()))
                         .orElse(null)
                 : null;
+        if (confirmation != null
+                && "APPLIED".equals(confirmation.decisionStatus())
+                && confirmation.appliedRevisionId() != null) {
+            status = "SUCCEEDED";
+            errorCode = null;
+            steps = appliedSteps(steps);
+        }
         return new V2TurnHistoryResponse(
                 intake.clientRequestId(), intake.content(), status, route,
                 planId, projectVersion, steps, finalText,
                 candidateArtifactId, outputPaths, errorCode,
                 intake.createdAt(), updatedAt, automatic, confirmation);
+    }
+
+    private static List<V2AdaptiveTurnResponse.Step> appliedSteps(
+            List<V2AdaptiveTurnResponse.Step> steps) {
+        return steps.stream()
+                .map(step -> "RUNNING".equals(step.status())
+                                || "PENDING".equals(step.status())
+                        ? new V2AdaptiveTurnResponse.Step(
+                                step.index(), step.title(), "SUCCEEDED",
+                                step.detail())
+                        : step)
+                .toList();
     }
 
     private String directAnswer(V2TurnIntakeEntity intake) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Narrow E2B adapter for the governed Java Broker; never accepts a shell string."""
+"""Narrow E2B adapter for the governed Sandbox Broker; never accepts a shell string."""
 
 import argparse
 import json
@@ -70,14 +70,15 @@ def command_health(_args):
     return 0
 
 
-def upload_workspace(sandbox, workspace, manifests_only=False, coordinates_only=False):
+def upload_workspace(sandbox, workspace, manifests_only=False,
+                     dependency_declarations_only=False):
     workspace = Path(workspace).resolve(strict=True)
     for source in sorted(workspace.rglob("*")):
         if source.is_symlink():
             raise RuntimeError("workspace links are forbidden")
         if not source.is_file():
             continue
-        if coordinates_only:
+        if dependency_declarations_only:
             continue
         relative = source.relative_to(workspace)
         if manifests_only and source.name != "pom.xml":
@@ -88,9 +89,11 @@ def upload_workspace(sandbox, workspace, manifests_only=False, coordinates_only=
 
 def command_create(args):
     global active_sandbox_id
-    coordinates_only = getattr(args, "coordinates_only", False)
-    if coordinates_only and not args.dependency_network:
-        raise RuntimeError("coordinates-only mode requires dependency networking")
+    dependency_declarations_only = getattr(
+        args, "dependency_declarations_only", False)
+    if dependency_declarations_only and not args.dependency_network:
+        raise RuntimeError(
+            "dependency-declarations-only mode requires dependency networking")
     if exact(args.name):
         raise RuntimeError("managed E2B sandbox already exists")
     ttl_seconds = min(3600, max(180, math.ceil(args.timeout_millis / 1000) + 120))
@@ -112,7 +115,7 @@ def command_create(args):
         if info.cpu_count > args.cpus or info.memory_mb * 1024 * 1024 > args.memory_bytes:
             raise RuntimeError("E2B template exceeds the requested resource limits")
         upload_workspace(sandbox, args.workspace, manifests_only=args.dependency_network,
-                         coordinates_only=coordinates_only)
+                         dependency_declarations_only=dependency_declarations_only)
         print(json.dumps({"name": args.name, "sandboxId": sandbox.sandbox_id}, separators=(",", ":")))
         active_sandbox_id = None
         return 0
@@ -235,7 +238,7 @@ def parser():
     create.add_argument("--memory-bytes", required=True, type=int)
     create.add_argument("--timeout-millis", required=True, type=int)
     create.add_argument("--dependency-network", action="store_true")
-    create.add_argument("--coordinates-only", action="store_true")
+    create.add_argument("--dependency-declarations-only", action="store_true")
     create.set_defaults(handler=command_create)
     policy = commands.add_parser("policy", add_help=False)
     policy.add_argument("--name", required=True)

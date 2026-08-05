@@ -493,25 +493,35 @@ public final class V2ProductToolCatalog {
     private static Entry projectCandidateCompose() {
         return entry(
                 "project_candidate",
-                "Create reviewed candidate file changes in an isolated Workspace.",
+                "Replace Project files in the isolated working copy.",
                 "project.candidate.compose",
-                "Prepare full-text replacements for one to four exact Project "
-                        + "paths in the isolated Workspace and create the only "
-                        + "durable source for a reviewable Candidate. It never "
-                        + "applies a Candidate or changes the original ProjectVersion; "
-                        + "sandbox.execute cannot create a Candidate.",
+                "Write complete replacement text for one to four existing "
+                        + "Project files into the isolated working copy. The "
+                        + "calling model must provide every target path and the "
+                        + "entire resulting file text; this tool does not ask "
+                        + "another model to write or repair code. It validates "
+                        + "the exact paths and text and persists the resulting "
+                        + "working-copy diff.",
                 objectSchema(
                         Map.of(
                                 "operation", constantStringSchema("compose"),
                                 "paths", arraySchema(
-                                        stringSchema(1, 1_024), 1, 4, true)),
-                        List.of("operation", "paths")),
+                                        stringSchema(1, 1_024), 1, 4, true),
+                                "replacements", arraySchema(
+                                        objectSchema(
+                                                Map.of(
+                                                        "path", stringSchema(
+                                                                1, 1_024),
+                                                        "text", stringSchema(
+                                                                0, 65_536)),
+                                                List.of("path", "text")),
+                                        1, 4, false)),
+                        List.of("operation", "paths", "replacements")),
                 Set.of(Capability.READ_PROJECT,
                         Capability.WRITE_WORKSPACE),
                 Set.of(RoutingRequirement.TOOL_USE,
                         RoutingRequirement.PROJECT_FILE_ACCESS,
-                        RoutingRequirement.MODIFICATION,
-                        RoutingRequirement.CONFIRMATION),
+                        RoutingRequirement.MODIFICATION),
                 ExecutionTarget.PROJECT);
     }
 
@@ -521,11 +531,10 @@ public final class V2ProductToolCatalog {
                 "Execute bounded code or commands in the isolated Sandbox.",
                 "sandbox.execute",
                 "Run selected Project paths in the existing isolated E2B "
-                        + "Sandbox. When a prior completed Plan Step created a "
-                        + "Candidate, run that resulting isolated Workspace "
-                        + "instead of recreating the Candidate. This proves "
-                        + "execution only and cannot create or update a Project "
-                        + "Candidate. Supported argv profiles include "
+                        + "Sandbox. Always run the latest isolated working-copy "
+                        + "content, including changes saved by earlier Steps. "
+                        + "This tool executes code but does not edit files. "
+                        + "Supported argv profiles include "
                         + "yanban-runner java/python/c/cpp, Maven test/verify, "
                         + "direct Java source launch, direct javac, and bounded "
                         + "git checks. Prefer yanban-runner java path.java for "
@@ -533,9 +542,14 @@ public final class V2ProductToolCatalog {
                         + "or more normalized .java source paths and no flags. "
                         + "Direct java accepts only -version or one normalized "
                         + ".java source path; it does not accept a compiled class "
-                        + "name. Java runner arguments may append "
-                        + "--dependency=group:artifact:version; dependencies are "
-                        + "prepared before offline run.",
+                        + "name. Before the first Java or Python run, inspect the "
+                        + "source imports and declare every non-standard dependency "
+                        + "in that first run. Java uses exact "
+                        + "--dependency=group:artifact:version arguments. Python "
+                        + "uses exact --dependency=package==version arguments. "
+                        + "The Broker downloads all declared direct and transitive "
+                        + "dependencies before it disables networking and runs the "
+                        + "source; do not first run without required dependencies.",
                 objectSchema(
                         Map.of(
                                 "paths", arraySchema(

@@ -244,12 +244,6 @@ public class AuthenticatedProjectEffectExecutionComposer {
                         userId, turnId, planId.value(),
                         intent.intent().stepId().value(),
                         intent.intent().kind());
-        if (naturalCandidate
-                && naturalCandidates.hasPreparedCandidate(
-                        planId.value())) {
-            return rejectDuplicateNaturalCandidate(
-                    active, intent, command);
-        }
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
             if (candidateAuthorities == null || candidateComposition == null) {
                 throw failed("candidate_composition");
@@ -403,61 +397,6 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 claimed.result(), claimed.replayed());
     }
 
-    private AuthenticatedProjectEffectExecutionOutcome
-            rejectDuplicateNaturalCandidate(
-                    RecoveredActiveStep active,
-                    PersistedEffectIntent intent,
-                    AuthenticatedProjectEffectExecutionCommand command) {
-        Instant started = Instant.now();
-        ProductEffectExecutionClaimResult claimed;
-        try {
-            claimed = claims.execute(
-                    new ProductEffectExecutionClaimRequest(
-                            active.recovery(), active.lease(), intent,
-                            command.recoveryAttempt().leaseToken(),
-                            active.lease().fencingToken(), started,
-                            () -> duplicateCandidateReceipt(
-                                    intent, started)));
-        } catch (RuntimeException exception) {
-            log.warn(
-                    "V2 duplicate Candidate recovery claim failed "
-                            + "planId={} stepId={} toolCallId={} "
-                            + "exceptionType={} causeType={} origin={}",
-                    active.planId().value(),
-                    active.recovery().activation().stepId().value(),
-                    intent.intent().toolCallId().value(),
-                    V2SafeFailureDiagnostics.exceptionType(exception),
-                    V2SafeFailureDiagnostics.causeType(exception),
-                    V2SafeFailureDiagnostics.origin(exception));
-            throw failed("candidate_duplicate_claim");
-        }
-        log.info(
-                "V2 duplicate Candidate request recorded as recoverable "
-                        + "failure planId={} stepId={} toolCallId={} replayed={}",
-                active.planId().value(),
-                active.recovery().activation().stepId().value(),
-                intent.intent().toolCallId().value(), claimed.replayed());
-        return new AuthenticatedProjectEffectExecutionOutcome(
-                claimed.result(), claimed.replayed());
-    }
-
-    private static ExecutionReceipt duplicateCandidateReceipt(
-            PersistedEffectIntent intent, Instant started) {
-        return new ExecutionReceipt(
-                new ReceiptId("project-receipt." + hash(
-                        intent.intent().toolCallId().value())),
-                intent.intent().toolCallId(), ReceiptStatus.FAILURE,
-                started, Instant.now(), java.util.Optional.of(1),
-                java.util.Optional.of("CANDIDATE_ALREADY_EXISTS"),
-                OutputCapture.empty(),
-                OutputCapture.inline(
-                        "A reviewable Candidate already exists for this "
-                                + "Plan. Use the existing Candidate for "
-                                + "validation or choose another tool.",
-                        false),
-                List.of(), java.util.Optional.empty(), List.of());
-    }
-
     private ExecutionReceipt receipt(
             RecoveredActiveStep active,
             PersistedEffectIntent intent, WorkspacePort workspace,
@@ -485,7 +424,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     ? candidateComposition.executeNatural(
                             intent, authority, workspace, ref, userId,
                             turnId, projectId, started,
-                            naturalCandidates, requestProvider)
+                            naturalCandidates)
                     : candidateComposition.execute(
                             intent, authority, workspace, ref, userId,
                             turnId, projectId, started);
@@ -629,12 +568,15 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private List<String> strictCandidatePaths(String canonicalArguments) {
         try {
             var root = json.readTree(canonicalArguments);
-            if (!root.isObject() || root.size() != 2
+            if (!root.isObject() || root.size() != 3
                     || !"compose".equals(
                             root.path("operation").asText())
                     || !root.path("paths").isArray()
                     || root.path("paths").size() < 1
-                    || root.path("paths").size() > 4) {
+                    || root.path("paths").size() > 4
+                    || !root.path("replacements").isArray()
+                    || root.path("replacements").size()
+                            != root.path("paths").size()) {
                 throw failed();
             }
             LinkedHashSet<String> paths = new LinkedHashSet<>();
@@ -646,6 +588,27 @@ public class AuthenticatedProjectEffectExecutionComposer {
                         || !paths.add(path)) {
                     throw failed();
                 }
+            }
+            LinkedHashSet<String> replacementPaths =
+                    new LinkedHashSet<>();
+            for (var item : root.path("replacements")) {
+                if (!item.isObject() || item.size() != 2
+                        || !item.path("path").isTextual()
+                        || !item.path("text").isTextual()
+                        || item.path("text").textValue()
+                                .getBytes(StandardCharsets.UTF_8).length
+                                > 64 * 1024) {
+                    throw failed();
+                }
+                String path = new ProjectPath(
+                        item.path("path").textValue()).value();
+                if (!path.equals(item.path("path").textValue())
+                        || !replacementPaths.add(path)) {
+                    throw failed();
+                }
+            }
+            if (!replacementPaths.equals(paths)) {
+                throw failed();
             }
             return List.copyOf(paths);
         } catch (java.io.IOException | IllegalArgumentException invalid) {

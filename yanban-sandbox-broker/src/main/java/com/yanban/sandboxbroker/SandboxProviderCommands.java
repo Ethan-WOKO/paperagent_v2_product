@@ -13,7 +13,7 @@ interface SandboxProviderCommands {
         return create(name, workspace, cpus, memoryBytes, timeoutMillis);
     }
     default boolean supportsDependencyNetwork() { return false; }
-    default List<String> createWithCoordinateDependencyNetwork(String name, Path workspace, int cpus,
+    default List<String> createWithDeclaredDependencyNetwork(String name, Path workspace, int cpus,
             long memoryBytes, long timeoutMillis) {
         return createWithDependencyNetwork(name, workspace, cpus, memoryBytes, timeoutMillis);
     }

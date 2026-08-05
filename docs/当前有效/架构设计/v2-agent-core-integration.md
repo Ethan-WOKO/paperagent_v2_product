@@ -75,8 +75,10 @@ dependency is a stop condition, not a reason to weaken the core.
 - TaskFrame freezes objective, objects, deliverables, constraints,
   ProjectVersion, and permission tier.
 - Plans may be revised, but completed authoritative facts are append-only.
-- Agents modify an isolated Workspace. The original ProjectVersion changes
-  only after the user accepts the diff.
+- Agents modify an isolated Workspace. For an explicit Project modification
+  request, the product may automatically publish a new current ProjectVersion
+  only after the final successful sandbox Receipt proves the exact Candidate
+  file contents. The prior immutable revision remains available for rollback.
 - Workspace diff, execution receipts, and event logs are result facts.
 
 ## Migration sequence
@@ -1216,8 +1218,14 @@ first produces a persistent Plan whose Steps contain goals, dependencies,
 expected outcomes, completion criteria, and execution bounds but no fixed
 tool assignment. The active Step receives the bounded product tool catalog at
 execution time and may choose the next suitable tool from current evidence.
-Replan replacement Steps use the same tool-free schema; the parser accepts an
-old capability field only as a compatibility hint.
+Replan replacement Steps use the same tool-free schema. Step-level tool or
+capability bindings are rejected; the capability catalog is task-level input
+for feasibility only.
+
+The main dialog has four model roles: intake planning, current-Step execution,
+current-Step reflection, and final user synthesis. Code generation is part of
+the Step-execution role. Project analysis and literature queue narration return
+their verified tool/runtime results without additional model calls.
 
 One persistent Step may contain several sequential ToolCall slots. The current
 slot keeps the same ToolCall ID across replay and pending recovery; CONTINUE
@@ -1226,6 +1234,12 @@ effect contributes a bounded final Receipt fact to the next model/reflection
 input. Failed model calls, invalid decisions, failed Receipts, and prior
 reflection diagnostics are retained in bounded form, so the next decision can
 change approach rather than repeat an invisible failure.
+
+Reflection performs a two-sided semantic comparison: it looks for the strongest
+evidence of completion and for a concrete remaining gap. It does not invent
+publication, confirmation, or repeated execution requirements. Invalid
+reflection JSON is retried once with the exact missing/unexpected fields and
+the previous invalid output, rather than a generic format-error message.
 
 After each successful effect, reflection returns strict `CONTINUE`, `REPLAN`,
 `COMPLETE`, or `FAIL` JSON. Eight cycles and three replans are hard limits.
@@ -1254,20 +1268,36 @@ the same persistent Plan and ToolCall. It does not bootstrap a new Plan or
 submit a duplicate sandbox execution. Owner-qualified GET remains read-only.
 
 Natural-language `project_candidate` uses strict
-`{"operation":"compose","paths":[...]}` arguments with one to four normalized,
-existing text paths. V62 durably binds that natural authority separately from
-the unchanged explicit Candidate delivery. Replacements are prepared only in
-the isolated Workspace. After the Plan has a durable successful terminal cut,
+`{"operation":"compose","paths":[...],"replacements":[{"path":"...","text":"complete file"}]}`
+arguments with one to four normalized, existing text paths. The Step executor
+produces the complete replacement text. The write effect performs no nested
+model call; it validates path equality, UTF-8 text, byte limits, actual change,
+and the exact Workspace diff before persistence. V66 allows append-only
+attempts for later corrections in the same Plan or Step and selects the latest
+valid prepared result; the existing execution bounds remain the retry limit.
+Replacements are prepared only in the isolated Workspace. After the Plan has a
+durable successful terminal cut,
 the existing Candidate artifact service rereads and attests the original
-ProjectVersion, publishes a numeric Candidate ID, and returns
-`WAITING_CONFIRMATION`. It never applies the Candidate or changes the original
+ProjectVersion and publishes a numeric Candidate ID. The product then requires
+the last `sandbox.execute` after Candidate composition to have succeeded with
+exit code zero, cover every Candidate path, and carry the fingerprint of the
+exact sandbox input files after applying the Candidate text. Only that exact
+binding may create a new immutable revision and move the Project current
+pointer. The previous revision remains available for rollback. A missing,
+failed, stale, or mismatched proof fails closed and does not change the current
 ProjectVersion.
+
+Final synthesis receives the complete latest replacement text plus the
+successful sandbox command and output that passed the same exact-input
+fingerprint check used for automatic application. It does not reconstruct final
+code from shortened Step summaries and does not request a redundant rerun or
+confirmation.
 
 Only durable terminal success plus an accepted COMPLETE reflection may append
 the one assistant message. Failure leaves the already-persisted intake facts
 intact and records a machine-readable adaptive outcome. Legacy Agent
-orchestration, automatic Candidate apply, unrelated product features, and V2
-core contracts remain unchanged.
+orchestration, unrelated product features, and V2 core contracts remain
+unchanged.
 
 ## V2 Project conversational UI boundary
 
@@ -1289,11 +1319,13 @@ The page renders one user question, the server-owned ordered Step projection
 with each Step's execution result (including `SUPERSEDED_BY_REPLAN`), and one
 final result. It removes the former nested workbench-card presentation and
 does not ask the user to select read-analysis or Candidate generation.
-Output paths are shown only as locations. A waiting-confirmation result states
-that the original Project is unchanged and hands the Candidate to the existing
-Changes, Sandbox-validation, and explicit-apply authority. The frontend does
-not plan, infer success from technical output, manufacture progress, or apply
-changes.
+Output paths are shown only as locations. After the backend creates a revision,
+the result shows that the modification was saved automatically, keeps the final
+summary visible, and links to Changes and revision rollback. It does not ask
+the user to choose a second environment, rerun the already-bound Candidate, or
+confirm the same modification again. Historical waiting-confirmation records
+remain readable. The frontend does not plan, infer success from technical
+output, manufacture progress, or apply changes itself.
 
 ## Read-only paper-quality audit tool boundary
 

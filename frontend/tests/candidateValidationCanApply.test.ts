@@ -18,7 +18,7 @@ function validation(overrides: Partial<CandidateValidationResponse> = {}): Candi
     status: 'SUCCEEDED',
     exitCode: 0,
     timedOut: false,
-    provider: 'docker-sbx',
+    provider: 'e2b',
     stdout: 'bounded output',
     stderr: '',
     outputTruncated: true,
@@ -39,7 +39,7 @@ function validation(overrides: Partial<CandidateValidationResponse> = {}): Candi
 describe('Candidate validation application eligibility', () => {
   it('allows a successful bounded receipt even when its output was truncated', () => {
     expect(candidateValidationCanApply(validation(), binding)).toBe(true);
-    expect(candidateValidationCanApply(validation({ provider: 'e2b' }), binding)).toBe(true);
+    expect(candidateValidationCanApply(validation({ provider: 'docker-sbx' }), binding)).toBe(false);
   });
 
   it('still rejects failed and timed-out validations', () => {

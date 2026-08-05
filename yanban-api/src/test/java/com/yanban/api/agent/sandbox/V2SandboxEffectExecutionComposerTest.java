@@ -90,6 +90,9 @@ class V2SandboxEffectExecutionComposerTest {
                 .isEqualTo(ReceiptStatus.SUCCESS);
         assertThat(result.result().receipt().toolCallId())
                 .isEqualTo(fixture.toolCallId);
+        assertThat(result.result().receipt().artifactReferences())
+                .contains(V2SandboxInputFingerprint.artifactReference(
+                        Map.of("src/Main.java", "class Main {}")));
         assertThat(dispatches).hasSize(2);
         assertThat(dispatches)
                 .extracting(SandboxDispatch::idempotencyKey)

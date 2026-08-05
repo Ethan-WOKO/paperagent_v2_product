@@ -23,7 +23,7 @@ class SandboxExecutionPropertiesTest {
 
             assertThat(properties.isEnabled()).isFalse();
             assertThat(properties.isRequiredAtStartup()).isFalse();
-            assertThat(properties.getProvider()).isEqualTo("docker-sbx");
+            assertThat(properties.getProvider()).isEqualTo("e2b");
             assertThat(properties.getBrokerUrl()).isEqualTo(URI.create("http://127.0.0.1:8091"));
             assertThat(properties.getMaxConcurrentRuns()).isEqualTo(1);
             assertThat(properties.getCpus()).isEqualTo(2);
@@ -41,7 +41,7 @@ class SandboxExecutionPropertiesTest {
                         "yanban.sandbox.enabled=true",
                         "yanban.sandbox.broker-token=0123456789abcdef0123456789abcdef",
                         "yanban.sandbox.required-at-startup=true",
-                        "yanban.sandbox.provider=docker-sbx",
+                        "yanban.sandbox.provider=e2b",
                         "yanban.sandbox.broker-url=https://sandbox-worker:8091",
                         "yanban.sandbox.max-concurrent-runs=1",
                         "yanban.sandbox.cpus=1",

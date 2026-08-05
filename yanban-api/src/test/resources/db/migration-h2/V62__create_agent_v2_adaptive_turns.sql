@@ -29,7 +29,7 @@ CREATE TABLE agent_v2_natural_candidate_authorities (
     user_id BIGINT NOT NULL,
     session_id BIGINT NOT NULL,
     turn_id BIGINT NOT NULL,
-    plan_id VARCHAR(128) NOT NULL UNIQUE,
+    plan_id VARCHAR(128) NOT NULL,
     step_id VARCHAR(128) NOT NULL,
     project_id BIGINT NOT NULL,
     project_version VARCHAR(255) NOT NULL,
@@ -44,8 +44,6 @@ CREATE TABLE agent_v2_natural_candidate_authorities (
     status VARCHAR(32) NOT NULL,
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL,
-    CONSTRAINT uk_agent_v2_natural_candidate_step
-        UNIQUE (plan_id, step_id),
     CONSTRAINT ck_agent_v2_natural_candidate_status CHECK
         (status IN ('BOUND','PREPARED','PUBLISHED'))
 );

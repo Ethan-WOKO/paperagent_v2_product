@@ -60,7 +60,7 @@ import org.springframework.web.server.ResponseStatusException;
         "spring.datasource.driver-class-name=org.h2.Driver", "spring.datasource.username=sa",
         "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=none", "spring.flyway.enabled=true",
         "spring.kafka.listener.auto-startup=false", "yanban.sandbox.enabled=true",
-        "yanban.sandbox.provider=docker-sbx",
+        "yanban.sandbox.provider=e2b",
         "yanban.sandbox.broker-token=01234567890123456789012345678901",
         "yanban.sandbox.dispatch-delay-ms=3600000",
         "yanban.jwt.secret=test_secret_123456789012345678901234567890"
@@ -123,7 +123,7 @@ class CandidateSandboxValidationIntegrationTest {
 
         CandidateValidationResponse completed = service.list(USER, PROJECT, ARTIFACT).get(0);
         assertThat(completed.status()).isEqualTo("SUCCEEDED");
-        assertThat(completed.provider()).isEqualTo("docker-sbx");
+        assertThat(completed.provider()).isEqualTo("e2b");
         assertThat(completed.stdout()).isEqualTo("tests passed");
         assertThat(completed.receiptDigest()).hasSize(64);
         gate.requireSuccessful(USER, PROJECT, ARTIFACT, completed.validationId(), VERSION, candidate, List.of(0));
@@ -431,7 +431,7 @@ class CandidateSandboxValidationIntegrationTest {
         String executionId = "broker-" + request.stepId();
         SandboxReceipt receipt = new SandboxReceipt(executionId, request.idempotencyKey(), request.requestDigest(),
                 request.userId(), request.projectId(), request.sessionId(), request.planId(), request.stepId(),
-                request.fence(), request.projectVersion(), request.policyDigest(), "docker-sbx", status, exitCode,
+                request.fence(), request.projectVersion(), request.policyDigest(), "e2b", status, exitCode,
                 stdout, stderr, outputTruncated, Map.of(), Instant.now().minusSeconds(1), Instant.now(), error);
         return new SandboxExecutionView(executionId, request.idempotencyKey(), request.requestDigest(),
                 request.fence(), status, receipt, error);

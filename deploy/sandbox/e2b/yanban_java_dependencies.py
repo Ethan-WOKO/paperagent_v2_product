@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Builds one Maven Central-only classpath from strict server-supplied coordinates."""
 
 from pathlib import Path
@@ -43,7 +43,7 @@ def main():
     if CLASSPATH.exists():
         CLASSPATH.unlink()
     command = [
-        "mvn", "-B", "-ntp", "-s", "/opt/yanban/maven-central-settings.xml",
+        "/usr/bin/mvn", "-B", "-ntp", "-s", "/opt/yanban/maven-central-settings.xml",
         "-f", str(pom_path),
         "org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath",
         "-Dmdep.outputFile=" + str(CLASSPATH),

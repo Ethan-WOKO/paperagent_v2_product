@@ -5,7 +5,8 @@ package com.yanban.api.agent.v2.adaptive.reflection;
  */
 public final class ReflectionParseException extends RuntimeException {
 
-    public ReflectionParseException() {
-        super("reflection response is invalid");
+    public ReflectionParseException(String detail) {
+        super(detail == null || detail.isBlank()
+                ? "reflection response is invalid" : detail);
     }
 }

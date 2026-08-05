@@ -131,6 +131,40 @@ class ProjectRevisionWorkflowServiceTest {
     }
 
     @Test
+    void exactSandboxProofAutomaticallyAppliesAllChangesWithoutManualGate() {
+        ProjectRevisionOperationResponse applied = service.applyAutomatically(
+                owner.getId(), project.getId(), 55L,
+                "agent-auto-apply-test", baseVersion,
+                "c".repeat(64), "sandbox-receipt-final");
+
+        assertThat(applied.outcome())
+                .isEqualTo(ProjectRevisionOperation.Outcome.SUCCEEDED);
+        assertThat(applied.acceptedChangeIndexes())
+                .containsExactly(0, 1, 2);
+        assertThat(applied.rejectedChangeIndexes()).isEmpty();
+        Project current = projects.findById(project.getId()).orElseThrow();
+        assertThat(objects.get(current.getRootPath()))
+                .containsEntry("a.txt", bytes("A2"))
+                .containsEntry("new.txt", bytes("NEW"))
+                .doesNotContainKey("delete.txt");
+        verify(validationGate, never()).requireSuccessful(
+                anyLong(), anyLong(), anyLong(), anyString(),
+                anyString(), any(), any());
+        verify(validationGate, never()).markApplied(
+                anyString(), anyLong(), anyLong());
+
+        ProjectRevisionOperationResponse replay = service.applyAutomatically(
+                owner.getId(), project.getId(), 55L,
+                "agent-auto-apply-test", baseVersion,
+                "c".repeat(64), "sandbox-receipt-final");
+        assertThat(replay.operationId()).isEqualTo(applied.operationId());
+        assertThat(revisions
+                .findByProjectIdAndUserIdOrderByCreatedAtDescIdDesc(
+                        project.getId(), owner.getId()))
+                .hasSize(2);
+    }
+
+    @Test
     void applyRejectsHistoricalValidatedBinaryCandidateBeforeGateOrStorage() {
         CandidateArtifactResponse response = candidate(
                 project.getId(), baseVersion);

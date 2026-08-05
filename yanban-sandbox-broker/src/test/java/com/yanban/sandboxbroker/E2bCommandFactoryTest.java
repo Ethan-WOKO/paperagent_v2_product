@@ -25,9 +25,10 @@ class E2bCommandFactoryTest {
                 .containsExactly("/opt/e2b/bin/python", "/app/e2b_provider.py", "create", "--name", "yb-1",
                         "--workspace", workspace.toString(), "--template", "yanban-research-v1", "--cpus", "2",
                         "--memory-bytes", "536870912", "--timeout-millis", "900000", "--dependency-network");
-        assertThat(factory.createWithCoordinateDependencyNetwork(
+        assertThat(factory.createWithDeclaredDependencyNetwork(
                 "yb-1", workspace, 2, 536870912L, 900000L))
-                .endsWith("--dependency-network", "--coordinates-only");
+                .endsWith("--dependency-network",
+                        "--dependency-declarations-only");
         assertThat(factory.verifyDependencyNetwork("yb-1"))
                 .containsExactly("/opt/e2b/bin/python", "/app/e2b_provider.py", "policy", "--name", "yb-1",
                         "--expect", "dependency-network");

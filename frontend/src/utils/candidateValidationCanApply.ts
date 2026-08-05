@@ -10,7 +10,7 @@ export function candidateValidationCanApply(
   validation: CandidateValidationResponse,
   binding: CandidateValidationBinding,
 ) {
-  const trustedProvider = validation.provider === 'docker-sbx' || validation.provider === 'e2b';
+  const trustedProvider = validation.provider === 'e2b';
   const validExecutionProof = validation.profile === 'DOCUMENT_INTEGRITY'
     ? validation.exitCode === null
       && validation.provider === null

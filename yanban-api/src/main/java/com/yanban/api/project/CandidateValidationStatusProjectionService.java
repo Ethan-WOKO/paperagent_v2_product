@@ -23,10 +23,25 @@ public class CandidateValidationStatusProjectionService {
         if (userId == null || sessionId == null || artifactId == null) {
             return Optional.empty();
         }
-        return validations
+        Optional<Status> validation = validations
                 .findFirstByUserIdAndSessionIdAndArtifactIdOrderByCreatedAtDescIdDesc(
                         userId, sessionId, artifactId)
-                .map(value -> status(userId, artifactId, value));
+                        .map(value -> status(userId, artifactId, value));
+        if (validation.isPresent()
+                && "APPLIED".equals(
+                        validation.orElseThrow().decisionStatus())) {
+            return validation;
+        }
+        Optional<Status> automatic = operations
+                .findFirstByUserIdAndCandidateArtifactIdAndOperationTypeAndOutcomeOrderByIdDesc(
+                        userId, artifactId,
+                        ProjectRevisionOperation.Type.APPLICATION,
+                        ProjectRevisionOperation.Outcome.SUCCEEDED)
+                .map(operation -> new Status(
+                        "SUCCEEDED", "APPLIED", operation.getId(),
+                        operation.getResultRevisionId(),
+                        operation.getResultVersion()));
+        return automatic.isPresent() ? automatic : validation;
     }
 
     private Status status(

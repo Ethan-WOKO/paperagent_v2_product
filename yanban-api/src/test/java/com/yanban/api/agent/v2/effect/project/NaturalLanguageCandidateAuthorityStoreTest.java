@@ -21,12 +21,15 @@ class NaturalLanguageCandidateAuthorityStoreTest {
                         + ";MODE=MySQL;DB_CLOSE_DELAY=-1",
                 "sa", "");
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-        String sql = Files.readString(Path.of(
-                "src/test/resources/db/migration-h2/"
-                        + "V62__create_agent_v2_adaptive_turns.sql"));
-        for (String statement : sql.split(";")) {
-            if (!statement.isBlank()) {
-                jdbc.execute(statement);
+        for (String migration : List.of(
+                "V62__create_agent_v2_adaptive_turns.sql",
+                "V69__allow_multiple_natural_candidate_steps.sql")) {
+            String sql = Files.readString(Path.of(
+                    "src/test/resources/db/migration-h2/" + migration));
+            for (String statement : sql.split(";")) {
+                if (!statement.isBlank()) {
+                    jdbc.execute(statement);
+                }
             }
         }
         var store = new NaturalLanguageCandidateAuthorityStore(
@@ -49,10 +52,12 @@ class NaturalLanguageCandidateAuthorityStoreTest {
         assertFalse(store.hasPreparedCandidate("plan"));
 
         store.bindPrepared(
-                "plan", Map.of("README.md", "new text"),
+                "plan", "step", first.authoritySha256(),
+                Map.of("README.md", "new text"),
                 "d".repeat(64));
         store.bindPrepared(
-                "plan", Map.of("README.md", "new text"),
+                "plan", "step", first.authoritySha256(),
+                Map.of("README.md", "new text"),
                 "d".repeat(64));
         assertEquals(Map.of("README.md", "new text"),
                 store.requirePrepared("plan").replacements());
@@ -67,5 +72,22 @@ class NaturalLanguageCandidateAuthorityStoreTest {
         assertThrows(IllegalStateException.class, () ->
                 store.bindCandidate(
                         "plan", 78L, "e".repeat(64), "d".repeat(64)));
+
+        String repairedArguments =
+                "{\"operation\":\"compose\",\"paths\":[\"README.md\"],"
+                        + "\"replacements\":[{\"path\":\"README.md\","
+                        + "\"text\":\"fixed text\"}]}";
+        var repaired = store.bind(
+                7L, 9L, 42L, "plan", "repair-step", 8L,
+                "version", "improve", repairedArguments,
+                List.of("README.md"));
+        store.bindPrepared("plan", "repair-step",
+                repaired.authoritySha256(),
+                Map.of("README.md", "fixed text"), "f".repeat(64));
+
+        assertEquals("repair-step",
+                store.requirePrepared("plan").stepId());
+        assertEquals("fixed text", store.requirePrepared("plan")
+                .replacements().get("README.md"));
     }
 }

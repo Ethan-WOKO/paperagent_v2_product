@@ -32,11 +32,11 @@ final class E2bCommandFactory implements SandboxProviderCommands {
         command.add("--dependency-network");
         return List.copyOf(command);
     }
-    @Override public List<String> createWithCoordinateDependencyNetwork(String name, Path workspace,
+    @Override public List<String> createWithDeclaredDependencyNetwork(String name, Path workspace,
             int cpus, long memoryBytes, long timeoutMillis) {
         ArrayList<String> command = new ArrayList<>(
                 createWithDependencyNetwork(name, workspace, cpus, memoryBytes, timeoutMillis));
-        command.add("--coordinates-only");
+        command.add("--dependency-declarations-only");
         return List.copyOf(command);
     }
     @Override public List<String> verifyDependencyNetwork(String name) {

@@ -78,6 +78,36 @@ class CandidateValidationStatusProjectionServiceTest {
     }
 
     @Test
+    void projectsAutomaticApplicationWithoutManualValidation() {
+        CandidateSandboxValidationRepository repository =
+                mock(CandidateSandboxValidationRepository.class);
+        ProjectRevisionOperationRepository operations =
+                mock(ProjectRevisionOperationRepository.class);
+        when(repository
+                .findFirstByUserIdAndSessionIdAndArtifactIdOrderByCreatedAtDescIdDesc(
+                        7L, 9L, 42L))
+                .thenReturn(Optional.empty());
+        ProjectRevisionOperation operation =
+                mock(ProjectRevisionOperation.class);
+        when(operation.getId()).thenReturn(102L);
+        when(operation.getResultRevisionId()).thenReturn(30L);
+        when(operation.getResultVersion()).thenReturn("f".repeat(64));
+        when(operations
+                .findFirstByUserIdAndCandidateArtifactIdAndOperationTypeAndOutcomeOrderByIdDesc(
+                        7L, 42L,
+                        ProjectRevisionOperation.Type.APPLICATION,
+                        ProjectRevisionOperation.Outcome.SUCCEEDED))
+                .thenReturn(Optional.of(operation));
+
+        var result = new CandidateValidationStatusProjectionService(
+                repository, operations).latest(7L, 9L, 42L);
+
+        assertThat(result).contains(new CandidateValidationStatusProjectionService
+                .Status("SUCCEEDED", "APPLIED", 102L, 30L,
+                        "f".repeat(64)));
+    }
+
+    @Test
     void anotherOwnerReceivesNoConfirmationState() {
         CandidateSandboxValidationRepository repository =
                 mock(CandidateSandboxValidationRepository.class);

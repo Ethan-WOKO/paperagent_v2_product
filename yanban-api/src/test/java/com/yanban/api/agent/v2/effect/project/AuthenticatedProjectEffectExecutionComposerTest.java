@@ -646,38 +646,6 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     @Test
-    void duplicateNaturalCandidateBecomesRecoverableFailureReceipt() {
-        String arguments = "{\"operation\":\"compose\"}";
-        var fixture = candidateFixture(
-                new com.yanban.api.agent.v2.compatibility.project
-                        .ProjectCandidateEffectAuthority(
-                                ProjectCandidateCompositionEffect.KIND,
-                                arguments, sha256(arguments),
-                                7L, 8L, 9L, 42L, "version",
-                                "improve", List.of("paper.md")));
-        when(fixture.naturalAuthorities.authorizes(
-                7L, 42L, fixture.command.planId().value(),
-                "project-candidate-compose",
-                ProjectCandidateCompositionEffect.KIND)).thenReturn(true);
-        when(fixture.naturalCandidates.hasPreparedCandidate(
-                fixture.command.planId().value()))
-                .thenReturn(true);
-
-        var outcome = fixture.composer.execute(
-                7L, 42L, fixture.command);
-
-        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.FAILURE,
-                outcome.result().receipt().status());
-        assertEquals("CANDIDATE_ALREADY_EXISTS",
-                outcome.result().receipt().resultCode().orElseThrow());
-        assertTrue(outcome.result().receipt().standardError()
-                .inlineText().orElseThrow()
-                .contains("Candidate already exists"));
-        verifyNoInteractions(fixture.workspaces, fixture.composition,
-                fixture.candidateAuthorities);
-    }
-
-    @Test
     void mismatchedOrCrossBoundCandidateAuthorityFailsBeforeMutation() {
         String arguments = "{\"operation\":\"compose\"}";
         var crossUser = candidateFixture(

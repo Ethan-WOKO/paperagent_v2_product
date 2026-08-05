@@ -30,6 +30,8 @@ import io.paperagent.v2.providers.ProposedToolCall;
 import io.paperagent.v2.providers.ProviderFailure;
 import io.paperagent.v2.providers.ProviderFailureCode;
 import io.paperagent.v2.providers.UsageMetadata;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -40,6 +42,8 @@ import java.util.Optional;
 
 /** Bridge from the stable V2 model port to one owner-resolved product call. */
 public final class ProductChatModelProviderAdapter implements ModelProvider {
+    private static final Logger log = LoggerFactory.getLogger(
+            ProductChatModelProviderAdapter.class);
     private static final String FAILURE_MESSAGE = "product model turn failed";
 
     private final ChatModelProvider delegate;
@@ -77,8 +81,18 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
             ProductModelEndpoint endpoint =
                     endpoints.resolve(request.planId().orElseThrow());
             mapped = mapRequest(request, endpoint);
+            logModelInput(request, mapped.request());
             response = delegate.chat(mapped.request());
+            logModelOutput(request, response);
         } catch (RuntimeException exception) {
+            log.warn(
+                    "V2 model debug call failed requestId={} correlationId={} "
+                            + "exceptionType={} causeType={}",
+                    request.requestId().value(),
+                    request.correlationId().value(),
+                    exception.getClass().getName(),
+                    exception.getCause() == null ? "none"
+                            : exception.getCause().getClass().getName());
             return failure(ProviderFailureCode.UNAVAILABLE);
         }
         try {
@@ -121,6 +135,34 @@ public final class ProductChatModelProviderAdapter implements ModelProvider {
                 request.correlationId().value());
         return new MappedRequest(
                 mapped, Map.copyOf(toolIdsByProviderName));
+    }
+
+    private static void logModelInput(
+            ModelRequest source, ChatRequest request) {
+        log.info(
+                "V2 model debug input requestId={} correlationId={} "
+                        + "taskFrameId={} planId={} revisionId={} stepId={} "
+                        + "provider={} model={} temperature={} maxTokens={} "
+                        + "responseFormat={} thinking={} messages={} tools={}",
+                source.requestId().value(), source.correlationId().value(),
+                source.taskFrameId().map(value -> value.value())
+                        .orElse("none"),
+                source.planId().map(value -> value.value()).orElse("none"),
+                source.planRevisionId().map(value -> value.value())
+                        .orElse("none"),
+                source.stepId().map(value -> value.value()).orElse("none"),
+                request.provider(), request.model(), request.temperature(),
+                request.maxTokens(), request.responseFormat(),
+                request.thinking(), request.messages(), request.tools());
+    }
+
+    private static void logModelOutput(
+            ModelRequest request, ChatResponse response) {
+        log.info(
+                "V2 model debug output requestId={} correlationId={} "
+                        + "response={}",
+                request.requestId().value(),
+                request.correlationId().value(), response);
     }
 
     private ChatMessage message(ModelMessage message) {

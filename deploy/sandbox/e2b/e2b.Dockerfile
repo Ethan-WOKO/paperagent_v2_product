@@ -3,7 +3,7 @@ FROM e2bdev/base:latest
 USER root
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       ca-certificates curl gcc g++ git maven python3 \
+       ca-certificates curl gcc g++ git maven python3 python3-pip \
     && curl -fsSL \
        'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20%2B8/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20_8.tar.gz' \
        -o /tmp/temurin.tar.gz \
@@ -24,6 +24,7 @@ RUN update-ca-certificates -f \
     && mvn -version | grep -q 'Java version: 17'
 COPY yanban_runner.py /usr/local/lib/yanban/yanban_runner.py
 COPY yanban_java_dependencies.py /usr/local/lib/yanban/yanban_java_dependencies.py
+COPY yanban_python_dependencies.py /usr/local/lib/yanban/yanban_python_dependencies.py
 RUN printf '%s\n' \
       '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">' \
       '<mirrors><mirror><id>central-only</id><name>Maven Central only</name>' \
@@ -33,7 +34,9 @@ RUN printf '%s\n' \
     && chmod 0444 /opt/yanban/maven-central-settings.xml
 RUN chmod 0555 /usr/local/lib/yanban/yanban_runner.py \
     && chmod 0555 /usr/local/lib/yanban/yanban_java_dependencies.py \
+    && chmod 0555 /usr/local/lib/yanban/yanban_python_dependencies.py \
     && ln -s /usr/local/lib/yanban/yanban_runner.py /usr/local/bin/yanban-runner \
-    && ln -s /usr/local/lib/yanban/yanban_java_dependencies.py /usr/local/bin/yanban-java-dependencies
+    && ln -s /usr/local/lib/yanban/yanban_java_dependencies.py /usr/local/bin/yanban-java-dependencies \
+    && ln -s /usr/local/lib/yanban/yanban_python_dependencies.py /usr/local/bin/yanban-python-dependencies
 USER user
 WORKDIR /home/user/project

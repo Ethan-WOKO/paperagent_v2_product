@@ -24,14 +24,12 @@ class BrokerPropertiesTest {
     @Test void e2bRequiresKeyPinnedTemplateAndAbsoluteHelperExecutables() {
         BrokerProperties value = new BrokerProperties();
         value.setEnabled(true);
-        value.setProvider(BrokerProperties.Provider.E2B);
         value.setE2bApiKey("server-side-key-that-is-long-enough");
         value.setE2bTemplate("yanban-research-v1");
         Path root = Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath();
         value.setE2bPythonExecutable(root.resolve("python3").toString());
         value.setE2bHelper(root.resolve("e2b_provider.py").toString());
 
-        assertThat(value.isExecutableSafe()).isTrue();
         assertThat(value.isE2bConfigurationSafe()).isTrue();
         value.setE2bTemplate("unsafe template; rm -rf");
         assertThat(value.isE2bConfigurationSafe()).isFalse();

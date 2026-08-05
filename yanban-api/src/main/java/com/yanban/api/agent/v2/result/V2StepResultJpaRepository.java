@@ -22,4 +22,8 @@ interface V2StepResultJpaRepository
     Optional<V2StepResultEntity>
             findFirstByActivationEventIdAndStatusOrderByUpdatedAtDesc(
                     String activationEventId, String status);
+
+    Optional<V2StepResultEntity>
+            findFirstByActivationEventIdOrderByUpdatedAtDesc(
+                    String activationEventId);
 }

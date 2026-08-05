@@ -147,8 +147,6 @@ services:
       YANBAN_MINIO_ENDPOINT: http://minio:9000
       YANBAN_MINIO_SECURE: "false"
       YANBAN_SANDBOX_BROKER_URL: ${YANBAN_SANDBOX_BROKER_URL:-http://sandbox-broker:8091}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       mysql:
         condition: service_healthy
@@ -171,7 +169,6 @@ services:
     restart: unless-stopped
     environment:
       YANBAN_SANDBOX_BROKER_ENABLED: "true"
-      YANBAN_SANDBOX_BROKER_PROVIDER: E2B
       YANBAN_SANDBOX_BROKER_ADDRESS: 0.0.0.0
       YANBAN_SANDBOX_BROKER_MODE: PRODUCTION
       YANBAN_SANDBOX_BROKER_USER: yanban-sandbox

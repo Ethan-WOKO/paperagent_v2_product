@@ -1,5 +1,0 @@
-package com.yanban.sandboxbroker;
-import static org.assertj.core.api.Assertions.assertThat; import java.nio.file.Path; import java.util.List; import org.junit.jupiter.api.Test;
-class SbxCommandFactoryTest {
- @Test void constructsOfficialStructuredCommandsWithoutShell(){var f=new SbxCommandFactory("C:/Program Files/Docker/sbx.exe");assertThat(f.create("run-1",Path.of("C:/broker/work/1"),2,4294967296L,900000L)).containsExactly("C:/Program Files/Docker/sbx.exe","create","shell","C:\\broker\\work\\1","--name","run-1","--cpus","2","--memory","4096m","--quiet");assertThat(f.denyAllNetwork("run-1")).containsExactly("C:/Program Files/Docker/sbx.exe","policy","deny","network","--sandbox","run-1","**");assertThat(f.verifyNetworkPolicy("run-1")).containsExactly("C:/Program Files/Docker/sbx.exe","policy","ls","run-1","--type","network","--decision","deny","--source","local","--json");assertThat(f.exec("run-1",List.of("mvn","-o","test"))).containsExactly("C:/Program Files/Docker/sbx.exe","exec","run-1","mvn","-o","test");assertThat(f.remove("run-1")).containsExactly("C:/Program Files/Docker/sbx.exe","rm","--force","run-1");}
-}

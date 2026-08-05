@@ -281,7 +281,10 @@ class V2ProjectAnalysisServiceH2VerticalTest {
                         null, 10, "request-vertical")));
 
         assertEquals("SUCCEEDED", first.status());
-        assertEquals("Evidence from paper.md.", first.finalText());
+        assertEquals("Project analysis results for: Analyze evidence\n"
+                        + "- {\"path\":\"paper.md\","
+                        + "\"content\":\"evidence\"}",
+                first.finalText());
         assertEquals(first.assistantMessageId(),
                 replay.assistantMessageId());
         assertEquals(8, concurrentReads.size());

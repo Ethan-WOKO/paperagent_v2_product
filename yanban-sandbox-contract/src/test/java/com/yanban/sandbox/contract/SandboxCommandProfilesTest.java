@@ -83,4 +83,34 @@ class SandboxCommandProfilesTest {
         assertThrows(IllegalArgumentException.class, () ->
                 SandboxCommandProfiles.requireAllowed(tooMany));
     }
+
+    @Test
+    void pythonRequirementsArePinnedBoundedAndProduceOnlyInternalPreparation() {
+        var argv = List.of("yanban-runner", "python", "study.py",
+                "--dependency=numpy==2.2.6",
+                "--dependency=requests==2.32.3");
+        assertDoesNotThrow(() -> SandboxCommandProfiles.requireAllowed(argv));
+        assertTrue(SandboxCommandProfiles.usesPythonDependencies(argv));
+        assertTrue(SandboxCommandProfiles.usesDeclaredDependencies(argv));
+        assertEquals(List.of(List.of("yanban-python-dependencies",
+                        "numpy==2.2.6", "requests==2.32.3")),
+                SandboxCommandProfiles.dependencyPreparation(argv)
+                        .orElseThrow());
+        for (String bad : List.of(
+                "--dependency=requests",
+                "--dependency=requests>=2",
+                "--dependency=requests==latest",
+                "--dependency=requests[security]==2.32.3",
+                "--dependency=requests==2.32.3;python_version>'3'",
+                "--dependency=https://evil.invalid/package.whl")) {
+            assertThrows(IllegalArgumentException.class, () ->
+                    SandboxCommandProfiles.requireAllowed(List.of(
+                            "yanban-runner", "python", "study.py", bad)));
+        }
+        assertThrows(IllegalArgumentException.class, () ->
+                SandboxCommandProfiles.requireAllowed(List.of(
+                        "yanban-runner", "python", "study.py",
+                        "--dependency=my_package==1.0",
+                        "--dependency=my-package==1.1")));
+    }
 }

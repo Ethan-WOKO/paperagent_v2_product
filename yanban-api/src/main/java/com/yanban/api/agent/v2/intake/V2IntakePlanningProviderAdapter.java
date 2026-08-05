@@ -62,7 +62,7 @@ final class V2IntakePlanningProviderAdapter implements ModelProvider {
             List<ChatMessage> messages = request.messages().stream()
                     .map(V2IntakePlanningProviderAdapter::message)
                     .toList();
-            ChatResponse response = delegate.chat(new ChatRequest(
+            ChatRequest providerRequest = new ChatRequest(
                     endpoint.providerKey(),
                     endpoint.modelName(),
                     messages,
@@ -73,7 +73,27 @@ final class V2IntakePlanningProviderAdapter implements ModelProvider {
                     endpoint.apiUrl(),
                     ChatRequest.ResponseFormat.jsonObject(),
                     ChatRequest.Thinking.disabled(),
-                    request.correlationId().value()));
+                    request.correlationId().value());
+            log.info(
+                    "V2 model debug input phase=intake requestId={} "
+                            + "correlationId={} provider={} model={} "
+                            + "temperature={} maxTokens={} "
+                            + "responseFormat={} thinking={} messages={} "
+                            + "tools={}",
+                    request.requestId().value(),
+                    request.correlationId().value(),
+                    providerRequest.provider(), providerRequest.model(),
+                    providerRequest.temperature(),
+                    providerRequest.maxTokens(),
+                    providerRequest.responseFormat(),
+                    providerRequest.thinking(), providerRequest.messages(),
+                    providerRequest.tools());
+            ChatResponse response = delegate.chat(providerRequest);
+            log.info(
+                    "V2 model debug output phase=intake requestId={} "
+                            + "correlationId={} response={}",
+                    request.requestId().value(),
+                    request.correlationId().value(), response);
             if (response == null || response.message() == null
                     || response.toolCalls() != null
                     && !response.toolCalls().isEmpty()) {

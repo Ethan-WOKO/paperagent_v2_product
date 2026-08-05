@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.adaptive.reflection;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -77,18 +78,12 @@ class StrictReflectionDecisionParserTest {
     }
 
     @Test
-    void acceptsLegacyCapabilityAsCompatibilityHint() {
-        ReflectionOutcome outcome = parser.parse(replanWithStep(
-                "\"id\":\"one\"",
-                "\"dependencies\":[]",
-                "\"capability\":\"sandbox_execute\""));
-
-        assertEquals(
-                "sandbox_execute",
-                outcome.replacementSteps().get(0).publicCapability());
-        assertEquals(
-                "sandbox.execute",
-                outcome.replacementSteps().get(0).internalToolId().value());
+    void rejectsStepLevelCapabilityBinding() {
+        assertThrows(ReflectionParseException.class, () -> parser.parse(
+                replanWithStep(
+                        "\"id\":\"one\"",
+                        "\"dependencies\":[]",
+                        "\"capability\":\"sandbox_execute\"")));
     }
 
     @Test
@@ -112,6 +107,20 @@ class StrictReflectionDecisionParserTest {
                 {"decision":"CONTINUE","reason":"x","finalText":null,
                  "replacementSteps":[{}]}
                 """);
+    }
+
+    @Test
+    void reportsExactMissingAndUnexpectedFieldsForFormatRepair() {
+        ReflectionParseException failure = assertThrows(
+                ReflectionParseException.class, () -> parser.parse("""
+                {"decision":"CONTINUE","reason":"more work",
+                 "finalText":null,"extra":true}
+                """));
+
+        assertTrue(failure.getMessage().contains(
+                "missing=[replacementSteps]"));
+        assertTrue(failure.getMessage().contains(
+                "unexpected=[extra]"));
     }
 
     @Test

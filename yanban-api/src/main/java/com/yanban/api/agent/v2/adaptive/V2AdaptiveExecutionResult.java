@@ -11,7 +11,9 @@ public record V2AdaptiveExecutionResult(
         int replans,
         int repairs,
         Long candidateArtifactId,
-        List<String> outputPaths) {
+        List<String> outputPaths,
+        Long appliedRevisionId,
+        String appliedProjectVersion) {
     public V2AdaptiveExecutionResult {
         steps = List.copyOf(steps);
         outputPaths = List.copyOf(outputPaths);
@@ -22,7 +24,8 @@ public record V2AdaptiveExecutionResult(
             String finalText, String errorCode,
             int reflections, int replans, int repairs) {
         this(status, steps, finalText, errorCode,
-                reflections, replans, repairs, null, List.of());
+                reflections, replans, repairs, null, List.of(),
+                null, null);
     }
 
     public V2AdaptiveExecutionResult(
@@ -32,6 +35,16 @@ public record V2AdaptiveExecutionResult(
             Long candidateArtifactId) {
         this(status, steps, finalText, errorCode,
                 reflections, replans, repairs,
-                candidateArtifactId, List.of());
+                candidateArtifactId, List.of(), null, null);
+    }
+
+    public V2AdaptiveExecutionResult(
+            String status, List<V2AdaptiveTurnResponse.Step> steps,
+            String finalText, String errorCode,
+            int reflections, int replans, int repairs,
+            Long candidateArtifactId, List<String> outputPaths) {
+        this(status, steps, finalText, errorCode,
+                reflections, replans, repairs,
+                candidateArtifactId, outputPaths, null, null);
     }
 }

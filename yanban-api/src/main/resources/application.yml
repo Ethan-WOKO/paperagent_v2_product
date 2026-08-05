@@ -37,7 +37,7 @@ yanban:
   sandbox:
     enabled: ${YANBAN_SANDBOX_ENABLED:false}
     required-at-startup: ${YANBAN_SANDBOX_REQUIRED_AT_STARTUP:false}
-    provider: ${YANBAN_SANDBOX_PROVIDER:docker-sbx}
+    provider: ${YANBAN_SANDBOX_PROVIDER:e2b}
     broker-url: ${YANBAN_SANDBOX_BROKER_URL:http://127.0.0.1:8091}
     broker-token: ${YANBAN_SANDBOX_BROKER_TOKEN:}
     max-concurrent-runs: ${YANBAN_SANDBOX_MAX_CONCURRENT_RUNS:1}

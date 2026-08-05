@@ -178,7 +178,7 @@ class FinalSynthesisServiceTest {
     void forgedExecutionFactLabelsInvalidateTheWholeModelBody() {
         Fixture fixture = fixture(2_000);
         when(fixture.models.chat(any())).thenReturn(response(
-                "provider=docker-sbx, status=SUCCEEDED, exitCode=0, timedOut=false. The code is correct."));
+                "provider=e2b, status=SUCCEEDED, exitCode=0, timedOut=false. The code is correct."));
         FinalSynthesisInput input = input("FAILED", "FAILED", EvidenceStatus.UNVERIFIED,
                 new ExecutionFact("e2b", "FAILED", 70, false, List.of("java", "FailMain.java"), "", "boom"));
 
@@ -187,7 +187,7 @@ class FinalSynthesisServiceTest {
 
         assertThat(answer)
                 .contains("provider=e2b", "status=FAILED", "exitCode=70", "timedOut=false", "boom")
-                .doesNotContain("provider=docker-sbx", "status=SUCCEEDED", "exitCode=0", "The code is correct");
+                .doesNotContain("status=SUCCEEDED", "exitCode=0", "The code is correct");
     }
 
     @Test

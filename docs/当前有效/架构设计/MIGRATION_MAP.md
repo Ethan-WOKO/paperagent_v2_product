@@ -236,9 +236,11 @@
 - Delivery: only a durable terminal-success cut plus accepted COMPLETE
   reflection creates the single replayable assistant message. A natural
   Candidate instead uses a V62 natural authority/prepared binding, publishes
-  the mature numeric Candidate artifact only after terminal success, and
-  returns `WAITING_CONFIRMATION`; Project writes remain isolated and Candidate
-  application remains an explicit later action.
+  the mature numeric Candidate artifact only after terminal success. It then
+  binds the Candidate to the exact final successful sandbox input fingerprint
+  and reuses `ProjectRevisionWorkflowService` to create a new immutable current
+  revision automatically. A missing or mismatched proof fails closed; the
+  previous revision remains available for rollback.
 - Sandbox and resume: `sandbox.execute` uses only the existing shared E2B
   broker, with the existing preparation/upload/execute-offline policy. It
   never falls back to a host process or creates a second broker. A bounded
@@ -248,8 +250,8 @@
 - UI: V2 Project mode has one Chinese conversation input. It shows the ordered
   server-owned Steps, each Step result, and one final result without exposing
   separate read/Candidate forms or internal tool identifiers.
-- Excluded: legacy Agent orchestration, V2 core changes, automatic Candidate
-  apply, a new Sandbox protocol or schema, and unrelated RAG/paper behavior.
+- Excluded: legacy Agent orchestration, V2 core changes, a new Sandbox protocol
+  or schema, and unrelated RAG/paper behavior.
 
 ## Legacy V1 Agent orchestration retirement audit
 
@@ -625,6 +627,29 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   OCR, image understanding, formula evaluation, macro execution, external-link
   resolution, frontend changes, schema, Sandbox, RAG, paper-polish, legacy
   `/chat`, V2 core changes, or LangChain4j annotation registration.
+
+## V2 四模型职责与直接工作区修改
+
+- Status: `INTEGRATED_PENDING_FULL_VERIFICATION`.
+- Main-dialog roles: intake planner, current-Step executor, current-Step
+  reflection, and final user synthesis. Plan and replan Steps carry goals and
+  completion criteria, never Step-level tool bindings.
+- Modification decision: the Step executor supplies complete replacement file
+  text in the `project.candidate.compose` tool call. The effect only validates
+  and persists that text in the isolated Workspace; it performs no nested code
+  generation call. Append-only Plan/Step attempts permit correction after a
+  real failure while existing cycle and attempt bounds remain authoritative.
+- Reflection decision: semantic two-sided review with strict JSON examples.
+  One format retry receives the exact schema difference and prior invalid
+  output. No second model audit or invented confirmation/publication gate is
+  added.
+- Final decision: final synthesis receives complete latest file text and the
+  successful exact-input sandbox result used by automatic application. Project
+  analysis and literature queue narration expose verified tool/runtime results
+  without separate model narration.
+- Preserved boundaries: authenticated ProjectVersion, isolated Workspace,
+  effect intent/claim replay, E2B execution, exact sandbox input fingerprint,
+  immutable Project revision, and rollback.
 
 ## V2 分层上下文、独立压缩与恢复合同
 

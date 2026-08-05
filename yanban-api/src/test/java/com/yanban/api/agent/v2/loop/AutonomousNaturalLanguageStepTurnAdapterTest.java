@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.yanban.api.agent.v2.persistence.V2EffectHistorySource;
+import com.yanban.api.agent.v2.context.V2ExecutionContextSource;
 import io.paperagent.v2.contracts.EffectIntent;
 import io.paperagent.v2.contracts.ExecutionReceipt;
 import io.paperagent.v2.contracts.ObjectValue;
@@ -77,22 +78,16 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
                         .map(value -> value.id().value()).toList());
         String system = requests.getAllValues().get(0)
                 .messages().get(0).content();
-        assertTrue(system.contains("modification must"));
+        assertTrue(system.contains("only model that writes the new"));
+        assertTrue(system.contains("complete resulting file text"));
+        assertTrue(system.contains("Before the first Java or Python"));
+        assertTrue(system.contains("same command may be"));
+        assertTrue(system.contains("byte-identical content"));
+        assertTrue(system.contains("Do not hide them merely"));
         assertTrue(system.contains(
-                "sandbox.execute can run supplied code"));
-        assertTrue(system.contains(
-                "project.read only reads Project content"));
-        assertTrue(system.contains(
-                "requires\ncompiling, running, or testing code"));
-        assertTrue(system.contains(
-                "successful sandbox.execute Receipt"));
-        assertTrue(system.contains(
-                "successful project.candidate.compose Receipt"));
-        assertTrue(system.contains(
-                "Act only on the current Plan Step"));
-        assertTrue(system.contains("Completed Plan Steps"));
-        assertTrue(system.contains(
-                "do not call\nproject.candidate.compose again"));
+                "Work only on the current persisted Plan"));
+        assertTrue(system.contains("accepted results from completed Steps"));
+        assertTrue(system.contains("Do not\nrepeat work merely"));
     }
 
     @Test
@@ -126,6 +121,55 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
         assertTrue(prompt.contains("Completed Plan Steps"));
         assertTrue(prompt.contains(
                 "candidate-step: create the reviewable Candidate"));
+    }
+
+    @Test
+    void acceptedResultsCandidateAndPriorReflectionReachNextStepModel() {
+        Fixture fixture = fixture();
+        V2ExecutionContextSource contexts = mock(
+                V2ExecutionContextSource.class);
+        String completeReplacement = "public class Sort {"
+                + " // COMPLETE_REPLACEMENT\n}";
+        when(contexts.inspect(fixture.planId(), fixture.stepId()))
+                .thenReturn(new V2ExecutionContextSource.Projection(
+                        List.of("acceptedStepResult[stepId=step-3,"
+                                + "result=compiled and ran]"),
+                        List.of("toolExecution[stepId=step-3,"
+                                + "toolKind=sandbox.execute,exitCode=0,"
+                                + "stdout=ok]"),
+                        Optional.of("preparedCandidate[diffFingerprint=abc]"
+                                + "\n<replacement path=\"src/Sort.java\">\n"
+                                + completeReplacement
+                                + "\n</replacement>"),
+                        Optional.empty()));
+        when(fixture.history().inspect(
+                fixture.planId(), fixture.stepId()))
+                .thenReturn(List.of());
+        ModelResponse result = mock(ModelResponse.class);
+        when(result.proposedToolCalls()).thenReturn(List.of());
+        when(result.assistantText()).thenReturn(Optional.of(
+                "reuse the accepted sandbox result"));
+        when(fixture.provider().complete(any())).thenReturn(result);
+        var adapter = new AutonomousNaturalLanguageStepTurnAdapter(
+                fixture.provider(), fixture.history(), contexts,
+                tools(), false,
+                List.of("previousReflectionDecision=CONTINUE; "
+                        + "reason=use the successful result"));
+
+        assertInstanceOf(
+                StepResultDecision.class,
+                adapter.decide(fixture.input()));
+
+        ArgumentCaptor<ModelRequest> request =
+                ArgumentCaptor.forClass(ModelRequest.class);
+        verify(fixture.provider()).complete(request.capture());
+        String prompt = request.getValue().messages().get(1).content();
+        assertTrue(prompt.contains("acceptedStepResult[stepId=step-3"));
+        assertTrue(prompt.contains("toolKind=sandbox.execute"));
+        assertTrue(prompt.contains("exitCode=0"));
+        assertTrue(prompt.contains(completeReplacement));
+        assertTrue(prompt.contains(
+                "previousReflectionDecision=CONTINUE"));
     }
 
     @Test
@@ -210,7 +254,7 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
     }
 
     @Test
-    void identicalFailedCallIsReportedAsNoProgress() {
+    void identicalFailedCallRemainsAvailableForBoundedRetry() {
         Fixture fixture = fixture();
         V2EffectHistorySource.Entry failure = completed(
                 fixture, "failed-call", "project.search",
@@ -223,11 +267,14 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
         when(fixture.provider().complete(any()))
                 .thenReturn(response);
 
-        assertInstanceOf(
-                NoEffectDecision.class,
-                fixture.adapter().decide(fixture.input()));
+        EffectIntent retry = assertInstanceOf(
+                EffectIntentDecision.class,
+                fixture.adapter().decide(fixture.input())).intent();
+
+        assertEquals("project.search", retry.kind());
+        assertEquals(arguments(), retry.arguments());
         assertTrue(fixture.adapter().diagnostics().stream()
-                .anyMatch(value -> value.startsWith(
+                .noneMatch(value -> value.startsWith(
                         "NO_PROGRESS_REPEAT")));
     }
 
@@ -369,23 +416,26 @@ class AutonomousNaturalLanguageStepTurnAdapterTest {
         when(input.plan()).thenReturn(plan);
         when(input.activeStep()).thenReturn(step);
         var adapter = new AutonomousNaturalLanguageStepTurnAdapter(
-                provider, history,
-                List.of(
-                        NaturalLanguageStepKernelFactory.descriptor(
-                                new ToolId("literature.search")),
-                        NaturalLanguageStepKernelFactory.descriptor(
-                                new ToolId("project.read")),
-                        NaturalLanguageStepKernelFactory.descriptor(
-                                new ToolId("project.search")),
-                        NaturalLanguageStepKernelFactory.descriptor(
-                                new ToolId("project.bibtex.audit")),
-                        NaturalLanguageStepKernelFactory.descriptor(
-                                new ToolId("project.candidate.compose")),
-                        NaturalLanguageStepKernelFactory.descriptor(
-                                new ToolId("sandbox.execute"))),
+                provider, history, tools(),
                 false);
         return new Fixture(
                 provider, history, input, adapter, planId, stepId);
+    }
+
+    private static List<io.paperagent.v2.contracts.ToolDescriptor> tools() {
+        return List.of(
+                NaturalLanguageStepKernelFactory.descriptor(
+                        new ToolId("literature.search")),
+                NaturalLanguageStepKernelFactory.descriptor(
+                        new ToolId("project.read")),
+                NaturalLanguageStepKernelFactory.descriptor(
+                        new ToolId("project.search")),
+                NaturalLanguageStepKernelFactory.descriptor(
+                        new ToolId("project.bibtex.audit")),
+                NaturalLanguageStepKernelFactory.descriptor(
+                        new ToolId("project.candidate.compose")),
+                NaturalLanguageStepKernelFactory.descriptor(
+                        new ToolId("sandbox.execute")));
     }
 
     private static V2EffectHistorySource.Entry completed(

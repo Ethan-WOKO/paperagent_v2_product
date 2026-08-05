@@ -50,16 +50,16 @@ class SandboxWorker {
             renew(lease);
             leases.transition(lease,"MATERIALIZING",checkpoint("MATERIALIZED",entity.sandboxName()));
             throwIfCancelled(lease);
-            // Interrupting sbx create can leave the provider holding the workspace before the sandbox is listable.
+            // Provider creation can claim the workspace before the remote sandbox becomes listable.
             // Let the bounded create finish, then honor cancellation before policy or user code can run.
             Optional<List<List<String>>> dependencyCommands=SandboxCommandProfiles.dependencyPreparation(request.argv());
             boolean dependencyNetwork=dependencyCommands.isPresent()&&commands.supportsDependencyNetwork();
-            boolean coordinateDependencies=dependencyNetwork
-                    &&SandboxCommandProfiles.usesJavaDependencies(request.argv());
+            boolean declaredDependencies=dependencyNetwork
+                    &&SandboxCommandProfiles.usesDeclaredDependencies(request.argv());
             providerPhase="CREATE";
             List<String> createCommand=dependencyNetwork
-                    ?(coordinateDependencies
-                        ?commands.createWithCoordinateDependencyNetwork(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis())
+                    ?(declaredDependencies
+                        ?commands.createWithDeclaredDependencyNetwork(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis())
                         :commands.createWithDependencyNetwork(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis()))
                     :commands.create(entity.sandboxName(),root,request.cpus(),request.memoryBytes(),request.timeoutMillis());
             requireOk(execute(lease,createCommand,CREATE_TIMEOUT_MILLIS,65536,false),"create");

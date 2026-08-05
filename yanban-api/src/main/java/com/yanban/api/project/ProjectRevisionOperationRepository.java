@@ -8,4 +8,9 @@ public interface ProjectRevisionOperationRepository extends JpaRepository<Projec
                                                                                  String idempotencyKey);
     Optional<ProjectRevisionOperation> findByIdAndUserIdAndProjectId(
             Long id, Long userId, Long projectId);
+    Optional<ProjectRevisionOperation>
+            findFirstByUserIdAndCandidateArtifactIdAndOperationTypeAndOutcomeOrderByIdDesc(
+                    Long userId, Long candidateArtifactId,
+                    ProjectRevisionOperation.Type operationType,
+                    ProjectRevisionOperation.Outcome outcome);
 }

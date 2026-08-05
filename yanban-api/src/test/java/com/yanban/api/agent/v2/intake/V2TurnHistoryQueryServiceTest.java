@@ -151,7 +151,13 @@ class V2TurnHistoryQueryServiceTest {
                         new V2AdaptiveTurnResponse(
                                 "WAITING_CONFIRMATION",
                                 "PERSISTENT_PLAN_EXECUTE", "plan-1",
-                                "version-1", List.of(), "done", 42L,
+                                "version-1", List.of(
+                                        new V2AdaptiveTurnResponse.Step(
+                                                1, "fix", "RUNNING",
+                                                "saved"),
+                                        new V2AdaptiveTurnResponse.Step(
+                                                2, "verify", "PENDING",
+                                                null)), "done", 42L,
                                 List.of("src/Main.java"), null),
                         Instant.EPOCH, Instant.EPOCH)));
         when(artifacts.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(
@@ -167,7 +173,10 @@ class V2TurnHistoryQueryServiceTest {
 
         V2TurnHistoryResponse result = service.list(7L, 9L).get(0);
 
-        assertThat(result.status()).isEqualTo("WAITING_CONFIRMATION");
+        assertThat(result.status()).isEqualTo("SUCCEEDED");
+        assertThat(result.steps()).extracting(
+                        V2AdaptiveTurnResponse.Step::status)
+                .containsExactly("SUCCEEDED", "SUCCEEDED");
         assertThat(result.confirmationValidation())
                 .isEqualTo(new V2TurnHistoryResponse.ConfirmationValidation(
                         "SUCCEEDED", "APPLIED", 101L, 29L,

@@ -36,12 +36,14 @@ describe('ProjectPreviewPage V2-only 中文任务界面', () => {
     expect(source).toContain('结果：{{ step.detail }}');
     expect(source).toContain('生成内容位置');
     expect(source).toContain('原项目尚未修改');
-    expect(source).toContain('已确认应用，已创建项目版本');
+    expect(source).toContain('已自动保存，已创建项目版本');
     expect(source).toContain("v2TaskApplied(task)");
     expect(source).toContain("candidateConfirmationLabel(task.confirmationValidation)");
-    expect(source).toContain('打开修改与验证');
-    expect(source).toContain('Agent 自动验证');
-    expect(source).toContain('创建新版本前的确认验证');
+    expect(source).toContain('查看修改');
+    expect(source).toContain('最终沙箱运行');
+    expect(source).toContain('项目版本状态');
+    expect(source).toContain('v-if="!selectedCandidateApplied" class="project-candidate-sandbox__controls"');
+    expect(source).toContain('v-if="task.status === \'SUCCEEDED\' && task.finalText"');
   });
 
   it('服务端任务列表负责刷新恢复，localStorage 只保存进行中的同一请求', () => {
@@ -52,5 +54,7 @@ describe('ProjectPreviewPage V2-only 中文任务界面', () => {
     expect(source).toContain('onUnmounted(() =>');
     expect(source).toContain('stopV2NaturalLanguagePolling();');
     expect(source).toContain('resume: async () =>');
+    expect(source).toContain('refreshProjectAfterV2AutoApply(clientRequestId, epoch)');
+    expect(source).toContain('refreshProjectAfterV2AutoApply(stored.clientRequestId, epoch)');
   });
 });

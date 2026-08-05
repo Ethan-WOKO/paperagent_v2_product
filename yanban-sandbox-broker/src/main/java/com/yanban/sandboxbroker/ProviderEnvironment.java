@@ -32,21 +32,10 @@ final class ProviderEnvironment {
     Map<String, String> values() {
         Map<String, String> values = new LinkedHashMap<>();
         copyWindowsRuntime(values, "SystemRoot");
-        if (properties.getProvider() == BrokerProperties.Provider.E2B) {
-            values.put("E2B_API_KEY", properties.getE2bApiKey());
-            values.put("PYTHONUNBUFFERED", "1");
-            return Map.copyOf(values);
-        }
-        values.put("HOME", properties.getProviderHome());
-        if (windows) {
-            values.put("USERPROFILE", properties.getProviderHome());
-            values.put("LOCALAPPDATA", properties.getProviderDataHome());
-            values.put("APPDATA", properties.getProviderConfigHome());
-        }
-        values.put("XDG_CONFIG_HOME", properties.getProviderConfigHome());
-        values.put("XDG_DATA_HOME", properties.getProviderDataHome());
-        values.put("XDG_STATE_HOME", properties.getProviderStateHome());
-        values.put("SBX_NO_TELEMETRY", "1");
+        values.put("E2B_API_KEY", properties.getE2bApiKey());
+        values.put("PYTHONUNBUFFERED", "1");
+        values.put("PYTHONUTF8", "1");
+        values.put("PYTHONIOENCODING", "utf-8");
         return Map.copyOf(values);
     }
 

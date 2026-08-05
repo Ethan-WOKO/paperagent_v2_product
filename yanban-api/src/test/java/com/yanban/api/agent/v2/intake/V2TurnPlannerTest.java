@@ -59,15 +59,11 @@ class V2TurnPlannerTest {
     }
 
     @Test
-    void acceptsLegacyCapabilityAsCompatibilityHintOnly() {
-        var planned = planner(answer("unused")).parse(persistent(
-                "\"capability\":\"project_read\"",
-                "\"dependencies\":[]"));
-
-        assertEquals("project_read",
-                planned.capabilities().get(0).publicAlias());
-        assertEquals("project.read",
-                planned.capabilities().get(0).internalToolId().value());
+    void rejectsStepLevelCapabilityBinding() {
+        assertThrows(V2TurnPlanningException.class,
+                () -> planner(answer("unused")).parse(persistent(
+                        "\"capability\":\"project_read\"",
+                        "\"dependencies\":[]")));
     }
 
     @Test
@@ -229,7 +225,7 @@ class V2TurnPlannerTest {
                         "trace"));
 
         assertTrue(failure.failureCode().matches(
-                "PLANNER_CAPABILITY_DOTTED_[0-9a-f]{12}"));
+                "PLANNER_STEP_FIELDS_[0-9a-f]{12}"));
     }
 
     @Test
@@ -257,7 +253,7 @@ class V2TurnPlannerTest {
                         "Remove merge sort from Sort.java and compile it")));
         assertTrue(request.getValue().messages().stream()
                 .anyMatch(message -> message.content().contains(
-                        "Do not assign a tool or capability to a step")));
+                        "never bind a Plan Step to a named tool")));
     }
 
     @Test
@@ -288,6 +284,65 @@ class V2TurnPlannerTest {
                 repair.messages().get(repair.messages().size() - 2).content());
         assertEquals("user",
                 repair.messages().get(repair.messages().size() - 1).role());
+    }
+
+    @Test
+    void formatRepairNamesEveryMissingAndUnexpectedField() {
+        String invalid = answerText()
+                .replace("\"targets\":[\"current project\"],", "")
+                .replace("\"constraints\":[\"read only\"]",
+                        "\"notes\":\"unexpected\"");
+        ChatModelProvider provider = mock(ChatModelProvider.class);
+        when(provider.chat(any())).thenReturn(
+                new ChatResponse(
+                        ChatMessage.assistant(invalid), "stop", null),
+                new ChatResponse(
+                        ChatMessage.assistant(answerText()), "stop", null));
+
+        var planned = planner(provider).plan(
+                context("read the project"), endpoint(),
+                null, true, "trace");
+
+        assertEquals(Route.PERSISTENT_PLAN_EXECUTE, planned.route());
+        ArgumentCaptor<ChatRequest> requests =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        org.mockito.Mockito.verify(provider,
+                org.mockito.Mockito.times(2)).chat(requests.capture());
+        java.util.List<ChatMessage> repairMessages =
+                requests.getAllValues().get(1).messages();
+        String repairPrompt = repairMessages.get(
+                repairMessages.size() - 1).content();
+        assertTrue(repairPrompt.contains(
+                "taskFrame field mismatch; missing fields: constraints, targets; "
+                        + "unexpected fields: notes"));
+    }
+
+    @Test
+    void formatRepairNamesTheFieldWithTheWrongType() {
+        String invalid = answerText().replace(
+                "\"maxAttempts\":1", "\"maxAttempts\":\"one\"");
+        ChatModelProvider provider = mock(ChatModelProvider.class);
+        when(provider.chat(any())).thenReturn(
+                new ChatResponse(
+                        ChatMessage.assistant(invalid), "stop", null),
+                new ChatResponse(
+                        ChatMessage.assistant(answerText()), "stop", null));
+
+        var planned = planner(provider).plan(
+                context("read the project"), endpoint(),
+                null, true, "trace");
+
+        assertEquals(Route.PERSISTENT_PLAN_EXECUTE, planned.route());
+        ArgumentCaptor<ChatRequest> requests =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        org.mockito.Mockito.verify(provider,
+                org.mockito.Mockito.times(2)).chat(requests.capture());
+        java.util.List<ChatMessage> repairMessages =
+                requests.getAllValues().get(1).messages();
+        String repairPrompt = repairMessages.get(
+                repairMessages.size() - 1).content();
+        assertTrue(repairPrompt.contains(
+                "maxAttempts must be an integer; actual type: string"));
     }
 
     @Test

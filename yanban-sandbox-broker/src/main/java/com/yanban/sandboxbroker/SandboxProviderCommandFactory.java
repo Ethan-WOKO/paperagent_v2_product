@@ -9,10 +9,7 @@ final class SandboxProviderCommandFactory {
     SandboxProviderCommandFactory(BrokerProperties properties) { this.properties = properties; }
 
     SandboxProviderCommands commands() {
-        if (properties.getProvider() == BrokerProperties.Provider.E2B) {
-            return new E2bCommandFactory(properties.getE2bPythonExecutable(), properties.getE2bHelper(),
-                    properties.getE2bTemplate());
-        }
-        return new SbxCommandFactory(properties.getSbxExecutable());
+        return new E2bCommandFactory(properties.getE2bPythonExecutable(), properties.getE2bHelper(),
+                properties.getE2bTemplate());
     }
 }

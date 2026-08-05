@@ -234,7 +234,9 @@ class ProjectCandidateCompositionEffectTest {
                 "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
         var store = mock(NaturalLanguageCandidateAuthorityStore.class);
         String authorityJson =
-                "{\"operation\":\"compose\",\"paths\":[\"README.md\"]}";
+                "{\"operation\":\"compose\",\"paths\":[\"README.md\"],"
+                        + "\"replacements\":[{\"path\":\"README.md\","
+                        + "\"text\":\"new text\"}]}";
         var authority = new ProjectCandidateEffectAuthority(
                 ProjectCandidateCompositionEffect.KIND,
                 authorityJson, sha(authorityJson),
@@ -248,10 +250,12 @@ class ProjectCandidateCompositionEffectTest {
         doAnswer(call -> {
             prepared.set(
                     new NaturalLanguageCandidateAuthorityStore.Prepared(
-                            call.getArgument(1), call.getArgument(2)));
+                            call.getArgument(1), call.getArgument(3),
+                            call.getArgument(4)));
             return null;
         }).when(store).bindPrepared(
-                eq("plan"), anyMap(), anyString());
+                eq("plan"), eq("project-candidate-compose"),
+                anyString(), anyMap(), anyString());
         when(store.requirePrepared("plan"))
                 .thenAnswer(ignored -> prepared.get());
         var intent = new PersistedEffectIntent(new EffectIntent(
@@ -261,14 +265,19 @@ class ProjectCandidateCompositionEffectTest {
                 new ObjectValue(Map.of(
                         "operation", new TextValue("compose"),
                         "paths", new ListValue(List.of(
-                                new TextValue("README.md")))))),
+                                new TextValue("README.md"))),
+                        "replacements", new ListValue(List.of(
+                                new ObjectValue(Map.of(
+                                        "path", new TextValue("README.md"),
+                                        "text", new TextValue("new text")))))))),
                 "owner", 1L, new EventId("activation"));
 
         fixture.effect.executeNatural(
                 intent, fixture.modelAuthority,
                 fixture.workspace, fixture.ref,
                 7L, 42L, 8L, Instant.EPOCH,
-                store, fixture.provider);
+                store);
+        verifyNoInteractions(fixture.provider);
         assertEquals("new text", new String(
                 fixture.files.get("README.md"), StandardCharsets.UTF_8));
 

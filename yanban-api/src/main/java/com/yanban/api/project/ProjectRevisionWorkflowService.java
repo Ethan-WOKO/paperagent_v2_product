@@ -74,31 +74,63 @@ public class ProjectRevisionWorkflowService {
         ProjectRevisionOperation existing = findReplay(userId, projectId, key, requestHash);
         if (existing != null) return replay(existing);
 
-        requireManagedProject(userId, projectId);
         CandidateArtifactResponse candidate = candidates.getCurrent(userId, artifactId);
-        requireAcceptedIndexes(candidate.changes().size(), accepted);
-        for (Integer index : accepted) {
-            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(
-                    candidate.changes().get(index)
-                            .relativePath().value())) {
-                throw new ResponseStatusException(
-                        HttpStatus.UNPROCESSABLE_ENTITY,
-                        "Binary Project assets are read-only and cannot be applied as Candidate changes");
-            }
-        }
-        List<Integer> rejected = complement(candidate.changes().size(), accepted);
-        if (candidate.projectId() != projectId || !candidate.projectVersion().value().equals(expectedVersion)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Candidate does not match the current Project version");
-        }
-
-        if (candidate.governanceStatus() != CandidateChangeSet.GovernanceStatus.VALIDATED
-                || !candidate.validation().valid()
-                || candidate.applicationStatus() != CandidateChangeSet.ApplicationStatus.NOT_APPLIED) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Candidate is stale or invalid and cannot be applied");
-        }
+        requireApplicableCandidate(userId, projectId, expectedVersion, candidate,
+                accepted);
         validationGate.requireSuccessful(userId, projectId, artifactId, validationId,
                 expectedVersion, candidate, accepted);
+
+        return applyValidatedCandidate(userId, projectId, artifactId, key,
+                requestHash, expectedVersion, candidate, accepted,
+                validationId);
+    }
+
+    /** Server-only path for a Candidate bound to an exact successful V2 sandbox Receipt. */
+    public ProjectRevisionOperationResponse applyAutomatically(
+            Long userId, Long projectId, Long artifactId,
+            String idempotencyKey, String expectedVersion,
+            String expectedCandidateFingerprint, String receiptId) {
+        requireIdentity(userId, projectId);
+        String key = requireIdempotencyKey(idempotencyKey);
+        if (expectedVersion == null
+                || !expectedVersion.matches("[0-9a-f]{64}")
+                || expectedCandidateFingerprint == null
+                || !expectedCandidateFingerprint.matches("[0-9a-f]{64}")
+                || receiptId == null || receiptId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Automatic Candidate application proof is invalid");
+        }
+        CandidateArtifactResponse candidate = candidates.getCurrent(
+                userId, artifactId);
+        List<Integer> accepted = java.util.stream.IntStream.range(
+                        0, candidate.changes().size())
+                .boxed().toList();
+        String requestHash = requestHash(
+                "AUTOMATIC_APPLICATION:" + receiptId, artifactId,
+                expectedVersion, accepted);
+        ProjectRevisionOperation existing = findReplay(
+                userId, projectId, key, requestHash);
+        if (existing != null) {
+            return replay(existing);
+        }
+        requireApplicableCandidate(userId, projectId, expectedVersion, candidate,
+                accepted);
+        if (!expectedCandidateFingerprint.equals(
+                candidate.fingerprint().sha256())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Automatic Candidate fingerprint changed");
+        }
+        return applyValidatedCandidate(userId, projectId, artifactId, key,
+                requestHash, expectedVersion, candidate, accepted, null);
+    }
+
+    private ProjectRevisionOperationResponse applyValidatedCandidate(
+            Long userId, Long projectId, Long artifactId, String key,
+            String requestHash, String expectedVersion,
+            CandidateArtifactResponse candidate, List<Integer> accepted,
+            String validationId) {
+        List<Integer> rejected = complement(
+                candidate.changes().size(), accepted);
 
         ReservedOperation reserved = reserve(userId, projectId, key, requestHash,
                 ProjectRevisionOperation.Type.APPLICATION, expectedVersion, artifactId,
@@ -113,6 +145,37 @@ public class ProjectRevisionWorkflowService {
         } catch (RuntimeException ex) {
             fail(reserved.operationId(), errorCode(ex));
             throw ex;
+        }
+    }
+
+    private void requireApplicableCandidate(
+            Long userId, Long projectId, String expectedVersion,
+            CandidateArtifactResponse candidate, List<Integer> accepted) {
+        requireManagedProject(userId, projectId);
+        requireAcceptedIndexes(candidate.changes().size(), accepted);
+        for (Integer index : accepted) {
+            if (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(
+                    candidate.changes().get(index)
+                            .relativePath().value())) {
+                throw new ResponseStatusException(
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Binary Project assets are read-only and cannot be applied as Candidate changes");
+            }
+        }
+        if (candidate.projectId() != projectId
+                || !candidate.projectVersion().value()
+                        .equals(expectedVersion)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Candidate does not match the current Project version");
+        }
+        if (candidate.governanceStatus()
+                        != CandidateChangeSet.GovernanceStatus.VALIDATED
+                || !candidate.validation().valid()
+                || candidate.applicationStatus()
+                        != CandidateChangeSet.ApplicationStatus.NOT_APPLIED) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Candidate is stale or invalid and cannot be applied");
         }
     }
 
@@ -240,7 +303,10 @@ public class ProjectRevisionWorkflowService {
             projects.saveAndFlush(project);
             operation.succeed(revision.getId(), revision.getProjectVersion());
             operations.saveAndFlush(operation);
-            validationGate.markApplied(validationId, operation.getId(), revision.getId());
+            if (validationId != null) {
+                validationGate.markApplied(
+                        validationId, operation.getId(), revision.getId());
+            }
             return response(operation);
         });
     }

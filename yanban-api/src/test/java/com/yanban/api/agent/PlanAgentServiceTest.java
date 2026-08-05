@@ -2399,7 +2399,7 @@ class PlanAgentServiceTest {
         AgentPlanStep sandbox = newStep("sandbox", 1, List.of(), "[\"sandbox_execute\"]");
         ReflectionTestUtils.setField(sandbox, "type", "SANDBOX_EXECUTE");
         sandbox.markCompleted("Sandbox receipt " + "a".repeat(64)
-                + "; provider=docker-sbx; status=SUCCEEDED; exitCode=0; outputTrust=UNTRUSTED_DISPLAY_ONLY\n"
+                + "; provider=e2b; status=SUCCEEDED; exitCode=0; outputTrust=UNTRUSTED_DISPLAY_ONLY\n"
                 + "stdout:\nok\nstderr:\n");
         AgentPlanStep presentation = newStep("presentation", 2, List.of("sandbox"), "[]");
         AgentPlanEvent analysis = new AgentPlanEvent(PLAN_ID, sandbox.getId(), "sandbox_output_analysis",
@@ -2413,7 +2413,7 @@ class PlanAgentServiceTest {
         assertThat(completed).isTrue();
         assertThat(presentation.getStatus()).isEqualTo(AgentPlanStepStatus.COMPLETED.name());
         assertThat(presentation.getResult())
-                .contains("provider=docker-sbx", "status=SUCCEEDED", "stdout:\nok", "stderr:")
+                .contains("provider=e2b", "status=SUCCEEDED", "stdout:\nok", "stderr:")
                 .contains(com.yanban.api.agent.sandbox.SandboxOutputAnalysisService.DISCLAIMER)
                 .contains("The program printed ok.");
         verify(agentRuntimeService, org.mockito.Mockito.never()).run(any());

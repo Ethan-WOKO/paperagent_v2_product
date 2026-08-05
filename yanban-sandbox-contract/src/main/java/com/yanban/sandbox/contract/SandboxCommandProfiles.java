@@ -25,6 +25,13 @@ public final class SandboxCommandProfiles {
                     preparation.add(value.substring("--dependency=".length())));
             return Optional.of(List.of(List.copyOf(preparation)));
         }
+        if (pythonDependencies(argv)) {
+            List<String> preparation = new java.util.ArrayList<>();
+            preparation.add("yanban-python-dependencies");
+            argv.subList(3, argv.size()).forEach(value ->
+                    preparation.add(value.substring("--dependency=".length())));
+            return Optional.of(List.of(List.copyOf(preparation)));
+        }
         if (!"mvn".equals(argv.get(0))) return Optional.empty();
         return Optional.of(List.of(
                 List.of(
@@ -60,7 +67,7 @@ public final class SandboxCommandProfiles {
         if(argv.size()<3)return false;
         return switch(argv.get(1)){
             case "java" -> source(argv.get(2)) && javaDependencyArguments(argv);
-            case "python" -> argv.size()==3&&source(argv.get(2),".py");
+            case "python" -> source(argv.get(2),".py") && pythonDependencyArguments(argv);
             case "c" -> argv.size()==3&&source(argv.get(2),".c");
             case "cpp" -> argv.size()==3&&(source(argv.get(2),".cc")||source(argv.get(2),".cpp")||source(argv.get(2),".cxx"));
             default -> false;
@@ -69,6 +76,14 @@ public final class SandboxCommandProfiles {
     public static boolean usesJavaDependencies(List<String> argv) {
         requireAllowed(argv);
         return javaDependencies(argv);
+    }
+    public static boolean usesPythonDependencies(List<String> argv) {
+        requireAllowed(argv);
+        return pythonDependencies(argv);
+    }
+    public static boolean usesDeclaredDependencies(List<String> argv) {
+        requireAllowed(argv);
+        return javaDependencies(argv) || pythonDependencies(argv);
     }
     private static boolean javaDependencies(List<String> argv) {
         return argv != null && argv.size() > 3 && "yanban-runner".equals(argv.get(0))
@@ -84,6 +99,24 @@ public final class SandboxCommandProfiles {
             coordinates.add(value.substring("--dependency=".length()));
         }
         try{return !JavaMavenCoordinates.normalize(coordinates).isEmpty();}
+        catch(IllegalArgumentException invalid){return false;}
+    }
+    private static boolean pythonDependencies(List<String> argv) {
+        return argv != null && argv.size() > 3
+                && "yanban-runner".equals(argv.get(0))
+                && "python".equals(argv.get(1))
+                && pythonDependencyArguments(argv);
+    }
+    private static boolean pythonDependencyArguments(List<String> argv) {
+        if (argv.size()==3) return true;
+        if (argv.size()>3+PythonPackageRequirements.MAX_REQUIREMENTS) return false;
+        List<String> requirements=new java.util.ArrayList<>();
+        for(int i=3;i<argv.size();i++){
+            String value=argv.get(i);
+            if(!value.startsWith("--dependency="))return false;
+            requirements.add(value.substring("--dependency=".length()));
+        }
+        try{return !PythonPackageRequirements.normalize(requirements).isEmpty();}
         catch(IllegalArgumentException invalid){return false;}
     }
     private static boolean source(String value){try{Path path=Path.of(value);return !path.isAbsolute()&&path.normalize().equals(path)&&value.endsWith(".java")&&!value.contains("\\")&&!value.startsWith(".");}catch(RuntimeException ex){return false;}}

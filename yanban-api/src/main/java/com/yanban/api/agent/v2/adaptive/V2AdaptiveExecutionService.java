@@ -8,6 +8,7 @@ import com.yanban.api.agent.v2.workspace.*;
 import com.yanban.api.agent.v2.effect.project.NaturalLanguageCandidateAuthorityStore;
 import com.yanban.api.agent.v2.effect.project.ProjectCandidateCompositionEffect;
 import com.yanban.api.agent.v2.result.V2StepResultService;
+import com.yanban.api.project.AgentCandidateAutoApplicationService;
 import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.providers.ModelProvider;
@@ -35,6 +36,7 @@ public class V2AdaptiveExecutionService {
     private final NaturalLanguageCandidateAuthorityStore candidateAuthorities;
     private final V2StepResultService stepResults;
     private final V2AdaptiveFinalSynthesisService finalSynthesis;
+    private final AgentCandidateAutoApplicationService autoApplications;
 
     public V2AdaptiveExecutionService(
             V2AdaptiveExecutionStore store,
@@ -43,7 +45,7 @@ public class V2AdaptiveExecutionService {
             V2AdaptiveRuntimeCycleFactory cycles,
             ObjectMapper json) {
         this(store, starts, contexts, cycles, json,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     public V2AdaptiveExecutionService(
@@ -55,7 +57,7 @@ public class V2AdaptiveExecutionService {
             ProjectCandidateCompositionEffect candidates,
             NaturalLanguageCandidateAuthorityStore candidateAuthorities) {
         this(store, starts, contexts, cycles, json,
-                candidates, candidateAuthorities, null, null);
+                candidates, candidateAuthorities, null, null, null);
     }
 
     public V2AdaptiveExecutionService(
@@ -68,7 +70,21 @@ public class V2AdaptiveExecutionService {
             NaturalLanguageCandidateAuthorityStore candidateAuthorities,
             V2StepResultService stepResults) {
         this(store, starts, contexts, cycles, json, candidates,
-                candidateAuthorities, stepResults, null);
+                candidateAuthorities, stepResults, null, null);
+    }
+
+    public V2AdaptiveExecutionService(
+            V2AdaptiveExecutionStore store,
+            AuthenticatedAgentTurnExecutionStartRecoveryComposer starts,
+            AuthenticatedAgentTurnPlanExecutionContextComposer contexts,
+            V2AdaptiveRuntimeCycleFactory cycles,
+            ObjectMapper json,
+            ProjectCandidateCompositionEffect candidates,
+            NaturalLanguageCandidateAuthorityStore candidateAuthorities,
+            V2StepResultService stepResults,
+            V2AdaptiveFinalSynthesisService finalSynthesis) {
+        this(store, starts, contexts, cycles, json, candidates,
+                candidateAuthorities, stepResults, finalSynthesis, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -81,7 +97,8 @@ public class V2AdaptiveExecutionService {
             ProjectCandidateCompositionEffect candidates,
             NaturalLanguageCandidateAuthorityStore candidateAuthorities,
             V2StepResultService stepResults,
-            V2AdaptiveFinalSynthesisService finalSynthesis) {
+            V2AdaptiveFinalSynthesisService finalSynthesis,
+            AgentCandidateAutoApplicationService autoApplications) {
         this.store = store;
         this.starts = starts;
         this.contexts = contexts;
@@ -91,6 +108,7 @@ public class V2AdaptiveExecutionService {
         this.candidateAuthorities = candidateAuthorities;
         this.stepResults = stepResults;
         this.finalSynthesis = finalSynthesis;
+        this.autoApplications = autoApplications;
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
@@ -148,7 +166,9 @@ public class V2AdaptiveExecutionService {
                         command.bootstrap().taskFrame(),
                         command.bootstrap().plan(),
                         result.candidateArtifactId(),
-                        result.outputPaths(), command.modelProvider()));
+                        result.outputPaths(), result.appliedRevisionId(),
+                        result.appliedProjectVersion(),
+                        command.modelProvider()));
         if (synthesized.isEmpty()) {
             return result;
         }
@@ -157,7 +177,8 @@ public class V2AdaptiveExecutionService {
                 synthesized.orElseThrow(), result.errorCode(),
                 result.reflections(), result.replans(),
                 result.repairs(), result.candidateArtifactId(),
-                result.outputPaths());
+                result.outputPaths(), result.appliedRevisionId(),
+                result.appliedProjectVersion());
     }
 
     public boolean canResume(
@@ -194,6 +215,31 @@ public class V2AdaptiveExecutionService {
                             + "planId={} artifactId={} pathCount={}",
                     command.intakeId(), command.turnId(), planId,
                     published.artifactId(), authority.paths().size());
+            if (autoApplications != null) {
+                try {
+                    var applied = autoApplications.apply(
+                            command.userId(), command.turnId(), planId,
+                            published.artifactId());
+                    log.info(
+                            "V2 Candidate automatically applied intakeId={} "
+                                    + "turnId={} planId={} artifactId={} "
+                                    + "revisionId={}",
+                            command.intakeId(), command.turnId(), planId,
+                            published.artifactId(),
+                            applied.resultRevisionId());
+                    return new V2AdaptiveExecutionResult(
+                            "SUCCEEDED", result.steps(), result.finalText(),
+                            null, result.reflections(), result.replans(),
+                            result.repairs(), published.artifactId(),
+                            authority.paths(), applied.resultRevisionId(),
+                            applied.resultVersion());
+                } catch (RuntimeException failure) {
+                    logFailure(command, "candidate.auto-apply", failure);
+                    return candidateAutoApplyFailed(
+                            result, published.artifactId(),
+                            authority.paths());
+                }
+            }
             return new V2AdaptiveExecutionResult(
                     "WAITING_CONFIRMATION", result.steps(),
                     result.finalText(), null, result.reflections(),
@@ -212,6 +258,16 @@ public class V2AdaptiveExecutionService {
                 "CANDIDATE_PUBLISH_FAILED",
                 source.reflections(), source.replans(),
                 source.repairs());
+    }
+
+    private static V2AdaptiveExecutionResult candidateAutoApplyFailed(
+            V2AdaptiveExecutionResult source, Long artifactId,
+            List<String> paths) {
+        return new V2AdaptiveExecutionResult(
+                "FAILED", source.steps(), null,
+                "CANDIDATE_AUTO_APPLY_FAILED",
+                source.reflections(), source.replans(),
+                source.repairs(), artifactId, paths);
     }
 
     private V2AdaptiveExecutionResult executeStarted(
@@ -296,7 +352,7 @@ public class V2AdaptiveExecutionService {
                         command.bootstrap().plan()
                                 .latestRevision().id()),
                 new StrictReflectionDecisionParser(json),
-                stepResults);
+                stepResults, cycles.contextSource());
         try {
             return coordinator.execute(
                     new V2AdaptiveExecutionCoordinator.Command(

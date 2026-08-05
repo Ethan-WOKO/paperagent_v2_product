@@ -393,13 +393,16 @@ public class V2SandboxEffectExecutionComposer {
                                 || receiptStatus == ReceiptStatus.TIMEOUT
                         ? Optional.empty()
                         : Optional.ofNullable(source.exitCode());
-        List<ArtifactRef> artifacts = source.artifacts().entrySet().stream()
+        List<ArtifactRef> artifacts = new ArrayList<>();
+        artifacts.add(V2SandboxInputFingerprint.artifactReference(
+                dispatch.files()));
+        source.artifacts().entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> new ArtifactRef(
                         "sandbox:" + source.executionId() + ":"
                                 + entry.getKey() + ":"
                                 + entry.getValue().sha256()))
-                .toList();
+                .forEach(artifacts::add);
         return new ExecutionReceipt(
                 new ReceiptId("sandbox-receipt." + hash(
                         toolCallId.value())),

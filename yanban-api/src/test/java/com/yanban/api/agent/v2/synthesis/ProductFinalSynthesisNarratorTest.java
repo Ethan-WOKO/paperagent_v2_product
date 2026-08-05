@@ -26,50 +26,17 @@ import org.junit.jupiter.api.Test;
 
 class ProductFinalSynthesisNarratorTest {
     @Test
-    void sendsBoundedUntrustedReceiptsWithNoTools() {
-        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    void returnsRuntimeResultWithoutCallingAnotherModel() {
+        java.util.concurrent.atomic.AtomicInteger calls =
+                new java.util.concurrent.atomic.AtomicInteger();
         var narrator = new ProductFinalSynthesisNarrator(request -> {
-            captured.set(request);
-            return new ModelResponse(
-                    Optional.of("QUEUED"),
-                    List.of(), FinishReason.STOP,
-                    new UsageMetadata(1, 1, 0, Map.of()), Map.of());
+            calls.incrementAndGet();
+            throw new AssertionError("model must not be called");
         });
 
         assertEquals("Literature search task queued.",
                 narrator.narrate(request()));
-        assertTrue(captured.get().availableTools().isEmpty());
-        assertTrue(captured.get().messages().get(1).content()
-                .contains("UNTRUSTED DATA"));
-        assertEquals(0,
-                captured.get().generationOptions().maxProposedToolCalls());
-    }
-
-    @Test
-    void rejectsProviderToolCalls() {
-        var narrator = new ProductFinalSynthesisNarrator(request ->
-                new ModelResponse(
-                        Optional.empty(),
-                        List.of(new ProposedToolCall(
-                                "provider-call", new ToolId("unexpected"),
-                                new ObjectValue(Map.of()))),
-                        FinishReason.TOOL_CALLS,
-                        new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
-
-        assertThrows(IllegalStateException.class,
-                () -> narrator.narrate(request()));
-    }
-
-    @Test
-    void rejectsProviderClaimsThatResultsWereReturned() {
-        var narrator = new ProductFinalSynthesisNarrator(request ->
-                new ModelResponse(
-                        Optional.of("I found ten excellent papers."),
-                        List.of(), FinishReason.STOP,
-                        new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
-
-        assertThrows(IllegalStateException.class,
-                () -> narrator.narrate(request()));
+        assertEquals(0, calls.get());
     }
 
     private static FinalSynthesisNarrationRequest request() {

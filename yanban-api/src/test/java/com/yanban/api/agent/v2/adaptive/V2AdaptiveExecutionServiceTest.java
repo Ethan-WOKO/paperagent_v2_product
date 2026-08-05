@@ -11,6 +11,10 @@ import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnPlanExecutionCont
 import com.yanban.api.agent.v2.effect.project.NaturalLanguageCandidateAuthorityStore;
 import com.yanban.api.agent.v2.effect.project.ProjectCandidateCompositionEffect;
 import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectAuthority;
+import com.yanban.api.agent.v2.result.V2StepResultService;
+import com.yanban.api.project.AgentCandidateAutoApplicationService;
+import com.yanban.api.project.ProjectRevisionOperation;
+import com.yanban.api.project.ProjectRevisionOperationResponse;
 import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.providers.*;
@@ -303,6 +307,126 @@ class V2AdaptiveExecutionServiceTest {
                 eq("candidate ready"), eq(77L),
                 eq(List.of("src/Main.java", "README.md")),
                 isNull(), eq(1), eq(0), eq(0));
+    }
+
+    @Test
+    void durableTerminalCandidateIsAutomaticallyAppliedAndCompleted() {
+        var fixture = fixture();
+        when(fixture.modelProvider.complete(any()))
+                .thenReturn(
+                        complete("candidate ready"),
+                        auditComplete("candidate ready"));
+        var recovered = mock(RecoveredExecutionStart.class);
+        when(recovered.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.starts.recover(eq(7L), eq(11L), any()))
+                .thenReturn(recovered);
+        var context = mock(PlanExecutionContextReady.class);
+        when(context.planId()).thenReturn(new PlanId("plan-1"));
+        when(fixture.contexts.compose(eq(7L), eq(11L), any()))
+                .thenReturn(context);
+        V2AdaptiveCyclePort port = mock(V2AdaptiveCyclePort.class);
+        when(port.executeOne(any())).thenReturn(
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                        "step-1", "candidate prepared", true, null,
+                        List.of("executionReceipt=status=SUCCESS"),
+                        true, false));
+        when(fixture.cycles.create(
+                anyMap(), anyString(), anyString(), any(),
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
+        var authorities = mock(
+                NaturalLanguageCandidateAuthorityStore.class);
+        var authority = mock(ProjectCandidateEffectAuthority.class);
+        when(authority.paths()).thenReturn(List.of("src/Main.java"));
+        when(authorities.require("plan-1")).thenReturn(authority);
+        var candidates = mock(ProjectCandidateCompositionEffect.class);
+        when(candidates.publishNatural("plan-1", 7L, 11L, authorities))
+                .thenReturn(
+                        new ProjectCandidateCompositionEffect.CandidateResult(
+                                77L, "c".repeat(64), "d".repeat(64)));
+        var automatic = mock(AgentCandidateAutoApplicationService.class);
+        when(automatic.apply(7L, 11L, "plan-1", 77L)).thenReturn(
+                new ProjectRevisionOperationResponse(
+                        101L, ProjectRevisionOperation.Type.APPLICATION,
+                        ProjectRevisionOperation.Outcome.SUCCEEDED,
+                        28L, "a".repeat(64), 29L, "b".repeat(64),
+                        77L, "c".repeat(64), List.of(0), List.of(),
+                        Instant.EPOCH));
+        var service = new V2AdaptiveExecutionService(
+                fixture.store, fixture.starts, fixture.contexts,
+                fixture.cycles, new ObjectMapper(), candidates,
+                authorities, mock(V2StepResultService.class), null,
+                automatic);
+
+        V2AdaptiveExecutionResult result = service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.candidate.compose"),
+                        fixture.modelProvider));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertEquals(77L, result.candidateArtifactId());
+        assertEquals(29L, result.appliedRevisionId());
+        assertEquals("b".repeat(64), result.appliedProjectVersion());
+        verify(fixture.store).finish(
+                eq(7L), eq(9L), eq("request-1"), eq("SUCCEEDED"),
+                anyList(), eq("candidate ready"), eq(77L),
+                eq(List.of("src/Main.java")), isNull(),
+                eq(1), eq(0), eq(0));
+    }
+
+    @Test
+    void automaticApplicationFailureIsReportedSeparately() {
+        var fixture = fixture();
+        when(fixture.modelProvider.complete(any()))
+                .thenReturn(
+                        complete("candidate ready"),
+                        auditComplete("candidate ready"));
+        recoverPlanAndContext(fixture);
+        V2AdaptiveCyclePort port = mock(V2AdaptiveCyclePort.class);
+        when(port.executeOne(any())).thenReturn(
+                new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                        "step-1", "candidate prepared", true, null,
+                        List.of("executionReceipt=status=SUCCESS"),
+                        true, false));
+        when(fixture.cycles.create(
+                anyMap(), anyString(), anyString(), any(),
+                anyString(), any(), same(fixture.modelProvider)))
+                .thenReturn(port);
+        var authorities = mock(
+                NaturalLanguageCandidateAuthorityStore.class);
+        var authority = mock(ProjectCandidateEffectAuthority.class);
+        when(authority.paths()).thenReturn(List.of("src/Main.java"));
+        when(authorities.require("plan-1")).thenReturn(authority);
+        var candidates = mock(ProjectCandidateCompositionEffect.class);
+        when(candidates.publishNatural("plan-1", 7L, 11L, authorities))
+                .thenReturn(
+                        new ProjectCandidateCompositionEffect.CandidateResult(
+                                77L, "c".repeat(64), "d".repeat(64)));
+        var automatic = mock(AgentCandidateAutoApplicationService.class);
+        when(automatic.apply(7L, 11L, "plan-1", 77L))
+                .thenThrow(new IllegalStateException("proof mismatch"));
+        var service = new V2AdaptiveExecutionService(
+                fixture.store, fixture.starts, fixture.contexts,
+                fixture.cycles, new ObjectMapper(), candidates,
+                authorities, mock(V2StepResultService.class), null,
+                automatic);
+
+        V2AdaptiveExecutionResult result = service.execute(
+                command(fixture.bootstrap, "version-1",
+                        Map.of("step-1", "project.candidate.compose"),
+                        fixture.modelProvider));
+
+        assertEquals("FAILED", result.status());
+        assertEquals("CANDIDATE_AUTO_APPLY_FAILED", result.errorCode());
+        assertEquals(77L, result.candidateArtifactId());
+        verify(fixture.store).finish(
+                eq(7L), eq(9L), eq("request-1"), eq("FAILED"),
+                anyList(), isNull(), eq(77L),
+                eq(List.of("src/Main.java")),
+                eq("CANDIDATE_AUTO_APPLY_FAILED"),
+                eq(1), eq(0), eq(0));
     }
 
     @Test

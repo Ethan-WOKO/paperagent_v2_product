@@ -27,5 +27,5 @@ class SandboxReceiptValidationTest {
         assertThatThrownBy(()->invoke(dispatcher,value,receipt("broker-e",Map.of(),"",1,SandboxErrorCode.PROVIDER_REJECTED),SandboxExecutionStatus.SUCCEEDED)).isInstanceOf(Exception.class);
     }
     private void invoke(SandboxOutboxDispatcher dispatcher,SandboxOutboxExecution value,SandboxReceipt receipt,SandboxExecutionStatus status){ReflectionTestUtils.invokeMethod(dispatcher,"validateReceipt",value,receipt,status);}
-    private SandboxReceipt receipt(String id,Map<String,SandboxReceipt.Artifact> artifacts,String stdout,int exit,SandboxErrorCode error){Instant now=Instant.now();return new SandboxReceipt(id,"key","a".repeat(64),1,2,3,4,5,7,"b".repeat(64),"c".repeat(64),"docker-sbx",SandboxExecutionStatus.SUCCEEDED,exit,stdout,"",false,artifacts,now,now,error);}
+    private SandboxReceipt receipt(String id,Map<String,SandboxReceipt.Artifact> artifacts,String stdout,int exit,SandboxErrorCode error){Instant now=Instant.now();return new SandboxReceipt(id,"key","a".repeat(64),1,2,3,4,5,7,"b".repeat(64),"c".repeat(64),"e2b",SandboxExecutionStatus.SUCCEEDED,exit,stdout,"",false,artifacts,now,now,error);}
 }

@@ -12,7 +12,9 @@ import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.agent.AgentSessionRepository;
+import com.yanban.core.agent.AgentSessionScope;
 import com.yanban.core.agent.AgentTurnRepository;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -58,6 +60,32 @@ class AgentSessionServiceTest {
         verify(projects, org.mockito.Mockito.times(2)).manifest(7L, 42L);
         verify(sessions).listProjectSessions(7L, 42L);
         verify(sessions).createProjectSession(7L, 42L, request, "Project #42");
+    }
+
+    @Test
+    void projectFacadeDeletesOwnedSessionsBeforeDeletingProject() {
+        ProjectService projects = mock(ProjectService.class);
+        AgentSessionService sessions = mock(AgentSessionService.class);
+        ProjectSessionService service = new ProjectSessionService(projects, sessions);
+        AgentSessionResponse first = projectSession(45L);
+        AgentSessionResponse second = projectSession(46L);
+        when(sessions.listProjectSessions(7L, 42L))
+                .thenReturn(List.of(first, second));
+
+        service.deleteProject(7L, 42L);
+
+        var order = inOrder(projects, sessions);
+        order.verify(sessions).listProjectSessions(7L, 42L);
+        order.verify(sessions).deleteSession(7L, 45L);
+        order.verify(sessions).deleteSession(7L, 46L);
+        order.verify(projects).delete(7L, 42L);
+    }
+
+    private static AgentSessionResponse projectSession(Long id) {
+        Instant now = Instant.parse("2026-08-04T00:00:00Z");
+        return new AgentSessionResponse(
+                id, 7L, AgentSessionScope.PROJECT, 42L, "Study",
+                "provider", "model", 8, true, now, now);
     }
 
     private static Fixture fixture() {

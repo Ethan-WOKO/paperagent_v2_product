@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.adaptive;
 
 import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.adaptive.reflection.*;
+import com.yanban.api.agent.v2.context.V2ExecutionContextSource;
 import com.yanban.api.agent.v2.result.V2StepResultService;
 import com.yanban.api.agent.v2.result.V2StepResultSnapshot;
 import com.yanban.api.agent.v2.result.V2StepResultSource;
@@ -23,31 +24,35 @@ public final class V2AdaptiveExecutionCoordinator {
     static final int MAX_CYCLES = MAX_PLAN_STEPS
             + MAX_REPLANS * (1 + MAX_PLAN_STEPS);
     private static final int MAX_TOTAL_ITERATIONS = MAX_CYCLES * 2;
-    private static final String NO_PROGRESS_GUARD =
-            "noProgressGuard=the model has already persisted a Step-result "
-                    + "proposal for this active Step; choose COMPLETE if the "
-                    + "proposal satisfies it, REPLAN if a changed approach "
-                    + "is required, or "
-                    + "FAIL if execution cannot proceed";
     private final V2AdaptiveCyclePort cycles;
     private final ReflectionProvider reflections;
     private final StrictReflectionDecisionParser parser;
     private final V2StepResultService stepResults;
+    private final V2ExecutionContextSource contextSource;
 
     public V2AdaptiveExecutionCoordinator(
             V2AdaptiveCyclePort cycles, ReflectionProvider reflections,
             StrictReflectionDecisionParser parser) {
-        this(cycles, reflections, parser, null);
+        this(cycles, reflections, parser, null, null);
     }
 
     public V2AdaptiveExecutionCoordinator(
             V2AdaptiveCyclePort cycles, ReflectionProvider reflections,
             StrictReflectionDecisionParser parser,
             V2StepResultService stepResults) {
+        this(cycles, reflections, parser, stepResults, null);
+    }
+
+    public V2AdaptiveExecutionCoordinator(
+            V2AdaptiveCyclePort cycles, ReflectionProvider reflections,
+            StrictReflectionDecisionParser parser,
+            V2StepResultService stepResults,
+            V2ExecutionContextSource contextSource) {
         this.cycles = cycles;
         this.reflections = reflections;
         this.parser = parser;
         this.stepResults = stepResults;
+        this.contextSource = contextSource;
     }
 
     public V2AdaptiveExecutionResult execute(Command command) {
@@ -67,6 +72,7 @@ public final class V2AdaptiveExecutionCoordinator {
         boolean pendingRepair = false;
         V2AdaptiveCyclePort.Action nextAction =
                 V2AdaptiveCyclePort.Action.EXECUTE;
+        List<String> nextModelContextFacts = List.of();
         String acceptedFinalText = null;
         int replanCount = 0;
         int repairCount = 0;
@@ -91,7 +97,8 @@ public final class V2AdaptiveExecutionCoordinator {
                                 command.userId(), command.turnId(),
                                 command.planId(), totalIterations,
                                 pendingReplan,
-                                nextAction));
+                                nextAction,
+                                nextModelContextFacts));
             } catch (V2AdaptiveRuntimeCycleFactory.CycleStageException
                     failure) {
                 return failed(timeline,
@@ -104,6 +111,7 @@ public final class V2AdaptiveExecutionCoordinator {
                         executionCycles, replanCount, repairCount);
             }
             pendingReplan = null;
+            nextModelContextFacts = List.of();
             V2AdaptiveCyclePort.Action completedAction = nextAction;
             nextAction = V2AdaptiveCyclePort.Action.EXECUTE;
             updateExisting(timeline, stepIndexes, cycle, completedAction);
@@ -136,6 +144,7 @@ public final class V2AdaptiveExecutionCoordinator {
                         == V2AdaptiveCyclePort.CycleResult.State
                                 .PLAN_SUCCEEDED
                         && cycle.durableSucceeded()) {
+                    markTerminalSuccess(timeline);
                     return new V2AdaptiveExecutionResult(
                             "SUCCEEDED", timeline, acceptedFinalText, null,
                             executionCycles, replanCount, repairCount);
@@ -182,6 +191,12 @@ public final class V2AdaptiveExecutionCoordinator {
             }
 
             ReflectionOutcome decision;
+            V2ExecutionContextSource.Projection executionContext =
+                    contextSource == null || cycle.stepId() == null
+                            ? V2ExecutionContextSource.Projection.empty()
+                            : contextSource.inspect(
+                                    new PlanId(command.planId()),
+                                    new PlanStepId(cycle.stepId()));
             ReflectionContext reflectionContext =
                     command.reflectionContext(
                             accumulatedExecutionFacts, timeline,
@@ -190,7 +205,11 @@ public final class V2AdaptiveExecutionCoordinator {
                                     V2AdaptiveExecutionCoordinator
                                             ::reflectionStepResult)
                                     .orElse(null),
-                            completedResultFacts(command.planId()),
+                            contextSource == null
+                                    ? completedResultFacts(command.planId())
+                                    : executionContext
+                                            .acceptedStepResults(),
+                            executionContext.reflectionFacts(),
                             currentReceiptIds(
                                     receiptIdsByStep, cycle.stepId()));
             ReflectionResolution reflection = reflect(
@@ -200,26 +219,14 @@ public final class V2AdaptiveExecutionCoordinator {
                         executionCycles, replanCount, repairCount);
             }
             decision = reflection.decision();
-            if (requiresNoProgressReflection(cycle, decision)) {
-                ReflectionResolution reconsidered = reflect(
-                        withNoProgressGuard(reflectionContext),
-                        command.planId());
-                if (reconsidered.failureCode() != null) {
-                    return failed(timeline, reconsidered.failureCode(),
-                            executionCycles, replanCount, repairCount);
-                }
-                decision = reconsidered.decision();
-                if (decision.decision() == ReflectionAction.CONTINUE) {
-                    rejectStepResult(cycle, decision.reason());
-                    return failed(timeline, "REFLECTION_NO_PROGRESS",
-                            executionCycles, replanCount, repairCount);
-                }
-            }
+            String reflectionFact = reflectionFact(decision);
+            accumulatedExecutionFacts.add(reflectionFact);
             if (decision.decision() == ReflectionAction.COMPLETE) {
                 if (cycle.state()
                         == V2AdaptiveCyclePort.CycleResult.State
                                 .PLAN_SUCCEEDED
                         && cycle.durableSucceeded()) {
+                    markTerminalSuccess(timeline);
                     return new V2AdaptiveExecutionResult(
                             "SUCCEEDED", timeline, decision.finalText(), null,
                             executionCycles, replanCount, repairCount);
@@ -265,10 +272,12 @@ public final class V2AdaptiveExecutionCoordinator {
             }
             if (decision.decision() == ReflectionAction.CONTINUE) {
                 rejectStepResult(cycle, decision.reason());
+                nextModelContextFacts = List.of(reflectionFact);
                 continue;
             }
             if (decision.decision() == ReflectionAction.REPLAN) {
                 rejectStepResult(cycle, decision.reason());
+                nextModelContextFacts = List.of(reflectionFact);
                 if (++replanCount > MAX_REPLANS) {
                     return failed(timeline, "REPLAN_LIMIT_EXCEEDED",
                             executionCycles, replanCount, repairCount);
@@ -377,16 +386,12 @@ public final class V2AdaptiveExecutionCoordinator {
             String raw;
             try {
                 raw = reflections.reflect(context);
-            } catch (ReflectionAuditFormatException auditFormatFailure) {
-                logFailure("reflection.audit-format", planId,
-                        attempt, auditFormatFailure);
-                return new ReflectionResolution(
-                        null, "REFLECTION_AUDIT_FORMAT_INVALID");
             } catch (RuntimeException providerFailure) {
                 logFailure("reflection.provider", planId,
                         attempt, providerFailure);
                 failureCode = "REFLECTION_PROVIDER_EXCEPTION";
-                context = withReflectionDiagnostic(context, failureCode);
+                context = withReflectionDiagnostic(
+                        context, failureCode, null);
                 continue;
             }
             try {
@@ -396,12 +401,14 @@ public final class V2AdaptiveExecutionCoordinator {
                 logFailure("reflection.parse", planId,
                         attempt, invalid);
                 failureCode = "REFLECTION_PARSE_INVALID";
-                context = withReflectionDiagnostic(context, failureCode);
+                context = withReflectionDiagnostic(
+                        context, invalid.getMessage(), raw);
             } catch (RuntimeException parserFailure) {
                 logFailure("reflection.parser", planId,
                         attempt, parserFailure);
                 failureCode = "REFLECTION_PARSER_EXCEPTION";
-                context = withReflectionDiagnostic(context, failureCode);
+                context = withReflectionDiagnostic(
+                        context, failureCode, raw);
             }
         }
         return new ReflectionResolution(null, failureCode);
@@ -417,19 +424,6 @@ public final class V2AdaptiveExecutionCoordinator {
                 V2SafeFailureDiagnostics.exceptionType(failure),
                 V2SafeFailureDiagnostics.causeType(failure),
                 V2SafeFailureDiagnostics.origin(failure));
-    }
-
-    private static boolean requiresNoProgressReflection(
-            V2AdaptiveCyclePort.CycleResult cycle,
-            ReflectionOutcome decision) {
-        return decision.decision() == ReflectionAction.CONTINUE
-                && cycle.state()
-                        == V2AdaptiveCyclePort.CycleResult.State
-                                .STEP_SUCCEEDED
-                && cycle.stepResult()
-                        .map(value -> value.status()
-                                == V2StepResultStatus.REJECTED)
-                        .orElse(false);
     }
 
     private String acceptStepResult(
@@ -531,6 +525,13 @@ public final class V2AdaptiveExecutionCoordinator {
                         .map(receipt -> receipt.value()).toList());
     }
 
+    private static String reflectionFact(ReflectionOutcome decision) {
+        return "previousReflectionDecision="
+                + decision.decision().name()
+                + "; reason=" + decision.reason()
+                + "; replacementSteps=" + decision.replacementSteps();
+    }
+
     private static List<ReceiptId> currentReceiptIds(
             Map<String, LinkedHashSet<ReceiptId>> receiptIdsByStep,
             String stepId) {
@@ -592,23 +593,16 @@ public final class V2AdaptiveExecutionCoordinator {
                 current.status(), bounded(result)));
     }
 
-    private static ReflectionContext withNoProgressGuard(
-            ReflectionContext context) {
-        List<String> facts = new ArrayList<>(
-                context.recentExecutionFacts());
-        facts.add(NO_PROGRESS_GUARD);
-        return new ReflectionContext(
-                context.taskFrame(), context.currentPlan(),
-                context.conversationContext(), context.completedFacts(),
-                facts, context.unfinishedSteps(),
-                context.currentStepResult());
-    }
-
     private static ReflectionContext withReflectionDiagnostic(
-            ReflectionContext context, String diagnostic) {
+            ReflectionContext context, String diagnostic,
+            String previousOutput) {
         List<String> facts = new ArrayList<>(
                 context.recentExecutionFacts());
-        facts.add("previousReflectionFault=" + diagnostic);
+        facts.add("previousReflectionFormatError=" + diagnostic);
+        if (previousOutput != null && !previousOutput.isBlank()) {
+            facts.add("previousReflectionOutput="
+                    + bounded(previousOutput));
+        }
         return new ReflectionContext(
                 context.taskFrame(), context.currentPlan(),
                 context.conversationContext(), context.completedFacts(),
@@ -652,6 +646,7 @@ public final class V2AdaptiveExecutionCoordinator {
                 String activeStepId,
                 ReflectionStepResult currentStepResult,
                 List<String> acceptedStepResults,
+                List<String> relatedExecutionFacts,
                 List<ReceiptId> currentStepReceiptIds) {
             List<String> currentFacts = new ArrayList<>(
                     accumulatedExecutionFacts);
@@ -666,6 +661,7 @@ public final class V2AdaptiveExecutionCoordinator {
             currentStepReceiptIds.forEach(receiptId ->
                     currentFacts.add(
                             "activeStepReceiptId=" + receiptId.value()));
+            currentFacts.addAll(relatedExecutionFacts);
             List<String> completedFacts = new ArrayList<>(
                     baseContext.completedFacts());
             completedFacts.addAll(acceptedStepResults);

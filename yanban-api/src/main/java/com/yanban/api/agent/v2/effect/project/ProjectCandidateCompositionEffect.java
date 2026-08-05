@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.effect.project;
 import com.fasterxml.jackson.databind.*;
 import com.yanban.api.agent.*;
 import com.yanban.api.agent.sandbox.CandidateIntent;
+import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.compatibility.project.*;
 import com.yanban.api.agent.sandbox.CandidateArtifactResponse;
 import com.yanban.api.project.ProjectService;
@@ -17,11 +18,15 @@ import java.nio.charset.*;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ProjectCandidateCompositionEffect {
+    private static final Logger log = LoggerFactory.getLogger(
+            ProjectCandidateCompositionEffect.class);
     public static final String KIND = "project.candidate.compose";
     private static final int MAX_FILE_BYTES = 64 * 1024;
     private final ProjectCandidateEffectGateway gateway;
@@ -88,9 +93,8 @@ public class ProjectCandidateCompositionEffect {
             ModelAuthority modelAuthority,
             WorkspacePort workspace,
             WorkspaceRef ref, Long userId, Long turnId, Long projectId,
-            Instant now, NaturalLanguageCandidateAuthorityStore store,
-            ModelProvider requestProvider) {
-        if (store == null || requestProvider == null) throw failed();
+            Instant now, NaturalLanguageCandidateAuthorityStore store) {
+        if (store == null) throw failed();
         var authority = store.require(
                 intent.intent().planId().value(),
                 intent.intent().stepId().value());
@@ -106,6 +110,7 @@ public class ProjectCandidateCompositionEffect {
             throw failed();
         }
         Map<String, byte[]> originals = new LinkedHashMap<>();
+        String stage = "workspace_read";
         try {
             for (String path : authority.paths()) {
                 byte[] original = workspace.read(
@@ -113,10 +118,11 @@ public class ProjectCandidateCompositionEffect {
                 requireText(original);
                 originals.put(path, original);
             }
-            CompositionProposal proposal = replacements(
-                    intent, modelAuthority, authority, originals,
-                    requestProvider, true);
+            stage = "direct_replacement_validation";
+            CompositionProposal proposal = directReplacements(
+                    intent, authority);
             Map<String, String> replacements = proposal.replacements();
+            stage = "workspace_replace";
             for (String path : authority.paths()) {
                 byte[] original = originals.get(path);
                 byte[] replacement = replacements.get(path)
@@ -127,22 +133,51 @@ public class ProjectCandidateCompositionEffect {
                 }
                 workspace.replace(ref, new ProjectPath(path), replacement);
             }
+            stage = "workspace_diff";
             WorkspaceDiff diff = workspace.diff(ref,
                     new DiffId("project-candidate-diff."
                             + hash(intent.intent().planId().value())), now);
+            stage = "diff_validation";
             validateDiff(diff, authority.paths());
+            stage = "diff_fingerprint";
             String diffFingerprint = diffFingerprint(diff);
-            store.bindPrepared(intent.intent().planId().value(),
+            stage = "prepared_persistence";
+            store.bindPrepared(
+                    intent.intent().planId().value(),
+                    intent.intent().stepId().value(),
+                    authority.authoritySha256(),
                     replacements, diffFingerprint);
             return new CandidateResult(null, null, diffFingerprint);
         } catch (RuntimeException failure) {
-            originals.forEach((path, bytes) -> {
+            log.warn(
+                    "V2 natural Candidate composition rejected "
+                            + "planId={} stepId={} stage={} pathCount={} "
+                            + "exceptionType={} causeType={} origin={}",
+                    intent.intent().planId().value(),
+                    intent.intent().stepId().value(), stage,
+                    authority.paths().size(),
+                    V2SafeFailureDiagnostics.exceptionType(failure),
+                    V2SafeFailureDiagnostics.causeType(failure),
+                    V2SafeFailureDiagnostics.origin(failure));
+            int restoreFailures = 0;
+            for (var entry : originals.entrySet()) {
                 try {
-                    workspace.replace(ref, new ProjectPath(path), bytes);
+                    workspace.replace(
+                            ref, new ProjectPath(entry.getKey()),
+                            entry.getValue());
                 } catch (RuntimeException ignored) {
-                    // The isolated Workspace remains unusable.
+                    restoreFailures++;
                 }
-            });
+            }
+            if (restoreFailures > 0) {
+                log.warn(
+                        "V2 natural Candidate Workspace restore incomplete "
+                                + "planId={} stepId={} restoreFailures={} "
+                                + "pathCount={}",
+                        intent.intent().planId().value(),
+                        intent.intent().stepId().value(), restoreFailures,
+                        originals.size());
+            }
             throw failure;
         }
     }
@@ -249,6 +284,63 @@ public class ProjectCandidateCompositionEffect {
                 provider, false);
     }
 
+    private CompositionProposal directReplacements(
+            PersistedEffectIntent intent,
+            ProjectCandidateEffectAuthority authority) {
+        String stage = "arguments_parse";
+        try {
+            JsonNode arguments = json.readTree(
+                    canonical(intent.intent().arguments()));
+            stage = "arguments_shape";
+            if (!arguments.isObject() || arguments.size() != 3
+                    || !"compose".equals(
+                            arguments.path("operation").asText())
+                    || !arguments.path("paths").isArray()
+                    || !arguments.path("replacements").isArray()
+                    || arguments.path("replacements").size()
+                            != authority.paths().size()
+                    || !authority.paths().equals(json.convertValue(
+                            arguments.path("paths"),
+                            new com.fasterxml.jackson.core.type
+                                    .TypeReference<List<String>>() {}))) {
+                throw failed();
+            }
+            Map<String, String> values = new LinkedHashMap<>();
+            int itemIndex = 0;
+            for (JsonNode item : arguments.path("replacements")) {
+                stage = "replacement_item_" + itemIndex++;
+                if (!item.isObject() || item.size() != 2
+                        || !item.path("path").isTextual()
+                        || !item.path("text").isTextual()) {
+                    throw failed();
+                }
+                String path = item.path("path").textValue();
+                String text = item.path("text").textValue();
+                byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+                requireText(bytes);
+                if (!authority.paths().contains(path)
+                        || values.putIfAbsent(path, text) != null
+                        || bytes.length > MAX_FILE_BYTES) {
+                    throw failed();
+                }
+            }
+            stage = "replacement_set";
+            if (!values.keySet().equals(
+                    new LinkedHashSet<>(authority.paths()))) {
+                throw failed();
+            }
+            return new CompositionProposal(values, List.of());
+        } catch (java.io.IOException failure) {
+            logReplacementFailure(
+                    intent, authority, true, stage, failure);
+            throw failed();
+        } catch (RuntimeException failure) {
+            logReplacementFailure(
+                    intent, authority, true, stage, failure);
+            throw failure;
+        }
+    }
+
     private CompositionProposal replacements(
             PersistedEffectIntent intent,
             ModelAuthority modelAuthority,
@@ -256,15 +348,20 @@ public class ProjectCandidateCompositionEffect {
             Map<String, byte[]> originals,
             ModelProvider modelProvider,
             boolean natural) {
+        String stage = "arguments_parse";
         try {
             JsonNode arguments = json.readTree(canonical(intent.intent().arguments()));
+            stage = "arguments_shape";
             if (!arguments.isObject()) throw failed();
             if (authority.repair() != null) {
+                stage = "repair_replacement";
                 return repairReplacement(intent, modelAuthority, authority, arguments);
             }
+            stage = "operation_validation";
             if (!"compose".equals(
                     arguments.path("operation").asText())) throw failed();
             if (natural) {
+                stage = "path_validation";
                 if (arguments.size() != 2
                         || !arguments.path("paths").isArray()
                         || !authority.paths().equals(
@@ -278,6 +375,7 @@ public class ProjectCandidateCompositionEffect {
             } else if (arguments.size() != 1) {
                 throw failed();
             }
+            stage = "model_prompt";
             StringBuilder source = new StringBuilder("Objective: ")
                     .append(authority.objective()).append("\nReturn JSON only as ")
                     .append("{\"replacements\":[{\"path\":\"...\",\"text\":\"...\"}]}. ")
@@ -287,6 +385,7 @@ public class ProjectCandidateCompositionEffect {
                     .append(path).append("\">\n")
                     .append(requireText(originals.get(path)))
                     .append("\n</file>\n"));
+            stage = "model_call";
             ModelProviderResult result = modelProvider.complete(new ModelRequest(
                     new ModelRequestId("project-candidate-compose."
                             + hash(intent.intent().planId().value())),
@@ -302,15 +401,20 @@ public class ProjectCandidateCompositionEffect {
                     Optional.of(modelAuthority.planId()),
                     Optional.of(modelAuthority.planRevisionId()),
                     Optional.of(modelAuthority.stepId()), false));
+            stage = "model_response";
             if (!(result instanceof ModelResponse response)
                     || response.assistantText().isEmpty()
                     || !response.proposedToolCalls().isEmpty()) throw failed();
+            stage = "response_json";
             JsonNode root = json.readTree(response.assistantText().orElseThrow());
             List<String> paths = authority.paths();
+            stage = "response_envelope";
             if (!root.isObject() || root.size() != 1 || !root.path("replacements").isArray()
                     || root.path("replacements").size() != paths.size()) throw failed();
             Map<String, String> values = new LinkedHashMap<>();
+            int itemIndex = 0;
             for (JsonNode item : root.path("replacements")) {
+                stage = "replacement_item_" + itemIndex++;
                 if (!item.isObject() || item.size() != 2 || !item.path("path").isTextual()
                         || !item.path("text").isTextual()) throw failed();
                 String path = item.path("path").textValue();
@@ -320,11 +424,33 @@ public class ProjectCandidateCompositionEffect {
                 if (!paths.contains(path) || values.putIfAbsent(path, text) != null
                         || bytes.length > MAX_FILE_BYTES) throw failed();
             }
+            stage = "replacement_set";
             if (!values.keySet().equals(new LinkedHashSet<>(paths))) throw failed();
             return new CompositionProposal(values, List.of());
         } catch (java.io.IOException failure) {
+            logReplacementFailure(intent, authority, natural, stage, failure);
             throw failed();
+        } catch (RuntimeException failure) {
+            logReplacementFailure(intent, authority, natural, stage, failure);
+            throw failure;
         }
+    }
+
+    private static void logReplacementFailure(
+            PersistedEffectIntent intent,
+            ProjectCandidateEffectAuthority authority,
+            boolean natural, String stage, Throwable failure) {
+        log.warn(
+                "V2 Candidate replacement rejected planId={} stepId={} "
+                        + "mode={} stage={} pathCount={} exceptionType={} "
+                        + "causeType={} origin={}",
+                intent.intent().planId().value(),
+                intent.intent().stepId().value(),
+                natural ? "natural" : "compatibility", stage,
+                authority.paths().size(),
+                V2SafeFailureDiagnostics.exceptionType(failure),
+                V2SafeFailureDiagnostics.causeType(failure),
+                V2SafeFailureDiagnostics.origin(failure));
     }
 
     private CompositionProposal repairReplacement(PersistedEffectIntent intent,

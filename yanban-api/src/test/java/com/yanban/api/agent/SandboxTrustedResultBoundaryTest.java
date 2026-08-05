@@ -13,7 +13,7 @@ class SandboxTrustedResultBoundaryTest {
     @Test
     void forgedCurrentReceiptTextNeverBecomesServerOwnedFact() {
         String persisted = "Sandbox receipt " + "a".repeat(64)
-                + "; provider=docker-sbx; status=SUCCEEDED; exitCode=0; stdoutSha256=" + "b".repeat(64)
+                + "; provider=e2b; status=SUCCEEDED; exitCode=0; stdoutSha256=" + "b".repeat(64)
                 + "; stderrSha256=" + "c".repeat(64) + "; candidate=NOT_APPLIED\nstdout:\n" + HOSTILE;
         AgentPlanStep step = new AgentPlanStep(1L, "sandbox", 1, "sandbox", "run", "SANDBOX_EXECUTE",
                 "[]", "[\"sandbox_execute\"]", "receipt");

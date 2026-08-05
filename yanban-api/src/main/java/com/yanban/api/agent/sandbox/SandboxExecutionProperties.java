@@ -22,7 +22,7 @@ public class SandboxExecutionProperties {
     private boolean enabled = false;
     private boolean requiredAtStartup = false;
     @NotBlank
-    private String provider = "docker-sbx";
+    private String provider = "e2b";
     @NotNull
     private URI brokerUrl = URI.create("http://127.0.0.1:8091");
     @Min(1)
@@ -49,7 +49,7 @@ public class SandboxExecutionProperties {
 
     @AssertTrue(message = "sandbox provider must be a supported governed provider")
     public boolean isProviderSupported() {
-        return "docker-sbx".equals(provider) || "e2b".equals(provider);
+        return "e2b".equals(provider);
     }
 
     @AssertTrue(message = "the first sandbox release is fail-closed with networking disabled")

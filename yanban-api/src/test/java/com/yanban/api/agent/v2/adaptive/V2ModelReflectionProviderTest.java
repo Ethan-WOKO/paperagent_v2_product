@@ -1,11 +1,10 @@
 package com.yanban.api.agent.v2.adaptive;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.yanban.api.agent.v2.adaptive.reflection.ReflectionAuditFormatException;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionContext;
 import io.paperagent.v2.providers.FinishReason;
 import io.paperagent.v2.providers.ModelRequest;
@@ -14,345 +13,99 @@ import io.paperagent.v2.providers.UsageMetadata;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class V2ModelReflectionProviderTest {
     @Test
-    void promptDefinesCompleteAsCurrentStepCompletionNotPlanTerminal() {
+    void promptDefinesOneGoalBasedReflectionWithStrictExamples() {
         String system = captureSystemPrompt();
 
+        assertTrue(system.contains("current Plan\nStep's goal"));
+        assertTrue(system.contains("adversarial two-sided review"));
+        assertTrue(system.contains("strongest\nevidence"));
+        assertTrue(system.contains("concrete gap"));
+        assertTrue(system.contains("dependency\nSteps"));
+        assertTrue(system.contains("Do not require another read"));
+        assertTrue(system.contains("same outcome"));
+        assertTrue(system.contains("previousReflectionFormatError"));
         assertTrue(system.contains(
-                "current active Step's completion criteria are"));
-        assertTrue(system.contains("the Plan has later Steps"));
-        assertTrue(system.contains("persists this Step"));
-        assertTrue(system.contains("completion and advances the Plan"));
+                "{\"decision\":\"COMPLETE\""));
         assertTrue(system.contains(
-                "final answer only when the completed Step makes the whole"));
+                "{\"decision\":\"CONTINUE\""));
         assertTrue(system.contains(
-                "CONTINUE means the same active Step still needs"));
-        assertTrue(system.contains(
-                "completed nonterminal Step"));
-        assertTrue(system.contains(
-                "discards that provisional text after advancing"));
-        assertTrue(system.contains("Do not return"));
-        assertTrue(system.contains(
-                "CONTINUE merely because later Steps remain"));
-        assertTrue(system.contains(
-                "successful Receipt satisfies the current active Step"));
-        assertTrue(system.contains("Do not REPLAN"));
-        assertTrue(system.contains(
-                "streamline, combine, reorder"));
-        assertTrue(system.contains(
-                "active Step itself cannot proceed"));
+                "{\"decision\":\"FAIL\""));
         assertFalse(system.contains(
-                "COMPLETE is allowed only when the supplied durable cut is terminal"));
+                "Receipts belonging to other Steps are context, not"));
     }
 
     @Test
-    void promptDefinesTheExactReplanSchemaAndFailedReceiptAction() {
-        String system = captureSystemPrompt();
-
-        assertTrue(system.contains(
-                "id, intent, expectedOutcome, dependencies"));
-        assertTrue(system.contains("completionCriteria"));
-        assertTrue(system.contains("maxAttempts"));
-        assertTrue(system.contains("maxDurationSeconds"));
-        assertTrue(system.contains(
-                "Tool selection remains dynamic"));
-        assertTrue(system.contains(
-                "failed Receipt can be corrected, return REPLAN"));
-    }
-
-    @Test
-    void promptDoesNotTreatSandboxExecutionAsCandidateDelivery() {
-        String system = captureSystemPrompt();
-
-        assertTrue(system.contains(
-                "requires creating or modifying Project"));
-        assertTrue(system.contains(
-                "project.candidate.compose Receipt"));
-        assertTrue(system.contains(
-                "sandbox.execute Receipt proves"));
-        assertTrue(system.contains(
-                "does not prove a Workspace diff or Candidate"));
-        assertTrue(system.contains(
-                "project.read Receipt proves reading only"));
-        assertTrue(system.contains(
-                "whose intent, expected outcome, or completion criteria require"));
-        assertTrue(system.contains(
-                "sandbox compilation, execution, or tests"));
-        assertTrue(system.contains(
-                "successful executionReceipt whose toolKind is sandbox.execute"));
-        assertTrue(system.contains(
-                "toolKind is project.candidate.compose"));
-        assertTrue(system.contains(
-                "stepId equals activeStepId"));
-        assertTrue(system.contains(
-                "REVIEWABLE_CANDIDATE_CREATED"));
-        assertTrue(system.contains(
-                "PROJECT_BIBLIOGRAPHY_READ_ONLY"));
-        assertTrue(system.contains(
-                "does not prove compilation, modification, citation quality"));
-    }
-
-    @Test
-    void completeDecisionIsAuditedAgainstCurrentStepAuthority() {
+    void completeDecisionUsesExactlyOneModelCall() {
         AtomicInteger calls = new AtomicInteger();
-        AtomicReference<ModelRequest> audit = new AtomicReference<>();
         var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            if (call == 2) {
-                audit.set(request);
-            }
-            String decision = call == 1
-                    ? "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
-                            + "\"finalText\":\"done\","
-                            + "\"replacementSteps\":[]}"
-                    : "{\"complete\":false,"
-                            + "\"reason\":\"candidate not proven\","
-                            + "\"stepResult\":null}";
-            return response(decision);
+            calls.incrementAndGet();
+            return response("""
+                    {"decision":"COMPLETE","reason":"facts satisfy goal",
+                     "finalText":"done","replacementSteps":[]}
+                    """);
         }, new ObjectMapper(), null, null, null);
 
-        String result = provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of(
-                        "activeStepId=step-3",
-                        "executionReceipt=stepId=step-3, "
-                                + "authorityScope=SANDBOX_EXECUTION_ONLY"),
-                List.of("create candidate")));
+        String result = provider.reflect(context());
+
+        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void continueDecisionUsesExactlyOneModelCall() {
+        AtomicInteger calls = new AtomicInteger();
+        var provider = new V2ModelReflectionProvider(request -> {
+            calls.incrementAndGet();
+            return response("""
+                    {"decision":"CONTINUE","reason":"edit is missing",
+                     "finalText":null,"replacementSteps":[]}
+                    """);
+        }, new ObjectMapper(), null, null, null);
+
+        String result = provider.reflect(context());
 
         assertTrue(result.contains("\"decision\":\"CONTINUE\""));
-        assertTrue(audit.get().messages().get(0).content().contains(
-                "SANDBOX_EXECUTION_ONLY does not"));
-        assertTrue(audit.get().messages().get(1).content().contains(
-                "\"activeStepId\":\"step-3\""));
+        assertEquals(1, calls.get());
     }
 
     @Test
-    void supportedCompleteDecisionCanPassAudit() {
-        AtomicInteger calls = new AtomicInteger();
-        String complete = "{\"decision\":\"COMPLETE\","
-                + "\"reason\":\"candidate proven\","
-                + "\"finalText\":\"candidate ready\","
-                + "\"replacementSteps\":[]}";
+    void fullCandidateAndAcceptedSandboxFactsReachReflection() {
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
         var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            return response(call == 1 ? complete
-                    : "{\"complete\":true,"
-                            + "\"reason\":\"candidate receipt matches\","
-                            + "\"stepResult\":\"candidate ready\"}");
+            captured.set(request);
+            return response("""
+                    {"decision":"COMPLETE","reason":"prior run is reusable",
+                     "finalText":"reported","replacementSteps":[]}
+                    """);
         }, new ObjectMapper(), null, null, null);
-
-        String result = provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of(
-                        "activeStepId=step-3",
-                        "executionReceipt=stepId=step-3, "
-                                + "authorityScope=REVIEWABLE_CANDIDATE_CREATED"),
-                List.of("create candidate")));
-
-        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
-        assertTrue(result.contains("\"finalText\":\"candidate ready\""));
-        assertTrue(calls.get() == 2);
-    }
-
-    @Test
-    void unsupportedContinueRemainsContinueAfterStepStateAudit() {
-        AtomicInteger calls = new AtomicInteger();
-        var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            return response(call == 1
-                    ? "{\"decision\":\"CONTINUE\",\"reason\":\"edit next\","
-                            + "\"finalText\":null,"
-                            + "\"replacementSteps\":[]}"
-                    : "{\"complete\":false,"
-                            + "\"reason\":\"only read evidence exists\","
-                            + "\"stepResult\":null}");
-        }, new ObjectMapper(), null, null, null);
-
-        String result = provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of(
-                        "activeStepId=step-3",
-                        "executionReceipt=stepId=step-3, "
-                                + "authorityScope=PROJECT_CONTENT_READ_ONLY"),
-                List.of("create candidate")));
-
-        assertTrue(result.contains("\"decision\":\"CONTINUE\""));
-        assertTrue(calls.get() == 2);
-    }
-
-    @Test
-    void staleContinueIsCorrectedWhenCandidateReceiptCompletesStep() {
-        AtomicInteger calls = new AtomicInteger();
-        var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            return response(call == 1
-                    ? "{\"decision\":\"CONTINUE\",\"reason\":\"repeat\","
-                            + "\"finalText\":null,"
-                            + "\"replacementSteps\":[]}"
-                    : "{\"complete\":true,"
-                            + "\"reason\":\"candidate receipt proves delivery\","
-                            + "\"stepResult\":\"候选修改已创建\"}");
-        }, new ObjectMapper(), null, null, null);
-
-        String result = provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of(
-                        "activeStepId=step-3",
-                        "executionReceipt=stepId=step-3, "
-                                + "authorityScope=REVIEWABLE_CANDIDATE_CREATED"),
-                List.of("create candidate")));
-
-        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
-        assertTrue(result.contains("候选修改已创建"));
-        assertTrue(calls.get() == 2);
-    }
-
-    @Test
-    void auditHighlightsLaterSuccessfulSandboxReceiptAfterEarlierFailures() {
-        AtomicInteger calls = new AtomicInteger();
-        AtomicReference<ModelRequest> audit = new AtomicReference<>();
-        var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            if (call == 2) {
-                audit.set(request);
-            }
-            return response(call == 1
-                    ? "{\"decision\":\"CONTINUE\",\"reason\":\"retry\","
-                            + "\"finalText\":null,"
-                            + "\"replacementSteps\":[]}"
-                    : "{\"complete\":true,"
-                            + "\"reason\":\"later sandbox success wins\","
-                            + "\"stepResult\":\"编译运行成功\"}");
-        }, new ObjectMapper(), null, null, null);
-
-        String result = provider.reflect(new ReflectionContext(
-                "task",
-                "{\"steps\":[{\"id\":\"step-3\","
-                        + "\"completionCriteria\":[\"compile and run\"]}]}",
-                List.of(), List.of(),
-                List.of(
-                        "activeStepId=step-3",
-                        "activeStepTitle=compile and run candidate",
-                        "executionReceipt=PersistentPlanAgentLoopReceiptFacts["
-                                + "stepId=step-3, toolKind=sandbox.execute, "
-                                + "authorityScope=FAILED_EFFECT_ONLY, "
-                                + "status=FAILURE, exitCode=Optional[1], "
-                                + "standardOutput=, standardError=compile failed]",
-                        "executionReceipt=PersistentPlanAgentLoopReceiptFacts["
-                                + "stepId=step-3, toolKind=sandbox.execute, "
-                                + "authorityScope=SANDBOX_EXECUTION_ONLY, "
-                                + "status=SUCCESS, exitCode=Optional[0], "
-                                + "standardOutput=ok, standardError=]"),
-                List.of()));
-
-        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
-        String input = audit.get().messages().get(1).content();
-        assertTrue(input.contains("successfulCurrentStepReceipts"));
-        assertTrue(input.contains("status=SUCCESS"));
-        assertTrue(input.contains("exitCode=Optional[0]"));
-        assertTrue(audit.get().messages().get(0).content().contains(
-                "successful Receipt is not invalidated"));
-    }
-
-    @Test
-    void stepStateAuditExcludesReceiptsFromOtherSteps() {
-        AtomicInteger calls = new AtomicInteger();
-        AtomicReference<ModelRequest> audit = new AtomicReference<>();
-        var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            if (call == 2) {
-                audit.set(request);
-            }
-            return response(call == 1
-                    ? "{\"decision\":\"CONTINUE\",\"reason\":\"check\","
-                            + "\"finalText\":null,"
-                            + "\"replacementSteps\":[]}"
-                    : "{\"complete\":true,\"reason\":\"candidate ready\","
-                            + "\"stepResult\":\"candidate ready\"}");
-        }, new ObjectMapper(), null, null, null);
+        String candidate = "class Sort { // COMPLETE_REPLACEMENT }";
 
         provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
+                "task", "plan", List.of(),
+                List.of("acceptedStepResult[result=exit code 0]"),
                 List.of(
-                        "activeStepId=step-3",
-                        "activeStepTitle=create candidate",
-                        "executionReceipt=stepId=step-2, "
-                                + "authorityScope=SANDBOX_EXECUTION_ONLY",
-                        "executionReceipt=stepId=step-3, "
-                                + "authorityScope=REVIEWABLE_CANDIDATE_CREATED"),
-                List.of("create candidate")));
+                        "activeStepId=step-4",
+                        "toolExecution[stepId=step-3,toolKind=sandbox.execute,exitCode=0,stdout=ok]",
+                        "candidateContent=<replacement path=\"src/main/java/Sort.java\">"
+                                + candidate + "</replacement>"),
+                List.of("report final result")));
 
-        String input = audit.get().messages().get(1).content();
-        assertTrue(input.contains("stepId=step-3"));
-        assertTrue(input.contains("REVIEWABLE_CANDIDATE_CREATED"));
-        assertFalse(input.contains("stepId=step-2"));
-        assertFalse(input.contains("SANDBOX_EXECUTION_ONLY"));
+        String input = captured.get().messages().get(1).content();
+        assertTrue(input.contains("acceptedStepResult"));
+        assertTrue(input.contains("toolKind=sandbox.execute"));
+        assertTrue(input.contains("exitCode=0"));
+        assertTrue(input.contains(candidate));
     }
 
     @Test
-    void malformedCompletionAuditCannotReplaceStrictReflectionOutput() {
-        AtomicInteger calls = new AtomicInteger();
-        var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            return response(call == 1
-                    ? "{\"decision\":\"COMPLETE\",\"reason\":\"done\","
-                            + "\"finalText\":\"done\","
-                            + "\"replacementSteps\":[]}"
-                    : "{\"complete\":true,\"reason\":\"ok\","
-                            + "\"stepResult\":\"done\","
-                            + "\"unexpected\":true}");
-        }, new ObjectMapper(), null, null, null);
-
-        assertThrows(ReflectionAuditFormatException.class,
-                () -> provider.reflect(
-                new ReflectionContext(
-                        "task", "plan", List.of(), List.of(),
-                        List.of("activeStepId=step-1"),
-                        List.of("read project"))));
-        assertTrue(calls.get() == 3);
-    }
-
-    @Test
-    void malformedAuditGetsOneStrictFormatRepair() {
-        AtomicInteger calls = new AtomicInteger();
-        AtomicReference<ModelRequest> repair = new AtomicReference<>();
-        var provider = new V2ModelReflectionProvider(request -> {
-            int call = calls.incrementAndGet();
-            if (call == 3) {
-                repair.set(request);
-            }
-            return response(switch (call) {
-                case 1 -> "{\"decision\":\"CONTINUE\","
-                        + "\"reason\":\"check\",\"finalText\":null,"
-                        + "\"replacementSteps\":[]}";
-                case 2 -> "```json\n{\"complete\":true}\n```";
-                default -> "{\"complete\":true,"
-                        + "\"reason\":\"sandbox receipt proves success\","
-                        + "\"stepResult\":\"compiled and ran\"}";
-            });
-        }, new ObjectMapper(), null, null, null);
-
-        String result = provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of("activeStepId=step-1"),
-                List.of("compile and run")));
-
-        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
-        assertTrue(result.contains("\"finalText\":\"compiled and ran\""));
-        assertTrue(calls.get() == 3);
-        assertTrue(repair.get().messages().get(0).content().contains(
-                "exactly three fields"));
-        assertTrue(repair.get().messages().get(0).content().contains(
-                "Do not add fields"));
-    }
-
-    @Test
-    void replanStepIdsAreNamespacedWithDependenciesPreserved() throws Exception {
+    void replanStepIdsAreNamespacedWithDependenciesPreserved()
+            throws Exception {
         var provider = new V2ModelReflectionProvider(request -> response("""
                 {"decision":"REPLAN","reason":"change approach",
                  "finalText":null,"replacementSteps":[
@@ -367,9 +120,7 @@ class V2ModelReflectionProviderTest {
                     "maxAttempts":1,"maxDurationSeconds":60}]}
                 """), new ObjectMapper(), null, null, null);
 
-        String result = provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of("activeStepId=step-2"), List.of("compile")));
+        String result = provider.reflect(context());
         var root = new ObjectMapper().readTree(result);
         String first = root.path("replacementSteps").get(0)
                 .path("id").asText();
@@ -379,50 +130,27 @@ class V2ModelReflectionProviderTest {
         assertTrue(first.startsWith("replan-step-"));
         assertTrue(second.startsWith("replan-step-"));
         assertFalse(first.equals(second));
-        assertTrue(root.path("replacementSteps").get(1)
-                .path("dependencies").get(0).asText().equals(first));
-        assertFalse(result.contains("\"id\":\"step-1\""));
-    }
-
-    @Test
-    void reflectionShapedAuditIsMechanicallyNormalized() {
-        AtomicInteger calls = new AtomicInteger();
-        var provider = new V2ModelReflectionProvider(request -> response(
-                calls.incrementAndGet() == 1
-                        ? "{\"decision\":\"CONTINUE\","
-                                + "\"reason\":\"check\","
-                                + "\"finalText\":null,"
-                                + "\"replacementSteps\":[]}"
-                        : "{\"decision\":\"COMPLETE\","
-                                + "\"reason\":\"receipt proves success\","
-                                + "\"finalText\":\"exit code 0\","
-                                + "\"replacementSteps\":[]}"),
-                new ObjectMapper(), null, null, null);
-
-        String result = provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of("activeStepId=step-2"), List.of("compile")));
-
-        assertTrue(result.contains("\"decision\":\"COMPLETE\""));
-        assertTrue(result.contains("\"finalText\":\"exit code 0\""));
-        assertTrue(calls.get() == 2);
+        assertEquals(first, root.path("replacementSteps").get(1)
+                .path("dependencies").get(0).asText());
     }
 
     private static String captureSystemPrompt() {
         AtomicReference<ModelRequest> captured = new AtomicReference<>();
         var provider = new V2ModelReflectionProvider(request -> {
             captured.set(request);
-            return response(
-                    "{\"decision\":\"FAIL\",\"reason\":\"stop\","
-                            + "\"finalText\":null,"
-                            + "\"replacementSteps\":[]}");
+            return response("""
+                    {"decision":"FAIL","reason":"stop",
+                     "finalText":null,"replacementSteps":[]}
+                    """);
         }, new ObjectMapper(), null, null, null);
-
-        provider.reflect(new ReflectionContext(
-                "task", "plan", List.of(), List.of(),
-                List.of("failed receipt"), List.of("step")));
-
+        provider.reflect(context());
         return captured.get().messages().get(0).content();
+    }
+
+    private static ReflectionContext context() {
+        return new ReflectionContext(
+                "task", "plan", List.of(), List.of(),
+                List.of("activeStepId=step-2"), List.of("compile"));
     }
 
     private static ModelResponse response(String value) {

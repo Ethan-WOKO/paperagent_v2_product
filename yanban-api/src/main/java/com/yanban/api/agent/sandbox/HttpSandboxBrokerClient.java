@@ -14,7 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import org.springframework.http.HttpStatusCode;
 
-/** API-side client only. sbx/KVM/Docker privileges remain in the separately deployed broker. */
+/** API-side client only. E2B credentials remain in the separately deployed broker. */
 @Component
 @ConditionalOnProperty(prefix = "yanban.sandbox", name = "enabled", havingValue = "true")
 final class HttpSandboxBrokerClient implements SandboxBrokerClient {

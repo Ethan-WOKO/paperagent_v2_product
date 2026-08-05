@@ -202,7 +202,7 @@
 
               <template v-else-if="inspectorTab === 'changes'">
                 <div class="project-inspector__changes-head">
-                  <p class="project-panel__hint">这里只展示候选修改；确认前不会改动原项目。</p>
+                  <p class="project-panel__hint">修改内容通过最后一次沙箱运行并核对一致后，会自动创建新版本；旧版本仍可回退。</p>
                   <NButton size="tiny" secondary :loading="loading.candidates" :disabled="!activeProject || candidates.length === 0" title="重新核对候选修改与当前项目版本" @click="refreshCandidates">重新核对</NButton>
                 </div>
 
@@ -210,7 +210,9 @@
                   <button v-for="candidate in candidates" :key="candidate.artifact.id" :class="{ active: selectedCandidate?.artifact.id === candidate.artifact.id }" @click="selectCandidate(candidate)">
                     <strong :title="candidateTitle(candidate)">{{ candidateTitle(candidate) }}</strong>
                     <span>
-                      <NTag size="tiny" type="info">尚未应用</NTag>
+                      <NTag size="tiny" :type="candidateApplied(candidate.artifact.id) ? 'success' : 'info'">
+                        {{ candidateApplied(candidate.artifact.id) ? '已应用' : '尚未应用' }}
+                      </NTag>
                       <NTag size="tiny" :type="candidateStateType(candidate.state)">{{ candidateStateLabel(candidate.state) }}</NTag>
                       <small v-if="candidate.candidate">{{ candidate.candidate.changes.length }} 个文件</small>
                     </span>
@@ -229,7 +231,7 @@
                       <dt>格式版本</dt><dd>{{ selectedCandidate.candidate.schemaVersion }}</dd>
                       <dt>项目版本</dt><dd :title="selectedCandidate.candidate.projectVersion">{{ selectedCandidate.candidate.projectVersion }}</dd>
                       <dt>候选指纹</dt><dd :title="selectedCandidate.candidate.fingerprint">{{ selectedCandidate.candidate.fingerprint }}</dd>
-                      <dt>当前状态</dt><dd>{{ selectedCandidate.candidate.governanceStatus }} / {{ selectedCandidate.candidate.applicationStatus }}</dd>
+                      <dt>当前状态</dt><dd>{{ selectedCandidateApplied ? selectedCandidateApplicationLabel : `${selectedCandidate.candidate.governanceStatus} / ${selectedCandidate.candidate.applicationStatus}` }}</dd>
                       <dt>差异格式</dt><dd>{{ selectedCandidate.candidate.reviewDiff.format }}</dd>
                     </dl>
 
@@ -255,7 +257,7 @@
                     <section class="project-candidate-sandbox">
                       <div class="project-panel__title">
                         <strong>验证状态</strong>
-                        <span>{{ documentOnlyProject ? '文档不会作为代码执行' : '验证不会直接应用修改' }}</span>
+                        <span>{{ selectedCandidateApplied ? '最终运行已绑定到当前项目版本' : documentOnlyProject ? '文档不会作为代码执行' : '等待最终运行结果' }}</span>
                       </div>
                       <div class="project-candidate-validation-summary">
                         <NAlert :type="selectedCandidateAutomaticValidation ? 'success' : 'default'" :show-icon="false">
@@ -264,22 +266,25 @@
                             : '尚无通过记录' }}
                         </NAlert>
                         <NAlert :type="candidateConfirmationAlertType(selectedCandidateConfirmationValidation)" :show-icon="false">
-                          创建新版本前的确认验证：{{ selectedCandidateConfirmationValidation
+                          项目版本状态：{{ selectedCandidateConfirmationValidation
                             ? candidateConfirmationLabel(selectedCandidateConfirmationValidation)
                             : '尚未执行' }}
                         </NAlert>
                       </div>
+                      <NAlert v-if="selectedCandidateApplied" type="success" :show-icon="false">
+                        修改已经自动保存为新版本，无需再次选择环境、运行或确认。不满意可在“项目版本”中回退。
+                      </NAlert>
                       <NAlert v-if="documentOnlyProject" type="info" :show-icon="false">
                         这个项目只包含文档。系统会核对项目版本、路径、哈希、权限和候选绑定，不会把文档放进 E2B 执行。
                       </NAlert>
-                      <div class="project-candidate-sandbox__controls">
+                      <div v-if="!selectedCandidateApplied" class="project-candidate-sandbox__controls">
                         <NSelect v-model:value="validationProfile" size="small" :options="validationProfileOptions" :disabled="loading.candidateValidation" />
                         <NButton size="small" secondary :loading="loading.candidateValidation"
                           :disabled="!candidateCanSelect(selectedCandidate) || selectedChangeIndexes.size === 0"
                           @click="validationModalOpen = true">{{ documentOnlyProject ? '检查所选文档修改' : '在沙箱运行所选修改' }}</NButton>
                       </div>
                       <NAlert v-if="validationMessage" :type="validationMessageType" :show-icon="false">{{ validationMessage }}</NAlert>
-                      <div v-if="candidateValidations.length" class="project-candidate-validation-history">
+                      <div v-if="!selectedCandidateApplied && candidateValidations.length" class="project-candidate-validation-history">
                         <button v-for="validation in candidateValidations" :key="validation.validationId"
                           :class="{ active: selectedValidation?.validationId === validation.validationId }"
                           @click="selectedValidation = validation">
@@ -288,7 +293,7 @@
                           <small>{{ formatDateTime(validation.createdAt) }}</small>
                         </button>
                       </div>
-                      <article v-if="selectedValidation" class="project-candidate-validation-receipt">
+                      <article v-if="!selectedCandidateApplied && selectedValidation" class="project-candidate-validation-receipt">
                         <dl>
                            <dt>验证编号</dt><dd :title="selectedValidation.validationId">{{ selectedValidation.validationId }}</dd>
                            <dt>绑定信息</dt><dd>{{ shortHash(selectedValidation.candidateFingerprint) }} / {{ shortHash(selectedValidation.projectVersion) }}</dd>
@@ -320,7 +325,7 @@
                             :loading="loading.rejectCandidateValidation" @click="rejectSelectedValidation">拒绝候选修改</NButton>
                         </NSpace>
                       </article>
-                      <NEmpty v-else size="small" description="创建新版本前的确认验证：尚未执行" />
+                      <NEmpty v-else-if="!selectedCandidateApplied" size="small" description="尚未产生验证记录" />
                     </section>
 
                     <section class="project-candidate-files">
@@ -328,7 +333,7 @@
                         <header>
                           <NCheckbox
                             :checked="selectedChangeIndexes.has(changeIndex)"
-                            :disabled="!candidateCanSelect(selectedCandidate) || loading.applyCandidate || loading.candidateValidation"
+                            :disabled="selectedCandidateApplied || !candidateCanSelect(selectedCandidate) || loading.applyCandidate || loading.candidateValidation"
                             :aria-label="`选择 ${entry.relativePath}`"
                             @update:checked="(checked) => setChangeSelected(changeIndex, checked)"
                           />
@@ -361,7 +366,7 @@
                     <NAlert v-if="applicationMessage" :type="applicationMessageType" :show-icon="false">
                       {{ applicationMessage }}
                     </NAlert>
-                    <div class="project-candidate-apply">
+                    <div v-if="!selectedCandidateApplied" class="project-candidate-apply">
                       <span>已选择 {{ selectedChangeIndexes.size }} / {{ selectedCandidate.candidate.changes.length }} 项修改</span>
                       <NButton
                         type="primary"
@@ -451,14 +456,14 @@
                   <span class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">P</span>
                   <div class="v2-task-card__result-copy">
                     <NAlert v-if="v2TaskApplied(task)" type="success" :show-icon="false">
-                      候选修改 #{{ task.candidateArtifactId }} 已确认应用，已创建项目版本
+                      修改 #{{ task.candidateArtifactId }} 已自动保存，已创建项目版本
                       revision #{{ task.confirmationValidation?.appliedRevisionId }}
                       <template v-if="task.confirmationValidation?.appliedProjectVersion">
                         （{{ shortHash(task.confirmationValidation.appliedProjectVersion) }}）
                       </template>。旧项目版本仍然保留。
                     </NAlert>
                     <MarkdownMessage
-                      v-else-if="task.status === 'SUCCEEDED' && task.finalText"
+                      v-if="task.status === 'SUCCEEDED' && task.finalText"
                       :content="task.finalText"
                       variant="project"
                     />
@@ -478,7 +483,7 @@
                   <div v-if="task.candidateArtifactId" class="v2-conversation__candidate">
                     <span>候选修改 #{{ task.candidateArtifactId }}</span>
                     <NButton type="primary" secondary @click="openV2CandidateReview(task.candidateArtifactId)">
-                      打开修改与验证
+                      查看修改
                     </NButton>
                   </div>
                   <div v-if="task.outputPaths.length" class="v2-conversation__outputs">
@@ -486,11 +491,11 @@
                     <code v-for="path in task.outputPaths" :key="path" :title="path">{{ path }}</code>
                   </div>
                   <dl v-if="task.candidateArtifactId" class="v2-task-card__validation">
-                    <dt>Agent 自动验证</dt>
+                    <dt>最终沙箱运行</dt>
                     <dd>{{ task.agentAutomaticValidation
                       ? `已通过（${task.agentAutomaticValidation.provider}，退出码 ${task.agentAutomaticValidation.exitCode}）`
                       : '尚无通过记录' }}</dd>
-                    <dt>创建新版本前的确认验证</dt>
+                    <dt>项目版本状态</dt>
                     <dd>{{ task.confirmationValidation
                       ? candidateConfirmationLabel(task.confirmationValidation)
                       : '尚未执行' }}</dd>
@@ -815,7 +820,21 @@ const selectedCandidateAutomaticValidation = computed(() => {
     .find((item) => item.candidateArtifactId === artifactId)
     ?.agentAutomaticValidation || null;
 });
-const selectedCandidateConfirmationValidation = computed(() => candidateValidations.value[0] || null);
+const selectedCandidateConfirmationValidation = computed(() => {
+  const artifactId = selectedCandidate.value?.artifact.id;
+  if (!artifactId) return candidateValidations.value[0] || null;
+  const automatic = [...v2TurnHistory.value].reverse()
+    .find((item) => item.candidateArtifactId === artifactId)
+    ?.confirmationValidation || null;
+  return automatic || candidateValidations.value[0] || null;
+});
+const selectedCandidateApplied = computed(() =>
+  selectedCandidateConfirmationValidation.value?.decisionStatus === 'APPLIED'
+  && Boolean(selectedCandidateConfirmationValidation.value.appliedRevisionId));
+const selectedCandidateApplicationLabel = computed(() =>
+  selectedCandidateConfirmationValidation.value
+    ? candidateConfirmationLabel(selectedCandidateConfirmationValidation.value)
+    : '尚未应用');
 const documentOnlyProject = computed(() => {
   const files = manifest.value?.files || [];
   return files.length > 0 && files.every((file) =>
@@ -1052,6 +1071,18 @@ function candidateConfirmationLabel(validation: {
   }
   if (validation.decisionStatus === 'REJECTED') return '已拒绝';
   return technicalStatusLabel(validation.status);
+}
+
+function candidateApplied(artifactId: number) {
+  const projected = [...v2TurnHistory.value].reverse()
+    .find((item) => item.candidateArtifactId === artifactId)
+    ?.confirmationValidation;
+  if (projected?.decisionStatus === 'APPLIED'
+      && Boolean(projected.appliedRevisionId)) return true;
+  return selectedCandidate.value?.artifact.id === artifactId
+    && candidateValidations.value.some((validation) =>
+      validation.decisionStatus === 'APPLIED'
+      && Boolean(validation.appliedRevisionId));
 }
 
 function candidateConfirmationAlertType(validation: {
@@ -1669,6 +1700,17 @@ async function presentV2NaturalLanguageCandidate(
   if (candidate) selectCandidate(candidate);
 }
 
+async function refreshProjectAfterV2AutoApply(clientRequestId: string, epoch: number) {
+  if (epoch !== projectEpoch) return;
+  const appliedTask = v2TurnHistory.value.find(
+    (item) => item.clientRequestId === clientRequestId,
+  );
+  if (!appliedTask || !isV2CandidateApplied(appliedTask)) return;
+  selectedFile.value = null;
+  searchResults.value = [];
+  await Promise.all([loadManifest(epoch), loadRevisions()]);
+}
+
 async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number) {
   if (!v2NaturalTurnAvailable.value) return;
   const stored = storedV2NaturalLanguageRequest(projectId, sessionId);
@@ -1714,6 +1756,7 @@ async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number
     upsertV2TurnOutcome(stored.clientRequestId, stored.question, outcome);
     clearStoredV2NaturalLanguageRequest(projectId, sessionId);
     await loadV2TurnHistory(sessionId, epoch);
+    await refreshProjectAfterV2AutoApply(stored.clientRequestId, epoch);
     await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
   } catch (cause) {
     if (controller.signal.aborted) return;
@@ -1792,6 +1835,7 @@ async function sendV2NaturalLanguageTurn() {
     v2TurnInput.value = '';
     clearStoredV2NaturalLanguageRequest(projectId, sessionId);
     await loadV2TurnHistory(sessionId, epoch);
+    await refreshProjectAfterV2AutoApply(clientRequestId, epoch);
     await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
   } catch (cause) {
     const sessionId = activeSessionId.value;

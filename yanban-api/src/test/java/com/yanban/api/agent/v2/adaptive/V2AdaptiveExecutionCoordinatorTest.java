@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.adaptive.reflection.*;
+import com.yanban.api.agent.v2.context.V2ExecutionContextSource;
 import com.yanban.api.agent.v2.result.V2StepResultSnapshot;
 import com.yanban.api.agent.v2.result.V2StepResultSource;
 import com.yanban.api.agent.v2.result.V2StepResultStatus;
@@ -18,6 +19,7 @@ import io.paperagent.v2.contracts.ReceiptId;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class V2AdaptiveExecutionCoordinatorTest {
@@ -80,6 +82,56 @@ class V2AdaptiveExecutionCoordinatorTest {
         assertEquals("SUCCEEDED", result.status());
         assertEquals("完成", result.finalText());
         assertEquals(2, calls.get());
+    }
+
+    @Test
+    void durableExecutionContextReachesReflectionModel() {
+        AtomicInteger cycleCalls = new AtomicInteger();
+        V2AdaptiveCyclePort cycles = command -> {
+            if (cycleCalls.incrementAndGet() == 1) {
+                return new V2AdaptiveCyclePort.CycleResult(
+                        V2AdaptiveCyclePort.CycleResult.State
+                                .STEP_SUCCEEDED,
+                        "step-1", "sandbox succeeded", false, null,
+                        List.of("currentCycleFact=success"), true, false);
+            }
+            assertEquals(
+                    V2AdaptiveCyclePort.Action.COMPLETE_STEP,
+                    command.action());
+            return new V2AdaptiveCyclePort.CycleResult(
+                    V2AdaptiveCyclePort.CycleResult.State.PLAN_SUCCEEDED,
+                    "step-1", "completed", true, null);
+        };
+        V2ExecutionContextSource contextSource =
+                mock(V2ExecutionContextSource.class);
+        when(contextSource.inspect(
+                new PlanId("plan-1"), new PlanStepId("step-1")))
+                .thenReturn(new V2ExecutionContextSource.Projection(
+                        List.of("acceptedStepResult=previous success"),
+                        List.of("toolExecution=exitCode 0"),
+                        Optional.of("preparedCandidate=full file content"),
+                        Optional.of("latestStepDecision=continue")));
+        AtomicReference<ReflectionContext> reflected =
+                new AtomicReference<>();
+        ReflectionProvider provider = value -> {
+            reflected.set(value);
+            return complete();
+        };
+
+        var result = new V2AdaptiveExecutionCoordinator(
+                cycles, provider,
+                new StrictReflectionDecisionParser(new ObjectMapper()),
+                null, contextSource).execute(command(Map.of()));
+
+        assertEquals("SUCCEEDED", result.status());
+        assertTrue(reflected.get().completedFacts().contains(
+                "acceptedStepResult=previous success"));
+        assertTrue(reflected.get().recentExecutionFacts().contains(
+                "toolExecution=exitCode 0"));
+        assertTrue(reflected.get().recentExecutionFacts().contains(
+                "candidateContent=preparedCandidate=full file content"));
+        assertTrue(reflected.get().recentExecutionFacts().contains(
+                "previousReflection=latestStepDecision=continue"));
     }
 
     @Test
@@ -297,7 +349,7 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
-    void durableSuccessReflectionContinueGetsOneNoProgressReconsideration() {
+    void continueDecisionIsPassedToTheNextToolSelectionCycle() {
         AtomicInteger cycleCalls = new AtomicInteger();
         V2AdaptiveCyclePort cycles = command -> {
             int call = cycleCalls.incrementAndGet();
@@ -318,6 +370,9 @@ class V2AdaptiveExecutionCoordinatorTest {
                 assertEquals(
                         V2AdaptiveCyclePort.Action.EXECUTE,
                         command.action());
+                assertTrue(command.modelContextFacts().stream()
+                        .anyMatch(value -> value.contains(
+                                "previousReflectionDecision=CONTINUE")));
                 return new V2AdaptiveCyclePort.CycleResult(
                         V2AdaptiveCyclePort.CycleResult.State
                                 .STEP_SUCCEEDED,
@@ -334,19 +389,14 @@ class V2AdaptiveExecutionCoordinatorTest {
                     "step-1", "durable completion", true, null);
         };
         AtomicInteger reflectionCalls = new AtomicInteger();
-        ReflectionProvider provider = reflectionContext -> {
+        ReflectionProvider provider = ignored -> {
             int call = reflectionCalls.incrementAndGet();
-            boolean guarded = reflectionContext.recentExecutionFacts()
-                    .stream().anyMatch(value ->
-                            value.startsWith("noProgressGuard="));
-            if (call <= 2) {
-                assertFalse(guarded);
+            if (call == 1) {
                 return """
                         {"decision":"CONTINUE","reason":"continue",
                          "finalText":null,"replacementSteps":[]}
                         """;
             }
-            assertTrue(guarded);
             return complete();
         };
 
@@ -355,14 +405,19 @@ class V2AdaptiveExecutionCoordinatorTest {
 
         assertEquals("SUCCEEDED", result.status());
         assertEquals(3, cycleCalls.get());
-        assertEquals(3, reflectionCalls.get());
+        assertEquals(2, reflectionCalls.get());
     }
 
     @Test
-    void repeatedContinueAfterNoProgressGuardFailsWithoutReplayingTool() {
+    void continueDoesNotTriggerASecondReflectionModelCall() {
         AtomicInteger cycleCalls = new AtomicInteger();
-        V2AdaptiveCyclePort cycles = ignored -> {
+        V2AdaptiveCyclePort cycles = command -> {
             int call = cycleCalls.incrementAndGet();
+            if (call == 2) {
+                assertTrue(command.modelContextFacts().stream()
+                        .anyMatch(value -> value.contains(
+                                "previousReflectionDecision=CONTINUE")));
+            }
             return new V2AdaptiveCyclePort.CycleResult(
                     V2AdaptiveCyclePort.CycleResult.State.STEP_SUCCEEDED,
                     "step-1", "reflection selected", false, null,
@@ -374,16 +429,16 @@ class V2AdaptiveExecutionCoordinatorTest {
                             : rejectedStepResult()));
         };
         AtomicInteger reflectionCalls = new AtomicInteger();
-        ReflectionProvider provider = reflectionContext -> {
+        ReflectionProvider provider = ignored -> {
             int call = reflectionCalls.incrementAndGet();
-            if (call == 3) {
-                assertTrue(reflectionContext.recentExecutionFacts()
-                        .stream().anyMatch(value ->
-                                value.contains(
-                                        "persisted a Step-result")));
+            if (call == 1) {
+                return """
+                        {"decision":"CONTINUE","reason":"continue",
+                         "finalText":null,"replacementSteps":[]}
+                        """;
             }
             return """
-                    {"decision":"CONTINUE","reason":"continue",
+                    {"decision":"FAIL","reason":"cannot continue",
                      "finalText":null,"replacementSteps":[]}
                     """;
         };
@@ -392,9 +447,9 @@ class V2AdaptiveExecutionCoordinatorTest {
                 .execute(command(Map.of()));
 
         assertEquals("FAILED", result.status());
-        assertEquals("REFLECTION_NO_PROGRESS", result.errorCode());
+        assertEquals("REFLECTION_FAILED", result.errorCode());
         assertEquals(2, cycleCalls.get());
-        assertEquals(3, reflectionCalls.get());
+        assertEquals(2, reflectionCalls.get());
     }
 
     @Test
@@ -604,25 +659,6 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
-    void reflectionAuditFormatFailureHasItsOwnTerminalCode() {
-        AtomicInteger providerCalls = new AtomicInteger();
-        V2AdaptiveCyclePort cycle = ignored ->
-                new V2AdaptiveCyclePort.CycleResult(
-                        V2AdaptiveCyclePort.CycleResult.State.FAILED,
-                        "step-1", "EFFECT_REJECTED", false, null,
-                        List.of("failed receipt"), true, true);
-
-        var result = coordinator(cycle, ignored -> {
-            providerCalls.incrementAndGet();
-            throw new ReflectionAuditFormatException();
-        }).execute(command(Map.of("step-1", "project.search")));
-
-        assertEquals("REFLECTION_AUDIT_FORMAT_INVALID",
-                result.errorCode());
-        assertEquals(1, providerCalls.get());
-    }
-
-    @Test
     void agentLoopExceptionHasExplicitCycleStageCode() {
         var coordinator = coordinator(command -> {
             throw new V2AdaptiveRuntimeCycleFactory.CycleStageException(
@@ -674,7 +710,7 @@ class V2AdaptiveExecutionCoordinatorTest {
     }
 
     @Test
-    void reasoningOnlyReplanStepDoesNotCreateNullToolBinding() {
+    void replanStepsRemainGoalBasedWithoutToolBindings() {
         ReflectionOutcome replan = new StrictReflectionDecisionParser(
                 new ObjectMapper()).parse("""
                 {"decision":"REPLAN","reason":"repair",
@@ -682,12 +718,12 @@ class V2AdaptiveExecutionCoordinatorTest {
                   {"id":"repair-read","intent":"Read",
                    "expectedOutcome":"content","dependencies":[],
                    "completionCriteria":["read"],"maxAttempts":1,
-                   "maxDurationSeconds":30,"capability":"project_read"},
+                   "maxDurationSeconds":30},
                   {"id":"repair-analyze","intent":"Analyze",
                    "expectedOutcome":"answer",
                    "dependencies":["repair-read"],
                    "completionCriteria":["answer"],"maxAttempts":1,
-                   "maxDurationSeconds":30,"capability":null}]}
+                    "maxDurationSeconds":30}]}
                 """);
 
         Map<io.paperagent.v2.contracts.PlanStepId,
@@ -695,13 +731,7 @@ class V2AdaptiveExecutionCoordinatorTest {
                 V2AdaptiveRuntimeCycleFactory.bindingsForCycle(
                         Map.of(), replan);
 
-        assertEquals(1, bindings.size());
-        assertEquals("project.read", bindings.get(
-                new io.paperagent.v2.contracts.PlanStepId(
-                        "repair-read")).value());
-        assertFalse(bindings.containsKey(
-                new io.paperagent.v2.contracts.PlanStepId(
-                        "repair-analyze")));
+        assertTrue(bindings.isEmpty());
     }
 
     private static V2AdaptiveExecutionCoordinator coordinator(

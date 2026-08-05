@@ -15,7 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-@SpringBootTest(properties={"yanban.broker.enabled=true","yanban.broker.mode=LOCAL_ACCEPTANCE","yanban.broker.bind-address=127.0.0.1","yanban.broker.remote-access=false","yanban.broker.sbx-executable=C:/test/sbx.exe","yanban.broker.workspace-root=C:/test/work","yanban.broker.provider-home=C:/test/sbx-home","yanban.broker.provider-config-home=C:/test/sbx-home/config","yanban.broker.provider-data-home=C:/test/sbx-home/data","yanban.broker.provider-state-home=C:/test/sbx-home/state","yanban.broker.bearer-token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","spring.datasource.url=jdbc:h2:mem:broker;MODE=MySQL;DB_CLOSE_DELAY=-1",
+@SpringBootTest(properties={"yanban.broker.enabled=true","yanban.broker.mode=LOCAL_ACCEPTANCE","yanban.broker.bind-address=127.0.0.1","yanban.broker.remote-access=false","yanban.broker.workspace-root=C:/test/work","yanban.broker.bearer-token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","yanban.broker.e2b-api-key=server-side-key-that-is-long-enough","yanban.broker.e2b-template=yanban-research-v1","yanban.broker.e2b-python-executable=C:/test/python.exe","yanban.broker.e2b-helper=C:/test/e2b_provider.py","spring.datasource.url=jdbc:h2:mem:broker;MODE=MySQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa","spring.datasource.password=","spring.flyway.enabled=true","spring.flyway.locations=classpath:db/migration"})
 class BrokerMigrationTest {
     @Autowired DataSource dataSource;

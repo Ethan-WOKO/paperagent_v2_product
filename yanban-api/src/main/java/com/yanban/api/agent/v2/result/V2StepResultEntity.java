@@ -135,6 +135,7 @@ class V2StepResultEntity {
     String status() { return status; }
     String acceptedText() { return acceptedText; }
     String acceptedSha256() { return acceptedSha256; }
+    String resolutionReason() { return resolutionReason; }
     Instant createdAt() { return createdAt; }
     Instant updatedAt() { return updatedAt; }
 }

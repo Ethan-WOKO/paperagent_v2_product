@@ -29,7 +29,6 @@ Get-Content -LiteralPath $configPath | ForEach-Object {
 
 $required = @(
     'YANBAN_SANDBOX_BROKER_ENABLED',
-    'YANBAN_SANDBOX_BROKER_PROVIDER',
     'YANBAN_SANDBOX_WORKSPACE_ROOT',
     'YANBAN_SANDBOX_BROKER_TOKEN',
     'YANBAN_SANDBOX_DB_URL',
@@ -41,9 +40,8 @@ $required = @(
 foreach ($name in $required) {
     if ([string]::IsNullOrWhiteSpace($settings[$name])) { throw "Missing required setting: $name" }
 }
-if ($settings['YANBAN_SANDBOX_BROKER_ENABLED'] -ne 'true' -or
-    $settings['YANBAN_SANDBOX_BROKER_PROVIDER'].ToUpperInvariant() -ne 'E2B') {
-    throw 'The local Broker config must enable the E2B provider.'
+if ($settings['YANBAN_SANDBOX_BROKER_ENABLED'] -ne 'true') {
+    throw 'The local E2B Broker config must be enabled.'
 }
 if (-not (Test-Path -LiteralPath $providerHelper -PathType Leaf)) {
     throw 'The repository-owned E2B provider helper is missing.'

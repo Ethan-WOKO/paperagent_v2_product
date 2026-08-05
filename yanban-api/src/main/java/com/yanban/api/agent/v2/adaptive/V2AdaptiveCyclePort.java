@@ -12,16 +12,26 @@ public interface V2AdaptiveCyclePort {
 
     record CycleCommand(
             Long userId, Long turnId, String planId, int cycle,
-            Object replanRequest, Action action) {
+            Object replanRequest, Action action,
+            List<String> modelContextFacts) {
+        public CycleCommand(
+                Long userId, Long turnId, String planId, int cycle,
+                Object replanRequest, Action action) {
+            this(userId, turnId, planId, cycle, replanRequest,
+                    action, List.of());
+        }
+
         public CycleCommand(
                 Long userId, Long turnId, String planId, int cycle,
                 Object replanRequest) {
             this(userId, turnId, planId, cycle, replanRequest,
-                    Action.EXECUTE);
+                    Action.EXECUTE, List.of());
         }
 
         public CycleCommand {
             action = action == null ? Action.EXECUTE : action;
+            modelContextFacts = modelContextFacts == null
+                    ? List.of() : List.copyOf(modelContextFacts);
         }
     }
 

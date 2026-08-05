@@ -23,8 +23,12 @@ Before changing the repository, read:
 - A TaskFrame freezes the objective, objects, deliverables, constraints,
   ProjectVersion, and permission tier. A Plan may be revised, but completed
   authoritative facts are append-only and cannot be rewritten.
-- Agent execution may modify only an isolated Workspace. The original
-  ProjectVersion changes only after the user accepts the Workspace diff.
+- Agent execution may modify only an isolated Workspace. For an explicit
+  Project modification request, a new current ProjectVersion may be published
+  automatically only after the final successful sandbox run is bound to the
+  exact Candidate file contents. The previous immutable revision must remain
+  available for rollback. Without that proof, the ProjectVersion must not
+  change.
 - Workspace diffs, execution receipts, and event logs are authoritative result
   facts. Evidence supports conclusions; it is not a fixed tool-call script.
 

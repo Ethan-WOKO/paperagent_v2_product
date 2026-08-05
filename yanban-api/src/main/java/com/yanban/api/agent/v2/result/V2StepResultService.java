@@ -287,6 +287,49 @@ public class V2StepResultService {
                 .reduce((ignored, latest) -> latest);
     }
 
+    @Transactional(readOnly = true)
+    public Optional<ActiveDecision> latestDecisionForActive(
+            PlanId planId, PlanStepId stepId) {
+        Objects.requireNonNull(planId, "planId");
+        Objects.requireNonNull(stepId, "stepId");
+        var inspected = recoveries.inspect(planId);
+        if (inspected == null
+                || inspected.outcome() != PersistenceOutcome.FOUND
+                || inspected.failure().isPresent()
+                || !(inspected.value().orElse(null)
+                        instanceof io.paperagent.v2.persistence
+                                .PersistedStepRecoveryActive active)
+                || !active.activation().stepId().equals(stepId)) {
+            return Optional.empty();
+        }
+        String activationId = active.activation().activationEvent()
+                .id().value();
+        return repository
+                .findFirstByActivationEventIdOrderByUpdatedAtDesc(
+                        activationId)
+                .map(value -> new ActiveDecision(
+                        value.resultId(),
+                        V2StepResultSource.valueOf(value.source()),
+                        V2StepResultStatus.valueOf(value.status()),
+                        value.proposedText(),
+                        Optional.ofNullable(value.resolutionReason()),
+                        readReceiptIds(value.evidenceReceiptIdsJson())));
+    }
+
+    public record ActiveDecision(
+            String resultId,
+            V2StepResultSource source,
+            V2StepResultStatus status,
+            String proposedText,
+            Optional<String> resolutionReason,
+            List<ReceiptId> evidenceReceiptIds) {
+        public ActiveDecision {
+            resolutionReason = Objects.requireNonNull(
+                    resolutionReason, "resolutionReason");
+            evidenceReceiptIds = List.copyOf(evidenceReceiptIds);
+        }
+    }
+
     private void requireCurrentAuthority(V2StepResultEntity entity) {
         var inspected = recoveries.inspect(new PlanId(entity.planId()));
         if (inspected == null

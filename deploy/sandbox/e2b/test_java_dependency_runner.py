@@ -74,12 +74,12 @@ class JavaDependencyRunnerTest(unittest.TestCase):
                         "yanban-runner", "java", "Sort.java",
                         "--dependency=ch.qos.logback:logback-core:1.5.18"]):
                     self.assertEqual(0, runner.main())
-            self.assertEqual("javac", commands[0][0])
-            self.assertEqual("java", commands[1][0])
+            self.assertEqual("/opt/yanban/temurin-17/bin/javac", commands[0][0])
+            self.assertEqual("/opt/yanban/temurin-17/bin/java", commands[1][0])
             self.assertIn(str(root), commands[0][commands[0].index("-classpath") + 1])
             self.assertEqual(str(root), commands[0][commands[0].index("-sourcepath") + 1])
             self.assertIn(str(root), commands[1][commands[1].index("-classpath") + 1])
-            self.assertFalse(any(command[0] in ("mvn", "curl", "wget") for command in commands))
+            self.assertFalse(any(Path(command[0]).name in ("mvn", "curl", "wget") for command in commands))
 
 
 if __name__ == "__main__":

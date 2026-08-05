@@ -70,9 +70,51 @@ class V2AdaptiveFinalSynthesisServiceTest {
         String instructions = request.getValue().messages().get(0).content();
         assertTrue(facts.contains("已读取目标文件"));
         assertTrue(facts.contains("回溯生成所有排列"));
-        assertTrue(facts.contains("42"));
         assertTrue(facts.contains("src/main/java/Example.java"));
-        assertTrue(instructions.contains("reproduce source files"));
+        assertTrue(facts.contains(
+                "\"workingCopyApplicationState\":\"NOT_APPLIED\""));
+        assertTrue(instructions.contains("complete\nfinalWorkingCopy"));
+    }
+
+    @Test
+    void synthesisReceivesAutomaticRevisionState() {
+        V2StepResultService results = mock(V2StepResultService.class);
+        ModelProvider provider = mock(ModelProvider.class);
+        Plan plan = plan();
+        when(results.acceptedCompletedFacts(plan.id())).thenReturn(List.of(
+                accepted("result-1", "step-1", "sandbox succeeded")));
+        when(provider.complete(any())).thenReturn(response("saved"));
+        var autoApplications = mock(
+                com.yanban.api.project.AgentCandidateAutoApplicationService.class);
+        when(autoApplications.proof(plan.id().value(), 42L)).thenReturn(
+                new com.yanban.api.project.AgentCandidateAutoApplicationService
+                        .VerificationProof(
+                        "receipt", List.of("src/main/java/Example.java"),
+                        List.of("yanban-runner", "java",
+                                "src/main/java/Example.java"),
+                        "ok", "", 0,
+                        Map.of("src/main/java/Example.java",
+                                "class Example {}")));
+        var service = new V2AdaptiveFinalSynthesisService(
+                results, new ObjectMapper(), autoApplications);
+
+        service.synthesize(new V2AdaptiveFinalSynthesisService.Request(
+                taskFrame(), plan, 42L,
+                List.of("src/main/java/Example.java"),
+                29L, "f".repeat(64), provider));
+
+        ArgumentCaptor<ModelRequest> request = ArgumentCaptor.forClass(
+                ModelRequest.class);
+        verify(provider).complete(request.capture());
+        String facts = request.getValue().messages().get(1).content();
+        String instructions = request.getValue().messages().get(0).content();
+        assertTrue(facts.contains(
+                "\"workingCopyApplicationState\":\"APPLIED\""));
+        assertTrue(facts.contains("class Example {}"));
+        assertTrue(facts.contains("yanban-runner"));
+        assertTrue(facts.contains("\"standardOutput\":\"ok\""));
+        assertTrue(instructions.contains("already the current Project revision"));
+        assertTrue(instructions.contains("rollback"));
     }
 
     @Test

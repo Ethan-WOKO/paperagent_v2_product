@@ -241,6 +241,18 @@ class ProjectControllerIntegrationTest {
     }
 
     @Test
+    void deleteDelegatesToProjectSessionCleanupWhenConfigured() {
+        ProjectService projectService = org.mockito.Mockito.mock(ProjectService.class);
+        ProjectSessionService projectSessions = org.mockito.Mockito.mock(ProjectSessionService.class);
+        ProjectController controller = new ProjectController(projectService, projectSessions);
+
+        controller.delete(7L, 42L);
+
+        org.mockito.Mockito.verify(projectSessions).deleteProject(7L, 42L);
+        org.mockito.Mockito.verifyNoInteractions(projectService);
+    }
+
+    @Test
     void deleteReturnsTheSameNotFoundForMissingOrNonOwnedProject() throws Exception {
         mockMvc.perform(delete("/api/v1/projects/99"))
                 .andExpect(status().isNotFound());

@@ -240,7 +240,8 @@ class E2bProviderCommandTest(unittest.TestCase):
             provider.command_create(types.SimpleNamespace(
                 name="test", template="template", timeout_millis=60_000,
                 cpus=1, memory_bytes=256 * 1024 * 1024, workspace=workspace,
-                dependency_network=True, coordinates_only=True))
+                dependency_network=True,
+                dependency_declarations_only=True))
         self.assertEqual([], writes)
 
     def test_provider_error_code_is_bounded_and_actionable(self):

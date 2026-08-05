@@ -154,7 +154,11 @@ public class ProjectController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal(expression = "id") Long userId,
                        @PathVariable Long projectId) {
-        projectService.delete(userId, projectId);
+        if (projectSessions == null) {
+            projectService.delete(userId, projectId);
+            return;
+        }
+        projectSessions.deleteProject(userId, projectId);
     }
 
     @GetMapping("/{projectId}/manifest")

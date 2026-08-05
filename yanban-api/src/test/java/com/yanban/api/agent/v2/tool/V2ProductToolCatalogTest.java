@@ -205,15 +205,24 @@ class V2ProductToolCatalogTest {
         ToolId tool = id("project.candidate.compose");
         assertTrue(accepts(tool, object(Map.of(
                 "operation", text("compose"),
-                "paths", list(text("paper/main.tex"))))));
+                "paths", list(text("paper/main.tex")),
+                "replacements", list(object(Map.of(
+                        "path", text("paper/main.tex"),
+                        "text", text("updated"))))))));
         assertFalse(accepts(tool, object(Map.of(
                 "operation", text("apply"),
-                "paths", list(text("paper/main.tex"))))));
+                "paths", list(text("paper/main.tex")),
+                "replacements", list(object(Map.of(
+                        "path", text("paper/main.tex"),
+                        "text", text("updated"))))))));
         assertFalse(accepts(tool, object(Map.of(
                 "operation", text("compose"),
                 "paths", list(
                         text("paper/main.tex"),
-                        text("paper/main.tex"))))));
+                        text("paper/main.tex")),
+                "replacements", list(object(Map.of(
+                        "path", text("paper/main.tex"),
+                        "text", text("updated"))))))));
     }
 
     @Test

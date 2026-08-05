@@ -3,11 +3,9 @@ package com.yanban.api.agent.v2.adaptive.reflection;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.PlanStep;
 import io.paperagent.v2.contracts.PlanStepId;
-import io.paperagent.v2.contracts.ToolId;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -39,19 +37,21 @@ public final class StrictReflectionDecisionParser {
     public ReflectionOutcome parse(String raw) {
         if (raw == null || raw.isBlank()
                 || raw.length() > MAX_OUTPUT_CHARACTERS) {
-            throw invalid();
+            throw invalid(raw == null || raw.isBlank()
+                    ? "output is empty"
+                    : "output exceeds 32000 characters");
         }
         try {
             JsonNode root = json.readTree(raw);
             if (root == null || !root.isObject()) {
-                throw invalid();
+                throw invalid("top level must be one JSON object");
             }
             String decisionText = requiredText(root, "decision", 32);
             ReflectionAction decision;
             try {
                 decision = ReflectionAction.valueOf(decisionText);
             } catch (IllegalArgumentException failure) {
-                throw invalid();
+                throw invalid("decision must be CONTINUE, REPLAN, COMPLETE, or FAIL");
             }
 
             exactFields(root, Set.of(
@@ -63,7 +63,7 @@ public final class StrictReflectionDecisionParser {
                         root, "finalText", MAX_FINAL_TEXT_CHARACTERS);
             } else {
                 if (finalTextNode == null || !finalTextNode.isNull()) {
-                    throw invalid();
+                    throw invalid("finalText must be null unless decision is COMPLETE");
                 }
                 finalText = null;
             }
@@ -76,8 +76,11 @@ public final class StrictReflectionDecisionParser {
                     replacementSteps);
         } catch (ReflectionParseException failure) {
             throw failure;
-        } catch (IOException | RuntimeException failure) {
-            throw invalid();
+        } catch (IOException failure) {
+            throw invalid("output is not valid JSON: " + failure.getMessage());
+        } catch (RuntimeException failure) {
+            throw invalid("output violates the reflection schema: "
+                    + failure.getClass().getSimpleName());
         }
     }
 
@@ -86,21 +89,21 @@ public final class StrictReflectionDecisionParser {
         JsonNode stepsNode = root.get("replacementSteps");
         if (stepsNode == null || !stepsNode.isArray()
                 || stepsNode.size() > MAX_STEPS) {
-            throw invalid();
+            throw invalid("replacementSteps must be an array with at most 8 items");
         }
         if (decision == ReflectionAction.REPLAN) {
             if (stepsNode.isEmpty()) {
-                throw invalid();
+                throw invalid("REPLAN requires at least one replacement Step");
             }
         } else if (!stepsNode.isEmpty()) {
-            throw invalid();
+            throw invalid("replacementSteps must be empty unless decision is REPLAN");
         }
 
         List<ReflectionReplacementStep> result = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         for (JsonNode step : stepsNode) {
             if (!step.isObject()) {
-                throw invalid();
+                throw invalid("each replacement Step must be an object");
             }
             Set<String> fields = new HashSet<>();
             step.fieldNames().forEachRemaining(fields::add);
@@ -108,20 +111,18 @@ public final class StrictReflectionDecisionParser {
                     "id", "intent", "expectedOutcome", "dependencies",
                     "completionCriteria", "maxAttempts",
                     "maxDurationSeconds");
-            Set<String> legacyFields = new HashSet<>(currentFields);
-            legacyFields.add("capability");
-            if (!fields.equals(currentFields)
-                    && !fields.equals(legacyFields)) {
-                throw invalid();
+            if (!fields.equals(currentFields)) {
+                throw invalid(fieldDifference(
+                        "replacement Step", currentFields, fields));
             }
             String id = requiredText(step, "id", 128);
             if (!seen.add(id)) {
-                throw invalid();
+                throw invalid("replacement Step id is duplicated: " + id);
             }
             List<String> dependencies = textList(
                     step, "dependencies", false);
             if (!seen.containsAll(dependencies) || dependencies.contains(id)) {
-                throw invalid();
+                throw invalid("replacement Step dependencies may reference only earlier replacement Step ids");
             }
             PlanStep planStep = new PlanStep(
                     new PlanStepId(id),
@@ -139,23 +140,8 @@ public final class StrictReflectionDecisionParser {
                                     "maxDurationSeconds",
                                     1,
                                     3_600))));
-            JsonNode capability = step.get("capability");
-            String publicAlias = null;
-            ToolId internalToolId = null;
-            if (capability != null && !capability.isNull()) {
-                if (!capability.isTextual()) {
-                    throw invalid();
-                }
-                publicAlias = bounded(capability.textValue(), 64);
-                var internal = V2ProductToolCatalog
-                        .toolIdForPublicAlias(publicAlias);
-                if (publicAlias.contains(".") || internal.isEmpty()) {
-                    throw invalid();
-                }
-                internalToolId = internal.orElseThrow();
-            }
             result.add(new ReflectionReplacementStep(
-                    planStep, publicAlias, internalToolId));
+                    planStep, null, null));
         }
         return List.copyOf(result);
     }
@@ -164,7 +150,7 @@ public final class StrictReflectionDecisionParser {
         Set<String> actual = new HashSet<>();
         node.fieldNames().forEachRemaining(actual::add);
         if (!actual.equals(allowed)) {
-            throw invalid();
+            throw invalid(fieldDifference("top level", allowed, actual));
         }
     }
 
@@ -172,14 +158,15 @@ public final class StrictReflectionDecisionParser {
             JsonNode parent, String field, int maximum) {
         JsonNode node = parent.get(field);
         if (node == null || !node.isTextual()) {
-            throw invalid();
+            throw invalid("field '" + field + "' must be a string");
         }
         return bounded(node.textValue(), maximum);
     }
 
     private static String bounded(String value, int maximum) {
         if (value == null || value.isBlank() || value.length() > maximum) {
-            throw invalid();
+            throw invalid("text must be nonblank and at most "
+                    + maximum + " characters");
         }
         return value.trim();
     }
@@ -190,17 +177,22 @@ public final class StrictReflectionDecisionParser {
         if (node == null || !node.isArray()
                 || node.size() > MAX_LIST_ITEMS
                 || required && node.isEmpty()) {
-            throw invalid();
+            throw invalid("field '" + field
+                    + "' must be an array with "
+                    + (required ? "1-" : "0-")
+                    + MAX_LIST_ITEMS + " items");
         }
         List<String> result = new ArrayList<>();
         Set<String> unique = new HashSet<>();
         for (JsonNode item : node) {
             if (!item.isTextual()) {
-                throw invalid();
+                throw invalid("field '" + field
+                        + "' must contain only strings");
             }
             String value = bounded(item.textValue(), MAX_TEXT_CHARACTERS);
             if (!unique.add(value)) {
-                throw invalid();
+                throw invalid("field '" + field
+                        + "' contains a duplicate value");
             }
             result.add(value);
         }
@@ -211,16 +203,27 @@ public final class StrictReflectionDecisionParser {
             JsonNode parent, String field, int minimum, int maximum) {
         JsonNode node = parent.get(field);
         if (node == null || !node.canConvertToInt()) {
-            throw invalid();
+            throw invalid("field '" + field + "' must be an integer");
         }
         int value = node.intValue();
         if (value < minimum || value > maximum) {
-            throw invalid();
+            throw invalid("field '" + field + "' must be between "
+                    + minimum + " and " + maximum);
         }
         return value;
     }
 
-    private static ReflectionParseException invalid() {
-        return new ReflectionParseException();
+    private static String fieldDifference(
+            String location, Set<String> expected, Set<String> actual) {
+        Set<String> missing = new LinkedHashSet<>(expected);
+        missing.removeAll(actual);
+        Set<String> unexpected = new LinkedHashSet<>(actual);
+        unexpected.removeAll(expected);
+        return location + " fields are invalid; missing=" + missing
+                + ", unexpected=" + unexpected;
+    }
+
+    private static ReflectionParseException invalid(String detail) {
+        return new ReflectionParseException(detail);
     }
 }

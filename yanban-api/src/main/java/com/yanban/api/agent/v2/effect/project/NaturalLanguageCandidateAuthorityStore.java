@@ -48,7 +48,8 @@ public class NaturalLanguageCandidateAuthorityStore {
         } catch (DuplicateKeyException replay) {
             // Verified below against every frozen field.
         }
-        ProjectCandidateEffectAuthority value = require(planId, stepId);
+        ProjectCandidateEffectAuthority value = require(
+                planId, stepId, digest);
         if (!Objects.equals(userId, value.userId())
                 || !Objects.equals(sessionId, value.sessionId())
                 || !Objects.equals(turnId, value.turnId())
@@ -70,7 +71,21 @@ public class NaturalLanguageCandidateAuthorityStore {
                        objective,paths_json,authority_json,authority_sha256
                 from agent_v2_natural_candidate_authorities
                 where plan_id=? and step_id=?
+                order by id desc
+                limit 1
                 """, planId, stepId);
+        if (rows.size() != 1) throw failed();
+        return rows.get(0);
+    }
+
+    private ProjectCandidateEffectAuthority require(
+            String planId, String stepId, String digest) {
+        List<ProjectCandidateEffectAuthority> rows = query("""
+                select user_id,session_id,turn_id,project_id,project_version,
+                       objective,paths_json,authority_json,authority_sha256
+                from agent_v2_natural_candidate_authorities
+                where plan_id=? and step_id=? and authority_sha256=?
+                """, planId, stepId, digest);
         if (rows.size() != 1) throw failed();
         return rows.get(0);
     }
@@ -86,6 +101,8 @@ public class NaturalLanguageCandidateAuthorityStore {
                        objective,paths_json,authority_json,authority_sha256
                 from agent_v2_natural_candidate_authorities
                 where plan_id=?
+                order by id desc
+                limit 1
                 """, planId);
         return rows.size() == 1
                 ? Optional.of(rows.get(0)) : Optional.empty();
@@ -110,17 +127,21 @@ public class NaturalLanguageCandidateAuthorityStore {
 
     @Transactional
     public void bindPrepared(
-            String planId, Map<String, String> replacements,
+            String planId, String stepId,
+            String authoritySha256,
+            Map<String, String> replacements,
             String diffFingerprint) {
         int changed = jdbc.update("""
                 update agent_v2_natural_candidate_authorities
                 set replacements_json=?, diff_fingerprint=?,
                     status='PREPARED', updated_at=?
-                where plan_id=? and status='BOUND'
+                where plan_id=? and step_id=? and authority_sha256=?
+                  and status='BOUND'
                 """, write(new TreeMap<>(replacements)), diffFingerprint,
-                Instant.now(), planId);
+                Instant.now(), planId, stepId, authoritySha256);
         if (changed != 1) {
-            Prepared existing = requirePrepared(planId);
+            Prepared existing = requirePrepared(
+                    planId, stepId, authoritySha256);
             if (!existing.replacements().equals(replacements)
                     || !existing.diffFingerprint()
                             .equals(diffFingerprint)) {
@@ -130,40 +151,88 @@ public class NaturalLanguageCandidateAuthorityStore {
     }
 
     public Prepared requirePrepared(String planId) {
+        return findPrepared(planId).orElseThrow(
+                NaturalLanguageCandidateAuthorityStore::failed);
+    }
+
+    public Prepared requirePrepared(String planId, String stepId) {
         List<Prepared> rows = jdbc.query("""
-                select replacements_json,diff_fingerprint
+                select step_id,replacements_json,diff_fingerprint
                 from agent_v2_natural_candidate_authorities
-                where plan_id=? and status in ('PREPARED','PUBLISHED')
+                where plan_id=? and step_id=?
+                  and status in ('PREPARED','PUBLISHED')
                 """, (row, ignored) -> new Prepared(
+                row.getString("step_id"),
                 readMap(row.getString("replacements_json")),
-                row.getString("diff_fingerprint")), planId);
+                row.getString("diff_fingerprint")), planId, stepId);
         if (rows.size() != 1) throw failed();
         return rows.get(0);
+    }
+
+    private Prepared requirePrepared(
+            String planId, String stepId, String authoritySha256) {
+        List<Prepared> rows = jdbc.query("""
+                select step_id,replacements_json,diff_fingerprint
+                from agent_v2_natural_candidate_authorities
+                where plan_id=? and step_id=? and authority_sha256=?
+                  and status in ('PREPARED','PUBLISHED')
+                """, (row, ignored) -> new Prepared(
+                row.getString("step_id"),
+                readMap(row.getString("replacements_json")),
+                row.getString("diff_fingerprint")),
+                planId, stepId, authoritySha256);
+        if (rows.size() != 1) throw failed();
+        return rows.get(0);
+    }
+
+    public Optional<Prepared> findPrepared(String planId) {
+        List<Prepared> rows = jdbc.query("""
+                select step_id,replacements_json,diff_fingerprint
+                from agent_v2_natural_candidate_authorities
+                where plan_id=? and status in ('PREPARED','PUBLISHED')
+                order by id desc
+                limit 1
+                """, (row, ignored) -> new Prepared(
+                row.getString("step_id"),
+                readMap(row.getString("replacements_json")),
+                row.getString("diff_fingerprint")), planId);
+        if (rows.size() > 1) throw failed();
+        return rows.isEmpty() ? Optional.empty()
+                : Optional.of(rows.get(0));
     }
 
     @Transactional
     public void bindCandidate(
             String planId, Long artifactId,
             String candidateFingerprint, String diffFingerprint) {
-        int changed = jdbc.update("""
+        List<Long> ids = jdbc.queryForList("""
+                select id from agent_v2_natural_candidate_authorities
+                where plan_id=? and status='PREPARED'
+                  and diff_fingerprint=?
+                order by id desc
+                limit 1
+                """, Long.class, planId, diffFingerprint);
+        int changed = ids.size() == 1 ? jdbc.update("""
                 update agent_v2_natural_candidate_authorities
                 set candidate_artifact_id=?, candidate_fingerprint=?,
                     status='PUBLISHED', updated_at=?
-                where plan_id=? and status='PREPARED'
-                  and diff_fingerprint=?
+                where id=? and status='PREPARED'
                 """, artifactId, candidateFingerprint, Instant.now(),
-                planId, diffFingerprint);
+                ids.get(0)) : 0;
         if (changed != 1) {
             List<Published> rows = jdbc.query("""
                     select candidate_artifact_id,candidate_fingerprint,
                            diff_fingerprint
                     from agent_v2_natural_candidate_authorities
                     where plan_id=? and status='PUBLISHED'
+                      and diff_fingerprint=?
+                    order by id desc
+                    limit 1
                     """, (row, ignored) -> new Published(
                             row.getLong("candidate_artifact_id"),
                             row.getString("candidate_fingerprint"),
                             row.getString("diff_fingerprint")),
-                    planId);
+                    planId, diffFingerprint);
             if (rows.size() != 1
                     || !Objects.equals(
                             rows.get(0).artifactId(), artifactId)
@@ -183,12 +252,14 @@ public class NaturalLanguageCandidateAuthorityStore {
                 select candidate_artifact_id
                 from agent_v2_natural_candidate_authorities
                 where plan_id=? and status='PUBLISHED'
+                order by id desc
+                limit 1
                 """, Long.class, planId);
         return values.size() == 1
                 ? Optional.ofNullable(values.get(0)) : Optional.empty();
     }
 
-    /** True once this Plan already owns prepared or published Candidate data. */
+    /** Reports persisted state only; it is not used to block later repair attempts. */
     public boolean hasPreparedCandidate(String planId) {
         Integer count = jdbc.queryForObject("""
                 select count(*)
@@ -238,9 +309,16 @@ public class NaturalLanguageCandidateAuthorityStore {
     }
 
     public record Prepared(
+            String stepId,
             Map<String, String> replacements, String diffFingerprint) {
         public Prepared {
             replacements = Map.copyOf(replacements);
+        }
+
+        public Prepared(
+                Map<String, String> replacements,
+                String diffFingerprint) {
+            this(null, replacements, diffFingerprint);
         }
     }
 

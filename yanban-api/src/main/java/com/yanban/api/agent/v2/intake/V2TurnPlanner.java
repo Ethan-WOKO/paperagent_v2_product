@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.Map;
 import io.paperagent.v2.providers.CorrelationId;
 import io.paperagent.v2.providers.GenerationOptions;
@@ -50,9 +51,12 @@ final class V2TurnPlanner {
     private static final int MAX_TEXT = 2_000;
     private static final int MAX_STEPS = 8;
     private static final String SYSTEM_PROMPT = """
-            You are the V2 intake planner. Return exactly one JSON object and no markdown.
-            Choose the route from the work required by the current request, not from
-            whether a Project happens to be attached to the session.
+            You are the intake planner. Understand the user's current request,
+            choose its execution route, and, when needed, create a small durable
+            TaskFrame and Plan. Return exactly one JSON object and no markdown.
+            The supplied capability catalog is task-level information for
+            judging feasibility; never bind a Plan Step to a named tool or
+            capability.
 
             Choose DIRECT only when all of the following are true:
             1. The answer can be produced entirely from the user's supplied text,
@@ -96,12 +100,17 @@ final class V2TurnPlanner {
             - "Search the literature and summarize the results." ->
               PERSISTENT_PLAN_EXECUTE with retrieval and networkAccess true.
 
-            Otherwise choose PERSISTENT_PLAN_EXECUTE and author a bounded TaskFrame and Plan.
-            Do not call tools while planning. Plan steps describe goals,
-            dependencies and completion criteria only.
-            Do not assign a tool or capability to a step.
-            The execution model will select tools
-            dynamically from the task-level catalog after the Plan is stored.
+            Otherwise choose PERSISTENT_PLAN_EXECUTE and author a bounded
+            TaskFrame and Plan. Do not call tools while planning. Each Step must
+            describe only a user-meaningful goal, expected outcome,
+            dependencies, and completion criteria. Do not put tool names,
+            internal storage objects, candidate creation, publication,
+            automatic application, rollback bookkeeping, user confirmation, or
+            redundant validation into the Plan. The runtime handles persistence
+            and applies a verified working-copy revision after the Plan's real
+            work succeeds. Prefer the fewest Steps that preserve genuine
+            dependencies. Do not add defensive Steps for hypothetical failures;
+            execution and reflection handle actual failures when they occur.
             DIRECT schema:
             {"route":"DIRECT","requirements":{"projectEvidence":false,
              "toolUse":false,"retrieval":false,"networkAccess":false,
@@ -175,7 +184,7 @@ final class V2TurnPlanner {
                     "User-selected Skill instructions:\n"
                             + bounded(
                                     skill.prompt(), 8_000,
-                                    "SKILL_PROMPT")));
+                                    "SKILL_PROMPT", "skill prompt")));
         }
         prompt.addAll(historyWithoutCurrentWorkspaceMessage(context));
         if (context.currentUserMessage() != null) {
@@ -223,11 +232,12 @@ final class V2TurnPlanner {
             log.warn(
                     "V2 intake planner format repair requested traceId={} "
                             + "projectSession={} diagnostic={} "
-                            + "outputDigest={}",
+                            + "validationDetail={} outputDigest={}",
                     traceId, projectSession, firstFailure.diagnostic(),
+                    firstFailure.getMessage(),
                     hash(raw).substring(0, 12));
             ModelRequest repairRequest = formatRepairRequest(
-                    modelRequest, traceId, firstFailure.diagnostic(), raw);
+                    modelRequest, traceId, firstFailure.getMessage(), raw);
             raw = complete(
                     planningProvider, repairRequest, traceId,
                     projectSession, "format-repair");
@@ -349,7 +359,7 @@ final class V2TurnPlanner {
     }
 
     private static ModelRequest formatRepairRequest(
-            ModelRequest source, String traceId, String diagnostic,
+            ModelRequest source, String traceId, String validationDetail,
             String previousOutput) {
         List<ModelMessage> messages = new ArrayList<>(source.messages());
         messages.add(new ModelMessage(
@@ -357,8 +367,10 @@ final class V2TurnPlanner {
                 previousOutput));
         messages.add(new ModelMessage(
                 MessageRole.USER,
-                "Your previous planner response failed validation with "
-                        + diagnostic + ". Rewrite that response for the "
+                "Your previous planner response failed validation. "
+                        + "Exact error: " + validationDetail + ". Fix that "
+                        + "error, check the complete original schema, and "
+                        + "rewrite the response for the "
                         + "same request as exactly one top-level "
                         + "JSON object, never an array, JSON string, prose, "
                         + "or markdown fence. Include the complete route and "
@@ -412,22 +424,23 @@ final class V2TurnPlanner {
             String routeText = requiredText(root, "route", 32);
             if ("DIRECT".equals(routeText)) {
                 exactFields(root, Set.of("route", "requirements", "answer"),
-                        "DIRECT_FIELDS");
+                        "DIRECT_FIELDS", "top-level DIRECT object");
                 return PlannedTurn.direct(
                         routeRequirements(root),
                         requiredText(root, "answer", 20_000));
             }
             if (!"PERSISTENT_PLAN_EXECUTE".equals(routeText)) {
-                throw invalid("ROUTE_VALUE");
+                throw invalid("ROUTE_VALUE",
+                        "route must be DIRECT or PERSISTENT_PLAN_EXECUTE");
             }
             exactFields(root, Set.of(
                             "route", "requirements", "taskFrame", "plan"),
-                    "PERSISTENT_FIELDS");
+                    "PERSISTENT_FIELDS", "top-level persistent object");
             RouteRequirements requirements = routeRequirements(root);
             JsonNode frame = requiredObject(root, "taskFrame");
             exactFields(frame, Set.of(
                     "objective", "targets", "deliverables", "constraints"),
-                    "TASK_FRAME_FIELDS");
+                    "TASK_FRAME_FIELDS", "taskFrame");
             TaskFrameDraft taskFrame = new TaskFrameDraft(
                     requiredText(frame, "objective", MAX_TEXT),
                     textList(frame, "targets", true),
@@ -435,35 +448,49 @@ final class V2TurnPlanner {
                     textList(frame, "constraints", true));
 
             JsonNode plan = requiredObject(root, "plan");
-            exactFields(plan, Set.of("reason", "steps"), "PLAN_FIELDS");
+            exactFields(plan, Set.of("reason", "steps"), "PLAN_FIELDS",
+                    "plan");
             JsonNode stepsNode = plan.get("steps");
-            if (stepsNode == null || !stepsNode.isArray()
-                    || stepsNode.isEmpty() || stepsNode.size() > MAX_STEPS) {
-                throw invalid("PLAN_STEPS");
+            if (stepsNode == null) {
+                throw invalid("PLAN_STEPS",
+                        "plan.steps is missing; expected an array with 1-"
+                                + MAX_STEPS + " steps");
+            }
+            if (!stepsNode.isArray()) {
+                throw invalid("PLAN_STEPS",
+                        "plan.steps must be an array; actual type: "
+                                + nodeType(stepsNode));
+            }
+            if (stepsNode.isEmpty() || stepsNode.size() > MAX_STEPS) {
+                throw invalid("PLAN_STEPS",
+                        "plan.steps must contain 1-" + MAX_STEPS
+                                + " steps; actual count: "
+                                + stepsNode.size());
             }
             List<PlanStep> steps = new ArrayList<>();
-            List<PlannedCapability> capabilities = new ArrayList<>();
             Set<String> seen = new LinkedHashSet<>();
             for (JsonNode step : stepsNode) {
                 requireObject(step, "step");
-                exactFieldsOneOf(step, Set.of(
+                exactFields(step, Set.of(
                                 "id", "intent", "expectedOutcome",
                                 "dependencies", "completionCriteria",
                                 "maxAttempts", "maxDurationSeconds"),
-                        Set.of(
-                                "id", "intent", "expectedOutcome",
-                                "dependencies", "completionCriteria",
-                                "maxAttempts", "maxDurationSeconds",
-                                "capability"),
-                        "STEP_FIELDS");
+                        "STEP_FIELDS",
+                        "plan.steps[" + steps.size() + "]");
                 String id = requiredText(step, "id", 128);
                 if (!seen.add(id)) {
-                    throw invalid("STEP_ID_DUPLICATE");
+                    throw invalid("STEP_ID_DUPLICATE",
+                            "plan step id must be unique; duplicate id: "
+                                    + id);
                 }
                 List<String> dependencies = textList(
                         step, "dependencies", false);
                 if (!seen.containsAll(dependencies) || dependencies.contains(id)) {
-                    throw invalid("STEP_DEPENDENCIES");
+                    throw invalid("STEP_DEPENDENCIES",
+                            "plan.steps[" + steps.size()
+                                    + "].dependencies may reference only "
+                                    + "earlier step ids and may not reference "
+                                    + "the current step");
                 }
                 int attempts = boundedInt(step, "maxAttempts", 1, 5);
                 int duration = boundedInt(
@@ -478,39 +505,26 @@ final class V2TurnPlanner {
                         new BoundedExecutionHints(
                                 attempts, Duration.ofSeconds(duration)));
                 steps.add(planStep);
-                JsonNode capability = step.get("capability");
-                if (capability != null && !capability.isNull()) {
-                    if (!capability.isTextual()) {
-                        throw invalid("CAPABILITY_TYPE");
-                    }
-                    String alias = bounded(
-                            capability.textValue(), 64, "CAPABILITY_VALUE");
-                    if (alias.contains(".")) {
-                        throw invalid("CAPABILITY_DOTTED");
-                    }
-                    ToolId internal;
-                    try {
-                        internal = V2PlannerCapabilityCatalog
-                                .internalToolId(alias);
-                    } catch (V2TurnPlanningException failure) {
-                        throw invalid("CAPABILITY_UNSUPPORTED");
-                    }
-                    capabilities.add(new PlannedCapability(
-                            planStep.id(), alias, internal));
-                }
             }
             return PlannedTurn.persistent(
                     requirements,
                     taskFrame,
                     new InitialPlanDraft(
                             requiredText(plan, "reason", MAX_TEXT), steps),
-                    capabilities);
+                    List.of());
         } catch (V2TurnPlanningException failure) {
             throw failure;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException failure) {
+            var location = failure.getLocation();
+            String position = location == null ? ""
+                    : " at line " + location.getLineNr()
+                            + ", column " + location.getColumnNr();
+            throw invalid("JSON_SYNTAX", "JSON syntax error" + position);
         } catch (java.io.IOException failure) {
-            throw invalid("JSON_SYNTAX");
+            throw invalid("JSON_SYNTAX", "JSON syntax error");
         } catch (RuntimeException failure) {
-            throw invalid("PARSE_RUNTIME");
+            throw invalid("PARSE_RUNTIME",
+                    "planner response could not be parsed using the schema");
         }
     }
 
@@ -584,26 +598,34 @@ final class V2TurnPlanner {
 
     private static void requireObject(JsonNode value, String field) {
         if (value == null || !value.isObject()) {
-            throw invalid("OBJECT_" + diagnostic(field));
+            throw invalid("OBJECT_" + diagnostic(field),
+                    field + " must be a JSON object; actual type: "
+                            + nodeType(value));
         }
     }
 
     private static void exactFields(
-            JsonNode node, Set<String> allowed, String diagnostic) {
+            JsonNode node, Set<String> allowed, String diagnostic,
+            String location) {
         Set<String> actual = new HashSet<>();
         node.fieldNames().forEachRemaining(actual::add);
         if (!actual.equals(allowed)) {
-            throw invalid(diagnostic);
+            throw invalid(diagnostic,
+                    fieldMismatch(location, allowed, actual));
         }
     }
 
     private static void exactFieldsOneOf(
             JsonNode node, Set<String> current, Set<String> legacy,
-            String diagnostic) {
+            String diagnostic, String location) {
         Set<String> actual = new HashSet<>();
         node.fieldNames().forEachRemaining(actual::add);
         if (!actual.equals(current) && !actual.equals(legacy)) {
-            throw invalid(diagnostic);
+            Set<String> closest = symmetricDifferenceSize(actual, current)
+                            <= symmetricDifferenceSize(actual, legacy)
+                    ? current : legacy;
+            throw invalid(diagnostic,
+                    fieldMismatch(location, closest, actual));
         }
     }
 
@@ -611,16 +633,21 @@ final class V2TurnPlanner {
             JsonNode parent, String field, int maximum) {
         JsonNode node = parent.get(field);
         if (node == null || !node.isTextual()) {
-            throw invalid("TEXT_" + diagnostic(field));
+            throw invalid("TEXT_" + diagnostic(field),
+                    field + " must be nonblank text; actual type: "
+                            + nodeType(node));
         }
         return bounded(
-                node.textValue(), maximum, "TEXT_" + diagnostic(field));
+                node.textValue(), maximum, "TEXT_" + diagnostic(field),
+                field);
     }
 
     private static String bounded(
-            String value, int maximum, String diagnostic) {
+            String value, int maximum, String diagnostic, String field) {
         if (value == null || value.isBlank() || value.length() > maximum) {
-            throw invalid(diagnostic);
+            throw invalid(diagnostic,
+                    field + " must be nonblank text with at most "
+                            + maximum + " characters");
         }
         return value.trim();
     }
@@ -628,22 +655,34 @@ final class V2TurnPlanner {
     private static List<String> textList(
             JsonNode parent, String field, boolean required) {
         JsonNode node = parent.get(field);
-        if (node == null || !node.isArray()
-                || node.size() > MAX_LIST_ITEMS
-                || required && node.isEmpty()) {
-            throw invalid("LIST_" + diagnostic(field));
+        if (node == null || !node.isArray()) {
+            throw invalid("LIST_" + diagnostic(field),
+                    field + " must be an array of text values; actual type: "
+                            + nodeType(node));
+        }
+        if (node.size() > MAX_LIST_ITEMS || required && node.isEmpty()) {
+            String range = required ? "1-" + MAX_LIST_ITEMS
+                    : "0-" + MAX_LIST_ITEMS;
+            throw invalid("LIST_" + diagnostic(field),
+                    field + " must contain " + range
+                            + " values; actual count: " + node.size());
         }
         List<String> result = new ArrayList<>();
         Set<String> unique = new HashSet<>();
-        for (JsonNode item : node) {
+        for (int index = 0; index < node.size(); index++) {
+            JsonNode item = node.get(index);
             if (!item.isTextual()) {
-                throw invalid("LIST_" + diagnostic(field));
+                throw invalid("LIST_" + diagnostic(field),
+                        field + "[" + index + "] must be text; actual type: "
+                                + nodeType(item));
             }
             String value = bounded(
                     item.textValue(), MAX_TEXT,
-                    "LIST_" + diagnostic(field));
+                    "LIST_" + diagnostic(field),
+                    field + "[" + index + "]");
             if (!unique.add(value)) {
-                throw invalid("LIST_" + diagnostic(field));
+                throw invalid("LIST_" + diagnostic(field),
+                        field + " must not contain duplicate values");
             }
             result.add(value);
         }
@@ -654,11 +693,15 @@ final class V2TurnPlanner {
             JsonNode parent, String field, int minimum, int maximum) {
         JsonNode node = parent.get(field);
         if (node == null || !node.canConvertToInt()) {
-            throw invalid("INT_" + diagnostic(field));
+            throw invalid("INT_" + diagnostic(field),
+                    field + " must be an integer; actual type: "
+                            + nodeType(node));
         }
         int value = node.intValue();
         if (value < minimum || value > maximum) {
-            throw invalid("INT_" + diagnostic(field));
+            throw invalid("INT_" + diagnostic(field),
+                    field + " must be between " + minimum + " and "
+                            + maximum + "; actual value: " + value);
         }
         return value;
     }
@@ -668,7 +711,8 @@ final class V2TurnPlanner {
         exactFields(requirements, Set.of(
                 "projectEvidence", "toolUse", "retrieval",
                 "networkAccess", "execution", "durableModification",
-                "durableProgress"), "REQUIREMENTS_FIELDS");
+                "durableProgress"), "REQUIREMENTS_FIELDS",
+                "requirements");
         return new RouteRequirements(
                 requiredBoolean(requirements, "projectEvidence"),
                 requiredBoolean(requirements, "toolUse"),
@@ -682,9 +726,43 @@ final class V2TurnPlanner {
     private static boolean requiredBoolean(JsonNode parent, String field) {
         JsonNode node = parent.get(field);
         if (node == null || !node.isBoolean()) {
-            throw invalid("BOOLEAN_" + diagnostic(field));
+            throw invalid("BOOLEAN_" + diagnostic(field),
+                    field + " must be boolean; actual type: "
+                            + nodeType(node));
         }
         return node.booleanValue();
+    }
+
+    private static String fieldMismatch(
+            String location, Set<String> expected, Set<String> actual) {
+        Set<String> missing = new TreeSet<>(expected);
+        missing.removeAll(actual);
+        Set<String> unexpected = new TreeSet<>(actual);
+        unexpected.removeAll(expected);
+        List<String> details = new ArrayList<>();
+        if (!missing.isEmpty()) {
+            details.add("missing fields: " + String.join(", ", missing));
+        }
+        if (!unexpected.isEmpty()) {
+            details.add("unexpected fields: "
+                    + String.join(", ", unexpected));
+        }
+        return location + " field mismatch; " + String.join("; ", details);
+    }
+
+    private static int symmetricDifferenceSize(
+            Set<String> first, Set<String> second) {
+        Set<String> difference = new HashSet<>(first);
+        difference.removeAll(second);
+        Set<String> reverse = new HashSet<>(second);
+        reverse.removeAll(first);
+        return difference.size() + reverse.size();
+    }
+
+    private static String nodeType(JsonNode node) {
+        return node == null ? "missing"
+                : node.getNodeType().name().toLowerCase(
+                        java.util.Locale.ROOT);
     }
 
     private static void auditRouteRequirements(
@@ -718,6 +796,11 @@ final class V2TurnPlanner {
     private static V2TurnPlanningException invalid(String diagnostic) {
         return new V2TurnPlanningException(
                 diagnostic, "planner response is invalid");
+    }
+
+    private static V2TurnPlanningException invalid(
+            String diagnostic, String detail) {
+        return new V2TurnPlanningException(diagnostic, detail);
     }
 
     private static String hash(String value) {

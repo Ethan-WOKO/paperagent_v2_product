@@ -79,8 +79,10 @@ PR 只有满足以下任一条件才可以合并：
 - Compile `yanban-api` with dependencies; run the single Candidate frontend
   Vitest file and the frontend production build.
 - Verify the diff contains only frozen MODIFY paths, original Project bytes
-  remain unchanged, durable failure creates no Candidate, and UI handoff still
-  requires sandbox validation plus explicit apply confirmation.
+  remain unchanged until the exact final successful sandbox input is bound,
+  durable failure creates no current revision, automatic application creates
+  one immutable revision, rollback remains available, and the UI does not ask
+  for a redundant second validation or confirmation.
 - Do not run unrelated full product suites without a concrete dependency or
   failure that justifies expanding scope.
 
@@ -99,3 +101,23 @@ PR 只有满足以下任一条件才可以合并：
   or generated artifact changed.
 - Full RAG, paper-quality, retrieval, deployment, and product suites are not
   part of this gate without a concrete directly affected failure.
+
+## V2 four-role adaptive chain focused gate
+
+- Verify planner and replan outputs contain goal-based Steps with no capability
+  field, publication Step, confirmation Step, or redundant validation Step.
+- Verify the current-Step model can send complete `replacements` and the
+  Project write effect performs no nested model call. Reject missing, extra,
+  mismatched, duplicate, oversized, invalid UTF-8, unchanged, or out-of-scope
+  replacements before durable publication.
+- Verify a later correction may append another authority row in the same Plan
+  or Step, exact replay converges, and the latest valid preparation is selected.
+- Verify reflection format repair receives exact missing/unexpected fields and
+  the previous invalid output. Verify semantic reflection reuses accepted read,
+  write, and exact sandbox facts without inventing a second audit or user gate.
+- Verify final synthesis receives complete final file text and the matching
+  successful sandbox command/output, and literature/project compatibility
+  narration performs no extra model call.
+- Preserve E2B dependency preparation, Workspace isolation, sandbox input
+  fingerprinting, automatic immutable revision creation, deletion behavior,
+  and rollback tests.

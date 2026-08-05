@@ -250,9 +250,9 @@ describe('V2 自然语言 API 与页面接入', () => {
     expect(page).toContain('结果：{{ step.detail }}');
     expect(page).toContain('生成内容位置');
     expect(page).toContain('原项目尚未修改');
-    expect(page).toContain('已确认应用，已创建项目版本');
+    expect(page).toContain('已自动保存，已创建项目版本');
     expect(page).toContain("task.confirmationValidation?.appliedRevisionId");
-    expect(page).toContain('打开修改与验证');
+    expect(page).toContain('查看修改');
     expect(page).toContain('@click="openV2CandidateReview(task.candidateArtifactId)"');
   });
 

@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.adaptive;
 
 import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
 import com.yanban.api.agent.v2.adaptive.reflection.ReflectionOutcome;
+import com.yanban.api.agent.v2.context.V2ExecutionContextSource;
 import com.yanban.api.agent.v2.loop.*;
 import com.yanban.api.agent.v2.progression.EffectDrivenStepProgressionActivationLeaseAttempt;
 import io.paperagent.v2.contracts.*;
@@ -81,9 +82,12 @@ public class V2AdaptiveRuntimeCycleFactory {
                 } else {
                     NaturalLanguageStepKernelFactory.AutonomousKernel
                             autonomous = requestProvider == null
-                            ? kernels.createAutonomous(pending != null)
+                            ? kernels.createAutonomous(
+                                    pending != null,
+                                    command.modelContextFacts())
                             : kernels.createAutonomous(
-                                    requestProvider, pending != null);
+                                    requestProvider, pending != null,
+                                    command.modelContextFacts());
                     result = loop.executeAutonomousEffect(
                             command.userId(), command.turnId(), loopCommand,
                             autonomous.kernel(),
@@ -183,6 +187,10 @@ public class V2AdaptiveRuntimeCycleFactory {
             });
         }
         return current;
+    }
+
+    V2ExecutionContextSource contextSource() {
+        return kernels.contextSource();
     }
 
     private static List<String> authoritativeFacts(
