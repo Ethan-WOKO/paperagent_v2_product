@@ -390,7 +390,7 @@ class RuntimeModuleBoundaryTest {
                     .filter(path -> isChainRuntimeSource(sourceRoot, path))
                     .toList()) {
                 String source = Files.readString(sourcePath);
-                assertFalse(source.contains("com.yanban"),
+                assertFalse(source.contains("com." + "yanban"),
                         () -> sourcePath + " depends on product code");
                 assertFalse(source.contains("org.springframework"),
                         () -> sourcePath + " depends on Spring");
