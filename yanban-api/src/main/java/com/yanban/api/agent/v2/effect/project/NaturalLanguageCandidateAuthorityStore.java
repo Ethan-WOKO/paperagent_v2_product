@@ -2,7 +2,7 @@ package com.yanban.api.agent.v2.effect.project;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectAuthority;
+import com.yanban.api.agent.v2.chain.effect.ProjectCandidateEffectAuthority;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.ResultSet;

@@ -1,8 +1,12 @@
 package io.paperagent.v2.runtime.taskframe;
 
 import io.paperagent.v2.contracts.ProjectVersionRef;
+import io.paperagent.v2.contracts.PublishRequirement;
+import io.paperagent.v2.contracts.TaskRequirements;
 import io.paperagent.v2.contracts.TaskFrame;
 import io.paperagent.v2.contracts.TaskFrameId;
+import io.paperagent.v2.contracts.ValidationRequirement;
+import io.paperagent.v2.contracts.ValidationSubject;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -38,9 +42,31 @@ class TaskFrameFreezerTest {
         assertEquals(draft.targets(), result.targets());
         assertEquals(draft.deliverables(), result.deliverables());
         assertEquals(draft.constraints(), result.constraints());
+        assertEquals(draft.requirements(), result.requirements());
         assertEquals(Optional.of(projectVersion), result.sourceProjectVersion());
         assertEquals(executionProfile, result.executionProfile());
         assertEquals(createdAt, result.createdAt());
+    }
+
+    @Test
+    void explicitRequirementsFreezeWithoutPermissionOrCandidateInference() {
+        TaskRequirements requirements = TaskRequirements.explicit(
+                List.of(new ValidationRequirement(
+                        "validation-action", ValidationSubject.ACTION_RECEIPT,
+                        "the action receipt reports success")),
+                PublishRequirement.NOT_REQUIRED);
+        TaskFrameDraft draft = new TaskFrameDraft(
+                "Verify the action", List.of("action"),
+                List.of("verified result"), List.of(), requirements);
+
+        TaskFrame result = new DeterministicTaskFrameFreezer().freeze(
+                TaskFrameTestFixtures.request(draft));
+
+        assertEquals(requirements, result.requirements());
+        assertEquals(ValidationSubject.ACTION_RECEIPT,
+                result.requirements().validationRequirements().get(0).subject());
+        assertEquals(PublishRequirement.NOT_REQUIRED,
+                result.requirements().publishRequirement());
     }
 
     @Test

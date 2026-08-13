@@ -1,566 +1,368 @@
 package com.yanban.api.agent.v2.effect.project;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.CandidateChangeArtifactService;
-import com.yanban.api.agent.v2.compatibility.project.*;
-import com.yanban.api.artifact.AgentArtifactService;
-import com.yanban.api.artifact.ArtifactResponse;
+import com.yanban.api.agent.sandbox.CandidateArtifactResponse;
+import com.yanban.api.agent.v2.chain.effect.ProjectCandidateEffectAuthority;
+import com.yanban.api.project.ProjectFileResponse;
+import com.yanban.api.project.ProjectManifestResponse;
 import com.yanban.api.project.ProjectService;
-import com.yanban.core.research.FileHash;
-import com.yanban.core.research.ProjectRelativePath;
-import io.paperagent.v2.contracts.*;
+import com.yanban.api.project.ProjectStorageProperties;
+import com.yanban.core.agent.sandbox.CandidateFingerprint;
+import io.paperagent.v2.contracts.ContentHash;
+import io.paperagent.v2.contracts.DiffId;
+import io.paperagent.v2.contracts.DiffKind;
+import io.paperagent.v2.contracts.EffectIntent;
+import io.paperagent.v2.contracts.EventId;
+import io.paperagent.v2.contracts.ListValue;
+import io.paperagent.v2.contracts.ObjectValue;
+import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.PlanRevisionId;
+import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.ProjectPath;
+import io.paperagent.v2.contracts.ProjectVersionRef;
+import io.paperagent.v2.contracts.TaskFrameId;
+import io.paperagent.v2.contracts.TextValue;
+import io.paperagent.v2.contracts.ToolCallId;
+import io.paperagent.v2.contracts.WorkspaceDiff;
+import io.paperagent.v2.contracts.WorkspaceDiffEntry;
+import io.paperagent.v2.contracts.WorkspaceId;
+import io.paperagent.v2.contracts.WorkspaceRef;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
-import io.paperagent.v2.providers.*;
+import io.paperagent.v2.providers.ModelProvider;
 import io.paperagent.v2.workspace.WorkspacePort;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
 
 class ProjectCandidateCompositionEffectTest {
+    private static final String VERSION = "a".repeat(64);
+    private static final String AUTHORITY_JSON =
+            "{\"operation\":\"compose\",\"paths\":[\"README.md\"],"
+                    + "\"replacements\":[{\"path\":\"README.md\","
+                    + "\"text\":\"new text\"}]}";
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
-    void repairUsesPlanBoundProviderAndPreservesOtherFailedCandidateText() throws Exception {
-        var gateway = mock(ProjectCandidateEffectGateway.class);
-        var candidates = mock(CandidateChangeArtifactService.class);
-        var provider = mock(ModelProvider.class);
-        var projects = mock(ProjectService.class);
-        var workspace = mock(WorkspacePort.class);
-        var ref = new WorkspaceRef(new WorkspaceId("workspace"),
-                new ProjectVersionRef("8", "a".repeat(64)));
-        String broken = "import ch.qos.logback.core.rolling.TimeBasedFileNamingAndTriggeringPolicy;\n"
-                + "public class Sort { public static void main(String[] a) {} }\n";
-        String repaired = "public class Sort { public static void main(String[] a) {} }\n";
-        Map<String, String> source = new LinkedHashMap<>();
-        source.put("Sort.java", broken);
-        source.put("README.md", "candidate readme");
-        String replacementsDigest = sha(json.writeValueAsString(new TreeMap<>(source)));
-        Map<String, ContractValue> argumentValues = new TreeMap<>();
-        argumentValues.put("operation", new TextValue("repair"));
-        argumentValues.put("sourceCandidateArtifactId", new NumberValue(BigDecimal.valueOf(35)));
-        argumentValues.put("sourceCandidateFingerprint", new TextValue("b".repeat(64)));
-        argumentValues.put("selectedChangeIndex", new NumberValue(BigDecimal.ZERO));
-        argumentValues.put("selectedPath", new TextValue("Sort.java"));
-        argumentValues.put("failedReceiptDigest", new TextValue("c".repeat(64)));
-        argumentValues.put("originalProjectVersion", new TextValue("a".repeat(64)));
-        argumentValues.put("attempt", new NumberValue(BigDecimal.ONE));
-        argumentValues.put("maxAttempts", new NumberValue(BigDecimal.ONE));
-        argumentValues.put("sourceReplacementsSha256", new TextValue(replacementsDigest));
-        var intent = new PersistedEffectIntent(new EffectIntent(
-                new ToolCallId("tool"), new PlanId("plan"),
-                new PlanStepId("project-candidate-compose"),
-                ProjectCandidateCompositionEffect.KIND, new ObjectValue(argumentValues)),
-                "owner", 1L, new EventId("activation"));
-        String authorityJson = "{\"operation\":\"repair\"}";
-        when(gateway.require("plan", "project-candidate-compose")).thenReturn(
-                new ProjectCandidateEffectAuthority(ProjectCandidateCompositionEffect.KIND,
-                        authorityJson, sha(authorityJson), 7L, 8L, 9L, 42L,
-                        "a".repeat(64), "repair", List.of("Sort.java", "README.md"),
-                        new ProjectCandidateEffectAuthority.RepairAuthority(
-                                "55bc85eb-e38b-4a91-8669-1a6b4ba92646", 35L,
-                                "b".repeat(64), 0, "Sort.java", "c".repeat(64),
-                                "a".repeat(64), 1, 1, source, replacementsDigest,
-                                "package does not exist")));
-        when(provider.complete(any())).thenReturn(new ModelResponse(
-                Optional.of(json.writeValueAsString(Map.of(
-                        "replacementText", repaired, "mavenCoordinates", List.of()))),
-                List.of(), FinishReason.STOP, new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
-        Map<String, byte[]> files = new HashMap<>();
-        files.put("Sort.java", "original sort".getBytes(StandardCharsets.UTF_8));
-        files.put("README.md", "original readme".getBytes(StandardCharsets.UTF_8));
-        when(workspace.read(eq(ref), any())).thenAnswer(call ->
-                files.get(call.<ProjectPath>getArgument(1).value()));
-        doAnswer(call -> {
-            files.put(call.<ProjectPath>getArgument(1).value(), call.getArgument(2)); return null;
-        }).when(workspace).replace(eq(ref), any(), any());
-        when(workspace.diff(eq(ref), any(), any())).thenAnswer(call -> new WorkspaceDiff(
-                call.getArgument(1), ref, List.of(
-                new WorkspaceDiffEntry(DiffKind.MODIFY, new ProjectPath("Sort.java"),
-                        Optional.empty(), Optional.of(new ContentHash("sha256", sha("original sort"))),
-                        Optional.of(new ContentHash("sha256", sha(repaired))), Map.of()),
-                new WorkspaceDiffEntry(DiffKind.MODIFY, new ProjectPath("README.md"),
-                        Optional.empty(), Optional.of(new ContentHash("sha256", sha("original readme"))),
-                        Optional.of(new ContentHash("sha256", sha("candidate readme"))), Map.of())),
-                call.getArgument(2)));
-        var effect = new ProjectCandidateCompositionEffect(
-                gateway, candidates, provider, projects, json);
-        var authority = new ProjectCandidateCompositionEffect.ModelAuthority(
-                new TaskFrameId("task-frame"), new PlanId("plan"),
-                new PlanRevisionId("revision"), new PlanStepId("project-candidate-compose"));
+    void chainExecutionUsesExactFormalReplacementWithoutLegacyStore() {
+        Fixture fixture = fixture("old text", "new text");
 
-        effect.execute(intent, authority, workspace, ref, 7L, 42L, 8L, Instant.EPOCH);
+        ProjectCandidateCompositionEffect.CandidateResult result =
+                fixture.effect.executeChain(
+                        fixture.intent, fixture.authority, chainAuthority(),
+                        fixture.workspace, fixture.ref,
+                        7L, 42L, 8L, Instant.EPOCH);
 
-        assertEquals(repaired, new String(files.get("Sort.java"), StandardCharsets.UTF_8));
-        assertEquals("candidate readme",
-                new String(files.get("README.md"), StandardCharsets.UTF_8));
-        var request = org.mockito.ArgumentCaptor.forClass(ModelRequest.class);
-        verify(provider).complete(request.capture());
-        assertEquals(Optional.of(new PlanId("plan")), request.getValue().planId());
-        verify(gateway).bindPrepared(eq("plan"),
-                eq(Map.of("Sort.java", repaired, "README.md", "candidate readme")),
-                eq(List.of()), anyString());
-
-        clearInvocations(provider, gateway);
-        files.put("Sort.java", "original sort".getBytes(StandardCharsets.UTF_8));
-        files.put("README.md", "original readme".getBytes(StandardCharsets.UTF_8));
-        when(provider.complete(any())).thenReturn(new ModelResponse(
-                Optional.of(json.writeValueAsString(Map.of(
-                        "replacementText", broken, "mavenCoordinates",
-                        List.of("ch.qos.logback:logback-core:1.5.18")))),
-                List.of(), FinishReason.STOP, new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
-        effect.execute(intent, authority, workspace, ref, 7L, 42L, 8L, Instant.EPOCH);
-        verify(gateway).bindPrepared(eq("plan"),
-                eq(Map.of("Sort.java", broken, "README.md", "candidate readme")),
-                eq(List.of("ch.qos.logback:logback-core:1.5.18")), anyString());
-
-        clearInvocations(provider, gateway);
-        files.put("Sort.java", "original sort".getBytes(StandardCharsets.UTF_8));
-        files.put("README.md", "original readme".getBytes(StandardCharsets.UTF_8));
-        when(provider.complete(any())).thenReturn(new ModelResponse(
-                Optional.of(json.writeValueAsString(Map.of(
-                        "replacementText", broken, "mavenCoordinates", List.of()))),
-                List.of(), FinishReason.STOP, new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
-        assertThrows(IllegalStateException.class,
-                () -> effect.execute(intent, authority, workspace, ref,
-                        7L, 42L, 8L, Instant.EPOCH));
-        verify(gateway, never()).bindPrepared(anyString(), anyMap(), anyList(), anyString());
-    }
-
-    @Test
-    void exactFrozenReplacementMutatesOnlyWorkspaceAndProducesStableModifyDiff() {
-        Fixture fixture = fixture("{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-
-        var result = fixture.effect.execute(
-                fixture.intent, fixture.modelAuthority, fixture.workspace,
-                fixture.ref, 7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
-
-        assertNull(result.artifactId());
-        assertEquals(64, result.diffFingerprint().length());
         assertArrayEquals("new text".getBytes(StandardCharsets.UTF_8),
                 fixture.files.get("README.md"));
-        var modelRequest = org.mockito.ArgumentCaptor.forClass(
-                ModelRequest.class);
-        verify(fixture.provider).complete(modelRequest.capture());
-        assertEquals(Optional.of(
-                        fixture.modelAuthority.taskFrameId()),
-                modelRequest.getValue().taskFrameId());
-        assertEquals(Optional.of(fixture.modelAuthority.planId()),
-                modelRequest.getValue().planId());
-        assertEquals(Optional.of(
-                        fixture.modelAuthority.planRevisionId()),
-                modelRequest.getValue().planRevisionId());
-        assertEquals(Optional.of(fixture.modelAuthority.stepId()),
-                modelRequest.getValue().stepId());
-        verify(fixture.gateway).bindPrepared(
-                eq("plan"), eq(Map.of("README.md", "new text")), eq(List.of()),
-                eq(result.diffFingerprint()));
-        verifyNoInteractions(fixture.candidates, fixture.projects);
+        assertEquals(64, result.diffFingerprint().length());
+        verifyNoInteractions(fixture.store);
+        verify(fixture.provider, never()).complete(any());
     }
 
     @Test
-    void extraPathMalformedOversizedAndUnchangedProviderOutputFailClosed() {
-        for (String output : List.of(
-                "{\"replacements\":[{\"path\":\"extra.md\",\"text\":\"new\"}]}",
-                "{\"replacements\":[]}",
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"old text\"}]}",
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\""
-                        + "x".repeat(64 * 1024 + 1) + "\"}]}")) {
-            Fixture fixture = fixture(output);
-            assertThrows(IllegalStateException.class, () -> fixture.effect.execute(
-                    fixture.intent, fixture.modelAuthority,
-                    fixture.workspace, fixture.ref,
-                    7L, 42L, 8L, Instant.now()));
-            assertArrayEquals("old text".getBytes(StandardCharsets.UTF_8),
-                    fixture.files.get("README.md"));
-        }
-    }
+    void chainExecutionAcceptsReplacementAboveFormerLocalLimit() {
+        String replacement = "x".repeat(65 * 1024);
+        Fixture fixture = fixture("old text", replacement);
 
-    @Test
-    void providerFailureAndCrossBoundAuthorityFailBeforeCandidatePublication() {
-        Fixture providerFailure = fixture(null);
-        assertThrows(IllegalStateException.class, () -> providerFailure.effect.execute(
-                providerFailure.intent, providerFailure.modelAuthority,
-                providerFailure.workspace, providerFailure.ref,
-                7L, 42L, 8L, Instant.now()));
-        Fixture crossUser = fixture("{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new\"}]}");
-        assertThrows(IllegalStateException.class, () -> crossUser.effect.execute(
-                crossUser.intent, crossUser.modelAuthority,
-                crossUser.workspace, crossUser.ref,
-                99L, 42L, 8L, Instant.now()));
-        verifyNoInteractions(providerFailure.candidates, crossUser.candidates);
-    }
-
-    @Test
-    void terminalPublicationUsesExistingCandidatePipelineAndBindsExactFingerprints() {
-        Fixture fixture = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        fixture.effect.execute(
-                fixture.intent, fixture.modelAuthority,
+        fixture.effect.executeChain(
+                fixture.intent, fixture.authority,
+                chainAuthority(
+                        "README.md", replacement, "tool",
+                        "NONE", null, Map.of()),
                 fixture.workspace, fixture.ref,
-                7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
-        when(fixture.projects.manifest(7L, 8L)).thenReturn(
-                new com.yanban.api.project.ProjectManifestResponse(
-                        8L, "a".repeat(64), List.of(
-                        new com.yanban.api.project.ProjectFileEntry(
-                                "README.md", 8, Instant.now(), sha("old text")))));
-        when(fixture.projects.readFile(7L, 8L, "README.md")).thenReturn(
-                new com.yanban.api.project.ProjectFileResponse(
-                        "README.md", "old text", 8, Instant.now(), sha("old text")));
-        var artifact = mock(com.yanban.api.agent.sandbox.CandidateArtifactResponse.class);
-        when(artifact.artifactId()).thenReturn(42L);
-        when(artifact.fingerprint()).thenReturn(
-                new com.yanban.core.agent.sandbox.CandidateFingerprint("c".repeat(64)));
-        when(fixture.candidates.store(anyLong(), anyLong(), any(), any(), any()))
-                .thenReturn(artifact);
+                7L, 42L, 8L, Instant.EPOCH);
 
-        var published = fixture.effect.publish("plan", 7L, 42L);
-
-        assertEquals(42L, published.artifactId());
-        verify(fixture.gateway).bindCandidate(
-                eq("plan"), eq(42L), eq("c".repeat(64)), eq(published.diffFingerprint()));
-        verify(fixture.projects, never()).delete(anyLong(), anyLong());
+        assertArrayEquals(replacement.getBytes(StandardCharsets.UTF_8),
+                fixture.files.get("README.md"));
     }
 
     @Test
-    void naturalCandidatePreparesInWorkspaceThenPublishesWithoutApplyingProject() {
-        Fixture fixture = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        var store = mock(NaturalLanguageCandidateAuthorityStore.class);
-        String authorityJson =
-                "{\"operation\":\"compose\",\"paths\":[\"README.md\"],"
-                        + "\"replacements\":[{\"path\":\"README.md\","
-                        + "\"text\":\"new text\"}]}";
-        var authority = new ProjectCandidateEffectAuthority(
-                ProjectCandidateCompositionEffect.KIND,
-                authorityJson, sha(authorityJson),
-                7L, 8L, 9L, 42L, "a".repeat(64),
-                "improve", List.of("README.md"));
-        when(store.require("plan", "project-candidate-compose"))
-                .thenReturn(authority);
-        when(store.require("plan")).thenReturn(authority);
-        AtomicReference<NaturalLanguageCandidateAuthorityStore.Prepared>
-                prepared = new AtomicReference<>();
-        doAnswer(call -> {
-            prepared.set(
-                    new NaturalLanguageCandidateAuthorityStore.Prepared(
-                            call.getArgument(1), call.getArgument(3),
-                            call.getArgument(4)));
-            return null;
-        }).when(store).bindPrepared(
-                eq("plan"), eq("project-candidate-compose"),
-                anyString(), anyMap(), anyString());
-        when(store.requirePrepared("plan"))
-                .thenAnswer(ignored -> prepared.get());
-        var intent = new PersistedEffectIntent(new EffectIntent(
-                new ToolCallId("tool"), new PlanId("plan"),
-                new PlanStepId("project-candidate-compose"),
-                ProjectCandidateCompositionEffect.KIND,
-                new ObjectValue(Map.of(
-                        "operation", new TextValue("compose"),
-                        "paths", new ListValue(List.of(
-                                new TextValue("README.md"))),
-                        "replacements", new ListValue(List.of(
-                                new ObjectValue(Map.of(
-                                        "path", new TextValue("README.md"),
-                                        "text", new TextValue("new text")))))))),
-                "owner", 1L, new EventId("activation"));
+    void chainExecutionRejectsNoProgressAndRestoresWorkspace() {
+        Fixture fixture = fixture("new text", "new text");
 
-        fixture.effect.executeNatural(
-                intent, fixture.modelAuthority,
-                fixture.workspace, fixture.ref,
-                7L, 42L, 8L, Instant.EPOCH,
-                store);
-        verifyNoInteractions(fixture.provider);
-        assertEquals("new text", new String(
-                fixture.files.get("README.md"), StandardCharsets.UTF_8));
+        ProjectCandidateCompositionEffect.CandidateCompositionException failure =
+                assertThrows(
+                        ProjectCandidateCompositionEffect
+                                .CandidateCompositionException.class, () ->
+                                fixture.effect.executeChain(
+                                        fixture.intent, fixture.authority,
+                                        chainAuthority(), fixture.workspace,
+                                        fixture.ref, 7L, 42L, 8L,
+                                        Instant.EPOCH));
+        assertEquals(
+                ProjectCandidateCompositionEffect.CandidateCompositionException
+                        .NO_ACTUAL_CHANGE,
+                failure.code());
 
+        assertArrayEquals("new text".getBytes(StandardCharsets.UTF_8),
+                fixture.files.get("README.md"));
+        verify(fixture.store, never()).bindPrepared(
+                anyString(), anyString(), anyString(), any(), anyString());
+    }
+
+    @Test
+    void consecutiveChainActionsUseOnlyTheirRebasedActionDiff() {
+        Fixture first = fixture(
+                Map.of("README.md", "old text"),
+                "README.md", "first text", "action-1");
+        Fixture sameFile = fixture(
+                Map.of("README.md", "first text"),
+                "README.md", "second text", "action-2");
+        Fixture differentFile = fixture(
+                Map.of("README.md", "first text", "notes.md", "old note"),
+                "notes.md", "new note", "action-3");
+
+        first.effect.executeChain(
+                first.intent, first.authority,
+                chainAuthority(
+                        "README.md", "first text", "action-1",
+                        "NONE", null, Map.of()),
+                first.workspace, first.ref,
+                7L, 42L, 8L, Instant.EPOCH);
+        sameFile.effect.executeChain(
+                sameFile.intent, sameFile.authority,
+                chainAuthority(
+                        "README.md", "second text", "action-2",
+                        "b".repeat(64), 51L,
+                        Map.of("README.md", "first text")),
+                sameFile.workspace, sameFile.ref,
+                7L, 42L, 8L, Instant.EPOCH);
+        differentFile.effect.executeChain(
+                differentFile.intent, differentFile.authority,
+                chainAuthority(
+                        "notes.md", "new note", "action-3",
+                        "c".repeat(64), 52L,
+                        Map.of("README.md", "first text")),
+                differentFile.workspace, differentFile.ref,
+                7L, 42L, 8L, Instant.EPOCH);
+
+        assertArrayEquals("second text".getBytes(StandardCharsets.UTF_8),
+                sameFile.files.get("README.md"));
+        assertArrayEquals("first text".getBytes(StandardCharsets.UTF_8),
+                differentFile.files.get("README.md"));
+        assertArrayEquals("new note".getBytes(StandardCharsets.UTF_8),
+                differentFile.files.get("notes.md"));
+    }
+
+    @Test
+    void publishUsesPreparedFullTextAndBindsCandidateIdentity() {
+        Fixture fixture = fixture("old text", "new text");
+        String expectedDiff = sha(VERSION + '\0' + DiffKind.MODIFY
+                + '\0' + "README.md" + '\0' + sha("old text")
+                + '\0' + sha("new text"));
+        when(fixture.store.candidateArtifactId("plan"))
+                .thenReturn(Optional.empty());
+        when(fixture.store.require("plan")).thenReturn(authority());
+        when(fixture.store.requirePrepared("plan")).thenReturn(
+                new NaturalLanguageCandidateAuthorityStore.Prepared(
+                        "step", Map.of("README.md", "new text"),
+                        expectedDiff));
         when(fixture.projects.manifest(7L, 8L)).thenReturn(
-                new com.yanban.api.project.ProjectManifestResponse(
-                        8L, "a".repeat(64), List.of(
-                        new com.yanban.api.project.ProjectFileEntry(
-                                "README.md", 8, Instant.now(),
-                                sha("old text")))));
-        when(fixture.projects.readFile(7L, 8L, "README.md")).thenReturn(
-                new com.yanban.api.project.ProjectFileResponse(
-                        "README.md", "old text", 8, Instant.now(),
+                new ProjectManifestResponse(8L, VERSION, List.of()));
+        when(fixture.projects.readFile(7L, 8L, "README.md"))
+                .thenReturn(new ProjectFileResponse(
+                        "README.md", "old text", 8L, Instant.EPOCH,
                         sha("old text")));
-        var artifact = mock(
-                com.yanban.api.agent.sandbox.CandidateArtifactResponse.class);
-        when(artifact.artifactId()).thenReturn(77L);
-        when(artifact.fingerprint()).thenReturn(
-                new com.yanban.core.agent.sandbox.CandidateFingerprint(
-                        "c".repeat(64)));
+        CandidateArtifactResponse candidate = mock(
+                CandidateArtifactResponse.class);
+        when(candidate.artifactId()).thenReturn(55L);
+        when(candidate.fingerprint()).thenReturn(
+                new CandidateFingerprint("b".repeat(64)));
         when(fixture.candidates.store(
-                anyLong(), anyLong(), any(), any(), any()))
-                .thenReturn(artifact);
+                eq(7L), eq(9L), any(), any(), any()))
+                .thenReturn(candidate);
 
-        var published = fixture.effect.publishNatural(
-                "plan", 7L, 42L, store);
+        ProjectCandidateCompositionEffect.CandidateResult result =
+                fixture.effect.publishNatural(
+                        "plan", 7L, 42L, fixture.store);
 
-        assertEquals(77L, published.artifactId());
-        verify(store).bindCandidate(
-                eq("plan"), eq(77L), eq("c".repeat(64)),
-                eq(published.diffFingerprint()));
-        verify(fixture.projects).readFile(7L, 8L, "README.md");
-        verify(fixture.projects, never()).delete(anyLong(), anyLong());
+        assertEquals(55L, result.artifactId());
+        assertEquals("b".repeat(64), result.candidateFingerprint());
+        assertEquals(expectedDiff, result.diffFingerprint());
+        verify(fixture.store).bindCandidate(
+                "plan", 55L, "b".repeat(64), expectedDiff);
     }
 
     @Test
-    void staleVersionAndCandidatePersistenceFailurePublishNothing() {
-        Fixture stale = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        stale.effect.execute(
-                stale.intent, stale.modelAuthority, stale.workspace, stale.ref,
-                7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
-        when(stale.projects.manifest(7L, 8L)).thenReturn(
-                new com.yanban.api.project.ProjectManifestResponse(
-                        8L, "stale-version", List.of()));
-        assertThrows(IllegalStateException.class, () -> stale.effect.publish(
-                "plan", 7L, 42L));
-        verifyNoInteractions(stale.candidates);
-        verify(stale.gateway, never()).bindCandidate(anyString(), anyLong(), anyString(), anyString());
-
-        Fixture persistenceFailure = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        persistenceFailure.effect.execute(persistenceFailure.intent,
-                persistenceFailure.modelAuthority,
-                persistenceFailure.workspace, persistenceFailure.ref,
-                7L, 42L, 8L, Instant.parse("2026-01-01T00:00:00Z"));
-        when(persistenceFailure.projects.manifest(7L, 8L)).thenReturn(
-                new com.yanban.api.project.ProjectManifestResponse(
-                        8L, "a".repeat(64), List.of(
-                        new com.yanban.api.project.ProjectFileEntry(
-                                "README.md", 8, Instant.now(), sha("old text")))));
-        when(persistenceFailure.projects.readFile(7L, 8L, "README.md")).thenReturn(
-                new com.yanban.api.project.ProjectFileResponse(
-                        "README.md", "old text", 8, Instant.now(), sha("old text")));
-        when(persistenceFailure.candidates.store(anyLong(), anyLong(), any(), any(), any()))
-                .thenThrow(new IllegalStateException("persistence unavailable"));
-
-        assertThrows(IllegalStateException.class, () -> persistenceFailure.effect.publish(
-                "plan", 7L, 42L));
-        verify(persistenceFailure.gateway, never()).bindCandidate(
-                anyString(), anyLong(), anyString(), anyString());
-        verify(persistenceFailure.projects, never()).delete(anyLong(), anyLong());
-    }
-
-    @Test
-    void missingOrTamperedDurablePreparationPublishesNothing() {
-        Fixture missing = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        when(missing.projects.manifest(7L, 8L)).thenReturn(
-                new com.yanban.api.project.ProjectManifestResponse(
-                        8L, "a".repeat(64), List.of()));
-        when(missing.gateway.requirePrepared("plan")).thenReturn(null);
-        assertThrows(RuntimeException.class,
-                () -> missing.effect.publish("plan", 7L, 42L));
-        verifyNoInteractions(missing.candidates);
-
-        Fixture extra = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}");
-        when(extra.projects.manifest(7L, 8L)).thenReturn(
-                new com.yanban.api.project.ProjectManifestResponse(
-                        8L, "a".repeat(64), List.of()));
-        when(extra.gateway.requirePrepared("plan")).thenReturn(
-                new ProjectCandidateEffectGateway.PreparedCandidate(
-                        Map.of("README.md", "new text", "extra.md", "extra"),
-                        "d".repeat(64)));
-        assertThrows(IllegalStateException.class,
-                () -> extra.effect.publish("plan", 7L, 42L));
-        verifyNoInteractions(extra.candidates);
-    }
-
-    @Test
-    void realCandidateServiceAcceptsPublishedIntentAndEvidenceAsValidatedNotApplied() {
-        String originalHash = sha("old text");
-        String version = com.yanban.core.research.ProjectManifestIdentity.derive(
-                List.of(new com.yanban.core.research.ProjectManifestIdentity.Entry(
-                        new ProjectRelativePath("README.md"),
-                        new FileHash(originalHash), 8))).value();
-        Fixture fixture = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new text\"}]}",
-                version);
-        AgentArtifactService artifacts = mock(AgentArtifactService.class);
-        var realCandidates = new CandidateChangeArtifactService(
-                artifacts, fixture.projects, json);
-        var realEffect = new ProjectCandidateCompositionEffect(
-                fixture.gateway, realCandidates, fixture.provider,
-                fixture.projects, json);
-        var snapshot = new com.yanban.core.agent.sandbox.SandboxWorkspaceSnapshot(
-                new com.yanban.core.agent.sandbox.SandboxWorkspaceRef(
-                        8L, new com.yanban.core.research.ProjectVersionRef(version)),
-                List.of(new com.yanban.core.agent.sandbox.SandboxFileSnapshot(
-                        new ProjectRelativePath("README.md"),
-                        new FileHash(originalHash), 8)));
-        var materialized = new ProjectService.SandboxWorkspaceMaterialization(
-                snapshot, Map.of("README.md", "old text"));
+    void staleProjectVersionRejectsBeforeCandidateStore() {
+        Fixture fixture = fixture("old text", "new text");
+        when(fixture.store.candidateArtifactId("plan"))
+                .thenReturn(Optional.empty());
+        when(fixture.store.require("plan")).thenReturn(authority());
         when(fixture.projects.manifest(7L, 8L)).thenReturn(
-                new com.yanban.api.project.ProjectManifestResponse(
-                        8L, version, List.of(
-                        new com.yanban.api.project.ProjectFileEntry(
-                                "README.md", 8, Instant.now(), originalHash))));
-        when(fixture.projects.readFile(7L, 8L, "README.md")).thenReturn(
-                new com.yanban.api.project.ProjectFileResponse(
-                        "README.md", "old text", 8, Instant.now(), originalHash));
-        when(fixture.projects.materializeSandbox(
-                eq(7L), eq(8L), eq(Set.of("README.md"))))
-                .thenReturn(materialized);
-        AtomicReference<ArtifactResponse> persisted = new AtomicReference<>();
-        when(artifacts.createCandidateArtifact(
-                eq(7L), eq(9L), anyString(), anyString())).thenAnswer(call -> {
-                    var artifact = new ArtifactResponse(
-                            42L, 7L, 9L, call.getArgument(2), "TEXT",
-                            call.getArgument(3),
-                            CandidateChangeArtifactService.SOURCE_TYPE,
-                            List.of(), "ACTIVE", null, null, null,
-                            Instant.EPOCH, Instant.EPOCH);
-                    persisted.set(artifact);
-                    return artifact;
-                });
+                new ProjectManifestResponse(
+                        8L, "c".repeat(64), List.of()));
 
-        realEffect.execute(
-                fixture.intent, fixture.modelAuthority, fixture.workspace,
-                fixture.ref, 7L, 42L, 8L, Instant.EPOCH);
-        var published = realEffect.publish("plan", 7L, 42L);
-        when(artifacts.getArtifact(7L, 42L)).thenAnswer(
-                ignored -> persisted.get());
-        var reviewed = realCandidates.getCurrent(7L, 42L);
+        assertThrows(IllegalStateException.class, () ->
+                fixture.effect.publishNatural(
+                        "plan", 7L, 42L, fixture.store));
 
-        assertEquals(com.yanban.core.agent.sandbox.CandidateChangeSet
-                .GovernanceStatus.VALIDATED, reviewed.governanceStatus());
-        assertEquals(com.yanban.core.agent.sandbox.CandidateChangeSet
-                .ApplicationStatus.NOT_APPLIED, reviewed.applicationStatus());
-        assertEquals(8L, reviewed.projectId());
-        assertEquals(version, reviewed.projectVersion().value());
-        assertEquals(List.of("README.md"), reviewed.changes().stream()
-                .map(change -> change.relativePath().value()).toList());
-        assertEquals(originalHash,
-                reviewed.changes().get(0).baseFileHash().sha256());
-        assertEquals(reviewed.fingerprint().sha256(),
-                published.candidateFingerprint());
-        assertEquals(64, published.diffFingerprint().length());
-        verify(fixture.gateway).bindCandidate(
-                "plan", 42L, reviewed.fingerprint().sha256(),
-                published.diffFingerprint());
+        verify(fixture.candidates, never()).store(
+                anyLong(), anyLong(), any(), any(), any());
     }
 
-    @Test
-    void binaryAndMissingWorkspaceInputsFailBeforeProviderOrCandidate() {
-        Fixture binary = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new\"}]}");
-        when(binary.workspace.read(
-                binary.ref, new ProjectPath("README.md")))
-                .thenReturn(new byte[]{1});
-        assertThrows(IllegalStateException.class, () -> binary.effect.execute(
-                binary.intent, binary.modelAuthority,
-                binary.workspace, binary.ref,
-                7L, 42L, 8L, Instant.now()));
-        verifyNoInteractions(binary.candidates, binary.projects);
-
-        Fixture missing = fixture(
-                "{\"replacements\":[{\"path\":\"README.md\",\"text\":\"new\"}]}");
-        when(missing.workspace.read(
-                missing.ref, new ProjectPath("README.md")))
-                .thenThrow(new IllegalArgumentException("missing"));
-        assertThrows(IllegalArgumentException.class, () -> missing.effect.execute(
-                missing.intent, missing.modelAuthority,
-                missing.workspace, missing.ref,
-                7L, 42L, 8L, Instant.now()));
-        verifyNoInteractions(missing.candidates, missing.projects);
+    private Fixture fixture(String original, String replacement) {
+        return fixture(
+                Map.of("README.md", original),
+                "README.md", replacement, "tool");
     }
 
-    private Fixture fixture(String output) {
-        return fixture(output, "a".repeat(64));
-    }
-
-    private Fixture fixture(String output, String version) {
-        var gateway = mock(ProjectCandidateEffectGateway.class);
-        var candidates = mock(CandidateChangeArtifactService.class);
-        var provider = mock(ModelProvider.class);
-        var projects = mock(ProjectService.class);
-        var workspace = mock(WorkspacePort.class);
-        var ref = new WorkspaceRef(new WorkspaceId("workspace"),
-                new ProjectVersionRef("8", version));
-        String authorityJson = "{\"operation\":\"compose\"}";
-        when(gateway.require("plan", "project-candidate-compose")).thenReturn(
-                new ProjectCandidateEffectAuthority(
-                        ProjectCandidateCompositionEffect.KIND, authorityJson,
-                        sha(authorityJson), 7L, 8L, 9L, 42L, version,
-                        "improve", List.of("README.md")));
-        if (output == null) {
-            when(provider.complete(any())).thenReturn(new ProviderFailure(
-                    ProviderFailureCode.UNAVAILABLE, "provider", Map.of()));
-        } else {
-            when(provider.complete(any())).thenReturn(new ModelResponse(
-                    Optional.of(output), List.of(), FinishReason.STOP,
-                    new UsageMetadata(1, 1, 0, Map.of()), Map.of()));
-        }
-        Map<String, byte[]> files = new HashMap<>();
-        files.put("README.md", "old text".getBytes(StandardCharsets.UTF_8));
+    private Fixture fixture(
+            Map<String, String> baseline,
+            String targetPath,
+            String replacement,
+            String actionId) {
+        NaturalLanguageCandidateAuthorityStore store = mock(
+                NaturalLanguageCandidateAuthorityStore.class);
+        CandidateChangeArtifactService candidates = mock(
+                CandidateChangeArtifactService.class);
+        ModelProvider provider = mock(ModelProvider.class);
+        ProjectService projects = mock(ProjectService.class);
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        WorkspaceRef ref = new WorkspaceRef(
+                new WorkspaceId("workspace"),
+                new ProjectVersionRef("8", VERSION));
+        Map<String, byte[]> files = new LinkedHashMap<>();
+        baseline.forEach((path, text) -> files.put(
+                path, text.getBytes(StandardCharsets.UTF_8)));
+        String original = baseline.get(targetPath);
+        when(store.require("plan", "step")).thenReturn(authority());
         when(workspace.read(eq(ref), any())).thenAnswer(call ->
                 files.get(call.<ProjectPath>getArgument(1).value()));
-        doAnswer(call -> {
-            files.put(call.<ProjectPath>getArgument(1).value(), call.getArgument(2));
+        org.mockito.Mockito.doAnswer(call -> {
+            files.put(call.<ProjectPath>getArgument(1).value(),
+                    call.getArgument(2));
             return null;
         }).when(workspace).replace(eq(ref), any(), any());
         when(workspace.diff(eq(ref), any(), any())).thenAnswer(call -> {
-            byte[] before = "old text".getBytes(StandardCharsets.UTF_8);
-            byte[] after = files.get("README.md");
-            return new WorkspaceDiff(call.getArgument(1), ref,
-                    Arrays.equals(before, after) ? List.of() : List.of(
-                    new WorkspaceDiffEntry(DiffKind.MODIFY,
-                            new ProjectPath("README.md"), Optional.empty(),
-                            Optional.of(new ContentHash("sha256", sha(before))),
-                            Optional.of(new ContentHash("sha256", sha(after))), Map.of())),
+            List<WorkspaceDiffEntry> entries = new ArrayList<>();
+            entries.add(new WorkspaceDiffEntry(
+                    DiffKind.MODIFY, new ProjectPath(targetPath),
+                    Optional.empty(),
+                    Optional.of(new ContentHash("sha256", sha(original))),
+                    Optional.of(new ContentHash("sha256", sha(replacement))),
+                    Map.of()));
+            return new WorkspaceDiff(
+                    call.<DiffId>getArgument(1), ref, entries,
                     call.getArgument(2));
         });
-        AtomicReference<ProjectCandidateEffectGateway.PreparedCandidate> prepared =
-                new AtomicReference<>();
-        doAnswer(call -> {
-            prepared.set(new ProjectCandidateEffectGateway.PreparedCandidate(
-                    call.getArgument(1), call.getArgument(2), call.getArgument(3)));
-            return null;
-        }).when(gateway).bindPrepared(eq("plan"), anyMap(), anyList(), anyString());
-        when(gateway.requirePrepared("plan")).thenAnswer(ignored -> prepared.get());
-        var effect = new ProjectCandidateCompositionEffect(
-                gateway, candidates, provider, projects, json);
-        var intent = new PersistedEffectIntent(new EffectIntent(
-                new ToolCallId("tool"), new PlanId("plan"),
-                new PlanStepId("project-candidate-compose"),
-                ProjectCandidateCompositionEffect.KIND,
-                new ObjectValue(Map.of("operation", new TextValue("compose")))),
+        ProjectCandidateCompositionEffect effect =
+                new ProjectCandidateCompositionEffect(
+                        store, candidates, provider, projects, json,
+                        new ProjectStorageProperties());
+        PersistedEffectIntent intent = new PersistedEffectIntent(
+                new EffectIntent(
+                        new ToolCallId(actionId), new PlanId("plan"),
+                        new PlanStepId("step"),
+                        ProjectCandidateCompositionEffect.KIND,
+                        new ObjectValue(Map.of(
+                                "operation", new TextValue("compose"),
+                                "paths", new ListValue(List.of(
+                                new TextValue(targetPath))),
+                                "replacements", new ListValue(List.of(
+                                new ObjectValue(Map.of(
+                                        "path", new TextValue(targetPath),
+                                        "text", new TextValue(replacement)))))))),
                 "owner", 1L, new EventId("activation"));
-        var modelAuthority =
+        ProjectCandidateCompositionEffect.ModelAuthority modelAuthority =
                 new ProjectCandidateCompositionEffect.ModelAuthority(
-                        new TaskFrameId("task-frame"),
-                        new PlanId("plan"),
+                        new TaskFrameId("task-frame"), new PlanId("plan"),
                         new PlanRevisionId("revision"),
-                        new PlanStepId("project-candidate-compose"));
-        return new Fixture(effect, gateway, candidates, provider, projects,
-                workspace, ref, files, intent, modelAuthority);
+                        new PlanStepId("step"));
+        return new Fixture(
+                effect, intent, modelAuthority, workspace, ref, files,
+                store, candidates, provider, projects);
+    }
+
+    private static ProjectCandidateEffectAuthority authority() {
+        return new ProjectCandidateEffectAuthority(
+                ProjectCandidateCompositionEffect.KIND,
+                AUTHORITY_JSON, sha(AUTHORITY_JSON),
+                7L, 8L, 9L, 42L, VERSION,
+                "improve", List.of("README.md"));
+    }
+
+    private static ProjectCandidateEffectAuthority chainAuthority() {
+        return chainAuthority(
+                "README.md", "new text", "tool",
+                "NONE", null, Map.of());
+    }
+
+    private static ProjectCandidateEffectAuthority chainAuthority(
+            String path, String replacement, String actionId,
+            String candidateIdentity, Long artifactId,
+            Map<String, String> overlay) {
+        String authorityJson = "{\"operation\":\"compose\",\"paths\":[\""
+                + path + "\"],\"replacements\":[{\"path\":\"" + path
+                + "\",\"text\":\"" + replacement + "\"}]}";
+        return new ProjectCandidateEffectAuthority(
+                ProjectCandidateCompositionEffect.KIND,
+                authorityJson, sha(authorityJson),
+                7L, 8L, 9L, 42L, VERSION,
+                "improve", List.of(path), null,
+                new com.yanban.api.agent.v2.chain.effect
+                        .ChainActionWorkspaceAuthority(
+                        actionId, "f".repeat(64), "workspace",
+                        List.of(path), List.of(path),
+                        new com.yanban.api.agent.v2.chain.effect
+                                .ChainActionWorkspaceAuthority
+                                .BaseCandidateAuthority(
+                                candidateIdentity, VERSION, artifactId,
+                                overlay.entrySet().stream().map(entry ->
+                                        new com.yanban.api.agent.v2.chain.effect
+                                                .ChainActionWorkspaceAuthority
+                                                .TypedChange(
+                                                com.yanban.api.agent.v2.chain.effect
+                                                        .ChainActionWorkspaceAuthority
+                                                        .ChangeType.MODIFY,
+                                                entry.getKey(),
+                                                "a".repeat(64),
+                                                sha(entry.getValue()),
+                                                entry.getValue()))
+                                        .toList())));
     }
 
     private static String sha(String value) {
-        return sha(value.getBytes(StandardCharsets.UTF_8));
-    }
-    private static String sha(byte[] value) {
         try {
             return HexFormat.of().formatHex(
-                    MessageDigest.getInstance("SHA-256").digest(value));
-        } catch (Exception failure) { throw new AssertionError(failure); }
+                    MessageDigest.getInstance("SHA-256").digest(
+                            value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception impossible) {
+            throw new AssertionError(impossible);
+        }
     }
-    private record Fixture(ProjectCandidateCompositionEffect effect,
-            ProjectCandidateEffectGateway gateway,
-            CandidateChangeArtifactService candidates, ModelProvider provider,
-            ProjectService projects,
-            WorkspacePort workspace, WorkspaceRef ref, Map<String, byte[]> files,
+
+    private record Fixture(
+            ProjectCandidateCompositionEffect effect,
             PersistedEffectIntent intent,
-            ProjectCandidateCompositionEffect.ModelAuthority modelAuthority) {}
+            ProjectCandidateCompositionEffect.ModelAuthority authority,
+            WorkspacePort workspace,
+            WorkspaceRef ref,
+            Map<String, byte[]> files,
+            NaturalLanguageCandidateAuthorityStore store,
+            CandidateChangeArtifactService candidates,
+            ModelProvider provider,
+            ProjectService projects) {
+    }
 }

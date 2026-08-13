@@ -26,15 +26,4 @@ describe('项目页 V2-only 入口', () => {
     expect(source).not.toContain('@click="startProjectAnalysis"');
     expect(source).not.toContain('@click="startProjectCandidate"');
   });
-
-  it('任务结果一一对应并把执行过程默认折叠', () => {
-    expect(source).toContain('v-for="task in v2TurnHistory"');
-    expect(source).not.toContain('v2-task-card__role');
-    expect(source).toContain('class="v2-conversation__process"');
-    expect(source).toContain(':open="task.status === \'PLANNING\' || task.status === \'RUNNING\'"');
-    expect(source).toContain("task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理'");
-    expect(source).toContain('候选修改 #{{ task.candidateArtifactId }}');
-    expect(source).toContain('Agent 自动验证');
-    expect(source).toContain('创建新版本前的确认验证');
-  });
 });

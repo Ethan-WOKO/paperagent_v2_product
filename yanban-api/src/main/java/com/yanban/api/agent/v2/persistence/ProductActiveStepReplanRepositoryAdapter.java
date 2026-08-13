@@ -36,6 +36,15 @@ public class ProductActiveStepReplanRepositoryAdapter
         }
     }
 
+    public java.util.Optional<PersistedActiveStepReplan> findCommitted(
+            String replanEventId) {
+        if (replanEventId == null || replanEventId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "replanEventId must not be blank");
+        }
+        return transactions.findCommitted(replanEventId);
+    }
+
     private static boolean constraintViolation(Throwable failure) {
         Throwable current = failure;
         while (current != null) {

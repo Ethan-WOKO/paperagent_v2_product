@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 import com.yanban.api.agent.AgentController;
 import com.yanban.api.agent.AgentSessionService;
 import com.yanban.api.agent.v2.compatibility.V2ProductAvailability;
-import com.yanban.api.agent.v2.intake.V2NaturalLanguageTurnService;
 import com.yanban.api.security.JwtUser;
 import org.junit.jupiter.api.Test;
 
@@ -19,8 +18,7 @@ class AgentControllerV2LiteratureEndpointTest {
         var controller = new AgentController(
                 mock(AgentSessionService.class), v2,
                 mock(V2LiteratureOutcomeService.class),
-                V2ProductAvailability.enabledByDefault(),
-                mock(V2NaturalLanguageTurnService.class), null, null);
+                V2ProductAvailability.enabledByDefault());
         var request = new V2LiteratureTurnRequest(
                 "agents", 10, null, true, "request-77");
         var expected = new V2LiteratureTurnResponse(

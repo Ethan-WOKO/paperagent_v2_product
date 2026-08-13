@@ -11,6 +11,7 @@ import io.paperagent.v2.runtime.execution.activation.composition.ReadyStepActiva
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationAttempt;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationComposer;
 import io.paperagent.v2.runtime.execution.activation.composition.StepActivationCompositionOutcome;
+import io.paperagent.v2.runtime.execution.activation.materialization.StepActivationEventDraft;
 import io.paperagent.v2.runtime.execution.completion.composition.ActiveStepCompletionComposer;
 import io.paperagent.v2.runtime.execution.completion.composition.ActiveStepCompletionCompositionOutcome;
 import io.paperagent.v2.runtime.execution.completion.materialization.ActiveStepCompletionMaterializationRequest;
@@ -64,8 +65,34 @@ public class AuthenticatedAgentTurnStepProgressionComposer {
                 || !ready.planId().equals(planId)) {
             throw new IllegalStateException(INVALID);
         }
-        return activation.composeReady(
-                new ReadyStepActivationCompositionRequest(ready, attempt));
+        return activation.composeReady(new ReadyStepActivationCompositionRequest(
+                ready, normalizeActivationTime(ready, attempt)));
+    }
+
+    private static StepActivationAttempt normalizeActivationTime(
+            PersistedStepRecoveryReady ready,
+            StepActivationAttempt attempt) {
+        var sourceCreatedAt = ready.checkpoint().checkpoint().createdAt();
+        var eventCreatedAt = attempt.eventDraft().occurredAt();
+        var checkpointCreatedAt = attempt.checkpointCreatedAt();
+        var authorityCreatedAt = sourceCreatedAt.isAfter(eventCreatedAt)
+                ? sourceCreatedAt : eventCreatedAt;
+        if (checkpointCreatedAt.isAfter(authorityCreatedAt)) {
+            authorityCreatedAt = checkpointCreatedAt;
+        }
+        if (authorityCreatedAt.equals(eventCreatedAt)
+                && authorityCreatedAt.equals(checkpointCreatedAt)) {
+            return attempt;
+        }
+        var draft = attempt.eventDraft();
+        return new StepActivationAttempt(
+                attempt.leaseOwnerId(), attempt.leaseToken(),
+                attempt.leaseExpiresAt(),
+                new StepActivationEventDraft(
+                        draft.id(), authorityCreatedAt, draft.type(),
+                        draft.causationId(), draft.correlationId(),
+                        draft.payload()),
+                authorityCreatedAt);
     }
 
     public ActiveStepCompletionCompositionOutcome completeActive(

@@ -49,6 +49,41 @@ final class ProductPlanBootstrapTestFixtures {
                 true);
     }
 
+    static PersistedPlanBootstrap workspaceWithStepConstraints() {
+        PersistedPlanBootstrap base = workspace("plan-constraints", "task-constraints");
+        PlanRevision revision = base.plan().revisions().get(0);
+        PlanStep original = revision.steps().get(1);
+        PlanStep constrained = new PlanStep(
+                original.id(), original.intent(), original.expectedOutcome(),
+                original.dependencies(), original.completionCriteria(),
+                original.executionHints(), List.of("preserve unrelated content"));
+        PlanRevision revised = new PlanRevision(
+                revision.id(), revision.taskFrameId(), revision.number(),
+                revision.parentRevisionId(), revision.reason(), revision.createdAt(),
+                List.of(revision.steps().get(0), constrained), revision.completedFacts());
+        Plan plan = new Plan(base.plan().id(), base.plan().taskFrameId(), List.of(revised));
+        return new PersistedPlanBootstrap(
+                base.taskFrame(), plan, base.initialCheckpoint());
+    }
+
+    static PersistedPlanBootstrap workspaceWithCandidateMetadata() {
+        PersistedPlanBootstrap base = workspace("plan-candidate", "task-candidate");
+        PlanRevision revision = base.plan().latestRevision();
+        PlanStep original = revision.steps().get(1);
+        PlanStep candidate = new PlanStep(
+                original.id(), original.intent(), original.expectedOutcome(),
+                original.dependencies(), original.completionCriteria(),
+                original.executionHints(), List.of("preserve unrelated behavior"),
+                true, "finished");
+        PlanRevision revised = new PlanRevision(
+                revision.id(), revision.taskFrameId(), revision.number(),
+                revision.parentRevisionId(), revision.reason(), revision.createdAt(),
+                List.of(revision.steps().get(0), candidate), revision.completedFacts());
+        Plan plan = new Plan(base.plan().id(), base.plan().taskFrameId(), List.of(revised));
+        return new PersistedPlanBootstrap(
+                base.taskFrame(), plan, base.initialCheckpoint());
+    }
+
     static PersistedPlanBootstrap tuple(
             String planId,
             String taskFrameId,

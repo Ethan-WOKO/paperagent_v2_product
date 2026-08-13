@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.persistence;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.api.agent.LiteratureSearchStartToolExecutor;
+import com.yanban.api.agent.v2.chain.persistence.ProductPlanReplanMarkerReader;
 import com.yanban.core.tool.ToolCall;
 import com.yanban.core.tool.ToolExecutionContext;
 import com.yanban.paper.domain.LiteratureSearchTaskRepository;
@@ -100,6 +101,11 @@ class ProductEffectExecutionClaimRepositoryTest {
         @Bean
         ProductLeaseTimeSource leaseTimeSource() {
             return () -> ProductStepActivationTestFixtures.NOW;
+        }
+
+        @Bean
+        ProductPlanReplanMarkerReader productPlanReplanMarkerReader() {
+            return mock(ProductPlanReplanMarkerReader.class);
         }
     }
 
@@ -233,6 +239,39 @@ class ProductEffectExecutionClaimRepositoryTest {
     }
 
     @Test
+    void splitExternalExecutionCommitsClaimBeforePendingAndReusesItOnRetry() {
+        Scenario scenario = scenario("split-pending-execution");
+        ProductEffectExecutionClaimRequest valid = request(
+                scenario, scenario.lease().expiresAt().minusSeconds(1),
+                new AtomicInteger());
+        ProductEffectExecutionClaimRequest pending =
+                new ProductEffectExecutionClaimRequest(
+                        valid.recovery(), valid.lease(), valid.intent(),
+                        valid.leaseToken(), valid.fencingToken(),
+                        valid.observedAt(), () -> {
+                            throw new com.yanban.api.agent.sandbox
+                                    .V2SandboxEffectPendingException();
+                        });
+
+        assertThrows(
+                com.yanban.api.agent.sandbox
+                        .V2SandboxEffectPendingException.class,
+                () -> repository.executeExternal(pending));
+        assertEquals(1, claimRows.count());
+        assertEquals(0, receiptRows.count());
+        assertEquals(0, resultRows.count());
+
+        AtomicInteger retryInvocations = new AtomicInteger();
+        ProductEffectExecutionClaimResult recovered = repository.executeExternal(
+                request(scenario,
+                        scenario.lease().expiresAt().minusSeconds(1),
+                        retryInvocations));
+        assertEquals(false, recovered.replayed());
+        assertEquals(1, retryInvocations.get());
+        assertAtomicRows(1);
+    }
+
+    @Test
     void staleActiveRecoveryCannotExecuteAfterInterruptionCommits() {
         Scenario scenario = scenario("stale-interruption");
         var payload = new ProductStepInterruptionCodec.EncodedPayload(
@@ -263,7 +302,7 @@ class ProductEffectExecutionClaimRepositoryTest {
 
         ProductEffectExecutionClaimException failure = assertThrows(
                 ProductEffectExecutionClaimException.class,
-                () -> repository.execute(request(
+                () -> repository.executeExternal(request(
                         scenario,
                         scenario.lease().expiresAt().minusSeconds(1),
                         invocations)));

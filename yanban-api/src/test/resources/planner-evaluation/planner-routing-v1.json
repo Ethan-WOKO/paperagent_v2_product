@@ -1,0 +1,299 @@
+[
+  {
+    "id": "initial-direct-explanation",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "请解释一下 Java 中 CompletableFuture 的 thenApply 和 thenCompose 有什么区别。",
+    "expectedKinds": ["DIRECT_ROUTE"],
+    "note": "纯知识解释，不需要项目、工具、联网或持续执行。"
+  },
+  {
+    "id": "initial-direct-rewrite",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "把这句话改得更简洁：本研究的主要目的在于对现有方法进行更加全面和深入的分析。",
+    "expectedKinds": ["DIRECT_ROUTE"],
+    "note": "用户已提供完整文本，可直接回答。"
+  },
+  {
+    "id": "initial-direct-project-context-irrelevant",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "2 的 10 次方是多少？只回答数字。",
+    "expectedKinds": ["DIRECT_ROUTE"],
+    "note": "即使会话带有项目，当前请求也不需要项目。"
+  },
+  {
+    "id": "initial-direct-advice-only",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "给我三条改进论文摘要可读性的建议，不要修改项目里的任何内容。",
+    "expectedKinds": ["DIRECT_ROUTE"],
+    "note": "只要建议，并明确不修改项目。"
+  },
+  {
+    "id": "initial-persistent-inspect-project",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "查看当前项目的代码，分析为什么规划模型会选择错误的路由，不要修改代码。",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedBoundaryTrue": ["needsProject", "needsTool", "needsPersistentProgress"],
+    "note": "需要读取项目并持续分析。"
+  },
+  {
+    "id": "initial-persistent-modify-project",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "修改当前项目中的规划提示，让调用阶段出现在提示最前面，并运行相关测试。",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedBoundaryTrue": ["needsProject", "needsTool", "needsPersistentProgress"],
+    "note": "明确要求修改项目并执行测试。"
+  },
+  {
+    "id": "initial-persistent-run-tests",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "运行当前项目中规划模块的测试，告诉我失败原因。",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedBoundaryTrue": ["needsProject", "needsTool"],
+    "note": "需要项目和执行工具。"
+  },
+  {
+    "id": "initial-persistent-current-literature",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "检索 2026 年最新发表的五篇关于多智能体规划的论文，并整理标题和出处。",
+    "expectedKinds": ["NEED_PERMISSION"],
+    "note": "需要检索和联网，但当前冻结权限明确禁止联网，应先请求权限。"
+  },
+  {
+    "id": "initial-persistent-project-summary",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "阅读当前项目中的论文正文，概括第三章的核心论点。",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedBoundaryTrue": ["needsProject", "needsTool"],
+    "note": "需要读取项目内容，不能直接凭对话回答。"
+  },
+  {
+    "id": "initial-need-input-missing-paper",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "帮我总结这篇论文的主要贡献。",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "note": "没有提供论文、链接、标题或项目内对象指向。"
+  },
+  {
+    "id": "initial-need-input-missing-referent",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "把它改成更合理的实现。",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "note": "缺少“它”的明确指向。"
+  },
+  {
+    "id": "initial-need-input-choice-affects-result",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "把当前论文转换成目标期刊要求的格式。",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "note": "没有说明目标期刊，无法确定交付标准。"
+  },
+  {
+    "id": "initial-need-permission-private-source",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "读取未授权的私有文献库 private-corpus-alpha，并把其中所有论文导入当前项目。",
+    "expectedKinds": ["NEED_PERMISSION"],
+    "permissionConstraint": "当前权限明确不包含 private-corpus-alpha，且不能在较低权限下访问。",
+    "note": "缺少的是权限，不是用户信息。"
+  },
+  {
+    "id": "initial-need-permission-external-write",
+    "stage": "INITIAL_INTAKE",
+    "instruction": "把当前论文直接发布到外部期刊投稿系统 journal-submit.example。",
+    "expectedKinds": ["NEED_PERMISSION"],
+    "permissionConstraint": "当前权限不允许向外部投稿系统写入或代表用户提交。",
+    "note": "请求需要当前未授予的外部写权限。"
+  },
+  {
+    "id": "persistent-materialize-code-plan",
+    "stage": "PERSISTENT_PLAN",
+    "instruction": "修改规划模型的阶段提示并运行相关测试。",
+    "priorTask": "已经确认该请求必须进入持续计划执行，原因是需要读取和修改当前项目并执行测试。",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedBoundaryTrue": ["needsProject", "needsTool", "needsPersistentProgress"],
+    "note": "已有持续路由决定，当前应生成正式计划。"
+  },
+  {
+    "id": "persistent-materialize-research-plan",
+    "stage": "PERSISTENT_PLAN",
+    "instruction": "检索并比较 2025 至 2026 年的规划智能体研究。",
+    "priorTask": "已经确认需要联网检索和多步整理。",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedBoundaryTrue": ["needsTool", "needsNetwork", "needsPersistentProgress"],
+    "note": "已有持续路由决定，继续生成计划。"
+  },
+  {
+    "id": "persistent-need-input-target-file",
+    "stage": "PERSISTENT_PLAN",
+    "instruction": "修改指定文件中的错误实现。",
+    "priorTask": "持续路由已经确定，但指令和上下文都没有给出目标文件或可唯一定位的对象。",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "note": "计划所需的关键目标仍然缺失。"
+  },
+  {
+    "id": "persistent-need-permission-network",
+    "stage": "PERSISTENT_PLAN",
+    "instruction": "从受限网络源 restricted-research.example 下载数据并生成报告。",
+    "priorTask": "持续路由已经确定。",
+    "permissionConstraint": "当前任务执行权限不包含 restricted-research.example。",
+    "expectedKinds": ["NEED_PERMISSION"],
+    "note": "生成可执行计划前需要网络权限。"
+  },
+  {
+    "id": "revision-after-test-failure",
+    "stage": "PLAN_REVISION",
+    "instruction": "继续完成原任务。",
+    "priorTask": "原任务是修改规划路由并通过测试。",
+    "revisionTrigger": "failure:test.compile.1；原计划采用的方法导致编译失败，需要换一种实现。",
+    "expectedKinds": ["PLAN_REVISION"],
+    "note": "存在正式计划和明确修订触发。"
+  },
+  {
+    "id": "revision-new-constraint",
+    "stage": "PLAN_REVISION",
+    "instruction": "保留原任务，但不能修改任何正式业务类，只能调整测试支持代码。",
+    "priorTask": "原计划允许修改业务类和测试。",
+    "revisionTrigger": "decision:user-constraint.2；新增约束改变了后续步骤。",
+    "expectedKinds": ["PLAN_REVISION"],
+    "note": "新增约束要求修订已有计划。"
+  },
+  {
+    "id": "revision-need-input-choice",
+    "stage": "PLAN_REVISION",
+    "instruction": "按我刚才说的新方案继续。",
+    "priorTask": "当前计划存在两个互斥替代方案。",
+    "revisionTrigger": "gap:revision-choice.1；上下文中没有记录用户选择的是哪一个方案。",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "note": "修订方向缺失，不能猜测。"
+  },
+  {
+    "id": "revision-need-permission",
+    "stage": "PLAN_REVISION",
+    "instruction": "继续完成原任务。",
+    "priorTask": "当前计划下一步需要访问受限网络源。",
+    "revisionTrigger": "failure:permission.1；现有权限不足。",
+    "permissionConstraint": "访问受限网络源所需权限尚未授予。",
+    "expectedKinds": ["NEED_PERMISSION"],
+    "note": "修订无法解决权限缺口。"
+  },
+  {
+    "id": "disposition-supplement",
+    "stage": "USER_INSTRUCTION_DISPOSITION",
+    "instruction": "另外，测试必须覆盖计划修订场景。",
+    "priorTask": "正在修复规划模型路由，并为阶段提示增加测试。",
+    "instructionRelation": "SUPPLEMENT",
+    "expectedKinds": ["USER_INSTRUCTION_DISPOSITION"],
+    "note": "可以明确分类为对原任务的补充。"
+  },
+  {
+    "id": "disposition-correction",
+    "stage": "USER_INSTRUCTION_DISPOSITION",
+    "instruction": "更正一下，不是删除工具描述，而是只删除工具参数结构。",
+    "priorTask": "正在精简规划模型的工具上下文。",
+    "instructionRelation": "CORRECTION",
+    "expectedKinds": ["USER_INSTRUCTION_DISPOSITION"],
+    "note": "可以明确分类为纠正。"
+  },
+  {
+    "id": "disposition-new-unrelated-request",
+    "stage": "USER_INSTRUCTION_DISPOSITION",
+    "instruction": "先放下这个任务，帮我写一首关于秋天的诗。",
+    "priorTask": "正在修复规划模型路由。",
+    "instructionRelation": "SUPPLEMENT_OR_CORRECTION_CANDIDATE",
+    "expectedKinds": ["USER_INSTRUCTION_DISPOSITION"],
+    "note": "仍应先做指令归类，而不是直接返回新任务路由。"
+  },
+  {
+    "id": "disposition-need-input-ambiguous",
+    "stage": "USER_INSTRUCTION_DISPOSITION",
+    "instruction": "那个还是按之前的处理。",
+    "priorTask": "历史中存在两个不同的待选方案，且“那个”和“之前”都不能唯一定位。",
+    "instructionRelation": "SUPPLEMENT_OR_CORRECTION_CANDIDATE",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "note": "缺少完成指令分类所需的唯一指向。"
+  },
+  {
+    "id": "pending-resolved-target-journal",
+    "stage": "PENDING_ITEM_VALIDATION",
+    "instruction": "目标期刊是 IEEE Transactions on Software Engineering。",
+    "priorTask": "把当前论文转换成目标期刊要求的格式。",
+    "gapId": "gap.target-journal.1",
+    "pendingQuestion": "目标期刊是什么？",
+    "closingCondition": "用户给出唯一明确的目标期刊名称。",
+    "resumePosition": "PERSISTENT_PLAN",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedGapOutcome": "RESOLVED",
+    "note": "回答完整关闭缺口，并恢复生成计划。"
+  },
+  {
+    "id": "pending-still-missing-target-journal",
+    "stage": "PENDING_ITEM_VALIDATION",
+    "instruction": "就投一个比较好的软件工程期刊。",
+    "priorTask": "把当前论文转换成目标期刊要求的格式。",
+    "gapId": "gap.target-journal.2",
+    "pendingQuestion": "目标期刊是什么？",
+    "closingCondition": "用户给出唯一明确的目标期刊名称。",
+    "resumePosition": "PERSISTENT_PLAN",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "expectedGapOutcome": "STILL_PENDING",
+    "note": "答案仍不能唯一确定格式标准。"
+  },
+  {
+    "id": "pending-resolved-file",
+    "stage": "PENDING_ITEM_VALIDATION",
+    "instruction": "目标文件是 src/main/java/example/Planner.java。",
+    "priorTask": "修改指定文件中的错误实现。",
+    "gapId": "gap.target-file.1",
+    "pendingQuestion": "要修改哪个文件？",
+    "closingCondition": "用户给出唯一明确的项目相对文件路径。",
+    "resumePosition": "PERSISTENT_PLAN",
+    "expectedKinds": ["PERSISTENT_PLAN"],
+    "expectedGapOutcome": "RESOLVED",
+    "note": "文件目标已经明确。"
+  },
+  {
+    "id": "pending-irrelevant-answer",
+    "stage": "PENDING_ITEM_VALIDATION",
+    "instruction": "今天先这样吧。",
+    "priorTask": "修改指定文件中的错误实现。",
+    "gapId": "gap.target-file.2",
+    "pendingQuestion": "要修改哪个文件？",
+    "closingCondition": "用户给出唯一明确的项目相对文件路径。",
+    "resumePosition": "PERSISTENT_PLAN",
+    "expectedKinds": ["NEED_USER_INPUT"],
+    "expectedGapOutcome": "STILL_PENDING",
+    "note": "回答没有提供缺失信息。"
+  },
+  {
+    "id": "pending-resolved-direct-question",
+    "stage": "PENDING_ITEM_VALIDATION",
+    "instruction": "我指的是 Java 21。",
+    "priorTask": "解释该版本中虚拟线程的限制。",
+    "gapId": "gap.java-version.1",
+    "pendingQuestion": "你指的是哪个 Java 版本？",
+    "closingCondition": "用户给出唯一明确的 Java 主版本。",
+    "resumePosition": "INITIAL_INTAKE",
+    "expectedKinds": ["DIRECT_ROUTE"],
+    "expectedGapOutcome": "RESOLVED",
+    "note": "缺口关闭后请求可以直接回答。"
+  },
+  {
+    "id": "blocked-conflicting-project-authority",
+    "stage": "PLAN_REVISION",
+    "instruction": "继续修订计划。",
+    "priorTask": "修改当前项目中的规划逻辑。",
+    "revisionTrigger": "failure:authority-conflict.1",
+    "formalConflict": "两个不可变正式事实 fact:project-version-a 和 fact:project-version-b 同时声明自己是该任务唯一的当前项目版本，且无法确定任何一个可以被忽略。",
+    "expectedKinds": ["PLANNING_BLOCKED"],
+    "note": "正式权威事实互相冲突，不能通过询问用户或申请权限解决。"
+  },
+  {
+    "id": "blocked-conflicting-plan-binding",
+    "stage": "PLAN_REVISION",
+    "instruction": "继续修订当前计划。",
+    "priorTask": "按当前正式计划完成项目修改。",
+    "revisionTrigger": "failure:plan-binding-conflict.1",
+    "formalConflict": "正式事实 fact:plan-current-a 和 fact:plan-current-b 都声明不同计划修订是唯一当前修订，并且两者均不可覆盖。",
+    "expectedKinds": ["PLANNING_BLOCKED"],
+    "note": "无法确定被修订的正式计划权威。"
+  }
+]

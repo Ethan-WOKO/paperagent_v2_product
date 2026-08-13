@@ -6,14 +6,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
-import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisAuthoritySource;
-import com.yanban.api.agent.v2.compatibility.project.ProjectAnalysisEffectAuthority;
-import com.yanban.api.agent.v2.compatibility.project.ProjectCandidateEffectGateway;
+import com.yanban.api.agent.v2.chain.effect.ChainActionWorkspaceAuthority;
+import com.yanban.api.agent.v2.chain.effect.ProjectCandidateEffectAuthority;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRequest;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimResult;
-import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
 import com.yanban.api.agent.v2.tool.V2ProductToolCatalog;
+import com.yanban.api.project.ProjectStorageProperties;
 import com.yanban.api.agent.v2.workspace
         .AuthenticatedAgentTurnWorkspaceConfigurationException;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnWorkspacePortFactory;
@@ -51,10 +50,11 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.LinkedHashSet;
-import io.paperagent.v2.providers.ModelProvider;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -63,7 +63,6 @@ import org.springframework.stereotype.Service;
 public class AuthenticatedProjectEffectExecutionComposer {
     private static final Logger log = LoggerFactory.getLogger(
             AuthenticatedProjectEffectExecutionComposer.class);
-    private static final int MAX_FILE_BYTES = 64 * 1024;
     private static final int MAX_CAPTURE_CHARS = 256 * 1024;
 
     private final AgentTurnProductContextResolver contexts;
@@ -73,11 +72,8 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final ProductEffectExecutionClaimRepository claims;
     private final PlanExecutionContextRepository executionContexts;
     private final AuthenticatedAgentTurnWorkspacePortFactory workspaces;
-    private final ProjectAnalysisAuthoritySource authorities;
-    private final ProjectCandidateEffectGateway candidateAuthorities;
     private final ProjectCandidateCompositionEffect candidateComposition;
     private final ObjectMapper json;
-    private final NaturalLanguageEffectAuthoritySource naturalAuthorities;
     private final NaturalLanguageCandidateAuthorityStore naturalCandidates;
     private final V2ProjectBibtexAuditTool bibtexAudit;
     private final V2ProjectLatexOutlineTool latexOutline;
@@ -92,6 +88,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
     private final V2ProjectCrossMaterialSearchTool crossMaterialSearch;
     private final V2ProjectDocumentExtractTool documentExtract;
     private final V2ProjectSpreadsheetInspectTool spreadsheetInspect;
+    private final long maxFileBytes;
 
     public AuthenticatedProjectEffectExecutionComposer(
             AgentTurnProductContextResolver contexts,
@@ -101,46 +98,10 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ProductEffectExecutionClaimRepository claims,
             PlanExecutionContextRepository executionContexts,
             AuthenticatedAgentTurnWorkspacePortFactory workspaces,
-            ProjectAnalysisAuthoritySource authorities,
             ObjectMapper json) {
         this(contexts, planIds, recoverer, intents, claims, executionContexts,
-                workspaces, authorities, null, null, json, null, null);
-    }
-
-    public AuthenticatedProjectEffectExecutionComposer(
-            AgentTurnProductContextResolver contexts,
-            ProductPlanIdDerivation planIds,
-            StepRecoverer recoverer,
-            EffectIntentRepository intents,
-            ProductEffectExecutionClaimRepository claims,
-            PlanExecutionContextRepository executionContexts,
-            AuthenticatedAgentTurnWorkspacePortFactory workspaces,
-            ProjectAnalysisAuthoritySource authorities,
-            ProjectCandidateEffectGateway candidateAuthorities,
-            ProjectCandidateCompositionEffect candidateComposition,
-            ObjectMapper json) {
-        this(contexts, planIds, recoverer, intents, claims,
-                executionContexts, workspaces, authorities,
-                candidateAuthorities, candidateComposition, json, null, null);
-    }
-
-    public AuthenticatedProjectEffectExecutionComposer(
-            AgentTurnProductContextResolver contexts,
-            ProductPlanIdDerivation planIds,
-            StepRecoverer recoverer,
-            EffectIntentRepository intents,
-            ProductEffectExecutionClaimRepository claims,
-            PlanExecutionContextRepository executionContexts,
-            AuthenticatedAgentTurnWorkspacePortFactory workspaces,
-            ProjectAnalysisAuthoritySource authorities,
-            ProjectCandidateEffectGateway candidateAuthorities,
-            ProjectCandidateCompositionEffect candidateComposition,
-            ObjectMapper json,
-            NaturalLanguageEffectAuthoritySource naturalAuthorities) {
-        this(contexts, planIds, recoverer, intents, claims,
-                executionContexts, workspaces, authorities,
-                candidateAuthorities, candidateComposition, json,
-                naturalAuthorities, null);
+                workspaces, null, json, null,
+                new ProjectStorageProperties());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -152,12 +113,10 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ProductEffectExecutionClaimRepository claims,
             PlanExecutionContextRepository executionContexts,
             AuthenticatedAgentTurnWorkspacePortFactory workspaces,
-            ProjectAnalysisAuthoritySource authorities,
-            ProjectCandidateEffectGateway candidateAuthorities,
             ProjectCandidateCompositionEffect candidateComposition,
             ObjectMapper json,
-            NaturalLanguageEffectAuthoritySource naturalAuthorities,
-            NaturalLanguageCandidateAuthorityStore naturalCandidates) {
+            NaturalLanguageCandidateAuthorityStore naturalCandidates,
+            ProjectStorageProperties storage) {
         this.contexts = contexts;
         this.planIds = planIds;
         this.recoverer = recoverer;
@@ -165,12 +124,15 @@ public class AuthenticatedProjectEffectExecutionComposer {
         this.claims = claims;
         this.executionContexts = executionContexts;
         this.workspaces = workspaces;
-        this.authorities = authorities;
-        this.candidateAuthorities = candidateAuthorities;
         this.candidateComposition = candidateComposition;
         this.json = json;
-        this.naturalAuthorities = naturalAuthorities;
         this.naturalCandidates = naturalCandidates;
+        this.maxFileBytes = java.util.Objects.requireNonNull(
+                storage, "storage").getMaxFileBytes();
+        if (maxFileBytes < 1) {
+            throw new IllegalArgumentException(
+                    "project maxFileBytes must be positive");
+        }
         this.bibtexAudit = new V2ProjectBibtexAuditTool(json);
         this.latexOutline = new V2ProjectLatexOutlineTool(json);
         this.latexCrossrefAudit =
@@ -193,6 +155,42 @@ public class AuthenticatedProjectEffectExecutionComposer {
     }
 
     public AuthenticatedProjectEffectExecutionOutcome execute(
+            Long userId, Long turnId,
+            AuthenticatedProjectEffectExecutionCommand command) {
+        FormalExecution formal = formalExecution(userId, turnId, command);
+        ProjectCandidateEffectAuthority candidate = legacyCandidateAuthority(
+                userId, turnId, formal);
+        WorkspaceExecution workspace = legacyWorkspace(
+                userId, turnId, formal);
+        Instant started = Instant.now();
+        return claim(formal, command, started, () -> receiptLegacy(
+                formal.active(), formal.intent(), workspace.port(),
+                workspace.ref(), formal.context().identity().projectId(),
+                userId, turnId, started, candidate));
+    }
+
+    /** Executes a formally bound chain action without legacy Candidate state. */
+    public AuthenticatedProjectEffectExecutionOutcome executeChain(
+            Long userId, Long turnId,
+            AuthenticatedProjectEffectExecutionCommand command) {
+        FormalExecution formal = formalExecution(userId, turnId, command);
+        ChainActionWorkspaceAuthority chain =
+                requireChainAuthority(command, formal);
+        ProjectCandidateEffectAuthority candidate = chainCandidateAuthority(
+                userId, turnId, formal, chain);
+        WorkspaceExecution workspace = chainWorkspace(formal, chain);
+        Instant started = Instant.now();
+        try {
+            return claim(formal, command, started, () -> receiptChain(
+                    formal.active(), formal.intent(), workspace.port(),
+                    workspace.ref(), formal.context().identity().projectId(),
+                    userId, turnId, started, candidate));
+        } finally {
+            cleanupChainWorkspace(formal, workspace);
+        }
+    }
+
+    private FormalExecution formalExecution(
             Long userId, Long turnId,
             AuthenticatedProjectEffectExecutionCommand command) {
         com.yanban.api.agent.v2.VerifiedAgentTurnProductContext context;
@@ -235,105 +233,169 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 || !isProjectKind(intent.intent().kind())) {
             throw failed("intent_authority");
         }
-        boolean naturalCandidate =
-                ProjectCandidateCompositionEffect.KIND.equals(
-                        intent.intent().kind())
-                && naturalAuthorities != null
-                && naturalCandidates != null
-                && naturalAuthorities.authorizes(
-                        userId, turnId, planId.value(),
-                        intent.intent().stepId().value(),
-                        intent.intent().kind());
+        return new FormalExecution(context, planId, active, intent);
+    }
+
+    private ProjectCandidateEffectAuthority legacyCandidateAuthority(
+            Long userId, Long turnId, FormalExecution formal) {
+        PersistedEffectIntent intent = formal.intent();
+        ProjectCandidateEffectAuthority candidate = null;
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
-            if (candidateAuthorities == null || candidateComposition == null) {
+            if (candidateComposition == null || naturalCandidates == null) {
                 throw failed("candidate_composition");
             }
             String arguments = canonical(intent.intent().arguments());
-            var candidate = naturalCandidate
-                    ? naturalCandidates.bind(
-                            userId, context.identity().sessionId(), turnId,
-                            planId.value(),
-                            intent.intent().stepId().value(),
-                            context.identity().projectId(),
-                            context.projectVersionId().orElseThrow(
-                                    AuthenticatedProjectEffectExecutionComposer::failed),
-                            active.recovery().taskFrame().objective(),
-                            arguments, strictCandidatePaths(arguments))
-                    : candidateAuthorities.require(planId.value(),
-                            intent.intent().stepId().value());
-            if (naturalCandidate) {
-                log.info(
-                        "V2 natural Candidate authority bound planId={} "
-                                + "stepId={} pathCount={}",
-                        planId.value(),
-                        intent.intent().stepId().value(),
-                        candidate.paths().size());
-            }
-            if (!candidate.kind().equals(intent.intent().kind())
-                    || !candidate.authorityJson().equals(arguments)
-                    || !candidate.authoritySha256().equals(hash(arguments))
-                    || !userId.equals(candidate.userId())
-                    || !turnId.equals(candidate.turnId())
-                    || !context.identity().projectId().equals(candidate.projectId())
-                    || !context.identity().sessionId().equals(candidate.sessionId())
-                    || context.projectVersionId()
-                            .filter(candidate.projectVersion()::equals).isEmpty()) {
-                throw failed();
-            }
+            List<String> paths = strictCandidatePaths(arguments);
+            candidate = naturalCandidates.bind(
+                    userId, formal.context().identity().sessionId(), turnId,
+                    formal.planId().value(),
+                    intent.intent().stepId().value(),
+                    formal.context().identity().projectId(),
+                    formal.context().projectVersionId().orElseThrow(
+                            AuthenticatedProjectEffectExecutionComposer::failed),
+                    formal.active().recovery().taskFrame().objective(),
+                    arguments, paths);
+            validateCandidateAuthority(
+                    userId, turnId, formal, arguments, candidate, false);
         } else {
-            ProjectAnalysisEffectAuthority authority;
-            try {
-                authority = authorities.require(
-                        planId.value(), intent.intent().stepId().value());
-            } catch (RuntimeException missingAnalysis) {
-                try {
-                    if (candidateAuthorities == null) throw failed();
-                    var candidate = candidateAuthorities.require(
-                            planId.value(), intent.intent().stepId().value());
-                    authority = new ProjectAnalysisEffectAuthority(
-                            candidate.kind(), candidate.authorityJson(),
-                            candidate.authoritySha256());
-                } catch (RuntimeException missingCandidate) {
-                    if (naturalAuthorities == null
-                            || !naturalAuthorities.authorizes(
-                                    userId, turnId, planId.value(),
-                                    intent.intent().stepId().value(),
-                                    intent.intent().kind())) {
-                        throw failed("authority");
-                    }
-                    authority = null;
-                }
-            }
-            String arguments = canonical(intent.intent().arguments());
-            if (authority != null
-                    && (!authority.kind().equals(intent.intent().kind())
-                    || !authority.argumentJson().equals(arguments)
-                    || !authority.argumentSha256().equals(hash(arguments)))) {
-                throw failed("authority");
-            }
+            canonical(intent.intent().arguments());
         }
+        return candidate;
+    }
+
+    private ProjectCandidateEffectAuthority chainCandidateAuthority(
+            Long userId, Long turnId, FormalExecution formal,
+            ChainActionWorkspaceAuthority chain) {
+        PersistedEffectIntent intent = formal.intent();
+        if (!ProjectCandidateCompositionEffect.KIND.equals(
+                intent.intent().kind())) {
+            canonical(intent.intent().arguments());
+            return null;
+        }
+        if (candidateComposition == null) {
+            throw failed("candidate_composition");
+        }
+        String arguments = canonical(intent.intent().arguments());
+        List<String> paths = strictCandidatePaths(arguments);
+        ProjectCandidateEffectAuthority candidate =
+                new ProjectCandidateEffectAuthority(
+                        ProjectCandidateCompositionEffect.KIND,
+                        arguments, hash(arguments), userId,
+                        formal.context().identity().projectId(),
+                        formal.context().identity().sessionId(), turnId,
+                        formal.context().projectVersionId().orElseThrow(
+                                AuthenticatedProjectEffectExecutionComposer
+                                        ::failed),
+                        formal.active().recovery().taskFrame().objective(),
+                        paths, null, chain);
+        validateCandidateAuthority(
+                userId, turnId, formal, arguments, candidate, true);
+        return candidate;
+    }
+
+    private void validateCandidateAuthority(
+            Long userId, Long turnId, FormalExecution formal,
+            String arguments, ProjectCandidateEffectAuthority candidate,
+            boolean chain) {
+        log.info(
+                "V2 Candidate authority bound planId={} stepId={} "
+                        + "pathCount={}",
+                formal.planId().value(),
+                formal.intent().intent().stepId().value(),
+                candidate.paths().size());
+        if (!candidate.kind().equals(formal.intent().intent().kind())
+                || !candidate.authorityJson().equals(arguments)
+                || !candidate.authoritySha256().equals(hash(arguments))
+                || !userId.equals(candidate.userId())
+                || !turnId.equals(candidate.turnId())
+                || !formal.context().identity().projectId().equals(
+                candidate.projectId())
+                || !formal.context().identity().sessionId().equals(
+                candidate.sessionId())
+                || formal.context().projectVersionId()
+                .filter(candidate.projectVersion()::equals).isEmpty()
+                || chain != (candidate.chainAction() != null)) {
+            throw failed();
+        }
+    }
+
+    private ChainActionWorkspaceAuthority
+            requireChainAuthority(
+            AuthenticatedProjectEffectExecutionCommand command,
+            FormalExecution formal) {
+        ChainActionWorkspaceAuthority chain =
+                command.chainAuthority();
+        if (chain == null
+                || !chain.actionId().equals(command.toolCallId().value())
+                || !formal.intent().intent().toolCallId().equals(
+                command.toolCallId())
+                || !formal.active().planId().equals(formal.planId())
+                || formal.context().projectVersionId().isEmpty()
+                || !formal.context().projectVersionId().orElseThrow().equals(
+                chain.baseCandidate().baseProjectVersion())) {
+            throw failed("chain_authority");
+        }
+        return chain;
+    }
+
+    private WorkspaceExecution legacyWorkspace(
+            Long userId, Long turnId, FormalExecution formal) {
+        PersistedPlanExecutionContextConfirmed confirmed =
+                executionContext(formal.planId());
+        return workspace(formal,
+                () -> workspaces.create(userId, turnId),
+                port -> port.inspectMaterialization(
+                        confirmed.materializationSpec()));
+    }
+
+    private WorkspaceExecution chainWorkspace(
+            FormalExecution formal,
+            ChainActionWorkspaceAuthority chain) {
+        PersistedPlanExecutionContextConfirmed confirmed =
+                executionContext(formal.planId());
+        if (!confirmed.materializationSpec().workspaceId().value().equals(
+                chain.workspaceId())
+                || !confirmed.materializationSpec().sourceProjectVersion()
+                .versionId().equals(
+                        chain.baseCandidate().baseProjectVersion())) {
+            throw failed("chain_authority");
+        }
+        return workspace(formal,
+                () -> workspaces.createChain(formal.context(), chain),
+                port -> port.materialize(
+                        confirmed.materializationSpec()));
+    }
+
+    private PersistedPlanExecutionContextConfirmed executionContext(
+            io.paperagent.v2.contracts.PlanId planId) {
         var contextResult = executionContexts.inspect(planId);
         if (contextResult.outcome() != PersistenceOutcome.FOUND
                 || !(contextResult.value().orElse(null)
                 instanceof PersistedPlanExecutionContextConfirmed confirmed)) {
             throw failed("execution_context");
         }
-        WorkspacePort workspace;
-        VerifiedWorkspaceMaterialization verified;
+        return confirmed;
+    }
+
+    private WorkspaceExecution workspace(
+            FormalExecution formal, Supplier<WorkspacePort> create,
+            Function<WorkspacePort, VerifiedWorkspaceMaterialization>
+                    materialize) {
         try {
-            workspace = workspaces.create(userId, turnId);
-            verified = workspace.inspectMaterialization(
-                    confirmed.materializationSpec());
+            WorkspacePort workspace = create.get();
+            VerifiedWorkspaceMaterialization verified =
+                    materialize.apply(workspace);
+            return new WorkspaceExecution(workspace, verified.workspace());
         } catch (WorkspaceException exception) {
             log.warn(
                     "V2 Project effect Workspace rejected "
                             + "planId={} stepId={} toolCallId={} kind={} "
                             + "code={} operation={} projectPathPresent={} "
                             + "origin={}",
-                    planId.value(),
-                    active.recovery().activation().stepId().value(),
-                    intent.intent().toolCallId().value(),
-                    intent.intent().kind(),
+                    formal.planId().value(),
+                    formal.active().recovery().activation().stepId().value(),
+                    formal.intent().intent().toolCallId().value(),
+                    formal.intent().intent().kind(),
                     exception.code().name(),
                     exception.operation(),
                     exception.projectPath().isPresent(),
@@ -345,10 +407,10 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     "V2 Project effect Workspace configuration rejected "
                             + "planId={} stepId={} toolCallId={} kind={} "
                             + "code={}",
-                    planId.value(),
-                    active.recovery().activation().stepId().value(),
-                    intent.intent().toolCallId().value(),
-                    intent.intent().kind(),
+                    formal.planId().value(),
+                    formal.active().recovery().activation().stepId().value(),
+                    formal.intent().intent().toolCallId().value(),
+                    formal.intent().intent().kind(),
                     exception.code().name());
             throw failed(
                     "workspace.configuration." + exception.code().name());
@@ -357,37 +419,53 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     "V2 Project effect Workspace failed "
                             + "planId={} stepId={} toolCallId={} kind={} "
                             + "exceptionType={}",
-                    planId.value(),
-                    active.recovery().activation().stepId().value(),
-                    intent.intent().toolCallId().value(),
-                    intent.intent().kind(),
+                    formal.planId().value(),
+                    formal.active().recovery().activation().stepId().value(),
+                    formal.intent().intent().toolCallId().value(),
+                    formal.intent().intent().kind(),
                     exception.getClass().getSimpleName());
             throw failed("workspace");
         }
-        Instant started = Instant.now();
+    }
+
+    private void cleanupChainWorkspace(
+            FormalExecution formal, WorkspaceExecution workspace) {
+        try {
+            workspace.port().cleanup(workspace.ref());
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "V2 Project chain Workspace cleanup failed "
+                            + "planId={} stepId={} toolCallId={} "
+                            + "exceptionType={}",
+                    formal.planId().value(),
+                    formal.active().recovery().activation().stepId().value(),
+                    formal.intent().intent().toolCallId().value(),
+                    exception.getClass().getSimpleName());
+        }
+    }
+
+    private AuthenticatedProjectEffectExecutionOutcome claim(
+            FormalExecution formal,
+            AuthenticatedProjectEffectExecutionCommand command,
+            Instant started, Supplier<ExecutionReceipt> execution) {
         ProductEffectExecutionClaimResult claimed;
         try {
             claimed = claims.execute(
                     new ProductEffectExecutionClaimRequest(
-                            active.recovery(), active.lease(), intent,
+                            formal.active().recovery(), formal.active().lease(),
+                            formal.intent(),
                             command.recoveryAttempt().leaseToken(),
-                            active.lease().fencingToken(), started,
-                            () -> receipt(
-                                    active, intent, workspace,
-                                    verified.workspace(),
-                                    context.identity().projectId(),
-                                    userId, turnId, started,
-                                    naturalCandidate,
-                                    command.requestProvider())));
+                            formal.active().lease().fencingToken(), started,
+                            execution));
         } catch (RuntimeException exception) {
             log.warn(
                     "V2 Project effect claim failed planId={} stepId={} "
                             + "toolCallId={} kind={} exceptionType={} "
                             + "causeType={} origin={}",
-                    planId.value(),
-                    active.recovery().activation().stepId().value(),
-                    intent.intent().toolCallId().value(),
-                    intent.intent().kind(),
+                    formal.planId().value(),
+                    formal.active().recovery().activation().stepId().value(),
+                    formal.intent().intent().toolCallId().value(),
+                    formal.intent().intent().kind(),
                     V2SafeFailureDiagnostics.exceptionType(exception),
                     V2SafeFailureDiagnostics.causeType(exception),
                     V2SafeFailureDiagnostics.origin(exception));
@@ -397,48 +475,85 @@ public class AuthenticatedProjectEffectExecutionComposer {
                 claimed.result(), claimed.replayed());
     }
 
-    private ExecutionReceipt receipt(
-            RecoveredActiveStep active,
-            PersistedEffectIntent intent, WorkspacePort workspace,
-            io.paperagent.v2.contracts.WorkspaceRef ref, Long projectId,
-            Long userId, Long turnId, Instant started) {
-        return receipt(active, intent, workspace, ref, projectId,
-                userId, turnId, started, false, null);
-    }
-
-    private ExecutionReceipt receipt(
+    private ExecutionReceipt receiptLegacy(
             RecoveredActiveStep active,
             PersistedEffectIntent intent, WorkspacePort workspace,
             io.paperagent.v2.contracts.WorkspaceRef ref, Long projectId,
             Long userId, Long turnId, Instant started,
-            boolean naturalCandidate, ModelProvider requestProvider) {
+            ProjectCandidateEffectAuthority candidateAuthority) {
         if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
-            var authority =
-                    new ProjectCandidateCompositionEffect.ModelAuthority(
-                            active.recovery().taskFrame().id(),
-                            active.planId(),
-                            active.recovery().checkpoint().checkpoint()
-                                    .revisionId(),
-                            active.recovery().activation().stepId());
-            var candidate = naturalCandidate
-                    ? candidateComposition.executeNatural(
-                            intent, authority, workspace, ref, userId,
-                            turnId, projectId, started,
-                            naturalCandidates)
-                    : candidateComposition.execute(
-                            intent, authority, workspace, ref, userId,
-                            turnId, projectId, started);
-            ObjectNode output = json.createObjectNode();
-            output.put("diffFingerprint", candidate.diffFingerprint());
-            Instant ended = Instant.now();
-            return new ExecutionReceipt(
-                    new ReceiptId("project-receipt." + hash(
-                            intent.intent().toolCallId().value())),
-                    intent.intent().toolCallId(), ReceiptStatus.SUCCESS,
-                    started, ended, java.util.Optional.of(0),
-                    java.util.Optional.empty(), capture(write(output)),
-                    OutputCapture.empty(), List.of(), java.util.Optional.empty(), List.of());
+            var candidate = candidateComposition.executeNatural(
+                    intent, modelAuthority(active), workspace, ref, userId,
+                    turnId, projectId, started, naturalCandidates);
+            return candidateReceipt(intent, candidate, started);
         }
+        return evidenceReceipt(active, intent, workspace, ref, started);
+    }
+
+    private ExecutionReceipt receiptChain(
+            RecoveredActiveStep active,
+            PersistedEffectIntent intent, WorkspacePort workspace,
+            io.paperagent.v2.contracts.WorkspaceRef ref, Long projectId,
+            Long userId, Long turnId, Instant started,
+            ProjectCandidateEffectAuthority candidateAuthority) {
+        if (ProjectCandidateCompositionEffect.KIND.equals(intent.intent().kind())) {
+            try {
+                var candidate = candidateComposition.executeChain(
+                        intent, modelAuthority(active), candidateAuthority,
+                        workspace, ref, userId, turnId, projectId, started);
+                return candidateReceipt(intent, candidate, started);
+            } catch (ProjectCandidateCompositionEffect
+                    .CandidateCompositionException rejected) {
+                return candidateFailureReceipt(
+                        intent, started, rejected.code());
+            }
+        }
+        return evidenceReceipt(active, intent, workspace, ref, started);
+    }
+
+    private ProjectCandidateCompositionEffect.ModelAuthority modelAuthority(
+            RecoveredActiveStep active) {
+        return new ProjectCandidateCompositionEffect.ModelAuthority(
+                active.recovery().taskFrame().id(), active.planId(),
+                active.recovery().checkpoint().checkpoint().revisionId(),
+                active.recovery().activation().stepId());
+    }
+
+    private ExecutionReceipt candidateReceipt(
+            PersistedEffectIntent intent,
+            ProjectCandidateCompositionEffect.CandidateResult candidate,
+            Instant started) {
+        ObjectNode output = json.createObjectNode();
+        output.put("diffFingerprint", candidate.diffFingerprint());
+        Instant ended = Instant.now();
+        return new ExecutionReceipt(
+                new ReceiptId("project-receipt." + hash(
+                        intent.intent().toolCallId().value())),
+                intent.intent().toolCallId(), ReceiptStatus.SUCCESS,
+                started, ended, java.util.Optional.of(0),
+                java.util.Optional.empty(), capture(write(output)),
+                OutputCapture.empty(), List.of(), java.util.Optional.empty(),
+                List.of());
+    }
+
+    private ExecutionReceipt candidateFailureReceipt(
+            PersistedEffectIntent intent, Instant started, String code) {
+        Instant ended = Instant.now();
+        return new ExecutionReceipt(
+                new ReceiptId("project-receipt." + hash(
+                        intent.intent().toolCallId().value())),
+                intent.intent().toolCallId(), ReceiptStatus.FAILURE,
+                started, ended, java.util.Optional.of(1),
+                java.util.Optional.of(code), OutputCapture.empty(),
+                OutputCapture.inline(
+                        "Project Candidate operation made no progress", false),
+                List.of(), java.util.Optional.empty(), List.of());
+    }
+
+    private ExecutionReceipt evidenceReceipt(
+            RecoveredActiveStep active,
+            PersistedEffectIntent intent, WorkspacePort workspace,
+            io.paperagent.v2.contracts.WorkspaceRef ref, Instant started) {
         boolean success = true;
         String failureCode = "PROJECT_EVIDENCE_FAILED";
         String failureMessage = "Project evidence operation failed";
@@ -521,7 +636,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
             ObjectNode arguments) {
         String path = exactText(arguments, "path");
         byte[] bytes = workspace.read(ref, new ProjectPath(path));
-        if (bytes.length > MAX_FILE_BYTES) throw failed();
+        if (bytes.length > maxFileBytes) throw failed();
         return "path: " + path + "\ncontent:\n" + utf8(bytes);
     }
 
@@ -539,7 +654,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                         value.path().value())).toList()) {
             if (hits.size() >= maximum) break;
             byte[] bytes = workspace.read(ref, stat.path());
-            if (bytes.length > MAX_FILE_BYTES) continue;
+            if (bytes.length > maxFileBytes) continue;
             String content;
             try {
                 content = utf8(bytes);
@@ -597,7 +712,7 @@ public class AuthenticatedProjectEffectExecutionComposer {
                         || !item.path("text").isTextual()
                         || item.path("text").textValue()
                                 .getBytes(StandardCharsets.UTF_8).length
-                                > 64 * 1024) {
+                                > maxFileBytes) {
                     throw failed();
                 }
                 String path = new ProjectPath(
@@ -789,5 +904,17 @@ public class AuthenticatedProjectEffectExecutionComposer {
                     + ":" + element.getLineNumber();
         }
         return "workspace-boundary";
+    }
+
+    private record FormalExecution(
+            com.yanban.api.agent.v2.VerifiedAgentTurnProductContext context,
+            io.paperagent.v2.contracts.PlanId planId,
+            RecoveredActiveStep active,
+            PersistedEffectIntent intent) {
+    }
+
+    private record WorkspaceExecution(
+            WorkspacePort port,
+            io.paperagent.v2.contracts.WorkspaceRef ref) {
     }
 }

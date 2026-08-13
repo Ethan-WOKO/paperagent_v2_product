@@ -22,10 +22,16 @@ import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ProjectVersionRef;
 import io.paperagent.v2.contracts.ReceiptId;
 import io.paperagent.v2.contracts.ResourceLimits;
+import io.paperagent.v2.contracts.RequirementDeclarationMode;
 import io.paperagent.v2.contracts.SecretRef;
 import io.paperagent.v2.contracts.StepExecutionState;
 import io.paperagent.v2.contracts.TaskFrame;
 import io.paperagent.v2.contracts.TaskFrameId;
+import io.paperagent.v2.contracts.TaskRequirements;
+import io.paperagent.v2.contracts.ValidationRequirement;
+import io.paperagent.v2.contracts.ValidationSubject;
+import io.paperagent.v2.contracts.DeliveryRequirement;
+import io.paperagent.v2.contracts.PublishRequirement;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.VersionedCheckpoint;
 import org.springframework.stereotype.Component;
@@ -45,7 +51,8 @@ import java.util.Optional;
 
 @Component
 public final class ProductPlanBootstrapCodec {
-    static final int FORMAT_VERSION = 1;
+    static final int FORMAT_VERSION = 2;
+    static final int LEGACY_FORMAT_VERSION = 1;
     private static final String CORRUPT = "Stored V2 Plan bootstrap payload is invalid";
 
     private final ObjectMapper json;
@@ -56,9 +63,10 @@ public final class ProductPlanBootstrapCodec {
 
     public EncodedPayload encode(PersistedPlanBootstrap bootstrap) {
         try {
-            byte[] bytes = json.writeValueAsBytes(toDocument(bootstrap));
+            int formatVersion = formatVersion(bootstrap);
+            byte[] bytes = json.writeValueAsBytes(toDocument(bootstrap, formatVersion));
             return new EncodedPayload(
-                    FORMAT_VERSION,
+                    formatVersion,
                     sha256(bytes),
                     new String(bytes, StandardCharsets.UTF_8));
         } catch (JsonProcessingException exception) {
@@ -67,7 +75,8 @@ public final class ProductPlanBootstrapCodec {
     }
 
     public PersistedPlanBootstrap decode(int formatVersion, String expectedHash, String payload) {
-        if (formatVersion != FORMAT_VERSION) {
+        if (formatVersion != FORMAT_VERSION
+                && formatVersion != LEGACY_FORMAT_VERSION) {
             throw corrupt();
         }
         try {
@@ -77,7 +86,8 @@ public final class ProductPlanBootstrapCodec {
                     required(expectedHash).getBytes(StandardCharsets.US_ASCII))) {
                 throw corrupt();
             }
-            PersistedPlanBootstrap result = fromDocument(json.readTree(bytes));
+            PersistedPlanBootstrap result = fromDocument(
+                    json.readTree(bytes), formatVersion);
             EncodedPayload canonical = encode(result);
             if (!canonical.sha256().equals(expectedHash)
                     || !canonical.json().equals(payload)) {
@@ -92,23 +102,27 @@ public final class ProductPlanBootstrapCodec {
         }
     }
 
-    private ObjectNode toDocument(PersistedPlanBootstrap bootstrap) {
+    private ObjectNode toDocument(
+            PersistedPlanBootstrap bootstrap, int formatVersion) {
         ObjectNode root = json.createObjectNode();
-        root.put("format", FORMAT_VERSION);
-        root.set("taskFrame", taskFrameNode(bootstrap.taskFrame()));
-        root.set("plan", planNode(bootstrap.plan()));
+        root.put("format", formatVersion);
+        root.set("taskFrame", taskFrameNode(bootstrap.taskFrame(), formatVersion));
+        root.set("plan", planNode(bootstrap.plan(), formatVersion));
         root.set("initialCheckpoint",
                 checkpointNode(bootstrap.initialCheckpoint()));
         return root;
     }
 
-    private ObjectNode taskFrameNode(TaskFrame value) {
+    private ObjectNode taskFrameNode(TaskFrame value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("objective", value.objective());
         node.set("targets", strings(value.targets()));
         node.set("deliverables", strings(value.deliverables()));
         node.set("constraints", strings(value.constraints()));
+        if (formatVersion >= FORMAT_VERSION) {
+            node.set("requirements", requirementsNode(value.requirements()));
+        }
         value.sourceProjectVersion().ifPresentOrElse(project -> {
             ObjectNode projectNode = json.createObjectNode();
             projectNode.put("projectId", project.projectId());
@@ -117,6 +131,23 @@ public final class ProductPlanBootstrapCodec {
         }, () -> node.putNull("sourceProjectVersion"));
         node.set("executionProfile", executionProfileNode(value.executionProfile()));
         node.put("createdAt", value.createdAt().toString());
+        return node;
+    }
+
+    private ObjectNode requirementsNode(TaskRequirements value) {
+        ObjectNode node = json.createObjectNode();
+        node.put("declarationMode", value.declarationMode().name());
+        node.put("deliveryRequirement", value.deliveryRequirement().name());
+        ArrayNode validation = json.createArrayNode();
+        value.validationRequirements().forEach(requirement -> {
+            ObjectNode item = json.createObjectNode();
+            item.put("requirementId", requirement.requirementId());
+            item.put("subject", requirement.subject().name());
+            item.put("completionCondition", requirement.completionCondition());
+            validation.add(item);
+        });
+        node.set("validationRequirements", validation);
+        node.put("publishRequirement", value.publishRequirement().name());
         return node;
     }
 
@@ -139,17 +170,18 @@ public final class ProductPlanBootstrapCodec {
         return node;
     }
 
-    private ObjectNode planNode(Plan value) {
+    private ObjectNode planNode(Plan value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("taskFrameId", value.taskFrameId().value());
         ArrayNode revisions = json.createArrayNode();
-        value.revisions().forEach(revision -> revisions.add(revisionNode(revision)));
+        value.revisions().forEach(revision -> revisions.add(
+                revisionNode(revision, formatVersion)));
         node.set("revisions", revisions);
         return node;
     }
 
-    private ObjectNode revisionNode(PlanRevision value) {
+    private ObjectNode revisionNode(PlanRevision value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("taskFrameId", value.taskFrameId().value());
@@ -160,7 +192,7 @@ public final class ProductPlanBootstrapCodec {
         node.put("reason", value.reason());
         node.put("createdAt", value.createdAt().toString());
         ArrayNode steps = json.createArrayNode();
-        value.steps().forEach(step -> steps.add(stepNode(step)));
+        value.steps().forEach(step -> steps.add(stepNode(step, formatVersion)));
         node.set("steps", steps);
         ArrayNode facts = json.createArrayNode();
         value.completedFacts().entrySet().stream()
@@ -171,7 +203,7 @@ public final class ProductPlanBootstrapCodec {
         return node;
     }
 
-    private ObjectNode stepNode(PlanStep value) {
+    private ObjectNode stepNode(PlanStep value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("intent", value.intent());
@@ -179,6 +211,20 @@ public final class ProductPlanBootstrapCodec {
         node.set("dependencies", strings(value.dependencies().stream()
                 .map(PlanStepId::value).sorted().toList()));
         node.set("completionCriteria", strings(value.completionCriteria()));
+        if (!value.constraints().isEmpty()) {
+            node.set("constraints", strings(value.constraints()));
+        }
+        if (value.mayChangeCandidate()) {
+            node.put("mayChangeCandidate", true);
+        }
+        if (value.candidateValidationCompletionCondition() != null) {
+            node.put("candidateValidationCompletionCondition",
+                    value.candidateValidationCompletionCondition());
+        }
+        if (formatVersion >= FORMAT_VERSION) {
+            node.set("validationRequirementIds",
+                    strings(value.validationRequirementIds()));
+        }
         ObjectNode hints = json.createObjectNode();
         hints.put("maxAttempts", value.executionHints().maxAttempts());
         hints.put("maxDuration", value.executionHints().maxDuration().toString());
@@ -223,18 +269,20 @@ public final class ProductPlanBootstrapCodec {
         return node;
     }
 
-    private PersistedPlanBootstrap fromDocument(JsonNode root) {
-        if (integer(root, "format") != FORMAT_VERSION) {
+    private PersistedPlanBootstrap fromDocument(
+            JsonNode root, int formatVersion) {
+        if (integer(root, "format") != formatVersion) {
             throw corrupt();
         }
-        TaskFrame taskFrame = taskFrame(requiredNode(root, "taskFrame"));
-        Plan plan = plan(requiredNode(root, "plan"));
+        TaskFrame taskFrame = taskFrame(
+                requiredNode(root, "taskFrame"), formatVersion);
+        Plan plan = plan(requiredNode(root, "plan"), formatVersion);
         VersionedCheckpoint checkpoint =
                 checkpoint(requiredNode(root, "initialCheckpoint"));
         return new PersistedPlanBootstrap(taskFrame, plan, checkpoint);
     }
 
-    private TaskFrame taskFrame(JsonNode node) {
+    private TaskFrame taskFrame(JsonNode node, int formatVersion) {
         JsonNode project = requiredNode(node, "sourceProjectVersion");
         Optional<ProjectVersionRef> projectVersion = project.isNull()
                 ? Optional.empty()
@@ -246,9 +294,26 @@ public final class ProductPlanBootstrapCodec {
                 stringList(node, "targets"),
                 stringList(node, "deliverables"),
                 stringList(node, "constraints"),
+                formatVersion == LEGACY_FORMAT_VERSION
+                        ? TaskRequirements.legacyUnspecified()
+                        : requirements(requiredNode(node, "requirements")),
                 projectVersion,
                 executionProfile(requiredNode(node, "executionProfile")),
                 Instant.parse(text(node, "createdAt")));
+    }
+
+    private TaskRequirements requirements(JsonNode node) {
+        List<ValidationRequirement> validationRequirements = new ArrayList<>();
+        requiredArray(node, "validationRequirements").forEach(value ->
+                validationRequirements.add(new ValidationRequirement(
+                        text(value, "requirementId"),
+                        ValidationSubject.valueOf(text(value, "subject")),
+                        text(value, "completionCondition"))));
+        return new TaskRequirements(
+                RequirementDeclarationMode.valueOf(text(node, "declarationMode")),
+                DeliveryRequirement.valueOf(text(node, "deliveryRequirement")),
+                validationRequirements,
+                PublishRequirement.valueOf(text(node, "publishRequirement")));
     }
 
     private ExecutionProfile executionProfile(JsonNode node) {
@@ -269,18 +334,20 @@ public final class ProductPlanBootstrapCodec {
                         .map(SecretRef::new).toList()));
     }
 
-    private Plan plan(JsonNode node) {
+    private Plan plan(JsonNode node, int formatVersion) {
         List<PlanRevision> revisions = new ArrayList<>();
-        requiredArray(node, "revisions").forEach(value -> revisions.add(revision(value)));
+        requiredArray(node, "revisions").forEach(value -> revisions.add(
+                revision(value, formatVersion)));
         return new Plan(
                 new PlanId(text(node, "id")),
                 new TaskFrameId(text(node, "taskFrameId")),
                 revisions);
     }
 
-    private PlanRevision revision(JsonNode node) {
+    private PlanRevision revision(JsonNode node, int formatVersion) {
         List<PlanStep> steps = new ArrayList<>();
-        requiredArray(node, "steps").forEach(value -> steps.add(step(value)));
+        requiredArray(node, "steps").forEach(value -> steps.add(
+                step(value, formatVersion)));
         Map<PlanStepId, CompletionFact> facts = new LinkedHashMap<>();
         requiredArray(node, "completedFacts").forEach(value -> {
             CompletionFact fact = fact(value);
@@ -300,7 +367,7 @@ public final class ProductPlanBootstrapCodec {
                 facts);
     }
 
-    private PlanStep step(JsonNode node) {
+    private PlanStep step(JsonNode node, int formatVersion) {
         return new PlanStep(
                 new PlanStepId(text(node, "id")),
                 text(node, "intent"),
@@ -310,7 +377,40 @@ public final class ProductPlanBootstrapCodec {
                 stringList(node, "completionCriteria"),
                 new BoundedExecutionHints(
                         integer(requiredNode(node, "executionHints"), "maxAttempts"),
-                        Duration.parse(text(requiredNode(node, "executionHints"), "maxDuration"))));
+                        Duration.parse(text(requiredNode(node, "executionHints"), "maxDuration"))),
+                node.has("constraints") ? stringList(node, "constraints") : List.of(),
+                optionalBoolean(node, "mayChangeCandidate"),
+                optionalText(node, "candidateValidationCompletionCondition"),
+                formatVersion == LEGACY_FORMAT_VERSION
+                        ? List.of()
+                        : stringList(node, "validationRequirementIds"));
+    }
+
+    private static int formatVersion(PersistedPlanBootstrap bootstrap) {
+        if (bootstrap.taskFrame().requirements().declarationMode()
+                == RequirementDeclarationMode.LEGACY_UNSPECIFIED) {
+            boolean hasFormalBindings = bootstrap.plan().revisions().stream()
+                    .flatMap(revision -> revision.steps().stream())
+                    .anyMatch(step -> !step.validationRequirementIds().isEmpty());
+            if (hasFormalBindings) {
+                throw new IllegalStateException(
+                        "Legacy TaskFrame cannot carry formal validation bindings");
+            }
+            return LEGACY_FORMAT_VERSION;
+        }
+        return FORMAT_VERSION;
+    }
+
+    private static boolean optionalBoolean(JsonNode node, String field) {
+        if (!node.has(field)) return false;
+        if (!node.get(field).isBoolean()) throw corrupt();
+        return node.get(field).booleanValue();
+    }
+
+    private static String optionalText(JsonNode node, String field) {
+        if (!node.has(field) || node.get(field).isNull()) return null;
+        if (!node.get(field).isTextual()) throw corrupt();
+        return node.get(field).textValue();
     }
 
     private CompletionFact fact(JsonNode node) {

@@ -10,7 +10,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class V2SandboxPollWaiter {
     public int maximumPolls() {
-        return 10;
+        // The local E2B provider may spend more than forty seconds creating a
+        // fresh sandbox before the first terminal status is available. Keep
+        // the bounded request wait above that startup window while retaining
+        // the outer recovery path for genuinely slow executions.
+        return 180;
     }
 
     public void pause() {

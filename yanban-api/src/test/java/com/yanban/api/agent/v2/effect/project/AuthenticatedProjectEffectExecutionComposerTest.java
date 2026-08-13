@@ -51,12 +51,10 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                             .PlanExecutionContextRepository.class),
                     mock(com.yanban.api.agent.v2.workspace
                             .AuthenticatedAgentTurnWorkspacePortFactory.class),
-                    mock(com.yanban.api.agent.v2.compatibility.project
-                            .ProjectAnalysisAuthoritySource.class),
                     json);
 
     @Test
-    void exactReadIsBoundedUtf8AndBinaryOrOversizeFailsClosed() {
+    void exactReadUsesProjectBoundaryAndRejectsBinary() {
         WorkspacePort workspace = mock(WorkspacePort.class);
         WorkspaceRef ref = ref();
         ProjectPath path = new ProjectPath("paper/main.md");
@@ -81,10 +79,11 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         when(workspace.read(ref, path)).thenReturn(new byte[]{1});
         assertThrows(IllegalStateException.class,
                 () -> composer.read(workspace, ref, arguments));
-        when(workspace.read(ref, path)).thenReturn(
-                new byte[64 * 1024 + 1]);
-        assertThrows(IllegalStateException.class,
-                () -> composer.read(workspace, ref, arguments));
+        byte[] aboveFormerLimit = "x".repeat(65 * 1024)
+                .getBytes(StandardCharsets.UTF_8);
+        when(workspace.read(ref, path)).thenReturn(aboveFormerLimit);
+        assertTrue(composer.read(workspace, ref, arguments)
+                .endsWith("x".repeat(65 * 1024)));
         assertThrows(RuntimeException.class, () -> composer.read(
                 workspace, ref,
                 json.createObjectNode().put("path", "../secret")));
@@ -473,85 +472,6 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     @Test
-    void wrongPersistedAuthorityRejectsBeforeClaimOrWorkspaceRead() {
-        var contexts = mock(com.yanban.api.agent.v2
-                .AgentTurnProductContextResolver.class);
-        var planIds = new com.yanban.agent.v2.adapter.bootstrap
-                .ProductPlanIdDerivation();
-        var recoverer = mock(io.paperagent.v2.runtime.execution.recovery
-                .composition.StepRecoverer.class);
-        var intents = mock(io.paperagent.v2.persistence
-                .EffectIntentRepository.class);
-        var claims = mock(com.yanban.api.agent.v2.persistence
-                .ProductEffectExecutionClaimRepository.class);
-        var executionContexts = mock(io.paperagent.v2.persistence
-                .PlanExecutionContextRepository.class);
-        var workspaces = mock(com.yanban.api.agent.v2.workspace
-                .AuthenticatedAgentTurnWorkspacePortFactory.class);
-        var authorities = mock(com.yanban.api.agent.v2.compatibility.project
-                .ProjectAnalysisAuthoritySource.class);
-        var identity = new com.yanban.core.agent.AgentRunIdentity(
-                "AGENT_TURN", "turn-42", 7L, 9L, 8L);
-        var planId = planIds.derive(identity);
-        when(contexts.resolve(7L, 42L)).thenReturn(
-                new com.yanban.api.agent.v2.VerifiedAgentTurnProductContext(
-                        identity, Optional.of("version")));
-        var recovery = mock(io.paperagent.v2.persistence
-                .PersistedStepRecoveryActive.class);
-        var activation = mock(io.paperagent.v2.persistence
-                .PersistedStepActivation.class);
-        var stepId = new io.paperagent.v2.contracts.PlanStepId(
-                "project-read-01");
-        var activationEvent = mock(
-                io.paperagent.v2.contracts.EventEnvelope.class);
-        var activationEventId = new io.paperagent.v2.contracts.EventId(
-                "activation");
-        when(activation.stepId()).thenReturn(stepId);
-        when(activation.activationEvent()).thenReturn(activationEvent);
-        when(activationEvent.id()).thenReturn(activationEventId);
-        when(recovery.planId()).thenReturn(planId);
-        when(recovery.activation()).thenReturn(activation);
-        var lease = new io.paperagent.v2.persistence.LeaseRecord(
-                planId, "owner", "token", 1L,
-                Instant.now().minusSeconds(1),
-                Instant.now().plusSeconds(60));
-        var active = new io.paperagent.v2.runtime.execution.recovery
-                .composition.RecoveredActiveStep(
-                        recovery, lease,
-                        io.paperagent.v2.runtime.execution.recovery.composition
-                                .StepRecoveryLeaseDisposition
-                                .RETAINED_FOR_RECOVERY);
-        when(recoverer.recover(
-                org.mockito.ArgumentMatchers.any())).thenReturn(active);
-        var toolCallId = new io.paperagent.v2.contracts.ToolCallId("tool");
-        var intent = new io.paperagent.v2.contracts.EffectIntent(
-                toolCallId, planId, stepId, "project.read",
-                new io.paperagent.v2.contracts.ObjectValue(Map.of(
-                        "path", new io.paperagent.v2.contracts.TextValue(
-                                "paper.md"))));
-        when(intents.find(toolCallId)).thenReturn(
-                io.paperagent.v2.persistence.PersistenceResult.found(
-                        new io.paperagent.v2.persistence.PersistedEffectIntent(
-                                intent, "owner", 1L, activationEventId)));
-        when(authorities.require(planId.value(), stepId.value()))
-                .thenReturn(new com.yanban.api.agent.v2.compatibility.project
-                        .ProjectAnalysisEffectAuthority(
-                                "project.search", "{}", "a".repeat(64)));
-        var composer = new AuthenticatedProjectEffectExecutionComposer(
-                contexts, planIds, recoverer, intents, claims,
-                executionContexts, workspaces, authorities, json);
-        var attempt = new io.paperagent.v2.runtime.execution.recovery
-                .composition.StepRecoveryLeaseAttempt(
-                        "owner", "token", lease.expiresAt());
-
-        assertThrows(IllegalStateException.class, () -> composer.execute(
-                7L, 42L, new AuthenticatedProjectEffectExecutionCommand(
-                        planId, toolCallId, attempt)));
-
-        verifyNoInteractions(claims, executionContexts, workspaces);
-    }
-
-    @Test
     void realWorkspaceRejectsSymlinkWhenSupportedAndNonManifestRead(
             @TempDir Path root) throws Exception {
         byte[] evidence = "evidence".getBytes(StandardCharsets.UTF_8);
@@ -604,16 +524,16 @@ class AuthenticatedProjectEffectExecutionComposerTest {
 
     @Test
     void candidateAuthorityDispatchesExactCompositionAndBindsReceiptOutput() {
-        String arguments = "{\"operation\":\"compose\"}";
+        String arguments = candidateArgumentsJson();
         var fixture = candidateFixture(
-                new com.yanban.api.agent.v2.compatibility.project
+                new com.yanban.api.agent.v2.chain.effect
                         .ProjectCandidateEffectAuthority(
                                 ProjectCandidateCompositionEffect.KIND,
                                 arguments, sha256(arguments),
                                 7L, 8L, 9L, 42L, "version",
                                 "improve", List.of("paper.md")));
 
-        var outcome = fixture.composer.execute(
+        var outcome = fixture.composer.executeChain(
                 7L, 42L, fixture.command);
 
         assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
@@ -621,7 +541,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         assertTrue(outcome.result().receipt().standardOutput()
                 .inlineText().orElseThrow()
                 .contains("\"diffFingerprint\":\"" + "d".repeat(64) + "\""));
-        verify(fixture.composition).execute(
+        verify(fixture.composition).executeChain(
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.argThat(authority ->
                         authority.taskFrameId().equals(
@@ -634,58 +554,123 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                                                 .PlanRevisionId(
                                                         "candidate-revision"))
                                 && authority.stepId().equals(
-                                        new io.paperagent.v2.contracts
+                                new io.paperagent.v2.contracts
                                                 .PlanStepId(
                                                         "project-candidate-compose"))),
+                org.mockito.ArgumentMatchers.argThat(candidate ->
+                        candidate.authorityJson().equals(
+                                candidateArgumentsJson())
+                                && candidate.paths().equals(
+                                List.of("paper.md"))
+                                && candidate.chainAction().equals(
+                                fixture.command.chainAuthority())),
                 org.mockito.ArgumentMatchers.eq(fixture.workspace),
                 org.mockito.ArgumentMatchers.eq(ref()),
                 org.mockito.ArgumentMatchers.eq(7L),
                 org.mockito.ArgumentMatchers.eq(42L),
                 org.mockito.ArgumentMatchers.eq(8L),
                 org.mockito.ArgumentMatchers.any());
+        verifyNoInteractions(fixture.naturalCandidates);
+        verify(fixture.workspaces).createChain(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(
+                        fixture.command.chainAuthority()));
+        verify(fixture.workspace).cleanup(ref());
+        verify(fixture.workspaces, never()).create(7L, 42L);
     }
 
     @Test
-    void mismatchedOrCrossBoundCandidateAuthorityFailsBeforeMutation() {
-        String arguments = "{\"operation\":\"compose\"}";
-        var crossUser = candidateFixture(
-                new com.yanban.api.agent.v2.compatibility.project
+    void candidateNoProgressBecomesFormalFailureReceipt() {
+        var fixture = candidateFixture(
+                new com.yanban.api.agent.v2.chain.effect
                         .ProjectCandidateEffectAuthority(
-                                ProjectCandidateCompositionEffect.KIND,
-                                arguments, sha256(arguments),
-                                99L, 8L, 9L, 42L, "version",
-                                "improve", List.of("paper.md")));
-        assertThrows(IllegalStateException.class, () -> crossUser.composer.execute(
-                7L, 42L, crossUser.command));
-        verifyNoInteractions(crossUser.claims, crossUser.workspaces,
-                crossUser.composition);
+                        ProjectCandidateCompositionEffect.KIND,
+                        candidateArgumentsJson(),
+                        sha256(candidateArgumentsJson()),
+                        7L, 8L, 9L, 42L, "version",
+                        "improve", List.of("paper.md")));
+        when(fixture.composition.executeChain(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.any())).thenThrow(
+                        ProjectCandidateCompositionEffect
+                                .CandidateCompositionException
+                                .noActualChange());
 
-        var mismatchedArguments = candidateFixture(
-                new com.yanban.api.agent.v2.compatibility.project
-                        .ProjectCandidateEffectAuthority(
-                                ProjectCandidateCompositionEffect.KIND,
-                                "{}", sha256("{}"),
-                                7L, 8L, 9L, 42L, "version",
-                                "improve", List.of("paper.md")));
-        assertThrows(IllegalStateException.class,
-                () -> mismatchedArguments.composer.execute(
-                        7L, 42L, mismatchedArguments.command));
-        verifyNoInteractions(mismatchedArguments.claims,
-                mismatchedArguments.workspaces,
-                mismatchedArguments.composition);
+        var outcome = fixture.composer.executeChain(
+                7L, 42L, fixture.command);
+
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.FAILURE,
+                outcome.result().receipt().status());
+        assertEquals(
+                ProjectCandidateCompositionEffect.CandidateCompositionException
+                        .NO_ACTUAL_CHANGE,
+                outcome.result().receipt().resultCode().orElseThrow());
+    }
+
+    @Test
+    void legacyCandidateExecutionKeepsNaturalAuthorityAndTurnWorkspace() {
+        String arguments = candidateArgumentsJson();
+        var legacyAuthority = new com.yanban.api.agent.v2.chain.effect
+                .ProjectCandidateEffectAuthority(
+                ProjectCandidateCompositionEffect.KIND,
+                arguments, sha256(arguments),
+                7L, 8L, 9L, 42L, "version",
+                "improve", List.of("paper.md"));
+        var fixture = candidateFixture(legacyAuthority);
+        var legacyCommand = new AuthenticatedProjectEffectExecutionCommand(
+                fixture.command.planId(), fixture.command.toolCallId(),
+                fixture.command.recoveryAttempt());
+
+        var outcome = fixture.composer.execute(7L, 42L, legacyCommand);
+
+        assertEquals(io.paperagent.v2.contracts.ReceiptStatus.SUCCESS,
+                outcome.result().receipt().status());
+        verify(fixture.naturalCandidates).bind(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyList());
+        verify(fixture.composition).executeNatural(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(fixture.workspace),
+                org.mockito.ArgumentMatchers.eq(ref()),
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.eq(8L),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(fixture.naturalCandidates));
+        verify(fixture.workspaces).create(7L, 42L);
+        verify(fixture.workspace, never()).cleanup(ref());
+        verify(fixture.workspaces, never()).createChain(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void workspaceFailurePreservesSanitizedCodeAndStopsBeforeClaim() {
-        String arguments = "{\"operation\":\"compose\"}";
+        String arguments = candidateArgumentsJson();
         var fixture = candidateFixture(
-                new com.yanban.api.agent.v2.compatibility.project
+                new com.yanban.api.agent.v2.chain.effect
                         .ProjectCandidateEffectAuthority(
                                 ProjectCandidateCompositionEffect.KIND,
                                 arguments, sha256(arguments),
                                 7L, 8L, 9L, 42L, "version",
                                 "improve", List.of("paper.md")));
-        when(fixture.workspace.inspectMaterialization(
+        when(fixture.workspace.materialize(
                 org.mockito.ArgumentMatchers.any())).thenThrow(
                         new WorkspaceException(
                                 WorkspaceErrorCode.WORKSPACE_PARTIAL_STATE,
@@ -693,7 +678,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
 
         ProjectEffectExecutionException failure = assertThrows(
                 ProjectEffectExecutionException.class,
-                () -> fixture.composer.execute(
+                () -> fixture.composer.executeChain(
                         7L, 42L, fixture.command));
 
         assertEquals(
@@ -703,7 +688,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
     }
 
     private CandidateExecutionFixture candidateFixture(
-            com.yanban.api.agent.v2.compatibility.project
+            com.yanban.api.agent.v2.chain.effect
                     .ProjectCandidateEffectAuthority authority) {
         var contexts = mock(com.yanban.api.agent.v2
                 .AgentTurnProductContextResolver.class);
@@ -719,14 +704,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 .PlanExecutionContextRepository.class);
         var workspaces = mock(com.yanban.api.agent.v2.workspace
                 .AuthenticatedAgentTurnWorkspacePortFactory.class);
-        var analysisAuthorities = mock(com.yanban.api.agent.v2.compatibility
-                .project.ProjectAnalysisAuthoritySource.class);
-        var candidateAuthorities = mock(com.yanban.api.agent.v2.compatibility
-                .project.ProjectCandidateEffectGateway.class);
         var composition = mock(ProjectCandidateCompositionEffect.class);
-        var naturalAuthorities = mock(
-                com.yanban.api.agent.v2.effect
-                        .NaturalLanguageEffectAuthoritySource.class);
         var naturalCandidates = mock(
                 NaturalLanguageCandidateAuthorityStore.class);
         var identity = new com.yanban.core.agent.AgentRunIdentity(
@@ -750,6 +728,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         when(taskFrame.id()).thenReturn(
                 new io.paperagent.v2.contracts.TaskFrameId(
                         "candidate-task-frame"));
+        when(taskFrame.objective()).thenReturn("improve");
         when(recovery.taskFrame()).thenReturn(taskFrame);
         var checkpoint = mock(
                 io.paperagent.v2.persistence.VersionedCheckpoint.class);
@@ -783,20 +762,48 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                                 toolCallId, planId, stepId,
                                 ProjectCandidateCompositionEffect.KIND,
                                 new io.paperagent.v2.contracts.ObjectValue(
-                                        Map.of("operation",
+                                        Map.of(
+                                                "operation",
                                                 new io.paperagent.v2.contracts
-                                                        .TextValue("compose")))),
+                                                        .TextValue("compose"),
+                                                "paths",
+                                                new io.paperagent.v2.contracts
+                                                        .ListValue(List.of(
+                                                        new io.paperagent.v2.contracts
+                                                                .TextValue("paper.md"))),
+                                                "replacements",
+                                                new io.paperagent.v2.contracts
+                                                        .ListValue(List.of(
+                                                        new io.paperagent.v2.contracts.ObjectValue(
+                                                                Map.of(
+                                                                        "path", new io.paperagent.v2.contracts.TextValue("paper.md"),
+                                                                        "text", new io.paperagent.v2.contracts.TextValue("new text")))))))),
                         "owner", 1L, activationId);
         when(intents.find(toolCallId)).thenReturn(
                 io.paperagent.v2.persistence.PersistenceResult.found(
                         persistedIntent));
-        when(candidateAuthorities.require(planId.value(), stepId.value()))
+        when(naturalCandidates.bind(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyList()))
                 .thenReturn(authority);
         var confirmed = mock(io.paperagent.v2.persistence
                 .PersistedPlanExecutionContextConfirmed.class);
         var spec = mock(io.paperagent.v2.contracts
                 .WorkspaceMaterializationSpec.class);
         when(confirmed.materializationSpec()).thenReturn(spec);
+        when(spec.workspaceId()).thenReturn(
+                new io.paperagent.v2.contracts.WorkspaceId("workspace"));
+        when(spec.sourceProjectVersion()).thenReturn(
+                new io.paperagent.v2.contracts.ProjectVersionRef(
+                        "8", "version"));
         when(executionContexts.inspect(planId)).thenReturn(
                 io.paperagent.v2.persistence.PersistenceResult.found(
                         confirmed));
@@ -804,9 +811,22 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         var verified = mock(io.paperagent.v2.workspace
                 .VerifiedWorkspaceMaterialization.class);
         when(verified.workspace()).thenReturn(ref());
+        when(workspace.materialize(spec)).thenReturn(verified);
         when(workspace.inspectMaterialization(spec)).thenReturn(verified);
+        var chainAuthority = new com.yanban.api.agent.v2.chain.effect
+                .ChainActionWorkspaceAuthority(
+                toolCallId.value(), "f".repeat(64), "workspace",
+                List.of("paper.md"), List.of("paper.md"),
+                new com.yanban.api.agent.v2.chain.effect
+                        .ChainActionWorkspaceAuthority.BaseCandidateAuthority(
+                        "NONE", "version", null, List.of()));
+        when(workspaces.createChain(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(chainAuthority)))
+                .thenReturn(workspace);
         when(workspaces.create(7L, 42L)).thenReturn(workspace);
-        when(composition.execute(
+        when(composition.executeChain(
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.eq(workspace),
@@ -815,6 +835,19 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 org.mockito.ArgumentMatchers.eq(42L),
                 org.mockito.ArgumentMatchers.eq(8L),
                 org.mockito.ArgumentMatchers.any())).thenReturn(
+                        new ProjectCandidateCompositionEffect.CandidateResult(
+                                null, null, "d".repeat(64)));
+        when(composition.executeNatural(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(workspace),
+                org.mockito.ArgumentMatchers.eq(ref()),
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.eq(8L),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(naturalCandidates)))
+                .thenReturn(
                         new ProjectCandidateCompositionEffect.CandidateResult(
                                 null, null, "d".repeat(64)));
         when(claims.execute(org.mockito.ArgumentMatchers.any()))
@@ -832,17 +865,18 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 });
         var composer = new AuthenticatedProjectEffectExecutionComposer(
                 contexts, planIds, recoverer, intents, claims,
-                executionContexts, workspaces, analysisAuthorities,
-                candidateAuthorities, composition, json,
-                naturalAuthorities, naturalCandidates);
+                executionContexts, workspaces, composition, json,
+                naturalCandidates,
+                new com.yanban.api.project.ProjectStorageProperties());
         var command = new AuthenticatedProjectEffectExecutionCommand(
                 planId, toolCallId,
                 new io.paperagent.v2.runtime.execution.recovery.composition
                         .StepRecoveryLeaseAttempt(
-                                "owner", "token", lease.expiresAt()));
+                                "owner", "token", lease.expiresAt()),
+                null, chainAuthority);
         return new CandidateExecutionFixture(
                 composer, command, claims, workspaces, composition, workspace,
-                candidateAuthorities, naturalAuthorities, naturalCandidates);
+                naturalCandidates);
     }
 
     private record CandidateExecutionFixture(
@@ -854,10 +888,6 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                     .AuthenticatedAgentTurnWorkspacePortFactory workspaces,
             ProjectCandidateCompositionEffect composition,
             WorkspacePort workspace,
-            com.yanban.api.agent.v2.compatibility.project
-                    .ProjectCandidateEffectGateway candidateAuthorities,
-            com.yanban.api.agent.v2.effect
-                    .NaturalLanguageEffectAuthoritySource naturalAuthorities,
             NaturalLanguageCandidateAuthorityStore naturalCandidates) {}
 
     private static WorkspaceRef ref() {
@@ -891,8 +921,6 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 .PlanExecutionContextRepository.class);
         var workspaces = mock(com.yanban.api.agent.v2.workspace
                 .AuthenticatedAgentTurnWorkspacePortFactory.class);
-        var authorities = mock(com.yanban.api.agent.v2.compatibility.project
-                .ProjectAnalysisAuthoritySource.class);
         var identity = new com.yanban.core.agent.AgentRunIdentity(
                 "AGENT_TURN", "turn-42", 7L, 9L, 8L);
         var planId = planIds.derive(identity);
@@ -933,11 +961,6 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         when(intents.find(toolCallId)).thenReturn(
                 io.paperagent.v2.persistence.PersistenceResult.found(
                         persistedIntent));
-        when(authorities.require(planId.value(), stepId.value())).thenReturn(
-                new com.yanban.api.agent.v2.compatibility.project
-                        .ProjectAnalysisEffectAuthority(
-                                kind, canonicalArguments,
-                                sha256(canonicalArguments)));
         var confirmed = mock(io.paperagent.v2.persistence
                 .PersistedPlanExecutionContextConfirmed.class);
         var spec = mock(io.paperagent.v2.contracts
@@ -980,7 +1003,7 @@ class AuthenticatedProjectEffectExecutionComposerTest {
                 });
         var target = new AuthenticatedProjectEffectExecutionComposer(
                 contexts, planIds, recoverer, intents, claims,
-                executionContexts, workspaces, authorities, json);
+                executionContexts, workspaces, json);
         return target.execute(
                 7L, 42L, new AuthenticatedProjectEffectExecutionCommand(
                         planId, toolCallId,
@@ -1029,6 +1052,12 @@ class AuthenticatedProjectEffectExecutionComposerTest {
         } catch (java.security.NoSuchAlgorithmException exception) {
             throw new AssertionError(exception);
         }
+    }
+
+    private static String candidateArgumentsJson() {
+        return "{\"operation\":\"compose\",\"paths\":[\"paper.md\"],"
+                + "\"replacements\":[{\"path\":\"paper.md\","
+                + "\"text\":\"new text\"}]}";
     }
 
     private static String rootPath() {

@@ -16,25 +16,6 @@ describe('frontend UI mock boundary', () => {
     expect(user.data).toMatchObject({ role: 'USER', demo: false });
   });
 
-  it('provides deterministic project lifecycle states', () => {
-    const completed = resolveUiMockResponse(
-      { method: 'GET', path: '/agent/sessions/6401/v2/turns' },
-      { role: 'admin', projectState: 'complete' },
-    );
-    const running = resolveUiMockResponse(
-      { method: 'GET', path: '/agent/sessions/6401/v2/turns' },
-      { role: 'user', projectState: 'running' },
-    );
-    const empty = resolveUiMockResponse(
-      { method: 'GET', path: '/agent/sessions/6401/v2/turns' },
-      { role: 'user', projectState: 'empty' },
-    );
-
-    expect(completed.data).toMatchObject([{ status: 'SUCCEEDED' }]);
-    expect(running.data).toMatchObject([{ status: 'RUNNING' }]);
-    expect(empty.data).toEqual([]);
-  });
-
   it('provides ordinary workspace sessions and their message history separately', () => {
     const sessions = resolveUiMockResponse(
       { method: 'GET', path: '/agent/sessions' },

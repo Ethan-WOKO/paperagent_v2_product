@@ -25,6 +25,7 @@ public final class DeterministicTaskFrameFreezer implements TaskFrameFreezer {
                 draft.targets(),
                 draft.deliverables(),
                 draft.constraints(),
+                draft.requirements(),
                 request.sourceProjectVersion(),
                 request.executionProfile(),
                 request.createdAt());

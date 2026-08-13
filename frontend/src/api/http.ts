@@ -4,6 +4,7 @@ import { expireAuthSession, isJwtExpired } from '@/auth/session';
 
 const http = axios.create({
   baseURL: '/api/v1',
+  // One HTTP transport wait; durable Agent work continues and is recovered by status reads.
   timeout: 120000,
 });
 

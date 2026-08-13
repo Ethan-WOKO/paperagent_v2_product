@@ -298,26 +298,130 @@ export function sendMessage(sessionId: number, payload: SendMessageRequestPayloa
   return http.post<SendMessageResponse>(`/agent/sessions/${sessionId}/messages`, payload);
 }
 
-export type V2NaturalLanguageTurnStatus =
-  | 'PLANNING'
-  | 'RUNNING'
-  | 'WAITING_CONFIRMATION'
-  | 'SUCCEEDED'
-  | 'FAILED';
-
-export type V2NaturalLanguageStepStatus =
-  | 'PENDING'
-  | 'RUNNING'
-  | 'SUCCEEDED'
-  | 'FAILED'
-  | 'SUPERSEDED_BY_REPLAN';
-
 export interface V2NaturalLanguageTurnRequest {
   content: string;
   ragDisabled?: boolean;
   skillId?: string | null;
-  experiment?: AgentExperimentRequestPayload;
   clientRequestId: string;
+  instructionKind?: V2ProjectInstructionKind;
+  targetClientRequestId?: string | null;
+}
+
+export type V2ProjectInstructionKind =
+  | 'INITIAL'
+  | 'SUPPLEMENT'
+  | 'CORRECTION'
+  | 'REPLACEMENT';
+
+export type V2ProjectRoute = 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE';
+
+export type V2ProjectWorkState =
+  | 'PLANNING'
+  | 'CLASSIFYING_INSTRUCTION'
+  | 'DIRECT_ANSWERING'
+  | 'EXECUTING'
+  | 'AWAITING_REVIEW'
+  | 'VALIDATING_PENDING_ITEM'
+  | 'WAITING_USER'
+  | 'WAITING_PERMISSION'
+  | 'FINALIZING'
+  | 'DELIVERING'
+  | 'BLOCKED'
+  | 'TERMINAL';
+
+export type V2ProjectTaskOutcomeStatus =
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'SUPERSEDED';
+
+export type V2ProjectDeliveryStatus =
+  | 'PENDING'
+  | 'RETRYING'
+  | 'SUCCEEDED'
+  | 'DELIVERY_FAILED';
+
+export type V2ProjectStepStatus =
+  | 'NOT_STARTED'
+  | 'READY'
+  | 'ACTIVE'
+  | 'AWAITING_REVIEW'
+  | 'WAITING_GAP'
+  | 'COMPLETED'
+  | 'SUPERSEDED_BY_REPLAN';
+
+export type V2ProjectPendingItemType =
+  | 'USER_INFORMATION'
+  | 'USER_CHOICE'
+  | 'PERMISSION';
+
+export type V2ProjectPendingItemStatus =
+  | 'PENDING'
+  | 'RESPONSE_RECEIVED'
+  | 'RESOLVED'
+  | 'REJECTED'
+  | 'CANCELLED';
+
+export interface V2ProjectStepProjection {
+  stepId: string;
+  index: number;
+  title: string;
+  status: V2ProjectStepStatus;
+  detail: string | null;
+}
+
+export interface V2ProjectPendingItemProjection {
+  gapId: string;
+  type: V2ProjectPendingItemType;
+  status: V2ProjectPendingItemStatus;
+  question: string;
+  expectedFormat: string | null;
+}
+
+export interface V2ProjectValidationProjection {
+  validationId: string;
+  status: string;
+  requestDigest: string;
+  receiptDigest: string;
+  receipts: V2ProjectValidationReceiptProjection[];
+}
+
+export interface V2ProjectValidationReceiptProjection {
+  requirementId: string;
+  subject: 'CANDIDATE' | 'ACTION_RECEIPT';
+  receiptId: string;
+  actionId: string | null;
+  candidateArtifactId: number | null;
+  candidateFingerprint: string | null;
+  projectVersion: string | null;
+}
+
+export interface V2NaturalLanguageTurnResponse {
+  clientRequestId: string;
+  workState: V2ProjectWorkState;
+  taskOutcomeStatus: V2ProjectTaskOutcomeStatus | null;
+  deliveryStatus: V2ProjectDeliveryStatus | null;
+  route: V2ProjectRoute | null;
+  planId: string | null;
+  baseProjectVersion: string | null;
+  publishedProjectVersion: string | null;
+  revisionId: number | null;
+  publishReceiptId: string | null;
+  steps: V2ProjectStepProjection[];
+  pendingItem: V2ProjectPendingItemProjection | null;
+  validation: V2ProjectValidationProjection | null;
+  finalText: string | null;
+  candidateArtifactId: number | null;
+  outputPaths: string[];
+  failureCategory: string | null;
+  failureCode: string | null;
+  deliveryErrorCode: string | null;
+}
+
+export interface V2NaturalLanguageTurnHistoryItem extends V2NaturalLanguageTurnResponse {
+  question: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface V2NaturalLanguageTurnStartResponse {
@@ -326,54 +430,29 @@ export interface V2NaturalLanguageTurnStartResponse {
   userMessageId: number;
   assistantMessageId: number | null;
   clientRequestId: string;
-  route: 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE';
+  rootClientRequestId: string;
+  route: V2ProjectRoute | null;
   answer: string | null;
   planId: string | null;
   replayed: boolean;
 }
 
-export interface V2NaturalLanguageTurnStep {
-  index: number;
-  title: string;
-  status: V2NaturalLanguageStepStatus;
-  detail: string | null;
-}
-
-export interface V2NaturalLanguageTurnResponse {
-  status: V2NaturalLanguageTurnStatus;
-  route: 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE';
-  planId: string | null;
-  projectVersion: string | null;
-  steps: V2NaturalLanguageTurnStep[];
-  finalText: string | null;
-  candidateArtifactId: number | null;
-  outputPaths: string[];
-  errorCode: string | null;
-}
-
-export interface V2AgentAutomaticValidation {
-  status: 'PASSED';
-  provider: 'E2B';
-  exitCode: number;
-  receiptId: string;
-}
-
-export interface V2CandidateConfirmationValidation {
-  status: string;
-  decisionStatus: string;
-  applicationOperationId: number | null;
-  appliedRevisionId: number | null;
-  appliedProjectVersion: string | null;
-}
-
-export interface V2NaturalLanguageTurnHistoryItem extends Omit<V2NaturalLanguageTurnResponse, 'route'> {
+export interface V2TurnGapReplyRequest {
+  content: string;
   clientRequestId: string;
-  question: string;
-  route: 'DIRECT' | 'PERSISTENT_PLAN_EXECUTE' | null;
-  createdAt: string;
-  updatedAt: string;
-  agentAutomaticValidation: V2AgentAutomaticValidation | null;
-  confirmationValidation: V2CandidateConfirmationValidation | null;
+}
+
+export interface V2TurnCancelRequest {
+  clientRequestId: string;
+}
+
+export interface V2TurnCommandResponse {
+  rootClientRequestId: string;
+  commandClientRequestId: string;
+  instructionId: string;
+  pendingItemStatus: V2ProjectPendingItemStatus | null;
+  taskOutcomeStatus: V2ProjectTaskOutcomeStatus | null;
+  replayed: boolean;
 }
 
 export function startV2NaturalLanguageTurn(
@@ -407,6 +486,33 @@ export function listV2NaturalLanguageTurns(
   return http.get<V2NaturalLanguageTurnHistoryItem[]>(
     `/agent/sessions/${sessionId}/v2/turns`,
     { params: { limit }, signal },
+  );
+}
+
+export function replyV2NaturalLanguagePendingItem(
+  sessionId: number,
+  targetClientRequestId: string,
+  gapId: string,
+  payload: V2TurnGapReplyRequest,
+  signal?: AbortSignal,
+) {
+  return http.post<V2TurnCommandResponse>(
+    `/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(targetClientRequestId)}/pending-items/${encodeURIComponent(gapId)}/reply`,
+    payload,
+    { signal },
+  );
+}
+
+export function cancelV2NaturalLanguageTurn(
+  sessionId: number,
+  targetClientRequestId: string,
+  payload: V2TurnCancelRequest,
+  signal?: AbortSignal,
+) {
+  return http.post<V2TurnCommandResponse>(
+    `/agent/sessions/${sessionId}/v2/turns/${encodeURIComponent(targetClientRequestId)}/cancel`,
+    payload,
+    { signal },
   );
 }
 

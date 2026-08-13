@@ -37,7 +37,8 @@ import java.util.Optional;
 
 @Component
 public final class ProductStepCompletionCodec {
-    static final int FORMAT_VERSION = 1;
+    static final int FORMAT_VERSION = 2;
+    static final int LEGACY_FORMAT_VERSION = 1;
     private static final String REQUEST = "step-completion-request";
     private static final String RESULT = "step-completion-result";
     private static final String CORRUPT =
@@ -53,10 +54,16 @@ public final class ProductStepCompletionCodec {
     }
 
     EncodedPayload encodeRequest(StepCompletionRequest request) {
+        return encodeRequest(request, FORMAT_VERSION);
+    }
+
+    private EncodedPayload encodeRequest(
+            StepCompletionRequest request, int formatVersion) {
         ObjectNode root = carrier(
                 request.planId(), request.leaseToken(), request.fencingToken(),
                 request.completionEvent(), request.completedCheckpoint());
         root.put("kind", REQUEST);
+        root.put("format", formatVersion);
         root.put("expectedRevisionId", request.expectedRevisionId().value());
         root.put("expectedRevisionNumber", request.expectedRevisionNumber());
         root.put("expectedCheckpointVersion",
@@ -65,20 +72,28 @@ public final class ProductStepCompletionCodec {
                 request.expectedEventHeadSequence());
         root.put("stepId", request.stepId().value());
         root.set("completionFact", factNode(request.completionFact()));
-        root.set("completedRevision", revisionNode(request.completedRevision()));
+        root.set("completedRevision", revisionNode(
+                request.completedRevision(), formatVersion));
         return encode(root);
     }
 
     EncodedPayload encodeResult(PersistedStepCompletion result) {
+        return encodeResult(result, FORMAT_VERSION);
+    }
+
+    private EncodedPayload encodeResult(
+            PersistedStepCompletion result, int formatVersion) {
         ObjectNode root = carrier(
                 result.planId(), "result-carrier", result.fencingToken(),
                 result.completionEvent(),
                 result.completedCheckpoint().checkpoint());
         root.put("kind", RESULT);
+        root.put("format", formatVersion);
         root.remove("leaseToken");
         root.put("leaseOwnerId", result.leaseOwnerId());
         root.put("stepId", result.stepId().value());
-        root.set("completedRevision", revisionNode(result.completedRevision()));
+        root.set("completedRevision", revisionNode(
+                result.completedRevision(), formatVersion));
         ((ObjectNode) root.get("startedCheckpoint"))
                 .put("version", result.completedCheckpoint().version());
         return encode(root);
@@ -99,10 +114,10 @@ public final class ProductStepCompletionCodec {
                     new PlanStepId(text(root, "stepId")),
                     fact(requiredNode(root, "completionFact")),
                     carrier.startEvent(),
-                    revision(requiredNode(root, "completedRevision")),
+                    revision(requiredNode(root, "completedRevision"), version),
                     carrier.startedCheckpoint());
             requireCanonical(
-                    encodeRequest(decoded), expectedHash, payload);
+                    encodeRequest(decoded, version), expectedHash, payload);
             return decoded;
         } catch (Exception exception) {
             throw corrupt();
@@ -121,12 +136,12 @@ public final class ProductStepCompletionCodec {
                     carrier.planId(), new PlanStepId(text(root, "stepId")),
                     text(root, "leaseOwnerId"), carrier.fencingToken(),
                     carrier.startEvent(),
-                    revision(requiredNode(root, "completedRevision")),
+                    revision(requiredNode(root, "completedRevision"), version),
                     new VersionedCheckpoint(
                             number(checkpointNode, "version"),
                             carrier.startedCheckpoint()));
             requireCanonical(
-                    encodeResult(decoded), expectedHash, payload);
+                    encodeResult(decoded, version), expectedHash, payload);
             return decoded;
         } catch (Exception exception) {
             throw corrupt();
@@ -166,7 +181,7 @@ public final class ProductStepCompletionCodec {
                 encoded.sha256(), encoded.json());
     }
 
-    private ObjectNode revisionNode(PlanRevision value) {
+    private ObjectNode revisionNode(PlanRevision value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("taskFrameId", value.taskFrameId().value());
@@ -177,7 +192,7 @@ public final class ProductStepCompletionCodec {
         node.put("reason", value.reason());
         node.put("createdAt", value.createdAt().toString());
         ArrayNode steps = json.createArrayNode();
-        value.steps().forEach(step -> steps.add(stepNode(step)));
+        value.steps().forEach(step -> steps.add(stepNode(step, formatVersion)));
         node.set("steps", steps);
         ArrayNode facts = json.createArrayNode();
         value.completedFacts().entrySet().stream()
@@ -188,7 +203,7 @@ public final class ProductStepCompletionCodec {
         return node;
     }
 
-    private ObjectNode stepNode(PlanStep value) {
+    private ObjectNode stepNode(PlanStep value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("intent", value.intent());
@@ -196,6 +211,20 @@ public final class ProductStepCompletionCodec {
         node.set("dependencies", strings(value.dependencies().stream()
                 .map(PlanStepId::value).sorted().toList()));
         node.set("completionCriteria", strings(value.completionCriteria()));
+        if (!value.constraints().isEmpty()) {
+            node.set("constraints", strings(value.constraints()));
+        }
+        if (value.mayChangeCandidate()) {
+            node.put("mayChangeCandidate", true);
+        }
+        if (value.candidateValidationCompletionCondition() != null) {
+            node.put("candidateValidationCompletionCondition",
+                    value.candidateValidationCompletionCondition());
+        }
+        if (formatVersion >= FORMAT_VERSION) {
+            node.set("validationRequirementIds",
+                    strings(value.validationRequirementIds()));
+        }
         ObjectNode hints = json.createObjectNode();
         hints.put("maxAttempts", value.executionHints().maxAttempts());
         hints.put("maxDuration", value.executionHints().maxDuration().toString());
@@ -213,9 +242,10 @@ public final class ProductStepCompletionCodec {
         return node;
     }
 
-    private PlanRevision revision(JsonNode node) {
+    private PlanRevision revision(JsonNode node, int formatVersion) {
         List<PlanStep> steps = new ArrayList<>();
-        requiredArray(node, "steps").forEach(value -> steps.add(step(value)));
+        requiredArray(node, "steps").forEach(value -> steps.add(
+                step(value, formatVersion)));
         Map<PlanStepId, CompletionFact> facts = new LinkedHashMap<>();
         requiredArray(node, "completedFacts").forEach(value -> {
             CompletionFact fact = fact(value);
@@ -235,7 +265,7 @@ public final class ProductStepCompletionCodec {
                 facts);
     }
 
-    private PlanStep step(JsonNode node) {
+    private PlanStep step(JsonNode node, int formatVersion) {
         return new PlanStep(
                 new PlanStepId(text(node, "id")),
                 text(node, "intent"),
@@ -245,7 +275,25 @@ public final class ProductStepCompletionCodec {
                 stringList(node, "completionCriteria"),
                 new BoundedExecutionHints(
                         integer(requiredNode(node, "executionHints"), "maxAttempts"),
-                        Duration.parse(text(requiredNode(node, "executionHints"), "maxDuration"))));
+                        Duration.parse(text(requiredNode(node, "executionHints"), "maxDuration"))),
+                node.has("constraints") ? stringList(node, "constraints") : List.of(),
+                optionalBoolean(node, "mayChangeCandidate"),
+                optionalText(node, "candidateValidationCompletionCondition"),
+                formatVersion == LEGACY_FORMAT_VERSION
+                        ? List.of()
+                        : stringList(node, "validationRequirementIds"));
+    }
+
+    private static boolean optionalBoolean(JsonNode node, String field) {
+        if (!node.has(field)) return false;
+        if (!node.get(field).isBoolean()) throw corrupt();
+        return node.get(field).booleanValue();
+    }
+
+    private static String optionalText(JsonNode node, String field) {
+        if (!node.has(field) || node.get(field).isNull()) return null;
+        if (!node.get(field).isTextual()) throw corrupt();
+        return node.get(field).textValue();
     }
 
     private CompletionFact fact(JsonNode node) {
@@ -259,7 +307,7 @@ public final class ProductStepCompletionCodec {
 
     private ObjectNode verified(
             int version, String expectedHash, String payload, String kind) {
-        if (version != FORMAT_VERSION
+        if ((version != FORMAT_VERSION && version != LEGACY_FORMAT_VERSION)
                 || expectedHash == null || payload == null) {
             throw corrupt();
         }
@@ -272,7 +320,7 @@ public final class ProductStepCompletionCodec {
             }
             JsonNode parsed = json.readTree(bytes);
             if (!(parsed instanceof ObjectNode root)
-                    || integer(root, "format") != FORMAT_VERSION
+                    || integer(root, "format") != version
                     || !kind.equals(text(root, "kind"))) {
                 throw corrupt();
             }
@@ -286,7 +334,7 @@ public final class ProductStepCompletionCodec {
         try {
             byte[] bytes = json.writeValueAsBytes(root);
             return new EncodedPayload(
-                    FORMAT_VERSION, sha256(bytes),
+                    integer(root, "format"), sha256(bytes),
                     new String(bytes, StandardCharsets.UTF_8));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException(

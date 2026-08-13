@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.persistence;
 
+import com.yanban.api.agent.v2.chain.persistence.ProductPlanReplanMarkerReader;
 import io.paperagent.v2.contracts.Checkpoint;
 import io.paperagent.v2.contracts.CheckpointValidators;
 import io.paperagent.v2.contracts.Plan;
@@ -38,7 +39,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @Repository
-class ProductStepRecoveryTransactions {
+public class ProductStepRecoveryTransactions {
     private static final String RECOVERY = "stepRecovery";
 
     private final ProductPlanBootstrapJpaRepository bootstraps;
@@ -55,6 +56,7 @@ class ProductStepRecoveryTransactions {
     private final ProductStepCompletionMarkerReader completionMarkers;
     private final ProductActiveStepReplanJpaRepository replans;
     private final ProductActiveStepReplanMarkerReader replanMarkers;
+    private final ProductPlanReplanMarkerReader ordinaryReplans;
 
     ProductStepRecoveryTransactions(
             ProductPlanBootstrapJpaRepository bootstraps,
@@ -70,7 +72,8 @@ class ProductStepRecoveryTransactions {
             ProductStepCompletionJpaRepository completions,
             ProductStepCompletionMarkerReader completionMarkers,
             ProductActiveStepReplanJpaRepository replans,
-            ProductActiveStepReplanMarkerReader replanMarkers) {
+            ProductActiveStepReplanMarkerReader replanMarkers,
+            ProductPlanReplanMarkerReader ordinaryReplans) {
         this.bootstraps = bootstraps;
         this.bootstrapCodec = bootstrapCodec;
         this.starts = starts;
@@ -85,6 +88,7 @@ class ProductStepRecoveryTransactions {
         this.completionMarkers = completionMarkers;
         this.replans = replans;
         this.replanMarkers = replanMarkers;
+        this.ordinaryReplans = ordinaryReplans;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
@@ -104,7 +108,7 @@ class ProductStepRecoveryTransactions {
                 ? notEligible() : inspected;
     }
 
-    PersistenceResult<StepRecoverySnapshot> inspectLocked(PlanId planId) {
+    public PersistenceResult<StepRecoverySnapshot> inspectLocked(PlanId planId) {
         return inspect(planId, true);
     }
 
@@ -122,7 +126,9 @@ class ProductStepRecoveryTransactions {
                             planId.value()).isEmpty()
                     || !replans
                             .findAllByPlanIdOrderBySourceEventSequenceAsc(
-                                    planId.value()).isEmpty();
+                                    planId.value()).isEmpty()
+                    || !ordinaryReplans.findAllByPlanId(
+                            planId.value()).isEmpty();
             return occupied
                     ? partial()
                     : PersistenceResult.rejected(
@@ -149,24 +155,19 @@ class ProductStepRecoveryTransactions {
         List<ProductActiveStepReplanEntity> replanRows =
                 replans.findAllByPlanIdOrderBySourceEventSequenceAsc(
                         planId.value());
-        if (rows.isEmpty()) {
-            if (!interruptionRows.isEmpty() || !completionRows.isEmpty()
-                    || !replanRows.isEmpty()) {
-                return partial();
-            }
-            PlanStepId ready = firstReady(
-                    source.bootstrap().plan(),
-                    source.started().startedCheckpoint().checkpoint());
-            return ready == null ? notEligible()
-                    : PersistenceResult.found(
-                            new PersistedStepRecoveryReady(
-                                    source.bootstrap().taskFrame(),
-                                    source.bootstrap().plan(),
-                                    source.started().startedCheckpoint(),
-                                    ready, context.confirmed()));
+        List<ProductPlanReplanMarkerReader.Marker> ordinaryRows;
+        try {
+            ordinaryRows = ordinaryReplans.findAllByPlanId(planId.value());
+        } catch (RuntimeException corrupt) {
+            return partial();
+        }
+        if (rows.isEmpty() && (!interruptionRows.isEmpty()
+                || !completionRows.isEmpty() || !replanRows.isEmpty())) {
+            return partial();
         }
         Fold fold = fold(
-                source, context, rows, completionRows, replanRows);
+                source, context, rows, completionRows, replanRows,
+                ordinaryRows);
         if (fold == null) {
             return partial();
         }
@@ -186,14 +187,33 @@ class ProductStepRecoveryTransactions {
             Source source, ContextCut context,
             List<ProductStepActivationEntity> activationRows,
             List<ProductStepCompletionEntity> completionRows,
-            List<ProductActiveStepReplanEntity> replanRows) {
+            List<ProductActiveStepReplanEntity> replanRows,
+            List<ProductPlanReplanMarkerReader.Marker> ordinaryRows) {
         Plan plan = source.bootstrap().plan();
         VersionedCheckpoint head = source.started().startedCheckpoint();
         int activationIndex = 0;
         int completionIndex = 0;
         PersistedStepRecoveryActive active = null;
         int replanIndex = 0;
-        while (activationIndex < activationRows.size()) {
+        int ordinaryIndex = 0;
+        while (true) {
+            while (ordinaryIndex < ordinaryRows.size()
+                    && ordinaryRows.get(ordinaryIndex).sourceEventSequence()
+                    == head.checkpoint().lastEventSequence()) {
+                if (active != null) {
+                    return null;
+                }
+                OrdinaryFold ordinary = ordinary(
+                        source, plan, head, ordinaryRows.get(ordinaryIndex++));
+                if (ordinary == null) {
+                    return null;
+                }
+                plan = ordinary.plan();
+                head = ordinary.head();
+            }
+            if (activationIndex >= activationRows.size()) {
+                break;
+            }
             ProductStepActivationEntity activationRow =
                     activationRows.get(activationIndex++);
             Marker activation = marker(activationRow, source, plan, head);
@@ -232,7 +252,8 @@ class ProductStepRecoveryTransactions {
                 }
                 if (activationIndex != activationRows.size()
                         || completionIndex != completionRows.size()
-                        || replanIndex != replanRows.size()) {
+                        || replanIndex != replanRows.size()
+                        || ordinaryIndex != ordinaryRows.size()) {
                     return null;
                 }
                 return new Fold(active);
@@ -256,7 +277,8 @@ class ProductStepRecoveryTransactions {
             active = null;
         }
         if (completionIndex != completionRows.size() || active != null
-                || replanIndex != replanRows.size()) {
+                || replanIndex != replanRows.size()
+                || ordinaryIndex != ordinaryRows.size()) {
             return null;
         }
         if (head.checkpoint().planState() == PlanExecutionState.SUCCEEDED
@@ -270,6 +292,79 @@ class ProductStepRecoveryTransactions {
         return ready == null ? null : new Fold(new PersistedStepRecoveryReady(
                 source.bootstrap().taskFrame(), plan, head, ready,
                 context.confirmed()));
+    }
+
+    private static OrdinaryFold ordinary(
+            Source source, Plan current, VersionedCheckpoint head,
+            ProductPlanReplanMarkerReader.Marker marker) {
+        try {
+            var request = marker.request();
+            var result = marker.result();
+            PlanRevision previous = current.latestRevision();
+            PlanRevision revision = result.replannedRevision();
+            Checkpoint sourceCheckpoint = head.checkpoint();
+            Checkpoint target = result.replannedCheckpoint().checkpoint();
+            if (!request.planId().equals(current.id())
+                    || !result.planId().equals(current.id())
+                    || !request.expectedRevisionId().equals(previous.id())
+                    || request.expectedRevisionNumber() != previous.number()
+                    || request.expectedCheckpointVersion() != head.version()
+                    || request.expectedEventHeadSequence()
+                            != sourceCheckpoint.lastEventSequence()
+                    || !request.replanEvent().equals(result.replanEvent())
+                    || !request.replannedRevision().equals(revision)
+                    || !request.replannedCheckpoint().equals(target)
+                    || revision.number() != previous.number() + 1
+                    || !revision.parentRevisionId().equals(
+                            Optional.of(previous.id()))
+                    || !revision.taskFrameId().equals(current.taskFrameId())
+                    || revision.createdAt().isBefore(previous.createdAt())
+                    || !revision.completedFacts().equals(
+                            previous.completedFacts())
+                    || marker.resultEventSequence()
+                            != request.replanEvent().sequence()
+                    || request.replanEvent().sequence()
+                            <= sourceCheckpoint.lastEventSequence()
+                    || !request.replanEvent().planId().equals(current.id())
+                    || !request.replanEvent().taskFrameId().equals(
+                            source.bootstrap().taskFrame().id())
+                    || result.replannedCheckpoint().version()
+                            != head.version() + 1
+                    || !target.taskFrameId().equals(
+                            source.bootstrap().taskFrame().id())
+                    || !target.planId().equals(current.id())
+                    || !target.revisionId().equals(revision.id())
+                    || target.revisionNumber() != revision.number()
+                    || target.lastEventSequence()
+                            != request.replanEvent().sequence()
+                    || target.createdAt().isBefore(
+                            sourceCheckpoint.createdAt())
+                    || target.planState() != PlanExecutionState.ACTIVE
+                    || !target.receiptReferences().equals(
+                            sourceCheckpoint.receiptReferences())) {
+                return null;
+            }
+            List<PlanRevision> revisions = new ArrayList<>(
+                    current.revisions());
+            revisions.add(revision);
+            Plan replanned = new Plan(
+                    current.id(), current.taskFrameId(), revisions);
+            Set<PlanStepId> stepIds = revision.steps().stream()
+                    .map(PlanStep::id).collect(Collectors.toSet());
+            boolean expectedStates = target.stepStates().keySet()
+                    .equals(stepIds) && revision.steps().stream().allMatch(
+                    step -> target.stepStates().get(step.id())
+                            == (revision.completedFacts().containsKey(step.id())
+                            ? StepExecutionState.SUCCEEDED
+                            : StepExecutionState.NOT_STARTED));
+            return expectedStates && CheckpointValidators.validate(
+                    target, source.bootstrap().taskFrame(), replanned,
+                    sourceCheckpoint).isEmpty()
+                    ? new OrdinaryFold(replanned,
+                            result.replannedCheckpoint()) : null;
+        } catch (RuntimeException invalid) {
+            return null;
+        }
     }
 
     private Source source(
@@ -662,5 +757,8 @@ class ProductStepRecoveryTransactions {
     }
 
     private record Fold(StepRecoverySnapshot snapshot) {
+    }
+
+    private record OrdinaryFold(Plan plan, VersionedCheckpoint head) {
     }
 }

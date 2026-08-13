@@ -4,13 +4,6 @@ import java.util.List;
 import com.yanban.api.agent.ProjectSessionService;
 import com.yanban.api.agent.AgentSessionResponse;
 import com.yanban.api.agent.CreateSessionRequest;
-import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisRequest;
-import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisResponse;
-import com.yanban.api.agent.v2.compatibility.project.V2ProjectAnalysisService;
-import com.yanban.api.agent.v2.compatibility.project.V2ProjectCandidateRequest;
-import com.yanban.api.agent.v2.compatibility.project.V2ProjectCandidateResponse;
-import com.yanban.api.agent.v2.compatibility.project.V2ProjectCandidateService;
-import com.yanban.api.agent.v2.compatibility.V2ProductAvailability;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -41,73 +34,28 @@ public class ProjectController {
     private final ProjectUploadService projectUploadService;
     private final ProjectRevisionWorkflowService revisionWorkflow;
     private final CandidateSandboxValidationService candidateValidations;
-    private final V2ProjectAnalysisService v2ProjectAnalysis;
-    private final V2ProjectCandidateService v2ProjectCandidate;
-    private final V2ProductAvailability v2Availability;
 
     /** Compatibility constructor for focused existing controller tests. */
     public ProjectController(ProjectService projectService) {
-        this(projectService, null, null, null, java.util.Optional.empty(),
-                java.util.Optional.empty(), java.util.Optional.empty(),
-                V2ProductAvailability.enabledByDefault());
+        this(projectService, null, null, null, java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectSessionService projectSessions) {
         this(projectService, projectSessions, null, null,
-                java.util.Optional.empty(), java.util.Optional.empty(),
-                java.util.Optional.empty(),
-                V2ProductAvailability.enabledByDefault());
+                java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService) {
         this(projectService, projectSessions, projectUploadService,
-                null, java.util.Optional.empty(), java.util.Optional.empty(),
-                java.util.Optional.empty(),
-                V2ProductAvailability.enabledByDefault());
+                null, java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow) {
         this(projectService, projectSessions, projectUploadService,
-                revisionWorkflow, java.util.Optional.empty(),
-                java.util.Optional.empty(), java.util.Optional.empty(),
-                V2ProductAvailability.enabledByDefault());
-    }
-
-    public ProjectController(ProjectService projectService, ProjectSessionService projectSessions,
-                             ProjectUploadService projectUploadService,
-                             ProjectRevisionWorkflowService revisionWorkflow,
-                             java.util.Optional<CandidateSandboxValidationService> candidateValidations) {
-        this(projectService, projectSessions, projectUploadService,
-                revisionWorkflow, candidateValidations,
-                java.util.Optional.empty(), java.util.Optional.empty(),
-                V2ProductAvailability.enabledByDefault());
-    }
-
-    public ProjectController(ProjectService projectService,
-                             ProjectSessionService projectSessions,
-                             ProjectUploadService projectUploadService,
-                             ProjectRevisionWorkflowService revisionWorkflow,
-                             java.util.Optional<CandidateSandboxValidationService> candidateValidations,
-                             java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis) {
-        this(projectService, projectSessions, projectUploadService,
-                revisionWorkflow, candidateValidations, v2ProjectAnalysis,
-                java.util.Optional.empty(),
-                V2ProductAvailability.enabledByDefault());
-    }
-
-    public ProjectController(ProjectService projectService,
-                             ProjectSessionService projectSessions,
-                             ProjectUploadService projectUploadService,
-                             ProjectRevisionWorkflowService revisionWorkflow,
-                             java.util.Optional<CandidateSandboxValidationService> candidateValidations,
-                             java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis,
-                             java.util.Optional<V2ProjectCandidateService> v2ProjectCandidate) {
-        this(projectService, projectSessions, projectUploadService,
-                revisionWorkflow, candidateValidations, v2ProjectAnalysis,
-                v2ProjectCandidate, V2ProductAvailability.enabledByDefault());
+                revisionWorkflow, java.util.Optional.empty());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -115,18 +63,12 @@ public class ProjectController {
                              ProjectSessionService projectSessions,
                              ProjectUploadService projectUploadService,
                              ProjectRevisionWorkflowService revisionWorkflow,
-                             java.util.Optional<CandidateSandboxValidationService> candidateValidations,
-                             java.util.Optional<V2ProjectAnalysisService> v2ProjectAnalysis,
-                             java.util.Optional<V2ProjectCandidateService> v2ProjectCandidate,
-                             V2ProductAvailability v2Availability) {
+                             java.util.Optional<CandidateSandboxValidationService> candidateValidations) {
         this.projectService = projectService;
         this.projectSessions = projectSessions;
         this.projectUploadService = projectUploadService;
         this.revisionWorkflow = revisionWorkflow;
         this.candidateValidations = candidateValidations.orElse(null);
-        this.v2ProjectAnalysis = v2ProjectAnalysis.orElse(null);
-        this.v2ProjectCandidate = v2ProjectCandidate.orElse(null);
-        this.v2Availability = v2Availability;
     }
 
     @GetMapping
@@ -277,66 +219,6 @@ public class ProjectController {
                                           @RequestParam String query,
                                           @RequestParam(required = false) Integer maxResults) {
         return projectService.search(userId, projectId, query, maxResults);
-    }
-
-    @PostMapping("/{projectId}/agent/sessions/{sessionId}/v2/read-analysis-turns")
-    public V2ProjectAnalysisResponse startV2ProjectAnalysis(
-            @AuthenticationPrincipal(expression = "id") Long userId,
-            @PathVariable Long projectId,
-            @PathVariable Long sessionId,
-            @RequestBody V2ProjectAnalysisRequest request) {
-        v2Availability.requireAvailable(
-                V2ProductAvailability.PROJECT_READ_ANALYSIS);
-        if (v2ProjectAnalysis == null) {
-            throw new IllegalStateException(
-                    "V2 Project analysis is not configured");
-        }
-        return v2ProjectAnalysis.execute(
-                userId, projectId, sessionId, request);
-    }
-
-    @GetMapping("/{projectId}/agent/sessions/{sessionId}/v2/read-analysis-turns/{clientRequestId}")
-    public V2ProjectAnalysisResponse readV2ProjectAnalysis(
-            @AuthenticationPrincipal(expression = "id") Long userId,
-            @PathVariable Long projectId,
-            @PathVariable Long sessionId,
-            @PathVariable String clientRequestId) {
-        v2Availability.requireAvailable(
-                V2ProductAvailability.PROJECT_READ_ANALYSIS);
-        if (v2ProjectAnalysis == null) {
-            throw new IllegalStateException(
-                    "V2 Project analysis is not configured");
-        }
-        return v2ProjectAnalysis.read(
-                userId, projectId, sessionId, clientRequestId);
-    }
-
-    @PostMapping("/{projectId}/agent/sessions/{sessionId}/v2/candidate-turns")
-    public V2ProjectCandidateResponse startV2ProjectCandidate(
-            @AuthenticationPrincipal(expression = "id") Long userId,
-            @PathVariable Long projectId,
-            @PathVariable Long sessionId,
-            @RequestBody V2ProjectCandidateRequest request) {
-        v2Availability.requireAvailable(
-                V2ProductAvailability.PROJECT_CANDIDATE);
-        if (v2ProjectCandidate == null) {
-            throw new IllegalStateException("V2 Project Candidate is not configured");
-        }
-        return v2ProjectCandidate.execute(userId, projectId, sessionId, request);
-    }
-
-    @GetMapping("/{projectId}/agent/sessions/{sessionId}/v2/candidate-turns/{clientRequestId}")
-    public V2ProjectCandidateResponse readV2ProjectCandidate(
-            @AuthenticationPrincipal(expression = "id") Long userId,
-            @PathVariable Long projectId,
-            @PathVariable Long sessionId,
-            @PathVariable String clientRequestId) {
-        v2Availability.requireAvailable(
-                V2ProductAvailability.PROJECT_CANDIDATE);
-        if (v2ProjectCandidate == null) {
-            throw new IllegalStateException("V2 Project Candidate is not configured");
-        }
-        return v2ProjectCandidate.read(userId, projectId, sessionId, clientRequestId);
     }
 
     private void requireRevisionWorkflow() {

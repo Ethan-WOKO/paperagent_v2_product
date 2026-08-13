@@ -10,9 +10,24 @@ public record TaskFrame(
         List<String> targets,
         List<String> deliverables,
         List<String> constraints,
+        TaskRequirements requirements,
         Optional<ProjectVersionRef> sourceProjectVersion,
         ExecutionProfile executionProfile,
         Instant createdAt) {
+
+    public TaskFrame(
+            TaskFrameId id,
+            String objective,
+            List<String> targets,
+            List<String> deliverables,
+            List<String> constraints,
+            Optional<ProjectVersionRef> sourceProjectVersion,
+            ExecutionProfile executionProfile,
+            Instant createdAt) {
+        this(id, objective, targets, deliverables, constraints,
+                TaskRequirements.legacyUnspecified(), sourceProjectVersion,
+                executionProfile, createdAt);
+    }
 
     public TaskFrame {
         Contracts.required(id, "taskFrame.id");
@@ -20,6 +35,7 @@ public record TaskFrame(
         targets = requiredTextList(targets, "taskFrame.targets", true);
         deliverables = requiredTextList(deliverables, "taskFrame.deliverables", true);
         constraints = requiredTextList(constraints, "taskFrame.constraints", false);
+        Contracts.required(requirements, "taskFrame.requirements");
         sourceProjectVersion = Contracts.required(sourceProjectVersion, "taskFrame.sourceProjectVersion");
         Contracts.required(executionProfile, "taskFrame.executionProfile");
         Contracts.required(createdAt, "taskFrame.createdAt");

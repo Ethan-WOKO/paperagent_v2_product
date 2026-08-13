@@ -4,9 +4,10 @@ import com.fasterxml.jackson.databind.*;
 import com.yanban.api.agent.*;
 import com.yanban.api.agent.sandbox.CandidateIntent;
 import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
-import com.yanban.api.agent.v2.compatibility.project.*;
+import com.yanban.api.agent.v2.chain.effect.ProjectCandidateEffectAuthority;
 import com.yanban.api.agent.sandbox.CandidateArtifactResponse;
 import com.yanban.api.project.ProjectService;
+import com.yanban.api.project.ProjectStorageProperties;
 import com.yanban.core.research.*;
 import io.paperagent.v2.contracts.*;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
@@ -28,18 +29,26 @@ public class ProjectCandidateCompositionEffect {
     private static final Logger log = LoggerFactory.getLogger(
             ProjectCandidateCompositionEffect.class);
     public static final String KIND = "project.candidate.compose";
-    private static final int MAX_FILE_BYTES = 64 * 1024;
-    private final ProjectCandidateEffectGateway gateway;
+    private final NaturalLanguageCandidateAuthorityStore authorities;
     private final CandidateChangeArtifactService candidates;
     private final ModelProvider provider;
     private final ProjectService projects;
     private final ObjectMapper json;
+    private final long maxFileBytes;
 
-    public ProjectCandidateCompositionEffect(ProjectCandidateEffectGateway gateway,
+    public ProjectCandidateCompositionEffect(
+            NaturalLanguageCandidateAuthorityStore authorities,
             CandidateChangeArtifactService candidates, ModelProvider provider,
-            ProjectService projects, ObjectMapper json) {
-        this.gateway = gateway; this.candidates = candidates;
+            ProjectService projects, ObjectMapper json,
+            ProjectStorageProperties storage) {
+        this.authorities = authorities; this.candidates = candidates;
         this.provider = provider; this.projects = projects; this.json = json;
+        this.maxFileBytes = Objects.requireNonNull(storage, "storage")
+                .getMaxFileBytes();
+        if (maxFileBytes < 1) {
+            throw new IllegalArgumentException(
+                    "project maxFileBytes must be positive");
+        }
     }
 
     CandidateResult execute(
@@ -47,7 +56,7 @@ public class ProjectCandidateCompositionEffect {
             ModelAuthority modelAuthority,
             WorkspacePort workspace,
             WorkspaceRef ref, Long userId, Long turnId, Long projectId, Instant now) {
-        var authority = gateway.require(intent.intent().planId().value(),
+        var authority = authorities.require(intent.intent().planId().value(),
                 intent.intent().stepId().value());
         if (modelAuthority == null
                 || !modelAuthority.planId().equals(intent.intent().planId())
@@ -68,7 +77,7 @@ public class ProjectCandidateCompositionEffect {
             for (String path : authority.paths()) {
                 byte[] original = originals.get(path);
                 byte[] replacement = replacements.get(path).getBytes(StandardCharsets.UTF_8);
-                if (replacement.length > MAX_FILE_BYTES || Arrays.equals(original, replacement)) throw failed();
+                if (replacement.length > maxFileBytes || Arrays.equals(original, replacement)) throw failed();
                 workspace.replace(ref, new ProjectPath(path), replacement);
             }
             WorkspaceDiff diff = workspace.diff(ref,
@@ -76,8 +85,11 @@ public class ProjectCandidateCompositionEffect {
                             + hash(intent.intent().planId().value())), now);
             validateDiff(diff, authority.paths());
             String diffFingerprint = diffFingerprint(diff);
-            gateway.bindPrepared(intent.intent().planId().value(),
-                    replacements, proposal.mavenCoordinates(), diffFingerprint);
+            authorities.bindPrepared(
+                    intent.intent().planId().value(),
+                    intent.intent().stepId().value(),
+                    authority.authoritySha256(), replacements,
+                    diffFingerprint);
             return new CandidateResult(null, null, diffFingerprint);
         } catch (RuntimeException failure) {
             originals.forEach((path, bytes) -> {
@@ -98,6 +110,47 @@ public class ProjectCandidateCompositionEffect {
         var authority = store.require(
                 intent.intent().planId().value(),
                 intent.intent().stepId().value());
+        return executeDirect(
+                intent, modelAuthority, authority, workspace, ref,
+                userId, turnId, projectId, now,
+                (replacements, diffFingerprint) -> store.bindPrepared(
+                        intent.intent().planId().value(),
+                        intent.intent().stepId().value(),
+                        authority.authoritySha256(), replacements,
+                        diffFingerprint));
+    }
+
+    /** New-chain path: consumes the formal proposal authority without V62/V69 state. */
+    CandidateResult executeChain(
+            PersistedEffectIntent intent,
+            ModelAuthority modelAuthority,
+            ProjectCandidateEffectAuthority authority,
+            WorkspacePort workspace,
+            WorkspaceRef ref, Long userId, Long turnId, Long projectId,
+            Instant now) {
+        if (authority == null || authority.chainAction() == null
+                || !authority.chainAction().actionId().equals(
+                intent.intent().toolCallId().value())
+                || !authority.chainAction().workspaceId().equals(
+                ref.id().value())
+                || !authority.projectVersion().equals(
+                authority.chainAction().baseCandidate()
+                        .baseProjectVersion())) {
+            throw failed();
+        }
+        return executeDirect(
+                intent, modelAuthority, authority, workspace, ref,
+                userId, turnId, projectId, now,
+                (replacements, diffFingerprint) -> { });
+    }
+
+    private CandidateResult executeDirect(
+            PersistedEffectIntent intent,
+            ModelAuthority modelAuthority,
+            ProjectCandidateEffectAuthority authority,
+            WorkspacePort workspace,
+            WorkspaceRef ref, Long userId, Long turnId, Long projectId,
+            Instant now, PreparedBinding preparedBinding) {
         if (modelAuthority == null
                 || !modelAuthority.planId().equals(intent.intent().planId())
                 || !modelAuthority.stepId().equals(intent.intent().stepId())
@@ -106,7 +159,9 @@ public class ProjectCandidateCompositionEffect {
                 || !turnId.equals(authority.turnId())
                 || !projectId.equals(authority.projectId())
                 || !hash(authority.authorityJson())
-                        .equals(authority.authoritySha256())) {
+                        .equals(authority.authoritySha256())
+                || !authority.projectVersion().equals(
+                ref.sourceProjectVersion().versionId())) {
             throw failed();
         }
         Map<String, byte[]> originals = new LinkedHashMap<>();
@@ -127,26 +182,26 @@ public class ProjectCandidateCompositionEffect {
                 byte[] original = originals.get(path);
                 byte[] replacement = replacements.get(path)
                         .getBytes(StandardCharsets.UTF_8);
-                if (replacement.length > MAX_FILE_BYTES
-                        || Arrays.equals(original, replacement)) {
+                if (replacement.length > maxFileBytes) {
                     throw failed();
+                }
+                if (Arrays.equals(original, replacement)) {
+                    throw CandidateCompositionException.noActualChange();
                 }
                 workspace.replace(ref, new ProjectPath(path), replacement);
             }
             stage = "workspace_diff";
             WorkspaceDiff diff = workspace.diff(ref,
                     new DiffId("project-candidate-diff."
-                            + hash(intent.intent().planId().value())), now);
+                            + hash(authority.chainAction() == null
+                            ? intent.intent().planId().value()
+                            : authority.chainAction().actionId())), now);
             stage = "diff_validation";
             validateDiff(diff, authority.paths());
             stage = "diff_fingerprint";
             String diffFingerprint = diffFingerprint(diff);
             stage = "prepared_persistence";
-            store.bindPrepared(
-                    intent.intent().planId().value(),
-                    intent.intent().stepId().value(),
-                    authority.authoritySha256(),
-                    replacements, diffFingerprint);
+            preparedBinding.bind(replacements, diffFingerprint);
             return new CandidateResult(null, null, diffFingerprint);
         } catch (RuntimeException failure) {
             log.warn(
@@ -182,40 +237,14 @@ public class ProjectCandidateCompositionEffect {
         }
     }
 
+    @FunctionalInterface
+    private interface PreparedBinding {
+        void bind(Map<String, String> replacements, String diffFingerprint);
+    }
+
     @Transactional
     public CandidateResult publish(String planId, Long userId, Long turnId) {
-        var authority = gateway.require(planId, "project-candidate-compose");
-        if (!userId.equals(authority.userId()) || !turnId.equals(authority.turnId())) throw failed();
-        var manifest = projects.manifest(userId, authority.projectId());
-        if (!authority.projectVersion().equals(manifest.version())) throw failed();
-        var prepared = gateway.requirePrepared(planId);
-        if (!prepared.replacements().keySet().equals(
-                new LinkedHashSet<>(authority.paths()))) throw failed();
-        Map<String, byte[]> originals = new LinkedHashMap<>();
-        Map<String, String> replacements = new LinkedHashMap<>();
-        for (String path : authority.paths()) {
-            var original = projects.readFile(userId, authority.projectId(), path);
-            byte[] bytes = original.content().getBytes(StandardCharsets.UTF_8);
-            if (!hash(bytes).equals(original.sha256())) throw failed();
-            String replacement = prepared.replacements().get(path);
-            if (replacement == null) throw failed();
-            byte[] replacementBytes = replacement.getBytes(StandardCharsets.UTF_8);
-            requireText(replacementBytes);
-            if (replacementBytes.length > MAX_FILE_BYTES
-                    || Arrays.equals(bytes, replacementBytes)) throw failed();
-            originals.put(path, bytes);
-            replacements.put(path, replacement);
-        }
-        String diffFingerprint = diffFingerprint(
-                authority.projectVersion(), originals, replacements);
-        if (!diffFingerprint.equals(prepared.diffFingerprint())) throw failed();
-        CandidateArtifactResponse candidate = candidates.store(userId, authority.sessionId(),
-                new ProjectRuntimeContext(userId, authority.projectId(), authority.projectVersion()),
-                candidateIntent(authority, originals, replacements), evidence(authority, originals));
-        gateway.bindCandidate(planId, candidate.artifactId(),
-                candidate.fingerprint().sha256(), diffFingerprint);
-        return new CandidateResult(candidate.artifactId(),
-                candidate.fingerprint().sha256(), diffFingerprint);
+        return publishNatural(planId, userId, turnId, authorities);
     }
 
     @Transactional
@@ -250,7 +279,7 @@ public class ProjectCandidateCompositionEffect {
             byte[] replacementBytes =
                     replacement.getBytes(StandardCharsets.UTF_8);
             requireText(replacementBytes);
-            if (replacementBytes.length > MAX_FILE_BYTES
+            if (replacementBytes.length > maxFileBytes
                     || Arrays.equals(bytes, replacementBytes)) {
                 throw failed();
             }
@@ -320,7 +349,7 @@ public class ProjectCandidateCompositionEffect {
                 requireText(bytes);
                 if (!authority.paths().contains(path)
                         || values.putIfAbsent(path, text) != null
-                        || bytes.length > MAX_FILE_BYTES) {
+                        || bytes.length > maxFileBytes) {
                     throw failed();
                 }
             }
@@ -422,7 +451,7 @@ public class ProjectCandidateCompositionEffect {
                 byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
                 requireText(bytes);
                 if (!paths.contains(path) || values.putIfAbsent(path, text) != null
-                        || bytes.length > MAX_FILE_BYTES) throw failed();
+                        || bytes.length > maxFileBytes) throw failed();
             }
             stage = "replacement_set";
             if (!values.keySet().equals(new LinkedHashSet<>(paths))) throw failed();
@@ -521,7 +550,7 @@ public class ProjectCandidateCompositionEffect {
         String replacement = root.path("replacementText").textValue();
         byte[] bytes = replacement.getBytes(StandardCharsets.UTF_8);
         requireText(bytes);
-        if (bytes.length > MAX_FILE_BYTES
+        if (bytes.length > maxFileBytes
                 || (replacement.equals(source) && coordinates.isEmpty())) throw failed();
         Map<String, String> combined = new LinkedHashMap<>(repair.sourceReplacements());
         combined.put(repair.selectedPath(), replacement);
@@ -616,8 +645,8 @@ public class ProjectCandidateCompositionEffect {
         try { return json.writeValueAsString(node); }
         catch (Exception failure) { throw failed(); }
     }
-    private static String requireText(byte[] bytes) {
-        if (bytes.length > MAX_FILE_BYTES) throw failed();
+    private String requireText(byte[] bytes) {
+        if (bytes.length > maxFileBytes) throw failed();
         try {
             String value = StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
@@ -638,6 +667,26 @@ public class ProjectCandidateCompositionEffect {
     private static String hash(String value) { return hash(value.getBytes(StandardCharsets.UTF_8)); }
     private static IllegalStateException failed() {
         return new IllegalStateException("V2 Project Candidate composition failed");
+    }
+
+    static final class CandidateCompositionException
+            extends IllegalStateException {
+        static final String NO_ACTUAL_CHANGE =
+                "PROJECT_CANDIDATE_NO_ACTUAL_CHANGE";
+        private final String code;
+
+        private CandidateCompositionException(String code) {
+            super("V2 Project Candidate composition rejected");
+            this.code = code;
+        }
+
+        static CandidateCompositionException noActualChange() {
+            return new CandidateCompositionException(NO_ACTUAL_CHANGE);
+        }
+
+        String code() {
+            return code;
+        }
     }
     public record CandidateResult(Long artifactId, String candidateFingerprint,
                                   String diffFingerprint) {}

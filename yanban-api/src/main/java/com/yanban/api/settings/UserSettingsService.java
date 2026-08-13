@@ -2,6 +2,7 @@ package com.yanban.api.settings;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.core.model.DeepSeekProperties;
 import com.yanban.core.model.OpenRouterProperties;
 import com.yanban.core.user.UserAccountPolicy;
 import java.math.BigDecimal;
@@ -52,6 +53,7 @@ public class UserSettingsService {
     private final ObjectMapper objectMapper;
     private final UserAccountPolicy accountPolicy;
     private final UserSettingsInitializer initializer;
+    private final DeepSeekProperties deepSeekProperties;
     private final OpenRouterProperties openRouterProperties;
 
     public UserSettingsService(SysUserSettingsRepository repository,
@@ -61,6 +63,7 @@ public class UserSettingsService {
                                ObjectMapper objectMapper,
                                UserAccountPolicy accountPolicy,
                                UserSettingsInitializer initializer,
+                               DeepSeekProperties deepSeekProperties,
                                OpenRouterProperties openRouterProperties) {
         this.repository = repository;
         this.userModelRepository = userModelRepository;
@@ -69,6 +72,7 @@ public class UserSettingsService {
         this.objectMapper = objectMapper;
         this.accountPolicy = accountPolicy;
         this.initializer = initializer;
+        this.deepSeekProperties = deepSeekProperties;
         this.openRouterProperties = openRouterProperties;
     }
 
@@ -250,10 +254,14 @@ public class UserSettingsService {
                 java.util.Locale.ROOT);
 
         if (DEFAULT_PROVIDER.equals(builtinProvider)) {
+            String apiKey = decryptDeepseekApiKey(settings);
+            if (!StringUtils.hasText(apiKey)) {
+                apiKey = deepSeekProperties.getApiKey();
+            }
             return new ModelEndpoint(builtinProvider,
                     resolveDeepseekModel(model, settings.getDeepseekModel()),
                     null,
-                    decryptDeepseekApiKey(settings),
+                    apiKey,
                     "builtin",
                     "DeepSeek");
         }

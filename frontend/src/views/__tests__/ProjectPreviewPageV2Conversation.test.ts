@@ -1,60 +1,71 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-describe('ProjectPreviewPage V2-only 中文任务界面', () => {
+describe('ProjectPreviewPage 正式 V2 Agent 对话', () => {
   const source = readFileSync(
     new URL('../ProjectPreviewPage.vue', import.meta.url),
     'utf8',
   );
 
-  it('默认只渲染 V2 页面并删除旧 V1 对话 UI', () => {
+  it('只保留单一 Project composer 和既有 Project 会话栏', () => {
     expect(source).toContain('<section class="v2-conversation">');
-    expect(source).not.toContain("@click=\"setAgentMode('v1')\"");
-    expect(source).not.toContain('class="project-scroll-shell"');
-    expect(source).not.toContain('class="project-composer"');
-  });
-
-  it('只有一个中文自然语言输入，不再显示重复的任务说明', () => {
-    expect(source).not.toContain('class="v2-conversation__header"');
-    expect(source).not.toContain('class="project-agent-mode"');
     expect(source).toContain('class="v2-conversation__composer"');
-    expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
-    expect(source).not.toContain('aria-label="选择 V2 任务类型"');
-    expect(source).not.toContain('@click="startProjectAnalysis"');
-    expect(source).not.toContain('@click="startProjectCandidate"');
+    expect(source.match(/class="v2-conversation__composer"/g)).toHaveLength(1);
+    expect(source).not.toContain('class="project-composer"');
+    expect(source).not.toContain("@click=\"setAgentMode('v1')\"");
+    expect(source).toContain('v-for="session in projectSessions"');
+    expect(source).toContain('@click="selectConversation(session.id)"');
+    expect(source).toContain('@click="startNewConversation"');
+    expect(source).toContain('createProjectSession(project.id');
   });
 
-  it('每个问题展示一个结果、折叠过程和 Candidate 交付状态', () => {
+  it('展示正式 workState、TaskOutcome、Delivery、PendingItem 和发布事实', () => {
     expect(source).toContain('v-for="task in v2TurnHistory"');
-    expect(source).not.toContain('v2-task-card__role');
-    expect(source).toContain("task.status === 'SUCCEEDED'");
-    expect(source).toContain("task.status === 'FAILED'");
-    expect(source).toContain("task.status === 'WAITING_CONFIRMATION'");
-    expect(source).toContain('class="v2-conversation__process"');
-    expect(source).toContain(':open="task.status === \'PLANNING\' || task.status === \'RUNNING\'"');
-    expect(source).toContain("task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理'");
-    expect(source).toContain('结果：{{ step.detail }}');
-    expect(source).toContain('生成内容位置');
-    expect(source).toContain('原项目尚未修改');
-    expect(source).toContain('已自动保存，已创建项目版本');
-    expect(source).toContain("v2TaskApplied(task)");
-    expect(source).toContain("candidateConfirmationLabel(task.confirmationValidation)");
-    expect(source).toContain('查看修改');
-    expect(source).toContain('最终沙箱运行');
-    expect(source).toContain('项目版本状态');
-    expect(source).toContain('v-if="!selectedCandidateApplied" class="project-candidate-sandbox__controls"');
-    expect(source).toContain('v-if="task.status === \'SUCCEEDED\' && task.finalText"');
+    expect(source).toContain(':data-work-state="task.workState"');
+    expect(source).toContain(':data-delivery-status="task.deliveryStatus || undefined"');
+    expect(source).toContain("task.deliveryStatus === 'SUCCEEDED' && task.finalText");
+    expect(source).toContain("task.deliveryStatus === 'DELIVERY_FAILED'");
+    expect(source).toContain("task.pendingItem?.status === 'PENDING'");
+    expect(source).toContain('task.publishedProjectVersion && task.revisionId && task.publishReceiptId');
+    expect(source).toContain('task.validation.receipts');
+    expect(source).toContain('receipt.receiptId');
+    expect(source).toContain('selectedCandidatePublishedTurn');
+    expect(source).toContain('selectedCandidateValidatedTurn');
+    expect(source).toContain("turn.candidateArtifactId === artifactId");
+    expect(source).toContain("turn.validation?.status === 'PASSED'");
+    expect(source).toContain('Agent 正式验证已通过；尚未创建项目版本');
+    expect(source).toContain('下方记录仅用于手动创建项目版本');
+    expect(source).toContain('手动版本验证：');
+    expect(source).not.toContain('最近通过的沙箱验证：');
+    expect(source).toContain("'发布时已核验'");
+    expect(source).not.toContain('WAITING_CONFIRMATION');
+    expect(source).not.toContain('agentAutomaticValidation');
+    expect(source).not.toContain('confirmationValidation');
   });
 
-  it('服务端任务列表负责刷新恢复，localStorage 只保存进行中的同一请求', () => {
-    expect(source).toContain('listV2NaturalLanguageTurns(sessionId, 50)');
-    expect(source).toContain('V2_NATURAL_LANGUAGE_STORAGE_KEY');
-    expect(source).toContain('storeV2NaturalLanguageRequest(projectId, sessionId, clientRequestId, question)');
+  it('提供 gap reply、cancel、补充、纠正和替代动作', () => {
+    expect(source).toContain('v-if="canReplyToV2ProjectGap(task)"');
+    expect(source).toContain('v-if="canCancelV2ProjectTurn(task)"');
+    expect(source).toContain('v-if="canSendV2ProjectFollowUp(task)"');
+    expect(source).toContain('@click="prepareV2GapReply(task)"');
+    expect(source).toContain('@click="cancelV2NaturalLanguageTask(task)"');
+    expect(source).toContain(':disabled="v2TurnCancelSubmitting"');
+    expect(source).toContain('v2TurnCancelSubmitting.value = true');
+    expect(source).toContain(':disabled="loading.deleteProject"');
+    expect(source).not.toContain('Current Project Agent request is still running. Please wait before deleting a conversation.');
+    expect(source).toContain("@click=\"prepareV2Instruction('SUPPLEMENT', task)\"");
+    expect(source).toContain("@click=\"prepareV2Instruction('CORRECTION', task)\"");
+    expect(source).toContain("@click=\"prepareV2Instruction('REPLACEMENT', task)\"");
+    expect(source).toContain('@click="sendV2NaturalLanguageTurn"');
+  });
+
+  it('列表恢复和轮询只读取正式 GET，Delivery 终态才清恢复键', () => {
+    expect(source).toContain('listV2NaturalLanguageTurns(sessionId, 50, controller.signal)');
+    expect(source).toContain('getV2NaturalLanguageTurn(');
     expect(source).toContain('recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId)');
-    expect(source).toContain('onUnmounted(() =>');
-    expect(source).toContain('stopV2NaturalLanguagePolling();');
-    expect(source).toContain('resume: async () =>');
-    expect(source).toContain('refreshProjectAfterV2AutoApply(clientRequestId, epoch)');
-    expect(source).toContain('refreshProjectAfterV2AutoApply(stored.clientRequestId, epoch)');
+    expect(source).toContain('shouldClearV2ProjectChainRecovery(outcome)');
+    expect(source).toContain('clearStoredV2NaturalLanguageRequest(recovery.projectId, recovery.sessionId)');
+    expect(source).not.toContain('resume: async');
+    expect(source).not.toContain('startThenPollV2NaturalLanguageTurn');
   });
 });

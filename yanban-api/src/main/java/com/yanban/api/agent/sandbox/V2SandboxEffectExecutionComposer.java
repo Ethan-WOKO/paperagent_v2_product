@@ -1,8 +1,11 @@
 package com.yanban.api.agent.sandbox;
 
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
+import com.yanban.api.agent.ProjectMaterialScope;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.V2SafeFailureDiagnostics;
+import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.agent.v2.chain.effect.ChainActionWorkspaceAuthority;
 import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimRepository;
 import com.yanban.api.agent.v2.persistence.ProductEffectExecutionClaimException;
@@ -126,6 +129,51 @@ public class V2SandboxEffectExecutionComposer {
     public V2SandboxEffectExecutionOutcome execute(
             Long userId, Long turnId, io.paperagent.v2.contracts.PlanId planId,
             ToolCallId toolCallId, StepRecoveryLeaseAttempt attempt) {
+        FormalExecution formal = formalExecution(
+                userId, turnId, planId, toolCallId, attempt);
+        if (!authorities.authorizes(
+                userId, turnId, planId.value(),
+                formal.intent().intent().stepId().value(), KIND)) {
+            throw failed("intent_authority");
+        }
+        WorkspaceExecution workspace = legacyWorkspace(
+                userId, turnId, planId);
+        return executeFormal(
+                planId, toolCallId, attempt, formal, workspace);
+    }
+
+    /**
+     * Executes one formal chain EffectIntent without consulting the legacy
+     * natural-language authority source.
+     */
+    public V2SandboxEffectExecutionOutcome executeChain(
+            Long userId, Long turnId, io.paperagent.v2.contracts.PlanId planId,
+            ToolCallId toolCallId, StepRecoveryLeaseAttempt attempt,
+            ChainActionWorkspaceAuthority chainAuthority) {
+        FormalExecution formal = formalExecution(
+                userId, turnId, planId, toolCallId, attempt);
+        if (!formal.intent().intent().toolCallId().equals(toolCallId)
+                || !formal.active().planId().equals(planId)
+                || chainAuthority == null
+                || !chainAuthority.actionId().equals(toolCallId.value())
+                || formal.context().projectVersionId().isEmpty()
+                || !formal.context().projectVersionId().orElseThrow().equals(
+                chainAuthority.baseCandidate().baseProjectVersion())) {
+            throw failed("intent_authority");
+        }
+        WorkspaceExecution workspace = chainWorkspace(
+                formal, planId, chainAuthority);
+        try {
+            return executeFormal(
+                    planId, toolCallId, attempt, formal, workspace);
+        } finally {
+            cleanupChainWorkspace(planId, toolCallId, workspace);
+        }
+    }
+
+    private FormalExecution formalExecution(
+            Long userId, Long turnId, io.paperagent.v2.contracts.PlanId planId,
+            ToolCallId toolCallId, StepRecoveryLeaseAttempt attempt) {
         var context = contexts.resolve(userId, turnId);
         if (context.identity().projectId() == null
                 || !planIds.derive(context.identity()).equals(planId)) {
@@ -149,29 +197,31 @@ public class V2SandboxEffectExecutionComposer {
                                 .activationEvent().id())
                 || !intent.leaseOwnerId().equals(active.lease().ownerId())
                 || intent.fencingToken() != active.lease().fencingToken()
-                || !KIND.equals(intent.intent().kind())
-                || !authorities.authorizes(
-                        userId, turnId, planId.value(),
-                        intent.intent().stepId().value(), KIND)) {
+                || !KIND.equals(intent.intent().kind())) {
             throw failed("intent_authority");
         }
-        var executionContext = executionContexts.inspect(planId);
-        if (executionContext.outcome() != PersistenceOutcome.FOUND
-                || !(executionContext.value().orElse(null)
-                        instanceof PersistedPlanExecutionContextConfirmed
-                                confirmed)) {
-            throw failed("execution_context");
-        }
-        WorkspacePort workspace = workspaces.create(userId, turnId);
+        return new FormalExecution(context, active, intent);
+    }
+
+    private V2SandboxEffectExecutionOutcome executeFormal(
+            io.paperagent.v2.contracts.PlanId planId,
+            ToolCallId toolCallId, StepRecoveryLeaseAttempt attempt,
+            FormalExecution formal, WorkspaceExecution workspaceExecution) {
+        VerifiedAgentTurnProductContext context = formal.context();
+        RecoveredActiveStep active = formal.active();
+        PersistedEffectIntent intent = formal.intent();
+        WorkspacePort workspace = workspaceExecution.port();
         VerifiedWorkspaceMaterialization verified =
-                workspace.inspectMaterialization(
-                        confirmed.materializationSpec());
+                workspaceExecution.materialized();
         Arguments arguments = arguments(intent);
-        Map<String, String> files = files(
-                workspace, verified.workspace(), arguments.paths());
+        FileInputs inputs = files(
+                workspace, verified.workspace(), arguments.paths(),
+                workspaceExecution.formalAbsentPaths(),
+                workspaceExecution.chain());
+        List<String> resolvedArgv = inputs.resolveArgv(arguments.argv());
         SandboxExecutionException commandFailure = null;
         try {
-            commands.validate(arguments.argv(), Map.of());
+            commands.validate(resolvedArgv, Map.of());
         } catch (SandboxExecutionException rejected) {
             commandFailure = rejected;
             log.warn(
@@ -185,7 +235,7 @@ public class V2SandboxEffectExecutionComposer {
         Instant observed = Instant.now();
         ProductEffectExecutionClaimResult claimed;
         try {
-            claimed = claims.execute(
+            claimed = claims.executeExternal(
                     new ProductEffectExecutionClaimRequest(
                             active.recovery(), active.lease(), intent,
                             attempt.leaseToken(),
@@ -197,11 +247,11 @@ public class V2SandboxEffectExecutionComposer {
                                             context.identity().sessionId(),
                                             context.projectVersionId()
                                                     .orElseThrow(),
-                                            active, intent, files,
-                                            arguments.argv())
+                                            active, intent, inputs,
+                                            resolvedArgv)
                                     : commandPolicyReceipt(
                                             toolCallId, rejectedCommand,
-                                            observed)));
+                                            observed, inputs)));
         } catch (V2SandboxEffectPendingException pending) {
             throw pending;
         } catch (V2SandboxEffectExecutionException rejected) {
@@ -245,10 +295,73 @@ public class V2SandboxEffectExecutionComposer {
                 claimed.result(), claimed.replayed());
     }
 
+    private WorkspaceExecution legacyWorkspace(
+            Long userId, Long turnId,
+            io.paperagent.v2.contracts.PlanId planId) {
+        PersistedPlanExecutionContextConfirmed confirmed =
+                executionContext(planId);
+        WorkspacePort workspace = workspaces.create(userId, turnId);
+        return new WorkspaceExecution(
+                workspace, workspace.inspectMaterialization(
+                confirmed.materializationSpec()), Set.of(), false);
+    }
+
+    private WorkspaceExecution chainWorkspace(
+            FormalExecution formal,
+            io.paperagent.v2.contracts.PlanId planId,
+            ChainActionWorkspaceAuthority authority) {
+        PersistedPlanExecutionContextConfirmed confirmed =
+                executionContext(planId);
+        if (!confirmed.materializationSpec().workspaceId().value().equals(
+                authority.workspaceId())
+                || !confirmed.materializationSpec().sourceProjectVersion()
+                .versionId().equals(
+                authority.baseCandidate().baseProjectVersion())) {
+            throw failed("intent_authority");
+        }
+        WorkspacePort workspace = workspaces.createChain(
+                formal.context(), authority);
+        Set<String> absentPaths = authority.baseCandidate().changes().stream()
+                .filter(change -> change.type()
+                        == ChainActionWorkspaceAuthority.ChangeType.DELETE)
+                .map(ChainActionWorkspaceAuthority.TypedChange::path)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        return new WorkspaceExecution(
+                workspace, workspace.materialize(
+                confirmed.materializationSpec()), absentPaths, true);
+    }
+
+    private PersistedPlanExecutionContextConfirmed executionContext(
+            io.paperagent.v2.contracts.PlanId planId) {
+        var executionContext = executionContexts.inspect(planId);
+        if (executionContext.outcome() != PersistenceOutcome.FOUND
+                || !(executionContext.value().orElse(null)
+                        instanceof PersistedPlanExecutionContextConfirmed
+                                confirmed)) {
+            throw failed("execution_context");
+        }
+        return confirmed;
+    }
+
+    private void cleanupChainWorkspace(
+            io.paperagent.v2.contracts.PlanId planId,
+            ToolCallId toolCallId, WorkspaceExecution workspace) {
+        try {
+            workspace.port().cleanup(workspace.materialized().workspace());
+        } catch (RuntimeException failure) {
+            log.warn(
+                    "V2 Sandbox chain Workspace cleanup failed "
+                            + "planId={} toolCallId={} exceptionType={}",
+                    planId.value(), toolCallId.value(),
+                    failure.getClass().getSimpleName());
+        }
+    }
+
     private static ExecutionReceipt commandPolicyReceipt(
             ToolCallId toolCallId,
             SandboxExecutionException failure,
-            Instant observed) {
+            Instant observed,
+            FileInputs inputs) {
         return new ExecutionReceipt(
                 new ReceiptId("sandbox-receipt." + hash(
                         toolCallId.value())),
@@ -264,23 +377,30 @@ public class V2SandboxEffectExecutionComposer {
                                 + "Use an exact argv shape from the "
                                 + "sandbox.execute tool description.",
                         false),
-                List.of(), Optional.empty(), List.of());
+                inputs.chain() ? inputArtifacts(inputs) : List.of(),
+                Optional.empty(), List.of());
     }
 
     private ExecutionReceipt executeBroker(
             long userId, long projectId, long sessionId,
             String projectVersion, RecoveredActiveStep active,
-            PersistedEffectIntent intent, Map<String, String> files,
+            PersistedEffectIntent intent, FileInputs inputs,
             List<String> argv) {
         String key = intent.intent().toolCallId().value();
-        String policy = hash("v2-e2b-offline\u0000"
-                + String.join("\u0000", argv));
+        String policyInput = "v2-e2b-offline\u0000"
+                + String.join("\u0000", argv);
+        if (inputs.chain()) {
+            policyInput += "\u0000sandbox-input-states-v2\u0000"
+                    + V2SandboxInputFingerprint.stateDigest(
+                    inputs.presentFiles(), inputs.absentPaths());
+        }
+        String policy = hash(policyInput);
         SandboxDispatch unsigned = new SandboxDispatch(
                 key, "", userId, projectId, sessionId,
                 stableLong(active.planId().value()),
                 stableLong(intent.intent().stepId().value()),
                 active.lease().fencingToken(), projectVersion, policy,
-                files, argv, properties.getCpus(),
+                inputs.presentFiles(), argv, properties.getCpus(),
                 properties.getMemoryLimit().toBytes(),
                 properties.getExecutionTimeout().toMillis(),
                 properties.getMaxOutputSize().toBytes(), false);
@@ -344,12 +464,14 @@ public class V2SandboxEffectExecutionComposer {
                 || dispatch.fence() != view.fence()) {
             throw failed("status_authority");
         }
-        return receipt(dispatch, view, intent.intent().toolCallId());
+        return receipt(
+                dispatch, view, intent.intent().toolCallId(), inputs);
     }
 
     private ExecutionReceipt receipt(
             SandboxDispatch dispatch, SandboxExecutionView view,
-            ToolCallId toolCallId) {
+            ToolCallId toolCallId,
+            FileInputs inputs) {
         SandboxReceipt source = view.receipt();
         if (source == null
                 || !view.executionId().equals(source.executionId())
@@ -393,9 +515,8 @@ public class V2SandboxEffectExecutionComposer {
                                 || receiptStatus == ReceiptStatus.TIMEOUT
                         ? Optional.empty()
                         : Optional.ofNullable(source.exitCode());
-        List<ArtifactRef> artifacts = new ArrayList<>();
-        artifacts.add(V2SandboxInputFingerprint.artifactReference(
-                dispatch.files()));
+        List<ArtifactRef> artifacts = new ArrayList<>(
+                inputArtifacts(inputs));
         source.artifacts().entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> new ArtifactRef(
@@ -447,10 +568,14 @@ public class V2SandboxEffectExecutionComposer {
             throw failed("arguments");
         }
         LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        LinkedHashSet<String> folded = new LinkedHashSet<>();
         for (ContractValue value : paths.values()) {
-            if (!(value instanceof TextValue text)
-                    || !normalized.add(
-                            new ProjectPath(text.value()).value())) {
+            if (!(value instanceof TextValue text)) {
+                throw failed("arguments");
+            }
+            String path = new ProjectPath(text.value()).value();
+            if (!normalized.add(path)
+                    || !folded.add(path.toLowerCase(Locale.ROOT))) {
                 throw failed("arguments");
             }
         }
@@ -465,20 +590,43 @@ public class V2SandboxEffectExecutionComposer {
                 List.copyOf(command));
     }
 
-    private static Map<String, String> files(
+    private static FileInputs files(
             WorkspacePort workspace,
             io.paperagent.v2.contracts.WorkspaceRef ref,
-            List<String> paths) {
+            List<String> paths,
+            Set<String> formalAbsentPaths,
+            boolean chain) {
+        List<String> knownPaths = workspace.list(ref).stream()
+                .map(stat -> stat.path().value())
+                .toList();
+        validateInputStatePaths(knownPaths, formalAbsentPaths);
+        LinkedHashSet<String> effectivePaths = new LinkedHashSet<>(knownPaths);
+        effectivePaths.addAll(formalAbsentPaths);
+        ProjectMaterialScope.CanonicalPathResolution resolution =
+                effectivePaths.isEmpty() && !chain
+                        ? identityResolution(paths)
+                        : ProjectMaterialScope.resolveCanonicalPaths(
+                                new LinkedHashSet<>(paths),
+                                List.copyOf(effectivePaths));
+        if (!resolution.valid()) {
+            throw failed("workspace_files");
+        }
         Map<String, String> result = new LinkedHashMap<>();
+        Set<String> absent = new LinkedHashSet<>();
         int total = 0;
         for (String path : paths) {
-            byte[] bytes = workspace.read(ref, new ProjectPath(path));
+            String canonical = resolution.canonicalAlias(path);
+            if (formalAbsentPaths.contains(canonical)) {
+                absent.add(canonical);
+                continue;
+            }
+            byte[] bytes = workspace.read(ref, new ProjectPath(canonical));
             total += bytes.length;
             if (bytes.length > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) {
                 throw failed("workspace_files");
             }
             try {
-                result.put(path, StandardCharsets.UTF_8.newDecoder()
+                result.put(canonical, StandardCharsets.UTF_8.newDecoder()
                         .onMalformedInput(CodingErrorAction.REPORT)
                         .onUnmappableCharacter(CodingErrorAction.REPORT)
                         .decode(ByteBuffer.wrap(bytes)).toString());
@@ -486,7 +634,75 @@ public class V2SandboxEffectExecutionComposer {
                 throw failed("workspace_files");
             }
         }
-        return Map.copyOf(result);
+        return new FileInputs(
+                Map.copyOf(result), Set.copyOf(absent),
+                resolution.aliases(), chain);
+    }
+
+    private static void validateInputStatePaths(
+            List<String> presentPaths,
+            Set<String> absentPaths) {
+        Set<String> folded = new LinkedHashSet<>();
+        for (String raw : java.util.stream.Stream.concat(
+                presentPaths.stream(), absentPaths.stream()).toList()) {
+            String path;
+            try {
+                path = new ProjectPath(raw).value();
+            } catch (RuntimeException invalid) {
+                throw failed("workspace_files");
+            }
+            if (!path.equals(raw)
+                    || !folded.add(path.toLowerCase(Locale.ROOT))) {
+                throw failed("workspace_files");
+            }
+        }
+    }
+
+    private static ProjectMaterialScope.CanonicalPathResolution identityResolution(
+            List<String> paths) {
+        Map<String, String> aliases = new LinkedHashMap<>();
+        paths.forEach(path -> aliases.put(
+                ProjectMaterialScope.normalize(path), path));
+        return new ProjectMaterialScope.CanonicalPathResolution(
+                new LinkedHashSet<>(paths), Set.of(), aliases, Map.of());
+    }
+
+    private record FileInputs(
+            Map<String, String> presentFiles,
+            Set<String> absentPaths,
+            Map<String, String> aliases,
+            boolean chain) {
+        private FileInputs {
+            presentFiles = Map.copyOf(presentFiles);
+            absentPaths = Set.copyOf(absentPaths);
+            aliases = Map.copyOf(aliases);
+            if (presentFiles.isEmpty() && absentPaths.isEmpty()) {
+                throw failed("workspace_files");
+            }
+        }
+
+        private List<String> resolveArgv(List<String> argv) {
+            return argv.stream()
+                    .map(value -> aliases.getOrDefault(
+                            ProjectMaterialScope.normalize(value), value))
+                    .toList();
+        }
+    }
+
+    private static List<ArtifactRef> inputArtifacts(FileInputs inputs) {
+        List<ArtifactRef> artifacts = new ArrayList<>();
+        if (inputs.chain()) {
+            artifacts.add(V2SandboxInputFingerprint.stateArtifactReference(
+                    inputs.presentFiles(), inputs.absentPaths()));
+            if (!inputs.presentFiles().isEmpty()) {
+                artifacts.add(V2SandboxInputFingerprint.artifactReference(
+                        inputs.presentFiles()));
+            }
+        } else {
+            artifacts.add(V2SandboxInputFingerprint.artifactReference(
+                    inputs.presentFiles()));
+        }
+        return List.copyOf(artifacts);
     }
 
     private static OutputCapture capture(
@@ -556,5 +772,21 @@ public class V2SandboxEffectExecutionComposer {
     }
 
     private record Arguments(List<String> paths, List<String> argv) {
+    }
+
+    private record FormalExecution(
+            VerifiedAgentTurnProductContext context,
+            RecoveredActiveStep active,
+            PersistedEffectIntent intent) {
+    }
+
+    private record WorkspaceExecution(
+            WorkspacePort port,
+            VerifiedWorkspaceMaterialization materialized,
+            Set<String> formalAbsentPaths,
+            boolean chain) {
+        private WorkspaceExecution {
+            formalAbsentPaths = Set.copyOf(formalAbsentPaths);
+        }
     }
 }

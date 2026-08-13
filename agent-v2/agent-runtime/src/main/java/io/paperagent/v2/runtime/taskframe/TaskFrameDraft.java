@@ -1,5 +1,6 @@
 package io.paperagent.v2.runtime.taskframe;
 
+import io.paperagent.v2.contracts.TaskRequirements;
 import java.util.List;
 
 /**
@@ -12,7 +13,17 @@ public record TaskFrameDraft(
         String objective,
         List<String> targets,
         List<String> deliverables,
-        List<String> constraints) {
+        List<String> constraints,
+        TaskRequirements requirements) {
+
+    public TaskFrameDraft(
+            String objective,
+            List<String> targets,
+            List<String> deliverables,
+            List<String> constraints) {
+        this(objective, targets, deliverables, constraints,
+                TaskRequirements.legacyUnspecified());
+    }
 
     public TaskFrameDraft {
         TaskFrameFreezeValues.required(objective, "taskFrameDraft.objective");
@@ -23,5 +34,7 @@ public record TaskFrameDraft(
         constraints = TaskFrameFreezeValues.list(
                 constraints,
                 "taskFrameDraft.constraints");
+        TaskFrameFreezeValues.required(requirements,
+                "taskFrameDraft.requirements");
     }
 }

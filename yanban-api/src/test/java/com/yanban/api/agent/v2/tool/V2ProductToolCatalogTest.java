@@ -86,6 +86,24 @@ class V2ProductToolCatalogTest {
         assertTrue(V2ProductToolCatalog.entries().stream()
                 .allMatch(entry -> !entry.descriptor()
                         .requiredCapabilities().isEmpty()));
+        assertEquals(
+                java.util.Set.of(
+                        "permission.literature-network-external",
+                        "permission.project-read",
+                        "permission.project-write",
+                        "permission.sandbox-execute-install"),
+                V2ProductToolCatalog.entries().stream()
+                        .map(V2ProductToolCatalog.Entry::permissionRef)
+                        .collect(java.util.stream.Collectors.toSet()));
+        assertEquals(
+                java.util.Set.of("product-literature-search"),
+                V2ProductToolCatalog.entry(id("literature.search"))
+                        .orElseThrow().requiredNetworkAllowlistEntries());
+        assertTrue(V2ProductToolCatalog.entries().stream()
+                .filter(entry -> !entry.descriptor().requiredCapabilities()
+                        .contains(Capability.ACCESS_NETWORK))
+                .allMatch(entry ->
+                        entry.requiredNetworkAllowlistEntries().isEmpty()));
         assertTrue(V2ProductToolCatalog.entries().stream()
                 .filter(entry -> entry.publicAlias().startsWith("project_"))
                 .allMatch(entry -> entry.routingRequirements().contains(
@@ -329,6 +347,16 @@ class V2ProductToolCatalogTest {
     @Test
     void acceptsAndRejectsSandboxArgumentsWithoutExecution() {
         ToolId tool = id("sandbox.execute");
+        String description = V2ProductToolCatalog.requireDescriptor(tool)
+                .description();
+        assertTrue(description.contains(
+                "Python {\"paths\":[\"src/test.py\"],\"argv\":[\"yanban-runner\",\"python\",\"src/test.py\"]}"));
+        assertTrue(description.contains(
+                "Java {\"paths\":[\"src/Main.java\"],\"argv\":[\"yanban-runner\",\"java\",\"src/Main.java\"]}"));
+        assertTrue(description.contains(
+                "C {\"paths\":[\"src/main.c\"],\"argv\":[\"yanban-runner\",\"c\",\"src/main.c\"]}"));
+        assertTrue(description.contains(
+                "C++ {\"paths\":[\"src/main.cpp\"],\"argv\":[\"yanban-runner\",\"cpp\",\"src/main.cpp\"]}"));
         assertTrue(accepts(tool, object(Map.of(
                 "paths", list(text("src/main/java/Sort.java")),
                 "argv", list(

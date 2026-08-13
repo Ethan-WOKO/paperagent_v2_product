@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import shlex
 import sys
 import tempfile
 import types
@@ -65,8 +66,8 @@ class E2bProviderCommandTest(unittest.TestCase):
         observed = []
 
         class Commands:
-            def run(self, *_args, **kwargs):
-                observed.append(kwargs)
+            def run(self, command, **kwargs):
+                observed.append((command, kwargs))
                 return types.SimpleNamespace(stdout="", stderr="", exit_code=0)
 
         provider.Sandbox = types.SimpleNamespace(
@@ -87,14 +88,22 @@ class E2bProviderCommandTest(unittest.TestCase):
 
         expected = {
             "JAVA_HOME": "/opt/yanban/temurin-17",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
             "PATH": (
                 "/opt/yanban/temurin-17/bin:/usr/local/sbin:"
                 "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ),
         }
         self.assertEqual(len(commands), len(observed))
-        for call in observed:
+        for argv, (command, call) in zip(commands, observed):
             self.assertEqual(expected, call["envs"])
+            self.assertEqual(
+                ["/usr/bin/env", "JAVA_HOME=" + expected["JAVA_HOME"],
+                 "LANG=" + expected["LANG"],
+                 "LC_ALL=" + expected["LC_ALL"],
+                 "PATH=" + expected["PATH"], *argv],
+                shlex.split(command))
 
     def test_non_java_command_does_not_receive_java_environment(self):
         provider = self.load_provider()

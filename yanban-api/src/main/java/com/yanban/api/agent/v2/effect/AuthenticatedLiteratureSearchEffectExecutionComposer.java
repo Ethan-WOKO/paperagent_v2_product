@@ -110,24 +110,11 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             Long userId, Long turnId,
             AuthenticatedLiteratureSearchEffectExecutionCommand command) {
         try {
-            VerifiedAgentTurnProductContext context =
-                    contexts.resolve(userId, turnId);
-            requireCommand(command);
-            PlanId authoritativePlan = planIds.derive(context.identity());
-            if (!authoritativePlan.equals(command.planId())) {
-                throw failed("command.planId");
-            }
-            StepRecoveryCompositionOutcome recovered = recoverer.recover(
-                    new StepRecoveryRequest(
-                            authoritativePlan, command.recoveryAttempt()));
-            if (!(recovered instanceof RecoveredActiveStep active)
-                    || active.leaseDisposition()
-                    != StepRecoveryLeaseDisposition.RETAINED_FOR_RECOVERY
-                    || !authoritativePlan.equals(active.planId())) {
-                throw failed("recovery.activeStep");
-            }
-            PersistedEffectIntent intent = load(command);
-            validateIntent(active, intent, command);
+            FormalExecution formal = formalExecution(
+                    userId, turnId, command);
+            VerifiedAgentTurnProductContext context = formal.context();
+            RecoveredActiveStep active = formal.active();
+            PersistedEffectIntent intent = formal.intent();
             ObjectNode arguments = arguments(intent.intent().arguments(),
                     context, active, command);
             Optional<LiteratureSearchRequestAuthority> explicit =
@@ -135,7 +122,7 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
             boolean natural = explicit.isEmpty()
                     && naturalAuthorities != null
                     && naturalAuthorities.authorizes(
-                            userId, turnId, authoritativePlan.value(),
+                            userId, turnId, command.planId().value(),
                             intent.intent().stepId().value(), V2_TOOL);
             if (explicit.isPresent()) {
                 requireAuthority(explicit.orElseThrow(), arguments);
@@ -148,13 +135,70 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                             active.recovery(), active.lease(), intent,
                             command.recoveryAttempt().leaseToken(),
                             active.lease().fencingToken(), observedAt,
-                            () -> invoke(context, turnId, command, arguments,
+                            () -> invokeLegacy(
+                                    context, turnId, command, arguments,
                                     observedAt, natural)));
             return new AuthenticatedLiteratureSearchEffectExecutionOutcome(
                     result.result(), result.replayed());
         } finally {
             ToolExecutionContext.clear();
         }
+    }
+
+    /**
+     * Executes one formal chain EffectIntent without consulting legacy request
+     * or natural-language authorities.
+     */
+    public AuthenticatedLiteratureSearchEffectExecutionOutcome executeChain(
+            Long userId, Long turnId,
+            AuthenticatedLiteratureSearchEffectExecutionCommand command) {
+        try {
+            FormalExecution formal = formalExecution(
+                    userId, turnId, command);
+            ObjectNode arguments = arguments(
+                    formal.intent().intent().arguments(), formal.context(),
+                    formal.active(), command);
+            Instant observedAt = requiredTime(
+                    timeSource.now(), "time.start");
+            var result = claims.execute(
+                    new ProductEffectExecutionClaimRequest(
+                            formal.active().recovery(),
+                            formal.active().lease(), formal.intent(),
+                            command.recoveryAttempt().leaseToken(),
+                            formal.active().lease().fencingToken(),
+                            observedAt,
+                            () -> invokeReceipt(
+                                    formal.context(), command, arguments,
+                                    observedAt)));
+            return new AuthenticatedLiteratureSearchEffectExecutionOutcome(
+                    result.result(), result.replayed());
+        } finally {
+            ToolExecutionContext.clear();
+        }
+    }
+
+    private FormalExecution formalExecution(
+            Long userId, Long turnId,
+            AuthenticatedLiteratureSearchEffectExecutionCommand command) {
+        VerifiedAgentTurnProductContext context =
+                contexts.resolve(userId, turnId);
+        requireCommand(command);
+        PlanId authoritativePlan = planIds.derive(context.identity());
+        if (!authoritativePlan.equals(command.planId())) {
+            throw failed("command.planId");
+        }
+        StepRecoveryCompositionOutcome recovered = recoverer.recover(
+                new StepRecoveryRequest(
+                        authoritativePlan, command.recoveryAttempt()));
+        if (!(recovered instanceof RecoveredActiveStep active)
+                || active.leaseDisposition()
+                != StepRecoveryLeaseDisposition.RETAINED_FOR_RECOVERY
+                || !authoritativePlan.equals(active.planId())) {
+            throw failed("recovery.activeStep");
+        }
+        PersistedEffectIntent intent = load(command);
+        validateIntent(active, intent, command);
+        return new FormalExecution(context, active, intent);
     }
 
     private static void requireAuthority(
@@ -276,12 +320,26 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
         return Optional.of(exact);
     }
 
-    private ExecutionReceipt invoke(
+    private ExecutionReceipt invokeLegacy(
             VerifiedAgentTurnProductContext context,
             Long turnId,
             AuthenticatedLiteratureSearchEffectExecutionCommand command,
             ObjectNode arguments,
             Instant startedAt, boolean natural) {
+        ExecutionReceipt receipt = invokeReceipt(
+                context, command, arguments, startedAt);
+        if (receipt.status() == ReceiptStatus.SUCCESS && !natural) {
+            taskBindings.bindSuccessfulReceipt(
+                    context.identity().userId(), turnId, receipt);
+        }
+        return receipt;
+    }
+
+    private ExecutionReceipt invokeReceipt(
+            VerifiedAgentTurnProductContext context,
+            AuthenticatedLiteratureSearchEffectExecutionCommand command,
+            ObjectNode arguments,
+            Instant startedAt) {
         ToolExecutionContext.clear();
         ToolExecutionContext.setCurrentUserId(context.identity().userId());
         if (context.identity().projectId() != null) {
@@ -321,10 +379,6 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
                 success ? Optional.empty()
                         : Optional.of("LITERATURE_START_FAILED"),
                 stdout, stderr, List.of(), Optional.empty(), List.of());
-        if (receipt.status() == ReceiptStatus.SUCCESS && !natural) {
-            taskBindings.bindSuccessfulReceipt(
-                    context.identity().userId(), turnId, receipt);
-        }
         return receipt;
     }
 
@@ -405,5 +459,11 @@ public class AuthenticatedLiteratureSearchEffectExecutionComposer {
     private static AuthenticatedLiteratureSearchEffectExecutionException
             failed(String path) {
         return new AuthenticatedLiteratureSearchEffectExecutionException(path);
+    }
+
+    private record FormalExecution(
+            VerifiedAgentTurnProductContext context,
+            RecoveredActiveStep active,
+            PersistedEffectIntent intent) {
     }
 }

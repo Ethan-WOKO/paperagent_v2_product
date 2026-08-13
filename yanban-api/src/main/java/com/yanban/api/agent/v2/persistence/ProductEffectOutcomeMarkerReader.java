@@ -152,6 +152,8 @@ class ProductEffectOutcomeMarkerReader {
                     && request.fencingToken() == result.fencingToken()
                     && request.expectedActivationEventId().equals(
                             result.activationEventId());
+            if (!valid) {
+            }
             return valid ? result : null;
         } catch (RuntimeException exception) {
             return null;

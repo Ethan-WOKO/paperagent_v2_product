@@ -9,5 +9,6 @@ public record V2NaturalLanguageTurnResponse(
         String route,
         String answer,
         String planId,
-        boolean replayed) {
+        boolean replayed,
+        String rootClientRequestId) {
 }

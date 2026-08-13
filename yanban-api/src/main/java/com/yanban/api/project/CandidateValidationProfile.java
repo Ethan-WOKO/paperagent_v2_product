@@ -5,6 +5,8 @@ import java.util.List;
 /** Server-owned compile/test profiles. The client never supplies argv or environment variables. */
 public enum CandidateValidationProfile {
     DOCUMENT_INTEGRITY(List.of()),
+    /** Server-owned validation derived from an exact Candidate-bound Agent sandbox receipt. */
+    AGENT_CHAIN_EXACT_CANDIDATE(List.of()),
     MAVEN_TEST(List.of("mvn", "-o", "test")),
     MAVEN_VERIFY(List.of("mvn", "-o", "verify")),
     JAVA_SOURCE_RUN("java", ".java"),

@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.agent.v2.chain.effect.ChainActionWorkspaceAuthority;
 import com.yanban.api.agent.v2.effect.NaturalLanguageEffectAuthoritySource;
 import com.yanban.api.agent.v2.persistence
         .ProductEffectExecutionClaimRepository;
@@ -66,9 +67,214 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class V2SandboxEffectExecutionComposerTest {
+    @Test
+    void chainExecutionUsesFormalIntentWithoutLegacyAuthority() {
+        Fixture fixture = new Fixture();
+        List<SandboxDispatch> dispatches = new ArrayList<>();
+        when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            dispatches.add(dispatch);
+            return accepted(dispatch);
+        });
+        when(fixture.broker.status("execution-1"))
+                .thenAnswer(invocation -> succeeded(dispatches.get(0)));
+
+        V2SandboxEffectExecutionOutcome result = fixture.executeChain();
+
+        assertThat(result.result().receipt().status())
+                .isEqualTo(ReceiptStatus.SUCCESS);
+        assertThat(result.result().receipt().toolCallId())
+                .isEqualTo(fixture.toolCallId);
+        assertThat(result.result().receipt().artifactReferences())
+                .contains(
+                        V2SandboxInputFingerprint.stateArtifactReference(
+                                Map.of("src/Main.java", "class Main {}"),
+                                Set.of()),
+                        V2SandboxInputFingerprint.artifactReference(
+                                Map.of("src/Main.java", "class Main {}")));
+        verify(fixture.claims).executeExternal(any());
+        verifyNoInteractions(fixture.authorities);
+        verify(fixture.workspaces).createChain(
+                any(), org.mockito.ArgumentMatchers.eq(
+                        fixture.chainAuthority(fixture.toolCallId)));
+        verify(fixture.workspace).cleanup(fixture.workspaceRef);
+        verify(fixture.workspaces, org.mockito.Mockito.never())
+                .create(fixture.userId, fixture.turnId);
+    }
+
+    @Test
+    void chainExecutionCarriesFormalAbsentInputWithoutDispatchingAFile() {
+        Fixture fixture = new Fixture();
+        when(fixture.workspace.list(fixture.workspaceRef))
+                .thenReturn(List.of());
+        List<SandboxDispatch> dispatches = new ArrayList<>();
+        when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            dispatches.add(dispatch);
+            return accepted(dispatch);
+        });
+        when(fixture.broker.status("execution-1"))
+                .thenAnswer(invocation -> succeeded(dispatches.get(0)));
+        var delete = new ChainActionWorkspaceAuthority.TypedChange(
+                ChainActionWorkspaceAuthority.ChangeType.DELETE,
+                "src/Main.java", "a".repeat(64), null, null);
+        var authority = new ChainActionWorkspaceAuthority(
+                fixture.toolCallId.value(), "f".repeat(64),
+                "sandbox-workspace", List.of(), List.of("src/Main.java"),
+                new ChainActionWorkspaceAuthority.BaseCandidateAuthority(
+                        "c".repeat(64), "version-1", 71L,
+                        List.of(delete)));
+
+        V2SandboxEffectExecutionOutcome result = fixture.executeChain(
+                fixture.toolCallId, authority);
+
+        assertThat(dispatches).singleElement().satisfies(dispatch -> {
+            assertThat(dispatch.files()).isEmpty();
+            assertThat(dispatch.policyDigest()).hasSize(64);
+            assertThat(dispatch.requestDigest()).hasSize(64);
+        });
+        assertThat(result.result().receipt().artifactReferences())
+                .containsExactly(
+                        V2SandboxInputFingerprint.stateArtifactReference(
+                                Map.of(), Set.of("src/Main.java")));
+        verify(fixture.workspace, org.mockito.Mockito.never()).read(
+                fixture.workspaceRef, new ProjectPath("src/Main.java"));
+    }
+
+    @Test
+    void chainExecutionRejectsOrdinaryMissingInput() {
+        Fixture fixture = new Fixture();
+        when(fixture.workspace.list(fixture.workspaceRef))
+                .thenReturn(List.of());
+
+        V2SandboxEffectExecutionException failure = assertThrows(
+                V2SandboxEffectExecutionException.class,
+                fixture::executeChain);
+
+        assertThat(failure.stage()).isEqualTo("workspace_files");
+        verifyNoInteractions(fixture.broker);
+    }
+
+    @Test
+    void chainExecutionRejectsCaseFoldDuplicateArgumentPaths() {
+        Fixture fixture = new Fixture();
+        when(fixture.intents.find(fixture.toolCallId)).thenReturn(
+                PersistenceResult.found(fixture.intent(
+                        fixture.toolCallId, new EventId("activation-1"),
+                        List.of("src/Main.java", "SRC/main.java"))));
+
+        V2SandboxEffectExecutionException failure = assertThrows(
+                V2SandboxEffectExecutionException.class,
+                fixture::executeChain);
+
+        assertThat(failure.stage()).isEqualTo("arguments");
+        verifyNoInteractions(fixture.broker);
+    }
+
+    @Test
+    void chainExecutionRejectsPathThatIsBothPresentAndFormallyAbsent() {
+        Fixture fixture = new Fixture();
+        var delete = new ChainActionWorkspaceAuthority.TypedChange(
+                ChainActionWorkspaceAuthority.ChangeType.DELETE,
+                "src/Main.java", "a".repeat(64), null, null);
+        var authority = new ChainActionWorkspaceAuthority(
+                fixture.toolCallId.value(), "f".repeat(64),
+                "sandbox-workspace", List.of(), List.of("src/Main.java"),
+                new ChainActionWorkspaceAuthority.BaseCandidateAuthority(
+                        "c".repeat(64), "version-1", 71L,
+                        List.of(delete)));
+
+        V2SandboxEffectExecutionException failure = assertThrows(
+                V2SandboxEffectExecutionException.class,
+                () -> fixture.executeChain(fixture.toolCallId, authority));
+
+        assertThat(failure.stage()).isEqualTo("workspace_files");
+        verifyNoInteractions(fixture.broker);
+    }
+
+    @Test
+    void chainExecutionRejectsChangedFormalIntentWithoutLegacyAuthority() {
+        Fixture fixture = new Fixture();
+        when(fixture.intents.find(fixture.toolCallId)).thenReturn(
+                PersistenceResult.found(fixture.intent(
+                        new EventId("activation-other"))));
+
+        V2SandboxEffectExecutionException failure = assertThrows(
+                V2SandboxEffectExecutionException.class,
+                fixture::executeChain);
+
+        assertThat(failure.stage()).isEqualTo("intent_authority");
+        verifyNoInteractions(
+                fixture.authorities, fixture.claims, fixture.broker);
+    }
+
+    @Test
+    void separateChainActionsNeverReuseSandboxWorkspace() {
+        Fixture fixture = new Fixture();
+        ToolCallId secondCall = new ToolCallId("sandbox-call-2");
+        when(fixture.intents.find(secondCall)).thenReturn(
+                PersistenceResult.found(fixture.intent(
+                        secondCall, new EventId("activation-1"))));
+        WorkspacePort first = mock(WorkspacePort.class);
+        WorkspacePort second = mock(WorkspacePort.class);
+        VerifiedWorkspaceMaterialization firstMaterialized =
+                mock(VerifiedWorkspaceMaterialization.class);
+        VerifiedWorkspaceMaterialization secondMaterialized =
+                mock(VerifiedWorkspaceMaterialization.class);
+        WorkspaceRef firstRef = mock(WorkspaceRef.class);
+        WorkspaceRef secondRef = mock(WorkspaceRef.class);
+        when(firstMaterialized.workspace()).thenReturn(firstRef);
+        when(secondMaterialized.workspace()).thenReturn(secondRef);
+        when(first.materialize(any())).thenReturn(firstMaterialized);
+        when(second.materialize(any())).thenReturn(secondMaterialized);
+        when(first.read(firstRef, new ProjectPath("src/Main.java")))
+                .thenReturn("class Main {}".getBytes(
+                        StandardCharsets.UTF_8));
+        when(second.read(secondRef, new ProjectPath("src/Main.java")))
+                .thenReturn("class Main { int x; }".getBytes(
+                        StandardCharsets.UTF_8));
+        var firstStat = mock(io.paperagent.v2.workspace.WorkspaceFileStat.class);
+        var secondStat = mock(io.paperagent.v2.workspace.WorkspaceFileStat.class);
+        when(firstStat.path()).thenReturn(new ProjectPath("src/Main.java"));
+        when(secondStat.path()).thenReturn(new ProjectPath("src/Main.java"));
+        when(first.list(firstRef)).thenReturn(List.of(firstStat));
+        when(second.list(secondRef)).thenReturn(List.of(secondStat));
+        when(fixture.workspaces.createChain(any(), any()))
+                .thenReturn(first, second);
+        List<SandboxDispatch> dispatches = new ArrayList<>();
+        when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch dispatch = invocation.getArgument(0);
+            dispatches.add(dispatch);
+            return accepted(dispatch);
+        });
+        when(fixture.broker.status("execution-1")).thenAnswer(invocation ->
+                succeeded(dispatches.get(dispatches.size() - 1)));
+
+        fixture.executeChain(
+                fixture.toolCallId,
+                fixture.chainAuthority(fixture.toolCallId));
+        fixture.executeChain(
+                secondCall,
+                fixture.chainAuthority(
+                        secondCall, "a".repeat(64), 71L,
+                        Map.of("src/Main.java", "class Main { int x; }")));
+
+        assertThat(dispatches).extracting(dispatch ->
+                dispatch.files().get("src/Main.java"))
+                .containsExactly("class Main {}", "class Main { int x; }");
+        verify(first).materialize(any());
+        verify(second).materialize(any());
+        verify(first).cleanup(firstRef);
+        verify(second).cleanup(secondRef);
+        verify(fixture.workspaces, times(2)).createChain(any(), any());
+        verify(fixture.workspaces, org.mockito.Mockito.never())
+                .create(fixture.userId, fixture.turnId);
+    }
+
     @Test
     void pendingExecutionResumesWithSameIdentityAndReturnsTerminalReceipt() {
         Fixture fixture = new Fixture();
@@ -93,6 +299,9 @@ class V2SandboxEffectExecutionComposerTest {
         assertThat(result.result().receipt().artifactReferences())
                 .contains(V2SandboxInputFingerprint.artifactReference(
                         Map.of("src/Main.java", "class Main {}")));
+        assertThat(result.result().receipt().artifactReferences())
+                .noneMatch(ref -> ref.value().startsWith(
+                        "sandbox-input-states-v2:"));
         assertThat(dispatches).hasSize(2);
         assertThat(dispatches)
                 .extracting(SandboxDispatch::idempotencyKey)
@@ -104,7 +313,13 @@ class V2SandboxEffectExecutionComposerTest {
                 .extracting(SandboxDispatch::policyDigest)
                 .allMatch(digest -> digest.matches("[0-9a-f]{64}"));
         verify(fixture.broker, times(2)).status("execution-1");
-        verify(fixture.claims, times(2)).execute(any());
+        verify(fixture.claims, times(2)).executeExternal(any());
+        verify(fixture.workspaces, times(2)).create(
+                fixture.userId, fixture.turnId);
+        verify(fixture.workspace, org.mockito.Mockito.never())
+                .cleanup(fixture.workspaceRef);
+        verify(fixture.workspaces, org.mockito.Mockito.never())
+                .createChain(any(), any());
     }
 
     @Test
@@ -136,11 +351,11 @@ class V2SandboxEffectExecutionComposerTest {
         assertThat(dispatches)
                 .extracting(SandboxDispatch::requestDigest)
                 .containsOnly(dispatches.get(0).requestDigest());
-        verify(fixture.claims, times(2)).execute(any());
+        verify(fixture.claims, times(2)).executeExternal(any());
     }
 
     @Test
-    void transactionWrapperDoesNotTurnPendingExecutionIntoFailure() {
+    void externalClaimBoundaryDoesNotTurnPendingExecutionIntoFailure() {
         Fixture fixture = new Fixture();
         List<SandboxDispatch> dispatches = new ArrayList<>();
         when(fixture.broker.dispatch(any())).thenAnswer(invocation -> {
@@ -160,7 +375,7 @@ class V2SandboxEffectExecutionComposerTest {
                 throw new IllegalStateException(
                         "transaction wrapper", pending);
             }
-        }).when(fixture.claims).execute(any());
+        }).when(fixture.claims).executeExternal(any());
 
         assertThrows(V2SandboxEffectPendingException.class,
                 fixture::execute);
@@ -225,8 +440,26 @@ class V2SandboxEffectExecutionComposerTest {
         assertThat(result.result().receipt().standardError().inlineText())
                 .hasValueSatisfying(value -> assertThat(value)
                         .contains("exact argv shape"));
+        assertThat(result.result().receipt().artifactReferences()).isEmpty();
         verifyNoInteractions(fixture.broker);
-        verify(fixture.claims).execute(any());
+        verify(fixture.claims).executeExternal(any());
+
+        Fixture chain = new Fixture();
+        doThrow(new SandboxExecutionException(
+                SandboxFailureCode.COMMAND_NOT_ALLOWED,
+                "command profile is not server-allowlisted"))
+                .when(chain.commands).validate(any(), any());
+
+        V2SandboxEffectExecutionOutcome chainResult = chain.executeChain();
+
+        assertThat(chainResult.result().receipt().artifactReferences())
+                .contains(
+                        V2SandboxInputFingerprint.stateArtifactReference(
+                                Map.of("src/Main.java", "class Main {}"),
+                                Set.of()),
+                        V2SandboxInputFingerprint.artifactReference(
+                                Map.of("src/Main.java", "class Main {}")));
+        verifyNoInteractions(chain.broker);
     }
 
     @Test
@@ -365,6 +598,14 @@ class V2SandboxEffectExecutionComposerTest {
                 mock(ProductEffectExecutionClaimRepository.class);
         private final SandboxCommandPolicy commands =
                 mock(SandboxCommandPolicy.class);
+        private final EffectIntentRepository intents =
+                mock(EffectIntentRepository.class);
+        private final NaturalLanguageEffectAuthoritySource authorities =
+                mock(NaturalLanguageEffectAuthoritySource.class);
+        private final AuthenticatedAgentTurnWorkspacePortFactory workspaces =
+                mock(AuthenticatedAgentTurnWorkspacePortFactory.class);
+        private final WorkspacePort workspace = mock(WorkspacePort.class);
+        private final WorkspaceRef workspaceRef = mock(WorkspaceRef.class);
         private final V2SandboxEffectExecutionComposer composer;
 
         @SuppressWarnings("unchecked")
@@ -374,14 +615,8 @@ class V2SandboxEffectExecutionComposerTest {
             ProductPlanIdDerivation planIds =
                     mock(ProductPlanIdDerivation.class);
             StepRecoverer recoverer = mock(StepRecoverer.class);
-            EffectIntentRepository intents =
-                    mock(EffectIntentRepository.class);
             PlanExecutionContextRepository executionContexts =
                     mock(PlanExecutionContextRepository.class);
-            AuthenticatedAgentTurnWorkspacePortFactory workspaces =
-                    mock(AuthenticatedAgentTurnWorkspacePortFactory.class);
-            NaturalLanguageEffectAuthoritySource authorities =
-                    mock(NaturalLanguageEffectAuthoritySource.class);
             SandboxExecutionProperties properties =
                     new SandboxExecutionProperties();
             properties.setProvider("e2b");
@@ -416,21 +651,9 @@ class V2SandboxEffectExecutionComposerTest {
                     StepRecoveryLeaseDisposition.RETAINED_FOR_RECOVERY);
             when(recoverer.recover(any())).thenReturn(active);
 
-            PersistedEffectIntent intent = new PersistedEffectIntent(
-                    new EffectIntent(
-                            toolCallId, planId, stepId,
-                            V2SandboxEffectExecutionComposer.KIND,
-                            new ObjectValue(Map.of(
-                                    "paths", new ListValue(List.of(
-                                            new TextValue(
-                                                    "src/Main.java"))),
-                                    "argv", new ListValue(List.of(
-                                            new TextValue("java"),
-                                            new TextValue(
-                                                    "src/Main.java")))))),
-                    "owner", 7, new EventId("activation-1"));
             when(intents.find(toolCallId)).thenReturn(
-                    PersistenceResult.found(intent));
+                    PersistenceResult.found(intent(
+                            new EventId("activation-1"))));
             when(authorities.authorizes(
                     userId, turnId, planId.value(),
                     stepId.value(),
@@ -439,22 +662,34 @@ class V2SandboxEffectExecutionComposerTest {
 
             PersistedPlanExecutionContextConfirmed confirmed =
                     mock(PersistedPlanExecutionContextConfirmed.class);
+            var spec = mock(io.paperagent.v2.contracts
+                    .WorkspaceMaterializationSpec.class);
+            when(confirmed.materializationSpec()).thenReturn(spec);
+            when(spec.workspaceId()).thenReturn(
+                    new io.paperagent.v2.contracts.WorkspaceId(
+                            "sandbox-workspace"));
+            when(spec.sourceProjectVersion()).thenReturn(
+                    new io.paperagent.v2.contracts.ProjectVersionRef(
+                            "13", "version-1"));
             when(executionContexts.inspect(planId)).thenReturn(
                     PersistenceResult.found(confirmed));
             VerifiedWorkspaceMaterialization materialization =
                     mock(VerifiedWorkspaceMaterialization.class);
-            WorkspaceRef workspaceRef = mock(WorkspaceRef.class);
             when(materialization.workspace()).thenReturn(workspaceRef);
-            WorkspacePort workspace = mock(WorkspacePort.class);
             when(workspaces.create(userId, turnId)).thenReturn(workspace);
             when(workspace.inspectMaterialization(any()))
                     .thenReturn(materialization);
+            when(workspaces.createChain(any(), any())).thenReturn(workspace);
+            when(workspace.materialize(any())).thenReturn(materialization);
             when(workspace.read(
                     workspaceRef, new ProjectPath("src/Main.java")))
                     .thenReturn("class Main {}".getBytes(
                             StandardCharsets.UTF_8));
+            var stat = mock(io.paperagent.v2.workspace.WorkspaceFileStat.class);
+            when(stat.path()).thenReturn(new ProjectPath("src/Main.java"));
+            when(workspace.list(workspaceRef)).thenReturn(List.of(stat));
 
-            when(claims.execute(any())).thenAnswer(invocation -> {
+            when(claims.executeExternal(any())).thenAnswer(invocation -> {
                 ProductEffectExecutionClaimRequest request =
                         invocation.getArgument(0);
                 var receipt = request.execution().get();
@@ -472,6 +707,75 @@ class V2SandboxEffectExecutionComposerTest {
         private V2SandboxEffectExecutionOutcome execute() {
             return composer.execute(
                     userId, turnId, planId, toolCallId, attempt);
+        }
+
+        private V2SandboxEffectExecutionOutcome executeChain() {
+            return executeChain(toolCallId, chainAuthority(toolCallId));
+        }
+
+        private V2SandboxEffectExecutionOutcome executeChain(
+                ToolCallId call,
+                ChainActionWorkspaceAuthority authority) {
+            return composer.executeChain(
+                    userId, turnId, planId, call, attempt, authority);
+        }
+
+        private PersistedEffectIntent intent(EventId activation) {
+            return intent(toolCallId, activation);
+        }
+
+        private PersistedEffectIntent intent(
+                ToolCallId call, EventId activation) {
+            return intent(call, activation, List.of("src/Main.java"));
+        }
+
+        private PersistedEffectIntent intent(
+                ToolCallId call,
+                EventId activation,
+                List<String> paths) {
+            return new PersistedEffectIntent(
+                    new EffectIntent(
+                            call, planId, stepId,
+                            V2SandboxEffectExecutionComposer.KIND,
+                            new ObjectValue(Map.of(
+                                    "paths", new ListValue(paths.stream()
+                                            .<io.paperagent.v2.contracts
+                                                    .ContractValue>map(
+                                                    TextValue::new)
+                                            .toList()),
+                                    "argv", new ListValue(List.of(
+                                            new TextValue("java"),
+                                            new TextValue(
+                                                    "src/Main.java")))))),
+                    "owner", 7, activation);
+        }
+
+        private ChainActionWorkspaceAuthority chainAuthority(
+                ToolCallId call) {
+            return chainAuthority(call, "NONE", null, Map.of());
+        }
+
+        private ChainActionWorkspaceAuthority chainAuthority(
+                ToolCallId call, String candidateIdentity, Long artifactId,
+                Map<String, String> overlay) {
+            return new ChainActionWorkspaceAuthority(
+                    call.value(), "f".repeat(64), "sandbox-workspace",
+                    List.of("src/Main.java"), List.of(),
+                    new ChainActionWorkspaceAuthority
+                            .BaseCandidateAuthority(
+                            candidateIdentity, "version-1", artifactId,
+                            overlay.entrySet().stream().map(entry -> {
+                                var text = com.yanban.core.agent.sandbox
+                                        .CandidateTextPayload.fromText(
+                                        entry.getValue());
+                                return new ChainActionWorkspaceAuthority
+                                        .TypedChange(
+                                        ChainActionWorkspaceAuthority
+                                                .ChangeType.MODIFY,
+                                        entry.getKey(), "a".repeat(64),
+                                        text.contentHash().sha256(),
+                                        entry.getValue());
+                            }).toList()));
         }
     }
 }

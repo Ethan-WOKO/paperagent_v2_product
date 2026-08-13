@@ -6,7 +6,9 @@ import io.paperagent.v2.persistence.EffectResultRequest;
 import io.paperagent.v2.persistence.PersistedEffectIntent;
 import io.paperagent.v2.persistence.PersistedEffectResult;
 import jakarta.persistence.EntityManager;
+import java.util.Optional;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Component
@@ -54,33 +56,75 @@ class ProductEffectExecutionClaimTransactions {
         this.entityManager = entityManager;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     ProductEffectExecutionClaimResult execute(
+            ProductEffectExecutionClaimRequest request) {
+        ProductLeaseEntity authoritativeLease = lockAndValidate(request);
+        var replay = replay(request);
+        if (replay.isPresent()) return replay.orElseThrow();
+        claim(request, false);
+        ExecutionReceipt receipt = request.execution().get();
+        return persistResult(request, authoritativeLease, receipt);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    Optional<ProductEffectExecutionClaimResult> claimOrReplay(
+            ProductEffectExecutionClaimRequest request) {
+        lockAndValidate(request);
+        var replay = replay(request);
+        if (replay.isPresent()) return replay;
+        claim(request, true);
+        return Optional.empty();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ProductEffectExecutionClaimResult complete(
+            ProductEffectExecutionClaimRequest request,
+            ExecutionReceipt receipt) {
+        ProductLeaseEntity authoritativeLease = lockAndValidate(request);
+        var replay = replay(request);
+        if (replay.isPresent()) return replay.orElseThrow();
+        ProductEffectExecutionClaimEntity claim = claims.findById(
+                request.intent().intent().toolCallId().value()).orElse(null);
+        if (claim == null || !sameClaim(claim, request)) {
+            throw failed("claim.missingOrChanged");
+        }
+        return persistResult(request, authoritativeLease, receipt);
+    }
+
+    private ProductLeaseEntity lockAndValidate(
             ProductEffectExecutionClaimRequest request) {
         String planId = request.intent().intent().planId().value();
         if (bootstraps.lockByPlanId(planId).isEmpty()) {
             throw failed("authority.plan");
         }
-        ProductLeaseEntity authoritativeLease = validateAuthority(request);
+        return validateAuthority(request);
+    }
 
-        ProductEffectOutcomeResultEntity resultRow =
-                results.findById(request.intent().intent().toolCallId().value())
-                        .orElse(null);
+    private Optional<ProductEffectExecutionClaimResult> replay(
+            ProductEffectExecutionClaimRequest request) {
+        ProductEffectOutcomeResultEntity resultRow = results.findById(
+                request.intent().intent().toolCallId().value()).orElse(null);
+        if (resultRow == null) return Optional.empty();
         ProductEffectExecutionClaimEntity claim = claims.findById(
                 request.intent().intent().toolCallId().value()).orElse(null);
-        if (resultRow != null) {
-            var marker = markers.result(resultRow);
-            if (claim == null || marker == null
-                    || !sameClaim(claim, request)) {
-                throw failed("result.corrupt");
-            }
-            return new ProductEffectExecutionClaimResult(
-                    marker.result(), true);
+        var marker = markers.result(resultRow);
+        if (claim == null || marker == null || !sameClaim(claim, request)) {
+            throw failed("result.corrupt");
         }
+        return Optional.of(new ProductEffectExecutionClaimResult(
+                marker.result(), true));
+    }
+
+    private void claim(
+            ProductEffectExecutionClaimRequest request,
+            boolean allowExactExistingClaim) {
+        ProductEffectExecutionClaimEntity claim = claims.findById(
+                request.intent().intent().toolCallId().value()).orElse(null);
         if (claim != null) {
+            if (allowExactExistingClaim && sameClaim(claim, request)) return;
             throw failed("claim.incomplete");
         }
-
         var intent = request.intent().intent();
         entityManager.persist(new ProductEffectExecutionClaimEntity(
                 intent.toolCallId().value(), intent.planId().value(),
@@ -88,8 +132,13 @@ class ProductEffectExecutionClaimTransactions {
                 request.intent().activationEventId().value(),
                 request.observedAt()));
         entityManager.flush();
+    }
 
-        ExecutionReceipt receipt = request.execution().get();
+    private ProductEffectExecutionClaimResult persistResult(
+            ProductEffectExecutionClaimRequest request,
+            ProductLeaseEntity authoritativeLease,
+            ExecutionReceipt receipt) {
+        var intent = request.intent().intent();
         if (receipt == null
                 || !receipt.toolCallId().equals(intent.toolCallId())) {
             throw failed("execution.receipt");
@@ -127,22 +176,25 @@ class ProductEffectExecutionClaimTransactions {
                 request.intent().intent().toolCallId().value());
         var recovery = request.recovery();
         var intent = request.intent();
-        if (durable == null || !durable.equals(intent)
-                || !interruptions.findAllByPlanId(
-                        intent.intent().planId().value()).isEmpty()
+        boolean interrupted = !interruptions.findAllByPlanId(
+                intent.intent().planId().value()).isEmpty();
+        boolean activeStep = recovery.checkpoint().checkpoint().stepStates().get(
+                intent.intent().stepId()) == StepExecutionState.ACTIVE;
+        boolean completed = completions
+                .findByPlanIdAndStepIdAndActivationEventId(
+                        intent.intent().planId().value(),
+                        intent.intent().stepId().value(),
+                        intent.activationEventId().value())
+                .isPresent();
+        boolean invalid = durable == null || !durable.equals(intent)
+                || interrupted
                 || !recovery.planId().equals(intent.intent().planId())
                 || !recovery.activation().stepId().equals(
                         intent.intent().stepId())
                 || !recovery.activation().activationEvent().id().equals(
                         intent.activationEventId())
-                || recovery.checkpoint().checkpoint().stepStates().get(
-                        intent.intent().stepId()) != StepExecutionState.ACTIVE
-                || completions
-                        .findByPlanIdAndStepIdAndActivationEventId(
-                                intent.intent().planId().value(),
-                                intent.intent().stepId().value(),
-                                intent.activationEventId().value())
-                        .isPresent()) {
+                || !activeStep || completed;
+        if (invalid) {
             throw failed("authority.activeStep");
         }
         ProductStepActivationEntity activation = activations.findById(

@@ -40,6 +40,11 @@ class TaskFrameDraftValidationTest {
                 TaskFrameFreezeValidationCode.REQUIRED_VALUE_MISSING,
                 "taskFrameDraft.constraints",
                 () -> new TaskFrameDraft("objective", List.of(), List.of(), null));
+        assertViolation(
+                TaskFrameFreezeValidationCode.REQUIRED_VALUE_MISSING,
+                "taskFrameDraft.requirements",
+                () -> new TaskFrameDraft(
+                        "objective", List.of(), List.of(), List.of(), null));
     }
 
     @Test

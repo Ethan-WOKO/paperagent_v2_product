@@ -1,0 +1,15 @@
+package io.paperagent.v2.chain;
+
+public enum ChainWorkState {
+    PLANNING,
+    CLASSIFYING_INSTRUCTION,
+    DIRECT_ANSWERING,
+    EXECUTING,
+    AWAITING_REVIEW,
+    VALIDATING_PENDING_ITEM,
+    WAITING_USER,
+    WAITING_PERMISSION,
+    FINALIZING,
+    DELIVERING,
+    TERMINAL
+}

@@ -48,9 +48,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 
 /**
- * Canonical format-1 codec for the immutable active-Step replan marker.
+ * Canonical codec for the immutable active-Step replan marker.
  *
  * <p>Every polymorphic contract value carries an explicit kind. Decode is
  * followed by byte-for-byte canonical re-encoding, so parser coercion and
@@ -58,7 +59,8 @@ import java.util.Optional;
  */
 @Component
 public final class ProductActiveStepReplanCodec {
-    static final int FORMAT_VERSION = 1;
+    static final int FORMAT_VERSION = 2;
+    static final int LEGACY_FORMAT_VERSION = 1;
     private static final String CORRUPT =
             "Stored V2 active-Step replan payload is invalid";
 
@@ -69,8 +71,13 @@ public final class ProductActiveStepReplanCodec {
     }
 
     EncodedPayload encodeRequest(ActiveStepReplanRequest value) {
+        return encodeRequest(value, FORMAT_VERSION);
+    }
+
+    private EncodedPayload encodeRequest(
+            ActiveStepReplanRequest value, int formatVersion) {
         ObjectNode root = json.createObjectNode();
-        root.put("format", FORMAT_VERSION);
+        root.put("format", formatVersion);
         root.put("planId", value.planId().value());
         root.put("leaseToken", value.leaseToken());
         root.put("fencingToken", value.fencingToken());
@@ -86,7 +93,7 @@ public final class ProductActiveStepReplanCodec {
                 checkpointNode(value.supersededCheckpoint()));
         root.set("replanEvent", eventNode(value.replanEvent()));
         root.set("replannedRevision",
-                revisionNode(value.replannedRevision()));
+                revisionNode(value.replannedRevision(), formatVersion));
         root.set("replannedCheckpoint",
                 checkpointNode(value.replannedCheckpoint()));
         return encode(root);
@@ -108,9 +115,9 @@ public final class ProductActiveStepReplanCodec {
                     event(root.get("supersessionEvent")),
                     checkpoint(root.get("supersededCheckpoint")),
                     event(root.get("replanEvent")),
-                    revision(root.get("replannedRevision")),
+                    revision(root.get("replannedRevision"), format),
                     checkpoint(root.get("replannedCheckpoint")));
-            canonical(encodeRequest(result), hash, payload);
+            canonical(encodeRequest(result, format), hash, payload);
             return result;
         } catch (RuntimeException exception) {
             throw corrupt();
@@ -118,8 +125,13 @@ public final class ProductActiveStepReplanCodec {
     }
 
     EncodedPayload encodeResult(PersistedActiveStepReplan value) {
+        return encodeResult(value, FORMAT_VERSION);
+    }
+
+    private EncodedPayload encodeResult(
+            PersistedActiveStepReplan value, int formatVersion) {
         ObjectNode root = json.createObjectNode();
-        root.put("format", FORMAT_VERSION);
+        root.put("format", formatVersion);
         root.put("planId", value.planId().value());
         root.put("supersededStepId", value.supersededStepId().value());
         root.put("leaseOwnerId", value.leaseOwnerId());
@@ -129,10 +141,14 @@ public final class ProductActiveStepReplanCodec {
                 versionedCheckpointNode(value.supersededCheckpoint()));
         root.set("replanEvent", eventNode(value.replanEvent()));
         root.set("replannedRevision",
-                revisionNode(value.replannedRevision()));
+                revisionNode(value.replannedRevision(), formatVersion));
         root.set("replannedCheckpoint",
                 versionedCheckpointNode(value.replannedCheckpoint()));
         return encode(root);
+    }
+
+    public String authoritySha256(PersistedActiveStepReplan value) {
+        return encodeResult(Objects.requireNonNull(value, "value")).sha256();
     }
 
     PersistedActiveStepReplan decodeResult(
@@ -149,10 +165,10 @@ public final class ProductActiveStepReplanCodec {
                             versionedCheckpoint(
                                     root.get("supersededCheckpoint")),
                             event(root.get("replanEvent")),
-                            revision(root.get("replannedRevision")),
+                            revision(root.get("replannedRevision"), format),
                             versionedCheckpoint(
                                     root.get("replannedCheckpoint")));
-            canonical(encodeResult(result), hash, payload);
+            canonical(encodeResult(result, format), hash, payload);
             return result;
         } catch (RuntimeException exception) {
             throw corrupt();
@@ -163,7 +179,7 @@ public final class ProductActiveStepReplanCodec {
         try {
             byte[] bytes = json.writeValueAsBytes(root);
             return new EncodedPayload(
-                    FORMAT_VERSION, sha256(bytes),
+                    integer(root, "format"), sha256(bytes),
                     new String(bytes, StandardCharsets.UTF_8));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException(
@@ -172,7 +188,7 @@ public final class ProductActiveStepReplanCodec {
     }
 
     private JsonNode verified(int format, String hash, String payload) {
-        if (format != FORMAT_VERSION) {
+        if (format != FORMAT_VERSION && format != LEGACY_FORMAT_VERSION) {
             throw corrupt();
         }
         try {
@@ -185,7 +201,7 @@ public final class ProductActiveStepReplanCodec {
             }
             JsonNode root = json.readTree(bytes);
             if (root == null || !root.isObject()
-                    || integer(root, "format") != FORMAT_VERSION) {
+                    || integer(root, "format") != format) {
                 throw corrupt();
             }
             return root;
@@ -258,7 +274,7 @@ public final class ProductActiveStepReplanCodec {
         };
     }
 
-    private ObjectNode revisionNode(PlanRevision value) {
+    private ObjectNode revisionNode(PlanRevision value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("taskFrameId", value.taskFrameId().value());
@@ -269,7 +285,7 @@ public final class ProductActiveStepReplanCodec {
         node.put("reason", value.reason());
         node.put("createdAt", value.createdAt().toString());
         ArrayNode steps = json.createArrayNode();
-        value.steps().forEach(step -> steps.add(stepNode(step)));
+        value.steps().forEach(step -> steps.add(stepNode(step, formatVersion)));
         node.set("steps", steps);
         ArrayNode facts = json.createArrayNode();
         value.completedFacts().entrySet().stream()
@@ -280,9 +296,9 @@ public final class ProductActiveStepReplanCodec {
         return node;
     }
 
-    private PlanRevision revision(JsonNode node) {
+    private PlanRevision revision(JsonNode node, int formatVersion) {
         List<PlanStep> steps = new ArrayList<>();
-        array(node, "steps").forEach(value -> steps.add(step(value)));
+        array(node, "steps").forEach(value -> steps.add(step(value, formatVersion)));
         Map<PlanStepId, CompletionFact> facts = new LinkedHashMap<>();
         array(node, "completedFacts").forEach(value -> {
             CompletionFact fact = fact(value);
@@ -304,7 +320,7 @@ public final class ProductActiveStepReplanCodec {
                 steps, facts);
     }
 
-    private ObjectNode stepNode(PlanStep value) {
+    private ObjectNode stepNode(PlanStep value, int formatVersion) {
         ObjectNode node = json.createObjectNode();
         node.put("id", value.id().value());
         node.put("intent", value.intent());
@@ -317,6 +333,23 @@ public final class ProductActiveStepReplanCodec {
         ArrayNode criteria = json.createArrayNode();
         value.completionCriteria().forEach(criteria::add);
         node.set("completionCriteria", criteria);
+        if (!value.constraints().isEmpty()) {
+            ArrayNode constraints = json.createArrayNode();
+            value.constraints().forEach(constraints::add);
+            node.set("constraints", constraints);
+        }
+        if (value.mayChangeCandidate()) {
+            node.put("mayChangeCandidate", true);
+        }
+        if (value.candidateValidationCompletionCondition() != null) {
+            node.put("candidateValidationCompletionCondition",
+                    value.candidateValidationCompletionCondition());
+        }
+        if (formatVersion >= FORMAT_VERSION) {
+            ArrayNode validationRequirementIds = json.createArrayNode();
+            value.validationRequirementIds().forEach(validationRequirementIds::add);
+            node.set("validationRequirementIds", validationRequirementIds);
+        }
         ObjectNode hints = json.createObjectNode();
         hints.put("maxAttempts", value.executionHints().maxAttempts());
         hints.put("maxDuration",
@@ -325,7 +358,7 @@ public final class ProductActiveStepReplanCodec {
         return node;
     }
 
-    private PlanStep step(JsonNode node) {
+    private PlanStep step(JsonNode node, int formatVersion) {
         LinkedHashSet<PlanStepId> dependencies = new LinkedHashSet<>();
         array(node, "dependencies").forEach(value -> {
             if (!value.isTextual()
@@ -341,6 +374,15 @@ public final class ProductActiveStepReplanCodec {
             }
             criteria.add(value.textValue());
         });
+        List<String> constraints = new ArrayList<>();
+        if (node.has("constraints")) {
+            array(node, "constraints").forEach(value -> {
+                if (!value.isTextual()) {
+                    throw corrupt();
+                }
+                constraints.add(value.textValue());
+            });
+        }
         JsonNode hints = requiredNode(node, "executionHints");
         return new PlanStep(
                 new PlanStepId(text(node, "id")),
@@ -350,7 +392,34 @@ public final class ProductActiveStepReplanCodec {
                 criteria,
                 new BoundedExecutionHints(
                         integer(hints, "maxAttempts"),
-                        Duration.parse(text(hints, "maxDuration"))));
+                        Duration.parse(text(hints, "maxDuration"))),
+                constraints,
+                optionalBoolean(node, "mayChangeCandidate"),
+                optionalText(node, "candidateValidationCompletionCondition"),
+                formatVersion == LEGACY_FORMAT_VERSION
+                        ? List.of()
+                        : textList(node, "validationRequirementIds"));
+    }
+
+    private List<String> textList(JsonNode node, String field) {
+        List<String> values = new ArrayList<>();
+        array(node, field).forEach(value -> {
+            if (!value.isTextual()) throw corrupt();
+            values.add(value.textValue());
+        });
+        return List.copyOf(values);
+    }
+
+    private static boolean optionalBoolean(JsonNode node, String field) {
+        if (!node.has(field)) return false;
+        if (!node.get(field).isBoolean()) throw corrupt();
+        return node.get(field).booleanValue();
+    }
+
+    private static String optionalText(JsonNode node, String field) {
+        if (!node.has(field) || node.get(field).isNull()) return null;
+        if (!node.get(field).isTextual()) throw corrupt();
+        return node.get(field).textValue();
     }
 
     private ObjectNode factNode(CompletionFact value) {

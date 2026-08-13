@@ -26,6 +26,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.Set;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Repository
@@ -76,6 +77,14 @@ class ProductActiveStepReplanTransactions {
         this.effectResults = effectResults;
         this.effectOutcomeMarkers = effectOutcomeMarkers;
         this.time = time;
+    }
+
+    Optional<PersistedActiveStepReplan> findCommitted(
+            String replanEventId) {
+        return replans.findByReplanEventId(replanEventId)
+                .map(markers::read)
+                .filter(java.util.Objects::nonNull)
+                .map(ProductActiveStepReplanMarkerReader.Marker::result);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

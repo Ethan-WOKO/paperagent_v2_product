@@ -25,6 +25,8 @@ REMOTE_ROOT = PurePosixPath("/home/user/project")
 TEMURIN_HOME = "/opt/yanban/temurin-17"
 JAVA_ENV = {
     "JAVA_HOME": TEMURIN_HOME,
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
     "PATH": (
         f"{TEMURIN_HOME}/bin:/usr/local/sbin:/usr/local/bin:"
         "/usr/sbin:/usr/bin:/sbin:/bin"
@@ -71,7 +73,8 @@ def command_health(_args):
 
 
 def upload_workspace(sandbox, workspace, manifests_only=False,
-                     dependency_declarations_only=False):
+                     dependency_declarations_only=False,
+                     dependency_sources_only=False):
     workspace = Path(workspace).resolve(strict=True)
     for source in sorted(workspace.rglob("*")):
         if source.is_symlink():
@@ -79,6 +82,8 @@ def upload_workspace(sandbox, workspace, manifests_only=False,
         if not source.is_file():
             continue
         if dependency_declarations_only:
+            continue
+        if dependency_sources_only and source.suffix.lower() not in (".java", ".py"):
             continue
         relative = source.relative_to(workspace)
         if manifests_only and source.name != "pom.xml":
@@ -91,9 +96,15 @@ def command_create(args):
     global active_sandbox_id
     dependency_declarations_only = getattr(
         args, "dependency_declarations_only", False)
+    dependency_sources_only = getattr(args, "dependency_sources_only", False)
     if dependency_declarations_only and not args.dependency_network:
         raise RuntimeError(
             "dependency-declarations-only mode requires dependency networking")
+    if dependency_sources_only and not args.dependency_network:
+        raise RuntimeError(
+            "dependency-sources-only mode requires dependency networking")
+    if dependency_sources_only and dependency_declarations_only:
+        raise RuntimeError("dependency upload modes are mutually exclusive")
     if exact(args.name):
         raise RuntimeError("managed E2B sandbox already exists")
     ttl_seconds = min(3600, max(180, math.ceil(args.timeout_millis / 1000) + 120))
@@ -115,7 +126,8 @@ def command_create(args):
         if info.cpu_count > args.cpus or info.memory_mb * 1024 * 1024 > args.memory_bytes:
             raise RuntimeError("E2B template exceeds the requested resource limits")
         upload_workspace(sandbox, args.workspace, manifests_only=args.dependency_network,
-                         dependency_declarations_only=dependency_declarations_only)
+                         dependency_declarations_only=dependency_declarations_only,
+                         dependency_sources_only=dependency_sources_only)
         print(json.dumps({"name": args.name, "sandboxId": sandbox.sandbox_id}, separators=(",", ":")))
         active_sandbox_id = None
         return 0
@@ -189,10 +201,18 @@ def command_exec(args):
     sandbox = Sandbox.connect(item.sandbox_id)
     active_sandbox_id = item.sandbox_id
     try:
-        command_env = JAVA_ENV if argv[0] in JAVA_COMMANDS else {}
+        java_command = argv[0] in JAVA_COMMANDS
+        command_env = JAVA_ENV if java_command else {}
+        command_argv = ([
+            "/usr/bin/env",
+            f"JAVA_HOME={JAVA_ENV['JAVA_HOME']}",
+            f"LANG={JAVA_ENV['LANG']}",
+            f"LC_ALL={JAVA_ENV['LC_ALL']}",
+            f"PATH={JAVA_ENV['PATH']}",
+        ] + argv) if java_command else argv
         try:
             result = sandbox.commands.run(
-                shlex.join(argv),
+                shlex.join(command_argv),
                 cwd=REMOTE_ROOT.as_posix(),
                 envs=command_env,
                 stdin=False,
@@ -239,6 +259,7 @@ def parser():
     create.add_argument("--timeout-millis", required=True, type=int)
     create.add_argument("--dependency-network", action="store_true")
     create.add_argument("--dependency-declarations-only", action="store_true")
+    create.add_argument("--dependency-sources-only", action="store_true")
     create.set_defaults(handler=command_create)
     policy = commands.add_parser("policy", add_help=False)
     policy.add_argument("--name", required=True)

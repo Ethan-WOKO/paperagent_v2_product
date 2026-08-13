@@ -1,5 +1,5 @@
 import { AxiosError, AxiosHeaders, type AxiosAdapter, type AxiosResponse } from 'axios';
-import type { V2NaturalLanguageTurnStartResponse } from '@/api/agent';
+import type { V2NaturalLanguageTurnStartResponse, V2TurnCommandResponse } from '@/api/agent';
 import {
   mockManifest,
   mockChatMessages,
@@ -81,8 +81,12 @@ export function resolveUiMockResponse(request: MockRequest, scenario: UiMockScen
   if (method === 'GET' && path === '/agent/sessions/6401/v2/turns') {
     return { status: 200, data: mockTurnHistory(scenario.projectState) };
   }
-  if (method === 'GET' && path.startsWith('/agent/sessions/6401/v2/turns/')) {
-    return { status: 200, data: mockTurn(scenario.projectState) };
+  const projectTurnMatch = /^\/agent\/sessions\/6401\/v2\/turns\/([^/]+)$/.exec(path);
+  if (method === 'GET' && projectTurnMatch) {
+    return {
+      status: 200,
+      data: { ...mockTurn(scenario.projectState), clientRequestId: decodeURIComponent(projectTurnMatch[1]) },
+    };
   }
   if (method === 'POST' && path === '/agent/sessions/6401/v2/turns') {
     const response: V2NaturalLanguageTurnStartResponse = {
@@ -91,9 +95,22 @@ export function resolveUiMockResponse(request: MockRequest, scenario: UiMockScen
       userMessageId: 8401,
       assistantMessageId: scenario.projectState === 'complete' ? 8402 : null,
       clientRequestId: 'ui-mock-start',
+      rootClientRequestId: 'ui-mock-start',
       route: 'PERSISTENT_PLAN_EXECUTE',
-      answer: scenario.projectState === 'complete' ? mockTurn('complete').finalText : null,
+      answer: null,
       planId: 'product-plan.ui-mock',
+      replayed: false,
+    };
+    return { status: 200, data: response };
+  }
+  const projectCommandMatch = /^\/agent\/sessions\/6401\/v2\/turns\/([^/]+)\/(?:pending-items\/[^/]+\/reply|cancel)$/.exec(path);
+  if (method === 'POST' && projectCommandMatch) {
+    const response: V2TurnCommandResponse = {
+      rootClientRequestId: decodeURIComponent(projectCommandMatch[1]),
+      commandClientRequestId: 'ui-mock-command',
+      instructionId: 'instruction.ui-mock',
+      pendingItemStatus: path.endsWith('/cancel') ? 'CANCELLED' : 'RESPONSE_RECEIVED',
+      taskOutcomeStatus: path.endsWith('/cancel') ? 'CANCELLED' : null,
       replayed: false,
     };
     return { status: 200, data: response };

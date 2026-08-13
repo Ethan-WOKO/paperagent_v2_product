@@ -12,6 +12,7 @@ import com.yanban.core.agent.sandbox.CandidateChangeSet;
 import com.yanban.core.agent.sandbox.CandidateFileChange;
 import com.yanban.sandbox.contract.SandboxCanonicalDigest;
 import com.yanban.sandbox.contract.SandboxDispatch;
+import com.yanban.sandbox.contract.SandboxExecutionStatus;
 import com.yanban.sandbox.contract.SandboxReceipt;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -98,6 +99,9 @@ public class CandidateSandboxValidationService {
         }
         CandidateValidationProfile profile = request.profile() == null
                 ? CandidateValidationProfile.MAVEN_TEST : request.profile();
+        if (profile == CandidateValidationProfile.AGENT_CHAIN_EXACT_CANDIDATE) {
+            invalid("AGENT_CHAIN_EXACT_CANDIDATE is reserved for server-owned Agent proof");
+        }
         dependencyCoordinates = com.yanban.sandbox.contract.JavaMavenCoordinates
                 .normalize(dependencyCoordinates);
         if (!dependencyCoordinates.isEmpty()
@@ -228,6 +232,43 @@ public class CandidateSandboxValidationService {
                 receipt != null && receipt.outputTruncated(), value.requestDigest(), value.receiptDigest(), value.errorCode(),
                 value.analysisSummary(), value.analysisDisclaimer(), value.decisionStatus(),
                 value.applicationOperationId(), value.appliedRevisionId(), value.createdAt(), value.updatedAt());
+    }
+
+    /** Resolves the original successful execution Receipt bound by one exact Validation. */
+    public String successfulReceiptRef(
+            Long userId,
+            Long projectId,
+            Long artifactId,
+            String validationId,
+            String projectVersion,
+            String candidateFingerprint,
+            String requestDigest,
+            String receiptDigest) {
+        CandidateSandboxValidation value = validations
+                .findByValidationIdAndUserIdAndProjectId(
+                        validationId, userId, projectId)
+                .orElse(null);
+        if (value == null
+                || !artifactId.equals(value.artifactId())
+                || !projectVersion.equals(value.projectVersion())
+                || !candidateFingerprint.equals(value.candidateFingerprint())
+                || !requestDigest.equals(value.requestDigest())
+                || !receiptDigest.equals(value.receiptDigest())
+                || !"SUCCEEDED".equals(value.status())
+                || value.receiptJson() == null
+                || !receiptDigest.equals(sha256(value.receiptJson()))) {
+            return null;
+        }
+        SandboxReceipt receipt = readReceipt(value.receiptJson());
+        if (receipt == null
+                || receipt.status() != SandboxExecutionStatus.SUCCEEDED
+                || receipt.exitCode() == null
+                || receipt.exitCode() != 0
+                || receipt.executionId() == null
+                || receipt.executionId().isBlank()) {
+            return null;
+        }
+        return receipt.executionId();
     }
 
     private CandidateValidationResponse replay(CandidateSandboxValidation value, String requestHash) {

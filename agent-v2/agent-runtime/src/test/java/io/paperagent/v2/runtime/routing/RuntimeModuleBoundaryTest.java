@@ -313,6 +313,7 @@ class RuntimeModuleBoundaryTest {
         try (var paths = Files.walk(sourceRoot)) {
             for (Path sourcePath : paths
                     .filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> isLegacyRuntimeSource(sourceRoot, path))
                     .toList()) {
                 Set<String> allowedPersistenceImports =
                         allowedPersistenceImports(sourceRoot, sourcePath);
@@ -342,6 +343,7 @@ class RuntimeModuleBoundaryTest {
         try (var paths = Files.walk(sourceRoot)) {
             for (Path sourcePath : paths
                     .filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> isLegacyRuntimeSource(sourceRoot, path))
                     .toList()) {
                 String source = Files.readString(sourcePath).toLowerCase();
                 for (String marker : FORBIDDEN_SOURCE_MARKERS) {
@@ -372,6 +374,37 @@ class RuntimeModuleBoundaryTest {
                                 () -> sourcePath
                                         + " contains non-allowlisted"
                                         + " workspace reference: "
+                                        + trimmed);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void chainRuntimeDependsOnlyOnChainContractsAndJdk() throws Exception {
+        Path sourceRoot = moduleDirectory().resolve("src/main/java");
+        try (var paths = Files.walk(sourceRoot)) {
+            for (Path sourcePath : paths
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> isChainRuntimeSource(sourceRoot, path))
+                    .toList()) {
+                String source = Files.readString(sourcePath);
+                assertFalse(source.contains("com.yanban"),
+                        () -> sourcePath + " depends on product code");
+                assertFalse(source.contains("org.springframework"),
+                        () -> sourcePath + " depends on Spring");
+                for (String line : Files.readAllLines(sourcePath)) {
+                    String trimmed = line.trim();
+                    if (trimmed.startsWith("import ")) {
+                        assertTrue(
+                                trimmed.startsWith("import java.")
+                                        || trimmed.startsWith(
+                                                "import io.paperagent.v2.contracts.")
+                                        || trimmed.startsWith(
+                                                "import io.paperagent.v2.chain."),
+                                () -> sourcePath
+                                        + " crosses the chain runtime boundary: "
                                         + trimmed);
                     }
                 }
@@ -834,6 +867,20 @@ class RuntimeModuleBoundaryTest {
                 }
             }
         }
+    }
+
+    private static boolean isLegacyRuntimeSource(
+            Path sourceRoot, Path sourcePath) {
+        Path relative = sourceRoot.relativize(sourcePath);
+        return relative.startsWith(Path.of(
+                "io", "paperagent", "v2", "runtime"));
+    }
+
+    private static boolean isChainRuntimeSource(
+            Path sourceRoot, Path sourcePath) {
+        Path relative = sourceRoot.relativize(sourcePath);
+        return relative.startsWith(Path.of(
+                "io", "paperagent", "v2", "chain"));
     }
 
     private static boolean isBootstrapSource(Path sourceRoot, Path sourcePath) {

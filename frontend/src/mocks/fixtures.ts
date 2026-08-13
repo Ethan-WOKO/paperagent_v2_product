@@ -204,72 +204,57 @@ export const mockChatMessages: Record<number, AgentMessageResponse[]> = {
   6204: [],
 };
 
-const stepSet = {
-  complete: [
-    { index: 1, title: '检查任务编排', status: 'SUCCEEDED' as const, detail: '完成边界核对' },
-    { index: 2, title: '检查证据链', status: 'SUCCEEDED' as const, detail: '完成来源与版本核对' },
-    { index: 3, title: '检查验证机制', status: 'SUCCEEDED' as const, detail: '完成验证覆盖核对' },
-  ],
-  running: [
-    { index: 1, title: '检查任务编排', status: 'SUCCEEDED' as const, detail: '完成边界核对' },
-    { index: 2, title: '检查证据链', status: 'RUNNING' as const, detail: '正在核对证据来源' },
-    { index: 3, title: '检查验证机制', status: 'PENDING' as const, detail: null },
-  ],
-  waiting: [
-    { index: 1, title: '检查任务编排', status: 'SUCCEEDED' as const, detail: '完成边界核对' },
-    { index: 2, title: '确认修改范围', status: 'PENDING' as const, detail: '等待用户确认' },
-  ],
-  failed: [
-    { index: 1, title: '检查任务编排', status: 'SUCCEEDED' as const, detail: '完成边界核对' },
-    { index: 2, title: '读取验证输出', status: 'FAILED' as const, detail: '验证结果不可用' },
-  ],
-};
+function mockProjectChainCore(state: UiMockProjectState): V2NaturalLanguageTurnResponse {
+  const waiting = state === 'waiting';
+  const complete = state === 'complete';
+  const failed = state === 'failed';
+  return {
+    clientRequestId: `ui-mock-${state}`,
+    workState: complete || failed ? 'TERMINAL' : waiting ? 'WAITING_USER' : 'EXECUTING',
+    taskOutcomeStatus: complete ? 'COMPLETED' : failed ? 'FAILED' : null,
+    deliveryStatus: complete ? 'SUCCEEDED' : failed ? 'DELIVERY_FAILED' : null,
+    route: 'PERSISTENT_PLAN_EXECUTE',
+    planId: 'product-plan.ui-mock',
+    baseProjectVersion: 'V64',
+    publishedProjectVersion: null,
+    revisionId: null,
+    publishReceiptId: null,
+    steps: [{
+      stepId: 'step.ui-mock.1',
+      index: 1,
+      title: '检查 V2 链路边界',
+      status: complete ? 'COMPLETED' : waiting ? 'WAITING_GAP' : failed ? 'AWAITING_REVIEW' : 'ACTIVE',
+      detail: complete ? '正式评审已通过' : null,
+    }],
+    pendingItem: waiting ? {
+      gapId: 'gap.ui-mock.1',
+      type: 'USER_CHOICE',
+      status: 'PENDING',
+      question: '请选择需要优先检查的模块。',
+      expectedFormat: '模块名称',
+    } : null,
+    validation: null,
+    finalText: complete ? 'V2 链路边界检查已完成。' : null,
+    candidateArtifactId: null,
+    outputPaths: complete ? ['docs/architecture-review.md'] : [],
+    failureCategory: failed ? 'FINALIZATION' : null,
+    failureCode: failed ? 'FINALIZATION_FAILED' : null,
+    deliveryErrorCode: failed ? 'DELIVERY_EXHAUSTED' : null,
+  };
+}
 
 export function mockTurnHistory(state: UiMockProjectState): V2NaturalLanguageTurnHistoryItem[] {
   if (state === 'empty') return [];
-  const status = state === 'complete' ? 'SUCCEEDED'
-    : state === 'running' ? 'RUNNING'
-      : state === 'waiting' ? 'WAITING_CONFIRMATION' : 'FAILED';
   return [{
-    clientRequestId: `ui-mock-${state}`,
-    question: '请评审 V2 执行架构，检查任务编排、证据链和验证机制。',
-    status,
-    route: 'PERSISTENT_PLAN_EXECUTE',
-    planId: 'product-plan.ui-mock',
-    projectVersion: 'V64',
-    steps: stepSet[state],
-    finalText: state === 'complete'
-      ? 'V2 执行架构的模块边界清晰，证据链可以追溯，验证机制覆盖主要执行路径。仍需补强失败恢复与候选修改的自动化验证。'
-      : null,
-    candidateArtifactId: null,
-    outputPaths: state === 'complete' ? ['docs/architecture-review.md'] : [],
-    errorCode: state === 'failed' ? 'VALIDATION_UNAVAILABLE' : null,
+    ...mockProjectChainCore(state),
+    question: '请检查 V2 Agent 链路边界。',
     createdAt: CREATED_AT,
     updatedAt: UPDATED_AT,
-    agentAutomaticValidation: null,
-    confirmationValidation: null,
   }];
 }
 
 export function mockTurn(state: UiMockProjectState): V2NaturalLanguageTurnResponse {
-  const item = mockTurnHistory(state)[0];
-  if (item) {
-    const { route: _route, clientRequestId: _request, question: _question,
-      createdAt: _created, updatedAt: _updated, agentAutomaticValidation: _automatic,
-      confirmationValidation: _confirmation, ...turn } = item;
-    return { ...turn, route: item.route || 'PERSISTENT_PLAN_EXECUTE' };
-  }
-  return {
-    status: 'PLANNING',
-    route: 'PERSISTENT_PLAN_EXECUTE',
-    planId: null,
-    projectVersion: 'V64',
-    steps: [],
-    finalText: null,
-    candidateArtifactId: null,
-    outputPaths: [],
-    errorCode: null,
-  };
+  return mockProjectChainCore(state === 'empty' ? 'running' : state);
 }
 
 export const mockRevisions: ProjectRevisionResponse[] = [{

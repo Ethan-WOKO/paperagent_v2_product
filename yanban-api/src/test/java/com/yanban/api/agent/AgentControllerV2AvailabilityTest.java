@@ -89,7 +89,7 @@ class AgentControllerV2AvailabilityTest {
             boolean enabled) {
         return new AgentController(
                 sessions, turns, outcomes,
-                new V2ProductAvailability(enabled), null, null, null);
+                new V2ProductAvailability(enabled));
     }
 
     private static void assertUnavailable(Runnable invocation) {

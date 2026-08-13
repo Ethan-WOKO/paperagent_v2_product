@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.tool;
 import io.paperagent.v2.contracts.BooleanValue;
 import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.ContractValue;
+import io.paperagent.v2.contracts.ExecutionTier;
 import io.paperagent.v2.contracts.ListValue;
 import io.paperagent.v2.contracts.NumberValue;
 import io.paperagent.v2.contracts.ObjectValue;
@@ -122,7 +123,8 @@ public final class V2ProductToolCatalog {
                 Set.of(RoutingRequirement.TOOL_USE,
                         RoutingRequirement.NETWORK,
                         RoutingRequirement.EXTERNAL_OBSERVATION),
-                ExecutionTarget.LITERATURE);
+                ExecutionTarget.LITERATURE,
+                Set.of("product-literature-search"));
     }
 
     private static Entry projectRead() {
@@ -149,7 +151,7 @@ public final class V2ProductToolCatalog {
                 "Search all frozen Project text files for one literal query. "
                         + "query is 1-256 characters and maxResults is 1-20. "
                         + "Choose this for ordinary literal discovery, such as "
-                        + "finding every mention of mergeSort. Do not choose it "
+                        + "finding every mention of an exact symbol. Do not choose it "
                         + "when the result must prove that the same observation "
                         + "appears in at least two specified materials; choose "
                         + "project.cross-material.search for that case. This "
@@ -537,8 +539,13 @@ public final class V2ProductToolCatalog {
                         + "Supported argv profiles include "
                         + "yanban-runner java/python/c/cpp, Maven test/verify, "
                         + "direct Java source launch, direct javac, and bounded "
-                        + "git checks. Prefer yanban-runner java path.java for "
-                        + "Java compile-and-run. Direct javac accepts only one "
+                        + "git checks. Exact completeArguments examples: "
+                        + "Python {\"paths\":[\"src/test.py\"],\"argv\":[\"yanban-runner\",\"python\",\"src/test.py\"]}; "
+                        + "Java {\"paths\":[\"src/Main.java\"],\"argv\":[\"yanban-runner\",\"java\",\"src/Main.java\"]}; "
+                        + "C {\"paths\":[\"src/main.c\"],\"argv\":[\"yanban-runner\",\"c\",\"src/main.c\"]}; "
+                        + "C++ {\"paths\":[\"src/main.cpp\"],\"argv\":[\"yanban-runner\",\"cpp\",\"src/main.cpp\"]}. "
+                        + "Use these argv shapes exactly with the actual normalized Project-relative source path. "
+                        + "Prefer yanban-runner java path.java for Java compile-and-run. Direct javac accepts only one "
                         + "or more normalized .java source paths and no flags. "
                         + "Direct java accepts only -version or one normalized "
                         + ".java source path; it does not accept a compiled class "
@@ -578,14 +585,56 @@ public final class V2ProductToolCatalog {
             Set<Capability> requiredCapabilities,
             Set<RoutingRequirement> routingRequirements,
             ExecutionTarget executionTarget) {
+        return entry(
+                alias, publicDescription, id, modelDescription, schema,
+                requiredCapabilities, routingRequirements, executionTarget,
+                Set.of());
+    }
+
+    private static Entry entry(
+            String alias,
+            String publicDescription,
+            String id,
+            String modelDescription,
+            ObjectValue schema,
+            Set<Capability> requiredCapabilities,
+            Set<RoutingRequirement> routingRequirements,
+            ExecutionTarget executionTarget,
+            Set<String> requiredNetworkAllowlistEntries) {
         return new Entry(
                 alias,
                 publicDescription,
                 new ToolDescriptor(
                         new ToolId(id), modelDescription,
                         requiredCapabilities, schema),
+                permissionReference(requiredCapabilities),
+                Set.of(ExecutionTier.SANDBOX_STANDARD),
+                requiredNetworkAllowlistEntries,
                 routingRequirements,
                 executionTarget);
+    }
+
+    private static String permissionReference(
+            Set<Capability> requiredCapabilities) {
+        if (requiredCapabilities.equals(Set.of(Capability.READ_PROJECT))) {
+            return "permission.project-read";
+        }
+        if (requiredCapabilities.equals(Set.of(
+                Capability.READ_PROJECT, Capability.WRITE_WORKSPACE))) {
+            return "permission.project-write";
+        }
+        if (requiredCapabilities.equals(Set.of(
+                Capability.EXECUTE_COMMAND,
+                Capability.INSTALL_DEPENDENCY))) {
+            return "permission.sandbox-execute-install";
+        }
+        if (requiredCapabilities.equals(Set.of(
+                Capability.ACCESS_NETWORK,
+                Capability.INVOKE_EXTERNAL_TOOL))) {
+            return "permission.literature-network-external";
+        }
+        throw new IllegalStateException(
+                "V2 tool capability set has no permission reference");
     }
 
     private static ObjectValue objectSchema(
@@ -688,6 +737,9 @@ public final class V2ProductToolCatalog {
             String publicAlias,
             String publicDescription,
             ToolDescriptor descriptor,
+            String permissionRef,
+            Set<ExecutionTier> allowedExecutionTiers,
+            Set<String> requiredNetworkAllowlistEntries,
             Set<RoutingRequirement> routingRequirements,
             ExecutionTarget executionTarget) {
         public Entry {
@@ -698,12 +750,27 @@ public final class V2ProductToolCatalog {
             }
             if (publicDescription == null || publicDescription.isBlank()
                     || descriptor == null
+                    || permissionRef == null || permissionRef.isBlank()
+                    || allowedExecutionTiers == null
+                    || allowedExecutionTiers.isEmpty()
+                    || requiredNetworkAllowlistEntries == null
                     || routingRequirements == null
                     || routingRequirements.isEmpty()
                     || executionTarget == null) {
                 throw new IllegalArgumentException(
                         "invalid V2 product tool entry");
             }
+            if (requiredNetworkAllowlistEntries.stream().anyMatch(
+                    value -> value == null || value.isBlank())
+                    || descriptor.requiredCapabilities().contains(
+                    Capability.ACCESS_NETWORK)
+                    != !requiredNetworkAllowlistEntries.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "invalid V2 product tool network authority");
+            }
+            allowedExecutionTiers = Set.copyOf(allowedExecutionTiers);
+            requiredNetworkAllowlistEntries = Set.copyOf(
+                    requiredNetworkAllowlistEntries);
             routingRequirements = Set.copyOf(routingRequirements);
         }
     }

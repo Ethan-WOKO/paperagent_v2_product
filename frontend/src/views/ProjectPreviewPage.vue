@@ -7,7 +7,7 @@
           <NSpace :size="8" wrap>
             <NTag v-if="activeProject" size="small" type="success">{{ t('project.page.readOnly') }}</NTag>
             <NButton size="small" secondary :loading="loading.projects" @click="loadProjects">{{ t('project.page.refresh') }}</NButton>
-            <NButton v-if="activeProject" size="small" secondary type="error" :disabled="v2NaturalTurnBusy" @click="deleteModalOpen = true">{{ t('project.page.deleteProject') }}</NButton>
+            <NButton v-if="activeProject" size="small" secondary type="error" :disabled="loading.deleteProject" @click="deleteModalOpen = true">{{ t('project.page.deleteProject') }}</NButton>
             <NButton size="small" type="primary" @click="openCreateProjectModal">{{ t('project.page.newProject') }}</NButton>
           </NSpace>
           <button type="button" class="workspace-hero__collapse" :title="t('project.page.collapseHeader')" :aria-label="t('project.page.collapseHeader')" @click="setProjectHeaderCollapsed(true)">
@@ -213,7 +213,7 @@
                       <NTag size="tiny" :type="candidateApplied(candidate.artifact.id) ? 'success' : 'info'">
                         {{ candidateApplied(candidate.artifact.id) ? '已应用' : '尚未应用' }}
                       </NTag>
-                      <NTag size="tiny" :type="candidateStateType(candidate.state)">{{ candidateStateLabel(candidate.state) }}</NTag>
+                      <NTag v-if="!candidateApplied(candidate.artifact.id)" size="tiny" :type="candidateStateType(candidate.state)">{{ candidateStateLabel(candidate.state) }}</NTag>
                       <small v-if="candidate.candidate">{{ candidate.candidate.changes.length }} 个文件</small>
                     </span>
                   </button>
@@ -236,13 +236,16 @@
                     </dl>
 
                     <section class="project-candidate-validation">
-                      <div class="project-panel__title"><strong>候选内容检查</strong><span>{{ candidateValidationLabel(selectedCandidate.candidate) }}</span></div>
-                      <div class="project-validation-checks">
+                      <div class="project-panel__title"><strong>候选内容检查</strong><span>{{ selectedCandidateApplied ? '发布时已核验' : candidateValidationLabel(selectedCandidate.candidate) }}</span></div>
+                      <NAlert v-if="selectedCandidateApplied" type="success" :show-icon="false">
+                        当前项目版本来自这个候选修改，并已绑定正式验证与发布记录。
+                      </NAlert>
+                      <div v-else class="project-validation-checks">
                         <NTag v-for="check in selectedCandidate.candidate.validation.checks" :key="check.area" size="tiny" :type="check.status === 'PASSED' ? 'success' : check.status === 'FAILED' ? 'error' : 'warning'">
                           {{ candidateCheckAreaLabel(check.area) }} {{ technicalStatusLabel(check.status) }}
                         </NTag>
                       </div>
-                      <ul v-if="selectedCandidate.candidate.validation.issues.length" class="project-validation-issues">
+                      <ul v-if="!selectedCandidateApplied && selectedCandidate.candidate.validation.issues.length" class="project-validation-issues">
                         <li v-for="issue in selectedCandidate.candidate.validation.issues" :key="`${issue.area}:${issue.code}:${issue.relativePath || ''}`">
                           <strong>{{ issue.code }}</strong><span v-if="issue.relativePath">{{ issue.relativePath }}</span>
                         </li>
@@ -257,12 +260,21 @@
                     <section class="project-candidate-sandbox">
                       <div class="project-panel__title">
                         <strong>验证状态</strong>
-                        <span>{{ selectedCandidateApplied ? '最终运行已绑定到当前项目版本' : documentOnlyProject ? '文档不会作为代码执行' : '等待最终运行结果' }}</span>
+                        <span>{{ selectedCandidateApplied
+                          ? '最终运行已绑定到当前项目版本'
+                          : selectedCandidateValidatedTurn
+                            ? 'Agent 正式验证已通过；尚未创建项目版本'
+                            : documentOnlyProject
+                              ? '文档不会作为代码执行'
+                              : '等待手动版本验证' }}</span>
                       </div>
                       <div class="project-candidate-validation-summary">
-                        <NAlert :type="selectedCandidateAutomaticValidation ? 'success' : 'default'" :show-icon="false">
-                          Agent 自动验证：{{ selectedCandidateAutomaticValidation
-                            ? `已通过（${selectedCandidateAutomaticValidation.provider}，退出码 ${selectedCandidateAutomaticValidation.exitCode}）`
+                        <NAlert v-if="selectedCandidateValidatedTurn" type="success" :show-icon="false">
+                          Agent 任务已通过正式验证（{{ selectedCandidateValidatedTurn.validation?.receipts.length || 0 }} 个回执）；下方记录仅用于手动创建项目版本。
+                        </NAlert>
+                        <NAlert :type="selectedCandidateSuccessfulValidation ? 'success' : 'default'" :show-icon="false">
+                          手动版本验证：{{ selectedCandidateSuccessfulValidation
+                            ? `已通过（${selectedCandidateSuccessfulValidation.provider}，退出码 ${selectedCandidateSuccessfulValidation.exitCode}）`
                             : '尚无通过记录' }}
                         </NAlert>
                         <NAlert :type="candidateConfirmationAlertType(selectedCandidateConfirmationValidation)" :show-icon="false">
@@ -411,103 +423,132 @@
           </section>
 
           <section class="v2-conversation">
-            <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="loading.v2History || v2NaturalTurnBusy">
-              <article v-for="task in v2TurnHistory" :key="task.clientRequestId" class="v2-task-card" :data-status="task.status">
+            <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="loading.v2History || v2TurnRefreshing">
+              <article
+                v-for="task in v2TurnHistory"
+                :key="task.clientRequestId"
+                class="v2-task-card"
+                :data-work-state="task.workState"
+                :data-delivery-status="task.deliveryStatus || undefined"
+              >
                 <header class="v2-task-card__question">
                   <div class="v2-task-card__question-copy">
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
                     <p>{{ task.question }}</p>
                   </div>
-                  <NTag size="small" :type="v2TaskStatusType(task)">
-                    {{ v2TaskStatusLabel(task) }}
+                  <NTag size="small" :type="v2ProjectTurnTagType(task)">
+                    {{ v2ProjectTurnLabel(task) }}
                   </NTag>
                 </header>
 
                 <details
+                  v-if="task.steps.length"
                   class="v2-conversation__process"
-                  :open="task.status === 'PLANNING' || task.status === 'RUNNING'"
+                  :open="task.workState === 'EXECUTING' || task.workState === 'AWAITING_REVIEW'"
                 >
                   <summary>
-                    <span>{{ task.status === 'PLANNING' || task.status === 'RUNNING' ? '正在处理' : task.status === 'FAILED' ? '处理失败' : task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理' }}</span>
-                    <small>{{ task.steps.length ? `${task.steps.length} 个步骤` : '直接回答' }}</small>
+                    <span>{{ v2ProjectWorkStateLabel(task.workState) }}</span>
+                    <small>{{ task.steps.length }} 个正式步骤</small>
                   </summary>
-                  <ol v-if="task.steps.length">
-                    <li v-for="step in task.steps" :key="`${task.clientRequestId}:${step.index}:${step.title}`" :data-status="step.status">
+                  <ol>
+                    <li v-for="step in task.steps" :key="step.stepId" :data-status="step.status">
                       <span>{{ step.index }}</span>
                       <div>
                         <strong>{{ step.title }}</strong>
-                        <small v-if="step.detail">结果：{{ step.detail }}</small>
+                        <small v-if="step.detail">{{ step.detail }}</small>
                       </div>
-                      <NTag size="tiny" :type="v2StepTagType(step.status)">
-                        {{ v2NaturalLanguageStepStatusLabel(step.status) }}
+                      <NTag size="tiny" :type="v2ProjectStepTagType(step.status)">
+                        {{ v2ProjectStepLabel(step.status) }}
                       </NTag>
                     </li>
                   </ol>
-                  <p v-else class="v2-conversation__empty-process">
-                    {{ task.route === 'DIRECT'
-                      ? '此问题无需执行项目步骤，已直接回答。'
-                      : task.status === 'PLANNING'
-                        ? '正在制定执行步骤，请稍候。'
-                        : '没有可展示的执行步骤。' }}
-                  </p>
                 </details>
 
                 <section class="v2-task-card__result">
                   <span class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">P</span>
                   <div class="v2-task-card__result-copy">
-                    <NAlert v-if="v2TaskApplied(task)" type="success" :show-icon="false">
-                      修改 #{{ task.candidateArtifactId }} 已自动保存，已创建项目版本
-                      revision #{{ task.confirmationValidation?.appliedRevisionId }}
-                      <template v-if="task.confirmationValidation?.appliedProjectVersion">
-                        （{{ shortHash(task.confirmationValidation.appliedProjectVersion) }}）
-                      </template>。旧项目版本仍然保留。
+                    <NAlert
+                      v-if="task.publishedProjectVersion && task.revisionId && task.publishReceiptId"
+                      type="success"
+                      :show-icon="false"
+                    >
+                      已发布 Project 版本 {{ shortHash(task.publishedProjectVersion) }}
+                      （revision #{{ task.revisionId }}）。旧版本仍可回滚。
                     </NAlert>
                     <MarkdownMessage
-                      v-if="task.status === 'SUCCEEDED' && task.finalText"
+                      v-if="task.deliveryStatus === 'SUCCEEDED' && task.finalText"
                       :content="task.finalText"
                       variant="project"
                     />
-                    <NAlert v-else-if="task.status === 'FAILED'" type="error" :show-icon="false">
-                      执行没有成功。<template v-if="task.errorCode">错误代码：{{ task.errorCode }}</template>
+                    <NAlert v-else-if="task.deliveryStatus === 'DELIVERY_FAILED'" type="error" :show-icon="false">
+                      交付失败。<template v-if="task.deliveryErrorCode">错误代码：{{ task.deliveryErrorCode }}</template>
                     </NAlert>
-                    <NAlert v-else-if="task.status === 'WAITING_CONFIRMATION'" type="warning" :show-icon="false">
-                      候选修改已经生成，原项目尚未修改。请检查并验证后，再确认是否创建新版本。
+                    <NAlert v-else-if="task.pendingItem?.status === 'PENDING'" type="warning" :show-icon="false">
+                      <strong>{{ task.pendingItem.question }}</strong>
+                      <template v-if="task.pendingItem.expectedFormat"><br>期望格式：{{ task.pendingItem.expectedFormat }}</template>
                     </NAlert>
-                    <p v-else-if="task.status === 'PLANNING'">正在制定持久化计划。</p>
-                    <p v-else-if="task.status === 'RUNNING'">任务正在执行，刷新页面后仍可继续查看。</p>
-                    <p v-else>任务已完成。</p>
+                    <NAlert v-else-if="task.taskOutcomeStatus === 'FAILED'" type="error" :show-icon="false">
+                      任务失败。<template v-if="task.failureCode">错误代码：{{ task.failureCode }}</template>
+                    </NAlert>
+                    <NAlert v-else-if="task.taskOutcomeStatus === 'CANCELLED'" type="warning" :show-icon="false">任务已取消，等待正式交付记录。</NAlert>
+                    <NAlert v-else-if="task.taskOutcomeStatus === 'SUPERSEDED'" type="warning" :show-icon="false">该任务已被新任务替代。</NAlert>
+                    <NAlert v-else-if="task.workState === 'BLOCKED'" type="error" :show-icon="false">
+                      任务已停止：检测到确定性错误或连续无进展。你可以取消任务，或者直接删除会话/项目。
+                    </NAlert>
+                    <p v-else>{{ v2ProjectWorkStateLabel(task.workState) }}</p>
                   </div>
                 </section>
 
-                <div v-if="task.candidateArtifactId || task.outputPaths.length" class="v2-task-card__delivery">
+                <div v-if="task.candidateArtifactId || task.outputPaths.length || task.validation" class="v2-task-card__delivery">
                   <div v-if="task.candidateArtifactId" class="v2-conversation__candidate">
                     <span>候选修改 #{{ task.candidateArtifactId }}</span>
-                    <NButton type="primary" secondary @click="openV2CandidateReview(task.candidateArtifactId)">
-                      查看修改
-                    </NButton>
+                    <NButton type="primary" secondary @click="openV2CandidateReview(task.candidateArtifactId)">查看修改</NButton>
                   </div>
                   <div v-if="task.outputPaths.length" class="v2-conversation__outputs">
-                    <strong>生成内容位置</strong>
+                    <strong>正式交付位置</strong>
                     <code v-for="path in task.outputPaths" :key="path" :title="path">{{ path }}</code>
                   </div>
-                  <dl v-if="task.candidateArtifactId" class="v2-task-card__validation">
-                    <dt>最终沙箱运行</dt>
-                    <dd>{{ task.agentAutomaticValidation
-                      ? `已通过（${task.agentAutomaticValidation.provider}，退出码 ${task.agentAutomaticValidation.exitCode}）`
-                      : '尚无通过记录' }}</dd>
-                    <dt>项目版本状态</dt>
-                    <dd>{{ task.confirmationValidation
-                      ? candidateConfirmationLabel(task.confirmationValidation)
-                      : '尚未执行' }}</dd>
+                  <dl v-if="task.validation" class="v2-task-card__validation">
+                    <dt>验证状态</dt><dd>{{ task.validation.status }}</dd>
+                    <dt>验证回执</dt>
+                    <dd>
+                      <code v-for="receipt in task.validation.receipts" :key="`${receipt.requirementId}:${receipt.receiptId}`" :title="receipt.requirementId">
+                        {{ receipt.receiptId }}
+                      </code>
+                    </dd>
                   </dl>
                 </div>
 
+                <div class="v2-task-card__actions">
+                  <NButton
+                    v-if="canReplyToV2ProjectGap(task)"
+                    size="tiny"
+                    type="warning"
+                    @click="prepareV2GapReply(task)"
+                  >回复缺口</NButton>
+                  <NButton
+                    v-if="canCancelV2ProjectTurn(task)"
+                    size="tiny"
+                    secondary
+                    type="error"
+                    :disabled="v2TurnCancelSubmitting"
+                    @click="cancelV2NaturalLanguageTask(task)"
+                  >取消任务</NButton>
+                  <template v-if="canSendV2ProjectFollowUp(task)">
+                    <NButton size="tiny" quaternary @click="prepareV2Instruction('SUPPLEMENT', task)">补充</NButton>
+                    <NButton size="tiny" quaternary @click="prepareV2Instruction('CORRECTION', task)">纠正</NButton>
+                    <NButton size="tiny" quaternary @click="prepareV2Instruction('REPLACEMENT', task)">替代</NButton>
+                  </template>
+                </div>
               </article>
-              <NEmpty v-if="!loading.v2History && v2TurnHistory.length === 0" description="新版本产生的 V2 任务会显示在这里。" />
+              <NEmpty v-if="!loading.v2History && v2TurnHistory.length === 0" description="发送自然语言任务后，正式链路状态会显示在这里。" />
               <NSpin v-if="loading.v2History" size="small" />
             </div>
 
             <NAlert v-if="v2TurnError" type="error" :show-icon="false">{{ v2TurnError }}</NAlert>
+            <NAlert v-if="v2ComposerMode.type !== 'INITIAL'" type="info" :show-icon="false" closable @close="resetV2ComposerMode">
+              {{ v2ComposerModeLabel }}
+            </NAlert>
             <div class="v2-conversation__composer">
               <NInput
                 v-model:value="v2TurnInput"
@@ -515,17 +556,18 @@
                 type="textarea"
                 :maxlength="20000"
                 :autosize="{ minRows: 2, maxRows: 8 }"
-                placeholder="例如：读取项目中的 Sort.java，找出编译失败的原因，修复后在沙箱中运行"
+                :placeholder="v2ComposerPlaceholder"
+                :disabled="v2NaturalTurnBusy"
                 @keydown="handleV2TurnKeydown"
               />
               <NButton
                 class="project-send-button"
                 type="primary"
                 :loading="v2NaturalTurnBusy"
-                :disabled="!v2NaturalTurnAvailable || !activeProject || !v2TurnInput.trim() || v2NaturalTurnBusy"
+                :disabled="!activeProject || !v2TurnInput.trim() || v2NaturalTurnBusy"
                 @click="sendV2NaturalLanguageTurn"
               >
-                发送
+                {{ v2ComposerSubmitLabel }}
               </NButton>
             </div>
           </section>
@@ -649,30 +691,58 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
-import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
+import {
+  cancelV2NaturalLanguageTurn,
+  deleteSession as deleteAgentSession,
+  getV2NaturalLanguageTurn,
+  listV2NaturalLanguageTurns,
+  replyV2NaturalLanguagePendingItem,
+  startV2NaturalLanguageTurn,
+  updateSession as updateAgentSession,
+  type AgentSessionResponse,
+  type V2NaturalLanguageTurnHistoryItem,
+  type V2NaturalLanguageTurnResponse,
+  type V2ProjectInstructionKind,
+} from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
 import {
-  V2NaturalLanguageTurnNotCreatedError,
-  isV2CandidateApplied,
   isCurrentV2NaturalLanguageRequest,
-  isDefinitiveV2NaturalLanguageStartRejection,
   newV2NaturalLanguageClientRequestId,
-  normalizeV2NaturalLanguageRequest,
-  pollV2NaturalLanguageTurn,
-  startThenPollV2NaturalLanguageTurn,
-  v2NaturalLanguageStatusLabel,
-  v2NaturalLanguageStepStatusLabel,
   type V2NaturalLanguageRequestIdentity,
 } from '@/utils/v2NaturalLanguageTurn';
+import {
+  V2_PROJECT_CHAIN_REFRESH_INTERVAL_MS,
+  V2_PROJECT_CHAIN_TRANSIENT_READ_RETRY_LIMIT,
+  canCancelV2ProjectTurn,
+  canReplyToV2ProjectGap,
+  canSendV2ProjectFollowUp,
+  isCurrentV2ProjectHistoryRequest,
+  isV2ProjectTurnInteractionBlocking,
+  isV2ProjectTurnReadTransientFailure,
+  normalizeV2ProjectInstructionRequest,
+  parseV2ProjectChainRecoveryRecord,
+  shouldClearV2ProjectChainRecovery,
+  shouldRefreshV2ProjectChainTurn,
+  sortV2ProjectChainHistory,
+  v2ProjectInstructionKindLabel,
+  v2ProjectCommandFailureRecoveryDecision,
+  v2ProjectStepLabel,
+  v2ProjectStepTagType,
+  v2ProjectTurnLabel,
+  v2ProjectTurnTagType,
+  v2ProjectWorkStateLabel,
+  type V2ProjectChainRecoveryRecord,
+  type V2ProjectHistoryRequestIdentity,
+} from '@/utils/v2ProjectAgentChain';
 
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
 
@@ -682,6 +752,11 @@ interface CandidateReviewItem {
   state: CandidateReviewState;
   error: string | null;
 }
+
+type V2ComposerMode =
+  | { type: 'INITIAL' }
+  | { type: 'INSTRUCTION'; kind: Exclude<V2ProjectInstructionKind, 'INITIAL'>; targetClientRequestId: string }
+  | { type: 'GAP_REPLY'; targetClientRequestId: string; gapId: string; question: string };
 
 const { isEnglish, t } = useI18n();
 const route = useRoute();
@@ -730,18 +805,28 @@ const renameSessionDraft = ref('');
 let projectEpoch = 0;
 let sessionFlight: Promise<number | null> | null = null;
 let candidateValidationPoll: number | null = null;
+// Legacy candidate-view refresh budget only; it does not cancel validation or decide its result.
+const CANDIDATE_VALIDATION_VIEW_MAX_REFRESHES = 450;
+const CANDIDATE_VALIDATION_VIEW_REFRESH_INTERVAL_MS = 2_000;
 const V2_NATURAL_LANGUAGE_STORAGE_KEY = 'yanban.v2NaturalLanguage.activeRequest.';
-const v2NaturalTurnAvailable = ref(false);
 const v2TurnInput = ref('');
-const v2TurnStarting = ref(false);
-const v2TurnPolling = ref(false);
+const v2TurnSubmitting = ref(false);
+const v2TurnRefreshing = ref(false);
+const v2TurnInteractionBlocking = ref(false);
+const v2TurnCancelSubmitting = ref(false);
 const v2TurnError = ref('');
-const v2TurnOutcome = ref<V2NaturalLanguageTurnResponse | null>(null);
 const v2TurnHistory = ref<V2NaturalLanguageTurnHistoryItem[]>([]);
+const v2ComposerMode = ref<V2ComposerMode>({ type: 'INITIAL' });
 let v2TurnAbortController: AbortController | null = null;
+let v2TurnRefreshTimer: number | null = null;
+let v2HistoryAbortController: AbortController | null = null;
+let v2HistoryRequestSequence = 0;
 let v2TurnSequence = 0;
 let v2TurnClientRequestId: string | null = null;
-const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.value);
+const v2NaturalTurnBusy = computed(() => (
+  v2TurnSubmitting.value || v2TurnInteractionBlocking.value
+    || v2TurnCancelSubmitting.value
+));
 
 const loading = reactive({
   projects: false,
@@ -813,26 +898,53 @@ const projectUtilityMenuOptions = computed(() => [
   { label: `${isEnglish.value ? 'Project versions' : '项目版本'} (${revisions.value.length})`, key: 'versions' },
 ]);
 const activeProject = computed(() => projects.value.find((item) => item.id === activeProjectId.value) || null);
-const selectedCandidateAutomaticValidation = computed(() => {
+const v2ComposerModeLabel = computed(() => {
+  const mode = v2ComposerMode.value;
+  if (mode.type === 'GAP_REPLY') return `回复正式待处理事项：${mode.question}`;
+  if (mode.type === 'INSTRUCTION') {
+    return `${v2ProjectInstructionKindLabel(mode.kind)}任务 ${mode.targetClientRequestId}`;
+  }
+  return '';
+});
+const v2ComposerPlaceholder = computed(() => {
+  const mode = v2ComposerMode.value;
+  if (mode.type === 'GAP_REPLY') return '输入待处理事项的回复';
+  if (mode.type === 'INSTRUCTION') return `输入${v2ProjectInstructionKindLabel(mode.kind)}内容`;
+  return '例如：读取项目中的 README，完成任务并给出正式交付结果';
+});
+const v2ComposerSubmitLabel = computed(() => {
+  const mode = v2ComposerMode.value;
+  if (mode.type === 'GAP_REPLY') return '回复';
+  if (mode.type === 'INSTRUCTION') return v2ProjectInstructionKindLabel(mode.kind);
+  return '发送';
+});
+const selectedCandidateSuccessfulValidation = computed(() =>
+  candidateValidations.value.find((validation) => validation.status === 'SUCCEEDED') || null);
+const selectedCandidateConfirmationValidation = computed(() => candidateValidations.value[0] || null);
+const selectedCandidateValidatedTurn = computed(() => {
   const artifactId = selectedCandidate.value?.artifact.id;
   if (!artifactId) return null;
-  return [...v2TurnHistory.value].reverse()
-    .find((item) => item.candidateArtifactId === artifactId)
-    ?.agentAutomaticValidation || null;
+  return v2TurnHistory.value.find((turn) =>
+    turn.candidateArtifactId === artifactId
+    && turn.validation?.status === 'PASSED') || null;
 });
-const selectedCandidateConfirmationValidation = computed(() => {
+const selectedCandidatePublishedTurn = computed(() => {
   const artifactId = selectedCandidate.value?.artifact.id;
-  if (!artifactId) return candidateValidations.value[0] || null;
-  const automatic = [...v2TurnHistory.value].reverse()
-    .find((item) => item.candidateArtifactId === artifactId)
-    ?.confirmationValidation || null;
-  return automatic || candidateValidations.value[0] || null;
+  if (!artifactId) return null;
+  return v2TurnHistory.value.find((turn) =>
+    turn.candidateArtifactId === artifactId
+    && Boolean(turn.publishedProjectVersion)
+    && Boolean(turn.revisionId)
+    && Boolean(turn.publishReceiptId)) || null;
 });
 const selectedCandidateApplied = computed(() =>
-  selectedCandidateConfirmationValidation.value?.decisionStatus === 'APPLIED'
-  && Boolean(selectedCandidateConfirmationValidation.value.appliedRevisionId));
+  selectedCandidatePublishedTurn.value !== null
+  || (selectedCandidateConfirmationValidation.value?.decisionStatus === 'APPLIED'
+    && Boolean(selectedCandidateConfirmationValidation.value.appliedRevisionId)));
 const selectedCandidateApplicationLabel = computed(() =>
-  selectedCandidateConfirmationValidation.value
+  selectedCandidatePublishedTurn.value
+    ? `已由 Agent 链发布（revision #${selectedCandidatePublishedTurn.value.revisionId}）`
+    : selectedCandidateConfirmationValidation.value
     ? candidateConfirmationLabel(selectedCandidateConfirmationValidation.value)
     : '尚未应用');
 const documentOnlyProject = computed(() => {
@@ -1038,27 +1150,6 @@ function showInspector(tab: ProjectInspectorTab) {
   inspectorOpen.value = true;
 }
 
-function v2TurnStatusType(status: V2NaturalLanguageTurnHistoryItem['status']) {
-  if (status === 'FAILED') return 'error';
-  if (status === 'WAITING_CONFIRMATION') return 'warning';
-  if (status === 'SUCCEEDED') return 'success';
-  return 'info';
-}
-
-function v2TaskApplied(task: V2NaturalLanguageTurnHistoryItem) {
-  return isV2CandidateApplied(task);
-}
-
-function v2TaskStatusType(task: V2NaturalLanguageTurnHistoryItem): 'error' | 'warning' | 'success' | 'info' {
-  return v2TaskApplied(task) ? 'success' : v2TurnStatusType(task.status);
-}
-
-function v2TaskStatusLabel(task: V2NaturalLanguageTurnHistoryItem) {
-  return v2TaskApplied(task)
-    ? '已创建新版本'
-    : v2NaturalLanguageStatusLabel(task.status);
-}
-
 function candidateConfirmationLabel(validation: {
   status: string;
   decisionStatus: string;
@@ -1074,15 +1165,15 @@ function candidateConfirmationLabel(validation: {
 }
 
 function candidateApplied(artifactId: number) {
-  const projected = [...v2TurnHistory.value].reverse()
-    .find((item) => item.candidateArtifactId === artifactId)
-    ?.confirmationValidation;
-  if (projected?.decisionStatus === 'APPLIED'
-      && Boolean(projected.appliedRevisionId)) return true;
-  return selectedCandidate.value?.artifact.id === artifactId
-    && candidateValidations.value.some((validation) =>
+  return v2TurnHistory.value.some((turn) =>
+    turn.candidateArtifactId === artifactId
+    && Boolean(turn.publishedProjectVersion)
+    && Boolean(turn.revisionId)
+    && Boolean(turn.publishReceiptId))
+    || (selectedCandidate.value?.artifact.id === artifactId
+      && candidateValidations.value.some((validation) =>
       validation.decisionStatus === 'APPLIED'
-      && Boolean(validation.appliedRevisionId));
+      && Boolean(validation.appliedRevisionId)));
 }
 
 function candidateConfirmationAlertType(validation: {
@@ -1093,15 +1184,6 @@ function candidateConfirmationAlertType(validation: {
       || validation?.status === 'SUCCEEDED') return 'success';
   if (validation?.decisionStatus === 'REJECTED') return 'warning';
   return 'info';
-}
-
-function openV2CandidateReview(artifactId?: number | null) {
-  if (artifactId) {
-    const candidate = candidates.value.find((item) => item.artifact.id === artifactId);
-    if (candidate) selectCandidate(candidate);
-  }
-  showInspector('changes');
-  nextTick(() => document.querySelector('.project-inspector')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 }
 
 function selectCandidate(candidate: CandidateReviewItem) {
@@ -1174,10 +1256,7 @@ async function confirmApplyCandidate() {
     selectedFile.value = null;
     searchResults.value = [];
     await Promise.all([loadManifest(epoch), loadRevisions()]);
-    await Promise.all([
-      activeSessionId.value ? loadCandidates(activeSessionId.value, epoch) : Promise.resolve(),
-      activeSessionId.value ? loadV2TurnHistory(activeSessionId.value, epoch) : Promise.resolve(),
-    ]);
+    if (activeSessionId.value) await loadCandidates(activeSessionId.value, epoch);
     showInspector('versions');
   } catch (cause) {
     const status = apiStatus(cause);
@@ -1238,7 +1317,6 @@ async function confirmCandidateValidation() {
     validationModalOpen.value = false;
     selectedValidation.value = data;
     await loadCandidateValidations(item, epoch);
-    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value, epoch);
     void pollCandidateValidation(item.artifact.id, data.validationId, epoch, 0);
   } catch (cause) {
     if (epoch !== projectEpoch) return;
@@ -1255,18 +1333,15 @@ async function pollCandidateValidation(artifactId: number, validationId: string,
   if (epoch !== projectEpoch || selectedCandidate.value?.artifact.id !== artifactId) return;
   await loadCandidateValidations(selectedCandidate.value, epoch);
   const current = candidateValidations.value.find((validation) => validation.validationId === validationId);
-  if (!current || candidateValidationTerminal(current.status) || current.decisionStatus !== 'PENDING') {
-    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value, epoch);
-    return;
-  }
-  if (attempt >= 450) {
+  if (!current || candidateValidationTerminal(current.status) || current.decisionStatus !== 'PENDING') return;
+  if (attempt >= CANDIDATE_VALIDATION_VIEW_MAX_REFRESHES) {
     validationMessageType.value = 'warning';
     validationMessage.value = '沙箱验证仍在进行中，请稍后重新打开候选修改查看持久化结果。';
     return;
   }
   candidateValidationPoll = window.setTimeout(() => {
     void pollCandidateValidation(artifactId, validationId, epoch, attempt + 1);
-  }, 2000);
+  }, CANDIDATE_VALIDATION_VIEW_REFRESH_INTERVAL_MS);
 }
 
 async function cancelSelectedValidation() {
@@ -1277,7 +1352,6 @@ async function cancelSelectedValidation() {
   try {
     selectedValidation.value = (await cancelCandidateValidation(projectId, validation.validationId)).data;
     await loadCandidateValidations();
-    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value);
     void pollCandidateValidation(validation.artifactId, validation.validationId, projectEpoch, 0);
   } catch (cause) {
     validationMessageType.value = 'error'; validationMessage.value = apiError(cause);
@@ -1294,7 +1368,6 @@ async function rejectSelectedValidation() {
     validationMessageType.value = 'warning';
     validationMessage.value = '已拒绝候选修改，没有创建新的项目版本；验证记录会保留。';
     await loadCandidateValidations();
-    if (activeSessionId.value) await loadV2TurnHistory(activeSessionId.value);
   } catch (cause) {
     validationMessageType.value = 'error'; validationMessage.value = apiError(cause);
   } finally { loading.rejectCandidateValidation = false; }
@@ -1543,31 +1616,20 @@ function naturalLanguageStorageKey(projectId: number, sessionId: number) {
 }
 
 function storedV2NaturalLanguageRequest(projectId: number, sessionId: number) {
-  try {
-    const raw = window.localStorage.getItem(naturalLanguageStorageKey(projectId, sessionId));
-    if (!raw) return null;
-    const value = JSON.parse(raw) as { clientRequestId?: unknown; question?: unknown };
-    if (typeof value.clientRequestId !== 'string' || !value.clientRequestId
-        || typeof value.question !== 'string' || !value.question) {
-      window.localStorage.removeItem(naturalLanguageStorageKey(projectId, sessionId));
-      return null;
-    }
-    return { clientRequestId: value.clientRequestId, question: value.question };
-  } catch {
-    window.localStorage.removeItem(naturalLanguageStorageKey(projectId, sessionId));
-    return null;
+  const key = naturalLanguageStorageKey(projectId, sessionId);
+  const raw = window.localStorage.getItem(key);
+  const record = parseV2ProjectChainRecoveryRecord(raw, projectId, sessionId);
+  if (raw && !record) {
+    // Invalid local data is not a chain fact and cannot be used for recovery.
+    window.localStorage.removeItem(key);
   }
+  return record;
 }
 
-function storeV2NaturalLanguageRequest(
-  projectId: number,
-  sessionId: number,
-  clientRequestId: string,
-  question: string,
-) {
+function storeV2NaturalLanguageRequest(record: V2ProjectChainRecoveryRecord) {
   window.localStorage.setItem(
-    naturalLanguageStorageKey(projectId, sessionId),
-    JSON.stringify({ clientRequestId, question }),
+    naturalLanguageStorageKey(record.projectId, record.sessionId),
+    JSON.stringify(record),
   );
 }
 
@@ -1584,283 +1646,425 @@ function currentV2NaturalLanguageIdentity(): V2NaturalLanguageRequestIdentity {
   };
 }
 
-function stopV2NaturalLanguagePolling() {
+function isCurrentV2NaturalLanguageResponse(expected: V2NaturalLanguageRequestIdentity) {
+  return isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity());
+}
+
+function currentV2HistoryRequestIdentity(): V2ProjectHistoryRequestIdentity {
+  return {
+    ...currentV2NaturalLanguageIdentity(),
+    historySequence: v2HistoryRequestSequence,
+  };
+}
+
+function invalidateV2HistoryRequest() {
+  v2HistoryRequestSequence += 1;
+  v2HistoryAbortController?.abort();
+  v2HistoryAbortController = null;
+  loading.v2History = false;
+}
+
+function invalidateV2NaturalLanguageRequest() {
   v2TurnSequence += 1;
+  v2TurnClientRequestId = null;
   v2TurnAbortController?.abort();
   v2TurnAbortController = null;
-  v2TurnPolling.value = false;
+  if (v2TurnRefreshTimer != null) {
+    window.clearTimeout(v2TurnRefreshTimer);
+    v2TurnRefreshTimer = null;
+  }
+  v2TurnRefreshing.value = false;
+  v2TurnInteractionBlocking.value = false;
+}
+
+function resetV2ComposerMode() {
+  v2ComposerMode.value = { type: 'INITIAL' };
 }
 
 function resetV2NaturalLanguageView() {
-  stopV2NaturalLanguagePolling();
-  v2TurnStarting.value = false;
-  v2TurnClientRequestId = null;
-  v2TurnOutcome.value = null;
-  v2TurnError.value = '';
+  invalidateV2NaturalLanguageRequest();
+  invalidateV2HistoryRequest();
   v2TurnHistory.value = [];
+  v2TurnError.value = '';
+  v2TurnInput.value = '';
+  resetV2ComposerMode();
 }
 
-function sortV2TurnHistory(items: V2NaturalLanguageTurnHistoryItem[]) {
-  return [...items].sort((left, right) => {
-    const byTime = Date.parse(left.createdAt) - Date.parse(right.createdAt);
-    return byTime || left.clientRequestId.localeCompare(right.clientRequestId);
-  });
-}
-
-function upsertV2TurnOutcome(
-  clientRequestId: string,
-  question: string,
+function upsertV2NaturalLanguageOutcome(
   outcome: V2NaturalLanguageTurnResponse,
+  question: string,
 ) {
   const previous = v2TurnHistory.value.find(
-    (item) => item.clientRequestId === clientRequestId,
+    (item) => item.clientRequestId === outcome.clientRequestId,
   );
   const now = new Date().toISOString();
-  const next: V2NaturalLanguageTurnHistoryItem = {
-    ...outcome,
-    clientRequestId,
-    question,
-    createdAt: previous?.createdAt || now,
-    updatedAt: now,
-    agentAutomaticValidation: previous?.agentAutomaticValidation || null,
-    confirmationValidation: previous?.confirmationValidation || null,
-  };
-  v2TurnHistory.value = sortV2TurnHistory([
-    ...v2TurnHistory.value.filter((item) => item.clientRequestId !== clientRequestId),
-    next,
+  v2TurnHistory.value = sortV2ProjectChainHistory([
+    ...v2TurnHistory.value.filter((item) => item.clientRequestId !== outcome.clientRequestId),
+    {
+      ...outcome,
+      question: previous?.question || question,
+      createdAt: previous?.createdAt || now,
+      updatedAt: now,
+    },
   ]);
 }
 
-function upsertV2PlanningTask(clientRequestId: string, question: string) {
-  upsertV2TurnOutcome(clientRequestId, question, {
-    status: 'PLANNING',
-    route: 'PERSISTENT_PLAN_EXECUTE',
-    planId: null,
-    projectVersion: manifest.value?.version || null,
-    steps: [],
-    finalText: null,
-    candidateArtifactId: null,
-    outputPaths: [],
-    errorCode: null,
-  });
-}
-
-async function loadV2TurnHistory(sessionId: number, epoch = projectEpoch) {
-  loading.v2History = true;
-  try {
-    const items = (await listV2NaturalLanguageTurns(sessionId, 50)).data;
-    if (epoch !== projectEpoch || sessionId !== activeSessionId.value) return;
-    const pending = v2TurnHistory.value.filter((item) => (
-      (item.status === 'PLANNING' || item.status === 'RUNNING')
-      && !items.some((stored) => stored.clientRequestId === item.clientRequestId)
-    ));
-    v2TurnHistory.value = sortV2TurnHistory([...items, ...pending]);
-  } catch (cause) {
-    if (epoch === projectEpoch && sessionId === activeSessionId.value) {
-      v2TurnError.value = apiError(cause);
-    }
-  } finally {
-    if (epoch === projectEpoch && sessionId === activeSessionId.value) {
-      loading.v2History = false;
-    }
-  }
-}
-
-function v2StepTagType(status: V2NaturalLanguageStepStatus) {
-  if (status === 'SUCCEEDED') return 'success';
-  if (status === 'FAILED') return 'error';
-  if (status === 'RUNNING') return 'info';
-  if (status === 'SUPERSEDED_BY_REPLAN') return 'warning';
-  return 'default';
-}
-
-function v2NaturalLanguageFailureText(cause: unknown) {
-  if (cause instanceof V2NaturalLanguageTurnNotCreatedError) {
-    return '没有找到这次请求，请重新发送。';
-  }
-  if (cause instanceof Error && cause.message === 'v2-direct-answer-required') {
-    return '直接回答没有返回有效内容，请重新发送。';
-  }
-  if (cause instanceof Error && cause.message === 'v2-natural-language-poll-timeout') {
-    return '任务执行时间较长，请稍后刷新页面查看最新结果。';
-  }
-  return 'V2 请求失败，请稍后重试。';
-}
-
-async function presentV2NaturalLanguageCandidate(
+async function refreshProjectAfterV2Turn(
   projectId: number,
   sessionId: number,
   outcome: V2NaturalLanguageTurnResponse,
   epoch: number,
 ) {
-  if (!outcome.candidateArtifactId || epoch !== projectEpoch
-      || projectId !== activeProjectId.value || sessionId !== activeSessionId.value) return;
+  if (epoch !== projectEpoch || projectId !== activeProjectId.value
+      || sessionId !== activeSessionId.value) return;
+  if (outcome.publishedProjectVersion && outcome.revisionId && outcome.publishReceiptId) {
+    selectedFile.value = null;
+    searchResults.value = [];
+    await Promise.all([loadManifest(epoch), loadRevisions()]);
+  }
+  if (!outcome.candidateArtifactId) return;
   await loadCandidates(sessionId, epoch);
+  if (epoch !== projectEpoch) return;
   const candidate = candidates.value.find((item) => item.artifact.id === outcome.candidateArtifactId);
   if (candidate) selectCandidate(candidate);
 }
 
-async function refreshProjectAfterV2AutoApply(clientRequestId: string, epoch: number) {
-  if (epoch !== projectEpoch) return;
-  const appliedTask = v2TurnHistory.value.find(
-    (item) => item.clientRequestId === clientRequestId,
-  );
-  if (!appliedTask || !isV2CandidateApplied(appliedTask)) return;
-  selectedFile.value = null;
-  searchResults.value = [];
-  await Promise.all([loadManifest(epoch), loadRevisions()]);
+async function readV2NaturalLanguageTurn(
+  recovery: V2ProjectChainRecoveryRecord,
+  expected: V2NaturalLanguageRequestIdentity,
+  controller: AbortController,
+  epoch: number,
+  preserveError = false,
+  transientFailureCount = 0,
+) {
+  try {
+    const outcome = (await getV2NaturalLanguageTurn(
+      recovery.sessionId,
+      recovery.rootClientRequestId,
+      controller.signal,
+    )).data;
+    if (!isCurrentV2NaturalLanguageResponse(expected)) return;
+    if (!preserveError) v2TurnError.value = '';
+    upsertV2NaturalLanguageOutcome(outcome, recovery.question);
+    v2TurnInteractionBlocking.value = isV2ProjectTurnInteractionBlocking(outcome);
+    if (shouldClearV2ProjectChainRecovery(outcome)) {
+      clearStoredV2NaturalLanguageRequest(recovery.projectId, recovery.sessionId);
+      v2TurnRefreshing.value = false;
+      v2TurnAbortController = null;
+      await refreshProjectAfterV2Turn(
+        recovery.projectId, recovery.sessionId, outcome, epoch,
+      );
+      return;
+    }
+    if (!shouldRefreshV2ProjectChainTurn(outcome)) {
+      v2TurnRefreshing.value = false;
+      v2TurnAbortController = null;
+      return;
+    }
+    v2TurnRefreshTimer = window.setTimeout(() => {
+      v2TurnRefreshTimer = null;
+      void readV2NaturalLanguageTurn(
+        recovery, expected, controller, epoch, preserveError,
+      );
+    }, V2_PROJECT_CHAIN_REFRESH_INTERVAL_MS);
+  } catch (cause) {
+    if (controller.signal.aborted || !isCurrentV2NaturalLanguageResponse(expected)) return;
+    if (isV2ProjectTurnReadTransientFailure(cause)
+        && transientFailureCount < V2_PROJECT_CHAIN_TRANSIENT_READ_RETRY_LIMIT) {
+      v2TurnRefreshTimer = window.setTimeout(() => {
+        v2TurnRefreshTimer = null;
+        void readV2NaturalLanguageTurn(
+          recovery, expected, controller, epoch, preserveError,
+          transientFailureCount + 1,
+        );
+      }, V2_PROJECT_CHAIN_REFRESH_INTERVAL_MS);
+      return;
+    }
+    v2TurnRefreshing.value = false;
+    v2TurnInteractionBlocking.value = false;
+    v2TurnAbortController = null;
+    if (!preserveError) v2TurnError.value = apiError(cause);
+  }
 }
 
-async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number) {
-  if (!v2NaturalTurnAvailable.value) return;
-  const stored = storedV2NaturalLanguageRequest(projectId, sessionId);
-  if (!stored) return;
-  stopV2NaturalLanguagePolling();
-  v2TurnClientRequestId = stored.clientRequestId;
-  v2TurnError.value = '';
-  if (!v2TurnHistory.value.some((item) => item.clientRequestId === stored.clientRequestId)) {
-    upsertV2PlanningTask(stored.clientRequestId, stored.question);
+function recoverV2NaturalLanguageTurn(
+  projectId: number,
+  sessionId: number,
+  recoveryOverride?: V2ProjectChainRecoveryRecord,
+  options: { preserveError?: boolean } = {},
+) {
+  let recovery = recoveryOverride || storedV2NaturalLanguageRequest(projectId, sessionId);
+  if (!recovery) {
+    const latest = [...v2TurnHistory.value].reverse()
+      .find((item) => !shouldClearV2ProjectChainRecovery(item));
+    if (!latest) return;
+    recovery = {
+      version: 1,
+      projectId,
+      sessionId,
+      rootClientRequestId: latest.clientRequestId,
+      commandClientRequestId: latest.clientRequestId,
+      question: latest.question,
+    };
+    storeV2NaturalLanguageRequest(recovery);
   }
-  const sequence = v2TurnSequence;
-  const expected = { projectId, sessionId, clientRequestId: stored.clientRequestId, sequence };
+  const storedTurn = v2TurnHistory.value.find(
+    (item) => item.clientRequestId === recovery?.rootClientRequestId,
+  );
+  if (storedTurn && shouldClearV2ProjectChainRecovery(storedTurn)) {
+    clearStoredV2NaturalLanguageRequest(projectId, sessionId);
+    return;
+  }
+  invalidateV2NaturalLanguageRequest();
+  v2TurnClientRequestId = recovery.commandClientRequestId;
+  const expected = currentV2NaturalLanguageIdentity();
   const controller = new AbortController();
   v2TurnAbortController = controller;
-  v2TurnPolling.value = true;
-  const epoch = projectEpoch;
-  const request = normalizeV2NaturalLanguageRequest(
-    stored.question,
-    stored.clientRequestId,
+  v2TurnRefreshing.value = true;
+  v2TurnInteractionBlocking.value = true;
+  if (!options.preserveError) v2TurnError.value = '';
+  void readV2NaturalLanguageTurn(
+    recovery, expected, controller, projectEpoch, options.preserveError === true,
   );
+}
+
+async function loadV2TurnHistory(
+  sessionId: number,
+  epoch = projectEpoch,
+) {
+  v2HistoryRequestSequence += 1;
+  v2HistoryAbortController?.abort();
+  const controller = new AbortController();
+  v2HistoryAbortController = controller;
+  const expected = currentV2HistoryRequestIdentity();
+  loading.v2History = true;
   try {
-    const outcome = await pollV2NaturalLanguageTurn(
-      async () => (
-        await getV2NaturalLanguageTurn(sessionId, stored.clientRequestId, controller.signal)
-      ).data,
-      {
-        signal: controller.signal,
-        resume: async () => (
-          await startV2NaturalLanguageTurn(
-            sessionId, request, controller.signal,
-          )
-        ).data,
-        onOutcome: (value) => {
-          if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-            v2TurnOutcome.value = value;
-            upsertV2TurnOutcome(stored.clientRequestId, stored.question, value);
-          }
-        },
-      },
-    );
-    if (!isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) return;
-    v2TurnOutcome.value = outcome;
-    upsertV2TurnOutcome(stored.clientRequestId, stored.question, outcome);
-    clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-    await loadV2TurnHistory(sessionId, epoch);
-    await refreshProjectAfterV2AutoApply(stored.clientRequestId, epoch);
-    await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
+    const items = (await listV2NaturalLanguageTurns(sessionId, 50, controller.signal)).data;
+    if (epoch !== projectEpoch || controller.signal.aborted
+        || !isCurrentV2ProjectHistoryRequest(expected, currentV2HistoryRequestIdentity())) return;
+    v2TurnHistory.value = sortV2ProjectChainHistory(items);
   } catch (cause) {
-    if (controller.signal.aborted) return;
-    if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-      if ((cause as { response?: { status?: number } })?.response?.status === 404) {
-        clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-      }
-      v2TurnError.value = v2NaturalLanguageFailureText(cause);
-      await loadV2TurnHistory(sessionId, epoch);
-      if (v2TurnHistory.value.some((item) => (
-        item.clientRequestId === stored.clientRequestId && item.status === 'FAILED'
-      ))) v2TurnError.value = '';
+    if (!controller.signal.aborted && epoch === projectEpoch
+        && isCurrentV2ProjectHistoryRequest(expected, currentV2HistoryRequestIdentity())) {
+      v2TurnError.value = apiError(cause);
     }
   } finally {
-    if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-      v2TurnPolling.value = false;
-      v2TurnAbortController = null;
+    if (epoch === projectEpoch
+        && isCurrentV2ProjectHistoryRequest(expected, currentV2HistoryRequestIdentity())) {
+      loading.v2History = false;
+      v2HistoryAbortController = null;
     }
   }
+}
+
+function prepareV2GapReply(task: V2NaturalLanguageTurnHistoryItem) {
+  const pendingItem = task.pendingItem;
+  if (!pendingItem || !canReplyToV2ProjectGap(task)) return;
+  v2ComposerMode.value = {
+    type: 'GAP_REPLY',
+    targetClientRequestId: task.clientRequestId,
+    gapId: pendingItem.gapId,
+    question: pendingItem.question,
+  };
+  v2TurnInput.value = '';
+}
+
+function prepareV2Instruction(
+  kind: Exclude<V2ProjectInstructionKind, 'INITIAL'>,
+  task: V2NaturalLanguageTurnHistoryItem,
+) {
+  if (!canSendV2ProjectFollowUp(task)) return;
+  v2ComposerMode.value = {
+    type: 'INSTRUCTION',
+    kind,
+    targetClientRequestId: task.clientRequestId,
+  };
+  v2TurnInput.value = '';
+}
+
+function v2NaturalLanguageFailureText(cause: unknown) {
+  const code = (cause as { response?: { data?: { code?: unknown } } } | null)
+    ?.response?.data?.code;
+  if (typeof code === 'string' && code) return `Project Agent 请求失败：${code}`;
+  return apiError(cause);
 }
 
 async function sendV2NaturalLanguageTurn() {
-  if (!v2NaturalTurnAvailable.value) {
-    v2TurnError.value = 'V2 暂时不可用，项目文件、候选修改和版本功能仍可继续使用。';
-    return;
-  }
   const projectId = activeProjectId.value;
-  if (!projectId || v2NaturalTurnBusy.value) return;
-  const epoch = projectEpoch;
-  const clientRequestId = newV2NaturalLanguageClientRequestId();
   const question = v2TurnInput.value.trim();
-  v2TurnStarting.value = true;
+  if (!projectId || !question || v2NaturalTurnBusy.value) return;
+  const epoch = projectEpoch;
+  const mode = v2ComposerMode.value;
+  const commandClientRequestId = newV2NaturalLanguageClientRequestId();
+  v2TurnSubmitting.value = true;
   v2TurnError.value = '';
-  v2TurnOutcome.value = null;
+  let commandSessionId: number | null = null;
+  let previousRecovery: V2ProjectChainRecoveryRecord | null = null;
+  let commandRecovery: V2ProjectChainRecoveryRecord | null = null;
+  let commandExpected: V2NaturalLanguageRequestIdentity | null = null;
   try {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
-    const pending = storedV2NaturalLanguageRequest(projectId, sessionId);
-    if (pending) {
-      await recoverV2NaturalLanguageTurn(projectId, sessionId);
-      return;
-    }
-    const request = normalizeV2NaturalLanguageRequest(question, clientRequestId);
-    stopV2NaturalLanguagePolling();
-    v2TurnClientRequestId = clientRequestId;
-    const sequence = v2TurnSequence;
-    const expected = { projectId, sessionId, clientRequestId, sequence };
-    storeV2NaturalLanguageRequest(projectId, sessionId, clientRequestId, question);
-    upsertV2PlanningTask(clientRequestId, question);
+    commandSessionId = sessionId;
+    previousRecovery = storedV2NaturalLanguageRequest(projectId, sessionId);
+    const rootClientRequestId = mode.type === 'INITIAL'
+      ? commandClientRequestId
+      : mode.targetClientRequestId;
+    const taskQuestion = v2TurnHistory.value.find(
+      (item) => item.clientRequestId === rootClientRequestId,
+    )?.question || question;
+    commandRecovery = {
+      version: 1,
+      projectId,
+      sessionId,
+      rootClientRequestId,
+      commandClientRequestId,
+      question: taskQuestion,
+    };
+    storeV2NaturalLanguageRequest(commandRecovery);
+    invalidateV2NaturalLanguageRequest();
+    v2TurnClientRequestId = commandClientRequestId;
+    commandExpected = currentV2NaturalLanguageIdentity();
     const controller = new AbortController();
     v2TurnAbortController = controller;
-    v2TurnPolling.value = true;
-    const outcome = await startThenPollV2NaturalLanguageTurn(
-      async () => (await startV2NaturalLanguageTurn(sessionId, request, controller.signal)).data,
-      async () => (
-        await getV2NaturalLanguageTurn(sessionId, clientRequestId, controller.signal)
-      ).data,
-      {
-        signal: controller.signal,
-        resume: async () => (
-          await startV2NaturalLanguageTurn(
-            sessionId, request, controller.signal,
-          )
-        ).data,
-        onOutcome: (value) => {
-          if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-            v2TurnOutcome.value = value;
-            upsertV2TurnOutcome(clientRequestId, question, value);
-          }
-        },
-      },
-    );
-    if (!isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) return;
-    v2TurnOutcome.value = outcome;
-    upsertV2TurnOutcome(clientRequestId, question, outcome);
+    if (mode.type === 'GAP_REPLY') {
+      const acknowledgement = (await replyV2NaturalLanguagePendingItem(
+        sessionId,
+        mode.targetClientRequestId,
+        mode.gapId,
+        { content: question, clientRequestId: commandClientRequestId },
+        controller.signal,
+      )).data;
+      if (!isCurrentV2NaturalLanguageResponse(commandExpected)) return;
+      commandRecovery = {
+        ...commandRecovery,
+        rootClientRequestId: acknowledgement.rootClientRequestId,
+      };
+    } else {
+      const request = normalizeV2ProjectInstructionRequest(
+        question,
+        commandClientRequestId,
+        mode.type === 'INITIAL' ? 'INITIAL' : mode.kind,
+        mode.type === 'INITIAL' ? null : mode.targetClientRequestId,
+      );
+      const acknowledgement = (await startV2NaturalLanguageTurn(
+        sessionId, request, controller.signal,
+      )).data;
+      if (!isCurrentV2NaturalLanguageResponse(commandExpected)) return;
+      commandRecovery = {
+        ...commandRecovery,
+        rootClientRequestId: acknowledgement.rootClientRequestId,
+      };
+    }
+    storeV2NaturalLanguageRequest(commandRecovery);
     v2TurnInput.value = '';
-    clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-    await loadV2TurnHistory(sessionId, epoch);
-    await refreshProjectAfterV2AutoApply(clientRequestId, epoch);
-    await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
+    resetV2ComposerMode();
+    if (epoch === projectEpoch && projectId === activeProjectId.value
+        && commandExpected && isCurrentV2NaturalLanguageResponse(commandExpected)) {
+      recoverV2NaturalLanguageTurn(projectId, sessionId, commandRecovery);
+    }
   } catch (cause) {
-    const sessionId = activeSessionId.value;
-    if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      if (sessionId && (isDefinitiveV2NaturalLanguageStartRejection(cause)
-          || cause instanceof V2NaturalLanguageTurnNotCreatedError
-          || (cause instanceof Error && [
-            'v2-direct-answer-required',
-            'v2-intake-route-invalid',
-          ].includes(cause.message)))) {
-        clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-      }
-      v2TurnError.value = v2NaturalLanguageFailureText(cause);
-      if (sessionId) {
-        await loadV2TurnHistory(sessionId, epoch);
-        if (v2TurnHistory.value.some((item) => (
-          item.clientRequestId === clientRequestId && item.status === 'FAILED'
-        ))) v2TurnError.value = '';
+    const expected = commandExpected;
+    if (epoch === projectEpoch && projectId === activeProjectId.value
+        && expected && isCurrentV2NaturalLanguageResponse(expected)) {
+      const failureText = v2NaturalLanguageFailureText(cause);
+      v2TurnError.value = failureText;
+      if (commandSessionId && commandRecovery) {
+        if (v2ProjectCommandFailureRecoveryDecision(cause) === 'DROP_UNBOUND_RECOVERY') {
+          if (previousRecovery) {
+            storeV2NaturalLanguageRequest(previousRecovery);
+            recoverV2NaturalLanguageTurn(
+              projectId,
+              commandSessionId,
+              previousRecovery,
+              { preserveError: true },
+            );
+          } else clearStoredV2NaturalLanguageRequest(projectId, commandSessionId);
+          v2TurnError.value = failureText;
+        } else {
+          await loadV2TurnHistory(commandSessionId, epoch);
+          if (isCurrentV2NaturalLanguageResponse(expected)) {
+            recoverV2NaturalLanguageTurn(
+              projectId, commandSessionId, commandRecovery,
+            );
+          }
+        }
       }
     }
   } finally {
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      v2TurnStarting.value = false;
-      v2TurnPolling.value = false;
-      v2TurnAbortController = null;
+      v2TurnSubmitting.value = false;
+    }
+  }
+}
+
+async function cancelV2NaturalLanguageTask(task: V2NaturalLanguageTurnHistoryItem) {
+  const projectId = activeProjectId.value;
+  const sessionId = activeSessionId.value;
+  if (!projectId || !sessionId || v2TurnSubmitting.value
+      || v2TurnCancelSubmitting.value
+      || !canCancelV2ProjectTurn(task)) return;
+  if (!window.confirm('取消这个任务？已提交的正式事实会保留。')) return;
+  const commandClientRequestId = newV2NaturalLanguageClientRequestId();
+  const epoch = projectEpoch;
+  const previousRecovery = storedV2NaturalLanguageRequest(projectId, sessionId);
+  const recovery: V2ProjectChainRecoveryRecord = {
+    version: 1,
+    projectId,
+    sessionId,
+    rootClientRequestId: task.clientRequestId,
+    commandClientRequestId,
+    question: task.question,
+  };
+  storeV2NaturalLanguageRequest(recovery);
+  v2TurnCancelSubmitting.value = true;
+  v2TurnError.value = '';
+  invalidateV2NaturalLanguageRequest();
+  v2TurnClientRequestId = commandClientRequestId;
+  const expected = currentV2NaturalLanguageIdentity();
+  const controller = new AbortController();
+  v2TurnAbortController = controller;
+  try {
+    const acknowledgement = (await cancelV2NaturalLanguageTurn(
+      sessionId,
+      task.clientRequestId,
+      { clientRequestId: commandClientRequestId },
+      controller.signal,
+    )).data;
+    if (!isCurrentV2NaturalLanguageResponse(expected)) return;
+    const acceptedRecovery = {
+      ...recovery,
+      rootClientRequestId: acknowledgement.rootClientRequestId,
+    };
+    storeV2NaturalLanguageRequest(acceptedRecovery);
+    if (isCurrentV2NaturalLanguageResponse(expected)) {
+      recoverV2NaturalLanguageTurn(projectId, sessionId, acceptedRecovery);
+    }
+  } catch (cause) {
+    if (isCurrentV2NaturalLanguageResponse(expected)) {
+      const failureText = v2NaturalLanguageFailureText(cause);
+      v2TurnError.value = failureText;
+      if (v2ProjectCommandFailureRecoveryDecision(cause) === 'DROP_UNBOUND_RECOVERY') {
+        if (previousRecovery) {
+          storeV2NaturalLanguageRequest(previousRecovery);
+          recoverV2NaturalLanguageTurn(
+            projectId,
+            sessionId,
+            previousRecovery,
+            { preserveError: true },
+          );
+        } else clearStoredV2NaturalLanguageRequest(projectId, sessionId);
+        v2TurnError.value = failureText;
+      } else {
+        await loadV2TurnHistory(sessionId, epoch);
+        if (isCurrentV2NaturalLanguageResponse(expected)) {
+          recoverV2NaturalLanguageTurn(projectId, sessionId, recovery);
+        }
+      }
+    }
+  } finally {
+    if (epoch === projectEpoch && projectId === activeProjectId.value) {
+      v2TurnCancelSubmitting.value = false;
     }
   }
 }
@@ -1869,6 +2073,12 @@ function handleV2TurnKeydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
   event.preventDefault();
   void sendV2NaturalLanguageTurn();
+}
+
+function openV2CandidateReview(artifactId?: number | null) {
+  if (!artifactId) return;
+  const candidate = candidates.value.find((item) => item.artifact.id === artifactId);
+  if (candidate) selectCandidate(candidate);
 }
 
 async function selectProject(projectId: number) {
@@ -1967,7 +2177,7 @@ async function loadConversation(epoch = projectEpoch) {
       loadV2TurnHistory(sessionId, epoch),
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
-      void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
+      recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -2038,7 +2248,7 @@ async function selectConversation(sessionId: number) {
       loadV2TurnHistory(sessionId, epoch),
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
-      void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
+      recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -2105,16 +2315,16 @@ async function confirmRenameSession() {
 }
 
 async function deleteConversation(session: AgentSessionResponse) {
-  if (v2NaturalTurnBusy.value) {
-    error.value = 'Current Project Agent request is still running. Please wait before deleting a conversation.';
-    return;
-  }
   const sessionTitle = session.title || `Conversation #${session.id}`;
   if (!window.confirm(`Delete "${sessionTitle}"?`)) {
     return;
   }
   const wasActive = activeSessionId.value === session.id;
+  const recoveryToResume = wasActive && activeProjectId.value
+    ? storedV2NaturalLanguageRequest(activeProjectId.value, session.id)
+    : null;
   error.value = '';
+  if (wasActive) invalidateV2NaturalLanguageRequest();
   try {
     await deleteAgentSession(session.id);
     projectSessions.value = projectSessions.value.filter((item) => item.id !== session.id);
@@ -2131,6 +2341,14 @@ async function deleteConversation(session: AgentSessionResponse) {
     else syncProjectLocation(activeProjectId.value, null);
   } catch (cause) {
     error.value = apiError(cause);
+    if (wasActive && recoveryToResume && activeProjectId.value) {
+      recoverV2NaturalLanguageTurn(
+        activeProjectId.value,
+        session.id,
+        recoveryToResume,
+        { preserveError: true },
+      );
+    }
   }
 }
 
@@ -2211,37 +2429,13 @@ async function submitProject() {
   }
 }
 
-async function loadProductV2Availability() {
-  try {
-    const document = (await getV2ProductAvailability()).data;
-    const capabilities = Array.isArray(document.capabilities) ? document.capabilities : [];
-    const validDocument = document.formatVersion === 1
-      && typeof document.enabled === 'boolean'
-      && capabilities.every((capability) => typeof capability === 'string')
-      && new Set(capabilities).size === capabilities.length;
-    v2NaturalTurnAvailable.value = validDocument
-      && document.enabled
-      && capabilities.includes('agent.turn');
-  } catch {
-    v2NaturalTurnAvailable.value = false;
-  }
-  if (!v2NaturalTurnAvailable.value) {
-    stopV2NaturalLanguagePolling();
-    v2TurnStarting.value = false;
-  }
-  const projectId = activeProjectId.value;
-  const sessionId = activeSessionId.value;
-  if (!projectId || !sessionId) return;
-  if (v2NaturalTurnAvailable.value) void recoverV2NaturalLanguageTurn(projectId, sessionId);
-}
-
 onMounted(() => {
   inspectorOpen.value = false;
-  void loadProductV2Availability();
   void loadProjects();
 });
 onUnmounted(() => {
-  stopV2NaturalLanguagePolling();
+  invalidateV2NaturalLanguageRequest();
+  invalidateV2HistoryRequest();
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
   projectEpoch++;
 });
@@ -2371,30 +2565,24 @@ onUnmounted(() => {
 .v2-task-card__question { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .v2-task-card__question-copy { min-width: 0; flex: 1 1 auto; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 10px; }
 .v2-task-card__question p { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
-.v2-task-card__avatar { flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--yb-border-strong); border-radius: 50%; color: var(--yb-primary); background: var(--yb-bg-elevated); font-size: 10px; font-weight: 700; line-height: 1; }
+.v2-task-card__avatar { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--yb-border-strong); border-radius: 50%; color: var(--yb-primary); font-size: 10px; font-weight: 700; }
 .v2-task-card__avatar--assistant { border-color: var(--yb-primary); border-radius: 5px; color: var(--yb-primary-contrast); background: var(--yb-primary); }
 .v2-task-card__result { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px; border-radius: 8px; background: var(--yb-bg-muted); }
-.v2-task-card__result-copy { min-width: 0; }
+.v2-task-card__result-copy { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .v2-task-card__result-copy > p { margin: 0; color: var(--yb-text-secondary); }
 .v2-task-card__delivery { display: flex; flex-direction: column; gap: 8px; }
 .v2-task-card__validation { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 10px; }
 .v2-task-card__validation dt { color: var(--yb-text-muted); }
 .v2-task-card__validation dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.v2-conversation__question { align-self: flex-end; max-width: min(82%, 720px); padding: 10px 12px; border-radius: 12px 12px 2px 12px; background: var(--yb-bg-muted); }
-.v2-conversation__process, .v2-conversation__result { padding: 12px 0; border-bottom: 1px solid var(--yb-border); }
-.v2-conversation__question small { color: var(--yb-text-muted); font-size: 9px; }
-.v2-conversation__question p { margin: 5px 0 0; white-space: pre-wrap; line-height: 1.65; }
-.v2-conversation__process > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-.v2-conversation__process > summary { cursor: pointer; color: var(--yb-text-secondary); font-size: 10px; font-weight: 700; }
-.v2-conversation__process[open] > summary { margin-bottom: 8px; }
-.v2-conversation__process ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.v2-task-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.v2-conversation__process { padding: 0; border-top: 1px solid var(--yb-border); border-bottom: 1px solid var(--yb-border); }
+.v2-conversation__process > summary { display: flex; align-items: center; gap: 8px; min-height: 38px; cursor: pointer; color: var(--yb-text-secondary); font-size: 10px; font-weight: 700; }
+.v2-conversation__process > summary small { margin-left: auto; color: var(--yb-text-muted); font-weight: 400; }
+.v2-conversation__process ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0 0 8px; list-style: none; }
 .v2-conversation__process li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px; border-radius: 7px; background: var(--yb-bg-muted); }
 .v2-conversation__process li > span { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--yb-border); border-radius: 50%; color: var(--yb-text-muted); font-size: 10px; font-weight: 800; }
 .v2-conversation__process li > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .v2-conversation__process li small { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
-.v2-conversation__empty-process { margin: 0; color: var(--yb-text-muted); font-size: 10px; }
-.v2-conversation__result { display: flex; flex-direction: column; gap: 10px; }
-.v2-conversation__result h3 { margin: 0; font-size: 14px; }
 .v2-conversation__outputs { display: flex; flex-direction: column; gap: 5px; padding: 9px; border-radius: 7px; background: var(--yb-bg-muted); font-size: 10px; }
 .v2-conversation__outputs code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
 .v2-conversation__candidate { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -2804,9 +2992,7 @@ onUnmounted(() => {
 .project-workspace--console .project-file-list__item,
 .project-workspace--console .project-search-results strong,
 .project-workspace--console .project-search-results span,
-.project-workspace--console .project-inspector__tabs > strong,
-.project-workspace--console .v2-conversation__process > summary,
-.project-workspace--console .v2-conversation__empty-process {
+.project-workspace--console .project-inspector__tabs > strong {
   font-size: 11px;
 }
 
@@ -2935,152 +3121,9 @@ onUnmounted(() => {
   padding: 4px 0 2px;
 }
 
-.project-workspace--console .v2-task-card__question p,
-.project-workspace--console .v2-task-card__result,
-.project-workspace--console .v2-task-card__result :deep(.message-markdown) {
-  font-size: 14px;
-  line-height: 1.65;
-}
-
 .project-workspace--console .v2-conversation__tasks {
   gap: 0;
 }
-
-.project-workspace--console .v2-task-card {
-  gap: 12px;
-  padding: 14px 0;
-  border: 0;
-  border-top: 1px solid var(--project-rule);
-  border-radius: 0;
-  background: transparent;
-}
-
-.project-workspace--console .v2-task-card:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.project-workspace--console .v2-task-card__question {
-  padding: 12px 14px;
-  border: 1px solid var(--pa-role-user-border);
-  border-left: 3px solid var(--project-accent);
-  border-radius: var(--project-radius-panel);
-  background: var(--pa-role-user-surface);
-}
-
-.project-workspace--console .v2-task-card__result {
-  gap: 8px;
-  padding: 10px 0 2px;
-  border-left: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.project-workspace--console .v2-task-card__delivery,
-.project-workspace--console .v2-conversation__outputs {
-  gap: 7px;
-}
-
-.project-workspace--console .v2-conversation__outputs {
-  padding: 8px 0 0 12px;
-  border-left: 2px solid var(--project-rule-strong);
-  border-radius: 0;
-  background: transparent;
-  font-size: 11px;
-}
-
-.project-workspace--console .v2-task-card__validation {
-  gap: 5px 12px;
-  font-size: 11px;
-}
-
-.project-workspace--console .v2-conversation__process {
-  padding: 0;
-  border-top: 1px solid var(--project-rule);
-  border-bottom: 1px solid var(--project-rule);
-}
-
-.project-workspace--console .v2-conversation__process > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px 2px;
-  list-style: none;
-  color: var(--project-text);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.project-workspace--console .v2-conversation__process > summary::-webkit-details-marker { display: none; }
-
-.project-workspace--console .v2-conversation__process > summary::before {
-  display: grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  border: 1px solid var(--project-rule-strong);
-  border-radius: 50%;
-  color: var(--project-success);
-  content: "✓";
-  font-size: 10px;
-  line-height: 1;
-}
-
-.project-workspace--console .v2-conversation__process > summary::after {
-  margin-left: auto;
-  color: var(--project-muted);
-  content: "›";
-  font-size: 18px;
-  transition: transform 150ms ease;
-}
-
-.project-workspace--console .v2-conversation__process[open] > summary::after { transform: rotate(90deg); }
-.project-workspace--console .v2-conversation__process > summary small { color: var(--project-muted); font-size: 10px; font-weight: 400; }
-
-.project-workspace--console .v2-conversation__process[open] > summary {
-  margin-bottom: 0;
-  border-bottom: 1px solid var(--project-rule);
-}
-
-.project-workspace--console .v2-conversation__process ol {
-  position: relative;
-  gap: 0;
-  padding: 8px 2px;
-}
-
-.project-workspace--console .v2-conversation__process ol::before {
-  position: absolute;
-  top: 19px;
-  bottom: 19px;
-  left: 11px;
-  width: 1px;
-  background: var(--project-rule-strong);
-  content: "";
-}
-
-.project-workspace--console .v2-conversation__process li {
-  position: relative;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  gap: 9px;
-  padding: 8px 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.project-workspace--console .v2-conversation__process li > span {
-  z-index: 1;
-  border-color: var(--project-rule-strong);
-  border-radius: 50%;
-  color: var(--project-muted);
-  background: var(--project-canvas);
-  font-size: 11px;
-}
-
-.project-workspace--console .v2-conversation__process li[data-status="SUCCEEDED"] > span { border-color: var(--project-success); color: var(--project-success); }
-.project-workspace--console .v2-conversation__process li[data-status="FAILED"] > span { border-color: var(--project-danger); color: var(--project-danger); }
-.project-workspace--console .v2-conversation__process li[data-status="RUNNING"] > span,
-.project-workspace--console .v2-conversation__process li[data-status="ACTIVE"] > span { border-color: var(--project-accent); color: var(--project-accent); }
 
 .project-workspace--console :deep(.n-button) {
   --n-border-radius: var(--project-radius-control);
@@ -3252,15 +3295,6 @@ onUnmounted(() => {
     min-height: 196px;
     max-height: 214px;
   }
-  .project-workspace--console .v2-task-card__question,
-  .project-workspace--console .v2-conversation__candidate {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .project-workspace--console .v2-task-card__validation { grid-template-columns: 1fr; gap: 3px; }
-  .project-workspace--console .v2-task-card__validation dd + dt { margin-top: 6px; }
-  .project-workspace--console .v2-conversation__process li { grid-template-columns: 24px minmax(0, 1fr); align-items: start; }
-  .project-workspace--console .v2-conversation__process li :deep(.n-tag) { grid-column: 2; justify-self: start; }
   .project-workspace--console .project-inspector { max-height: 196px; overflow: hidden; }
   .project-workspace--console .project-inspector__body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
   .project-workspace--console .project-preview--inline { min-height: 116px; max-height: 142px; }

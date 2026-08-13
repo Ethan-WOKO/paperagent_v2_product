@@ -7,6 +7,7 @@ import com.yanban.core.tool.ToolExecutionContext;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.EventId;
 import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.ReceiptStatus;
 import io.paperagent.v2.contracts.TextValue;
 import io.paperagent.v2.persistence.PersistenceResult;
 import org.junit.jupiter.api.Test;
@@ -20,11 +21,57 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AuthenticatedLiteratureSearchEffectExecutionComposerTest {
+    @Test
+    void chainExecutionUsesFormalIntentWithoutLegacyAuthorities() {
+        var fixture = new LiteratureSearchEffectTestFixtures();
+        NaturalLanguageEffectAuthoritySource natural =
+                mock(NaturalLanguageEffectAuthoritySource.class);
+        var composer = chainComposer(fixture, natural);
+
+        var outcome = composer.executeChain(
+                7L, 42L, fixture.command());
+
+        assertEquals(ReceiptStatus.SUCCESS,
+                outcome.result().receipt().status());
+        assertEquals(fixture.command().toolCallId(),
+                outcome.result().receipt().toolCallId());
+        verify(fixture.claims).execute(
+                org.mockito.ArgumentMatchers.any());
+        verifyNoInteractions(
+                fixture.authorities, natural, fixture.taskBindings);
+    }
+
+    @Test
+    void chainExecutionRejectsChangedFormalIntentBeforeLegacyAuthorities() {
+        var fixture = new LiteratureSearchEffectTestFixtures();
+        NaturalLanguageEffectAuthoritySource natural =
+                mock(NaturalLanguageEffectAuthoritySource.class);
+        var composer = chainComposer(fixture, natural);
+        var changed = fixture.intent(
+                AuthenticatedLiteratureSearchEffectExecutionComposer.V2_TOOL,
+                LiteratureSearchEffectTestFixtures.STEP,
+                new EventId("activation-other"),
+                fixture.lease.ownerId(), fixture.lease.fencingToken(),
+                Map.of("query", new TextValue("graph retrieval")));
+        when(fixture.intents.find(fixture.command().toolCallId()))
+                .thenReturn(PersistenceResult.found(changed));
+
+        var failure = assertThrows(
+                AuthenticatedLiteratureSearchEffectExecutionException.class,
+                () -> composer.executeChain(
+                        7L, 42L, fixture.command()));
+
+        assertEquals("intent.authority", failure.path());
+        verifyNoInteractions(fixture.claims, fixture.executor,
+                fixture.authorities, natural, fixture.taskBindings);
+    }
+
     @Test
     void ownershipIsResolvedBeforeCommandAndRecovery() {
         var fixture = new LiteratureSearchEffectTestFixtures();
@@ -156,5 +203,16 @@ class AuthenticatedLiteratureSearchEffectExecutionComposerTest {
         assertEquals("intent.authority", failure.path());
         verifyNoInteractions(fixture.claims);
         verifyNoInteractions(fixture.executor);
+    }
+
+    private static AuthenticatedLiteratureSearchEffectExecutionComposer
+            chainComposer(
+            LiteratureSearchEffectTestFixtures fixture,
+            NaturalLanguageEffectAuthoritySource natural) {
+        return new AuthenticatedLiteratureSearchEffectExecutionComposer(
+                fixture.contexts, fixture.planIds, fixture.recoverer,
+                fixture.intents, fixture.claims, fixture.executor,
+                fixture.times, fixture.json, fixture.authorities,
+                fixture.taskBindings, natural);
     }
 }
