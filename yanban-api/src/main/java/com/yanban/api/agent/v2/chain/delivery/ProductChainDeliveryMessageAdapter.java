@@ -9,6 +9,7 @@ import io.paperagent.v2.chain.ChainFinalizationRepository;
 import io.paperagent.v2.chain.ChainFoundationRepository;
 import io.paperagent.v2.chain.ChainModelRepository;
 import io.paperagent.v2.chain.ChainPersistenceRecords;
+import io.paperagent.v2.chain.ChainTaskOutcomeStatus;
 import io.paperagent.v2.chain.delivery.ChainDeliveryMessagePort;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -24,6 +25,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
@@ -68,6 +70,89 @@ public final class ProductChainDeliveryMessageAdapter
                 TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.terminalOutcomes = Objects.requireNonNull(
                 terminalOutcomes, "terminalOutcomes");
+    }
+
+    /**
+     * Atomically delivers a code-owned presentation of one immutable Outcome.
+     * It is used only when optional Answer-model presentation cannot be
+     * produced; no model Proposal or second result authority is fabricated.
+     */
+    public OutcomeFallbackSubmission deliverOutcomeFallback(
+            OutcomeFallbackCommand command) {
+        Objects.requireNonNull(command, "command");
+        return required(write.execute(status ->
+                deliverOutcomeFallbackLocked(command)));
+    }
+
+    private OutcomeFallbackSubmission deliverOutcomeFallbackLocked(
+            OutcomeFallbackCommand command) {
+        ChainPersistenceRecords.TaskRecord task = lockTask(command.taskId());
+        ChainPersistenceRecords.TaskOutcomeRecord outcome = finalization
+                .findTaskOutcome(task.taskId())
+                .filter(value -> value.outcomeId().equals(
+                        command.outcomeId()))
+                .orElseThrow(() -> new IllegalStateException(
+                        "fallback Delivery Outcome is missing"));
+        require(outcome.sourceCommandId().equals(
+                        command.sourceCommandId()),
+                "fallback Delivery changed Outcome source command");
+        terminalOutcomes.requireExact(task, outcome);
+        String body = outcomeFallbackBody(outcome, command.diagnosticCode());
+        String identity = sha256(task.taskId() + "\0"
+                + outcome.outcomeId() + "\0OUTCOME_FALLBACK");
+        String deliveryId = "delivery.fallback." + identity;
+        ChainPersistenceRecords.DeliveryRecord delivery = finalization
+                .findDeliveries(task.taskId()).stream()
+                .filter(value -> value.deliveryId().equals(deliveryId))
+                .findFirst().orElse(null);
+        if (delivery == null) {
+            ChainPersistenceRecords.DeliveryRecord requested =
+                    new ChainPersistenceRecords.DeliveryRecord(
+                            deliveryId, task.taskId(),
+                            "delivery.fallback.event." + identity,
+                            outcome.sourceCommandId(), null,
+                            outcome.outcomeId(), null, null,
+                            null, null, command.committedAt());
+            String sourceDigest = sha256("TASK_OUTCOME\0"
+                    + outcome.outcomeId() + "\0OUTCOME_FALLBACK");
+            var appended = deliveries.appendDelivery(
+                    new ChainPersistenceRecords.AuthoritativeFact<>(
+                            new ChainPersistenceRecords.AuthorityEventRequest(
+                                    requested.eventId(), requested.taskId(),
+                                    "DELIVERY", null, sourceDigest,
+                                    requested.createdAt()), requested));
+            require(sameIgnoringTime(requested, appended.fact()),
+                    "fallback Delivery append changed immutable identity");
+            delivery = appended.fact();
+        }
+        verifyFallbackDelivery(delivery, outcome);
+        List<ChainPersistenceRecords.DeliveryEventRecord> events = finalization
+                .findDeliveryEvents(delivery.deliveryId()).stream()
+                .sorted(Comparator.comparingLong(
+                        ChainPersistenceRecords.DeliveryEventRecord
+                                ::eventSequence)).toList();
+        if (!events.isEmpty()) {
+            require(events.size() == 1,
+                    "fallback Delivery event prefix is ambiguous");
+            ChainPersistenceRecords.DeliveryEventRecord event = events.get(0);
+            verifyFallbackEvent(event, delivery, command);
+            AgentTurn turn = sourceTurn(task, delivery);
+            require(AgentTurn.STATUS_COMPLETED.equals(turn.getStatus())
+                            && turn.getAssistantMessageId() != null,
+                    "fallback Delivery replay lacks completed Turn");
+            MessageRow message = message(turn.getAssistantMessageId());
+            verifyFallbackMessage(message, task, delivery.deliveryId(), body);
+            return new OutcomeFallbackSubmission(
+                    delivery, event, message.id(), body, true);
+        }
+        AgentTurn turn = runningTurn(task, delivery);
+        long messageId = insertFallbackMessage(task, delivery.deliveryId(), body);
+        ChainPersistenceRecords.DeliveryEventRecord event =
+                appendFallbackSuccess(delivery, command);
+        turn.complete(messageId);
+        turns.saveAndFlush(turn);
+        return new OutcomeFallbackSubmission(
+                delivery, event, messageId, body, false);
     }
 
     @Override
@@ -220,6 +305,29 @@ public final class ProductChainDeliveryMessageAdapter
         return new AttemptSubmission(existing, true);
     }
 
+    private ChainPersistenceRecords.DeliveryEventRecord appendFallbackSuccess(
+            ChainPersistenceRecords.DeliveryRecord delivery,
+            OutcomeFallbackCommand command) {
+        String eventId = "delivery.fallback.success." + sha256(
+                delivery.deliveryId() + "\0" + command.diagnosticCode());
+        ChainPersistenceRecords.DeliveryEventRecord requested =
+                new ChainPersistenceRecords.DeliveryEventRecord(
+                        delivery.deliveryId(), 1L, delivery.taskId(), eventId,
+                        ChainDeliveryStatus.SUCCEEDED, 1, null,
+                        command.runtimePolicyVersion(), command.committedAt());
+        var appended = deliveries.appendDeliveryEvent(
+                new ChainPersistenceRecords.AuthoritativeFact<>(
+                        new ChainPersistenceRecords.AuthorityEventRequest(
+                                eventId, delivery.taskId(),
+                                "DELIVERY_SUCCEEDED", null,
+                                sha256(delivery.deliveryId() + "\0"
+                                        + command.diagnosticCode()),
+                                command.committedAt()), requested));
+        require(sameIgnoringTime(requested, appended.fact()),
+                "fallback Delivery event append changed immutable identity");
+        return appended.fact();
+    }
+
     private ChainPersistenceRecords.DeliveryEventRecord appendEvent(
             AttemptCommand command, ChainDeliveryStatus status,
             String errorCode, String eventId) {
@@ -350,6 +458,31 @@ public final class ProductChainDeliveryMessageAdapter
         return existing;
     }
 
+    private long insertFallbackMessage(
+            ChainPersistenceRecords.TaskRecord task,
+            String deliveryId,
+            String body) {
+        GeneratedKeyHolder generated = new GeneratedKeyHolder();
+        jdbc.update("""
+                INSERT INTO agent_messages(
+                    session_id,user_id,role,content,tool_calls_json,
+                    tool_call_id,paper_task_id,created_at)
+                VALUES(:sessionId,:userId,'assistant',:body,NULL,
+                    :messageKey,NULL,CURRENT_TIMESTAMP)
+                """, new MapSqlParameterSource()
+                .addValue("sessionId", task.sessionId())
+                .addValue("userId", task.userId())
+                .addValue("body", body)
+                .addValue("messageKey", messageKey(deliveryId)),
+                generated, new String[]{"id"});
+        Number key = generated.getKey();
+        require(key != null && key.longValue() > 0,
+                "fallback Delivery did not allocate a message identity");
+        MessageRow stored = message(key.longValue());
+        verifyFallbackMessage(stored, task, deliveryId, body);
+        return key.longValue();
+    }
+
     private long allocateMessageId(
             Reservation command,
             ChainPersistenceRecords.TaskRecord task) {
@@ -452,6 +585,55 @@ public final class ProductChainDeliveryMessageAdapter
         return rows.isEmpty() ? null : rows.get(0);
     }
 
+    private static void verifyFallbackDelivery(
+            ChainPersistenceRecords.DeliveryRecord delivery,
+            ChainPersistenceRecords.TaskOutcomeRecord outcome) {
+        require(delivery.taskId().equals(outcome.taskId())
+                        && delivery.sourceCommandId().equals(
+                        outcome.sourceCommandId())
+                        && Objects.equals(delivery.taskOutcomeId(),
+                        outcome.outcomeId())
+                        && delivery.routeDecisionId() == null
+                        && delivery.gapId() == null
+                        && delivery.decisionId() == null
+                        && delivery.answerContentId() == null
+                        && delivery.assistantMessageId() == null,
+                "fallback Delivery changed Outcome binding");
+    }
+
+    private static void verifyFallbackEvent(
+            ChainPersistenceRecords.DeliveryEventRecord event,
+            ChainPersistenceRecords.DeliveryRecord delivery,
+            OutcomeFallbackCommand command) {
+        String expectedEventId = "delivery.fallback.success." + sha256(
+                delivery.deliveryId() + "\0" + command.diagnosticCode());
+        require(event.deliveryId().equals(delivery.deliveryId())
+                        && event.taskId().equals(delivery.taskId())
+                        && event.eventSequence() == 1L
+                        && event.attemptNo() == 1
+                        && event.eventKind() == ChainDeliveryStatus.SUCCEEDED
+                        && event.errorCode() == null
+                        && event.eventId().equals(expectedEventId)
+                        && event.runtimePolicyVersion().equals(
+                        command.runtimePolicyVersion()),
+                "fallback Delivery replay changed immutable identity");
+    }
+
+    private static void verifyFallbackMessage(
+            MessageRow message,
+            ChainPersistenceRecords.TaskRecord task,
+            String deliveryId,
+            String body) {
+        require(message != null && message.id() > 0
+                        && message.sessionId() == task.sessionId()
+                        && message.userId() == task.userId()
+                        && "assistant".equalsIgnoreCase(message.role())
+                        && body.equals(message.content())
+                        && messageKey(deliveryId).equals(
+                        message.toolCallId()),
+                "fallback assistant message changed Outcome presentation");
+    }
+
     private static void verifyMessage(
             MessageRow message,
             ChainPersistenceRecords.TaskRecord task,
@@ -529,6 +711,43 @@ public final class ProductChainDeliveryMessageAdapter
         }
     }
 
+    static String outcomeFallbackBody(
+            ChainPersistenceRecords.TaskOutcomeRecord outcome,
+            String diagnosticCode) {
+        Objects.requireNonNull(outcome, "outcome");
+        String status = outcome.outcomeType()
+                == ChainTaskOutcomeStatus.COMPLETED ? "任务已完成" : "任务未完成";
+        String artifact = outcome.finalArtifactId() == null
+                ? "无" : "candidate-artifact:" + outcome.finalArtifactId();
+        String validation = Objects.equals(
+                outcome.validationId(), io.paperagent.v2.chain.ChainIdentity.NONE)
+                ? "无" : outcome.validationId();
+        String published = outcome.publishedProjectVersion() == null
+                ? "未发布新版本" : outcome.publishedProjectVersion();
+        String failure = outcome.outcomeType()
+                == ChainTaskOutcomeStatus.FAILED
+                ? Objects.toString(outcome.failureCategory(), "UNKNOWN")
+                + "/" + Objects.toString(outcome.failureCode(), "UNKNOWN")
+                : "无";
+        return status + "，但自动生成结果说明失败，以下为系统从正式结果生成的基础交付。\n"
+                + "- 结果状态：" + outcome.outcomeType().name() + "\n"
+                + "- 产物：" + artifact + "\n"
+                + "- 验证：" + validation + "\n"
+                + "- 项目版本：" + published + "\n"
+                + "- 任务失败：" + failure + "\n"
+                + "- 展示降级诊断：" + requiredDiagnostic(diagnosticCode);
+    }
+
+    private static String requiredDiagnostic(String value) {
+        if (value == null || value.isBlank()
+                || value.length() > 128
+                || !value.matches("[A-Z0-9_]+")) {
+            throw new IllegalArgumentException(
+                    "diagnosticCode must be a bounded machine code");
+        }
+        return value;
+    }
+
     private static String messageKey(String deliveryId) {
         return MESSAGE_KEY_PREFIX + deliveryId;
     }
@@ -559,6 +778,43 @@ public final class ProductChainDeliveryMessageAdapter
     private record ReservationRow(
             String deliveryId, String taskId, String answerContentId,
             String answerBodySha256, long assistantMessageId) {
+    }
+
+    public record OutcomeFallbackCommand(
+            String taskId,
+            String outcomeId,
+            String sourceCommandId,
+            String diagnosticCode,
+            String runtimePolicyVersion,
+            Instant committedAt) {
+        public OutcomeFallbackCommand {
+            if (taskId == null || taskId.isBlank()
+                    || outcomeId == null || outcomeId.isBlank()
+                    || sourceCommandId == null || sourceCommandId.isBlank()
+                    || runtimePolicyVersion == null
+                    || runtimePolicyVersion.isBlank()) {
+                throw new IllegalArgumentException(
+                        "fallback command identity must not be blank");
+            }
+            diagnosticCode = requiredDiagnostic(diagnosticCode);
+            Objects.requireNonNull(committedAt, "committedAt");
+        }
+    }
+
+    public record OutcomeFallbackSubmission(
+            ChainPersistenceRecords.DeliveryRecord delivery,
+            ChainPersistenceRecords.DeliveryEventRecord event,
+            long assistantMessageId,
+            String body,
+            boolean replayed) {
+        public OutcomeFallbackSubmission {
+            Objects.requireNonNull(delivery, "delivery");
+            Objects.requireNonNull(event, "event");
+            if (assistantMessageId < 1 || body == null || body.isBlank()) {
+                throw new IllegalArgumentException(
+                        "fallback submission is incomplete");
+            }
+        }
     }
 
     private static final class DeliveryPersistenceFailure

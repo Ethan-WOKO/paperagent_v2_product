@@ -155,6 +155,40 @@ class ProductChainDurableProgressionDriverTest {
     }
 
     @Test
+    void deterministicAnswerAuthorityFailureIsBlockedAndClassifiedOnce() {
+        ProductChainDurableProgressionDriver.ReceivedScanSource emptySource =
+                (after, limit) -> new ProductChainReceivedCommandSource.ScanPage(
+                        List.of(), null, false);
+        FakeClaims claims = new FakeClaims(List.of(
+                List.of("task-answer"), List.of()));
+        ProductChainDurableProgressionDriver driver = driver(
+                emptySource, claims, (command, claim) -> { },
+                (taskId, claim) -> {
+                    throw new IllegalStateException(
+                            "CHAIN_ANSWER_PLAN_BINDING_MISSING_OR_AMBIGUOUS");
+                });
+
+        var result = driver.advance(REQUEST);
+
+        assertThat(result.failures()).singleElement().satisfies(failure -> {
+            assertThat(failure.taskId()).isEqualTo("task-answer");
+            assertThat(failure.kind()).isEqualTo(
+                    ProductChainDurableProgressionDriver.FailureKind
+                            .TERMINAL_STATE);
+        });
+        assertThat(claims.lastFailureDeterministic).isTrue();
+        assertThat(claims.released).containsExactly("task-answer");
+    }
+
+    @Test
+    void transientProviderFailureRemainsBoundedRetryable() {
+        assertThat(ProductChainDurableProgressionDriver.classify(
+                new IllegalStateException("provider connection timeout"),
+                "provider connection timeout")).isEqualTo(
+                ProductChainDurableProgressionDriver.FailureKind.TRANSIENT);
+    }
+
+    @Test
     void protectsTheWholeClaimedActionWithTheInjectedLeaseKeeper() {
         FakeClaims claims = new FakeClaims(List.of(
                 List.of("task-1"), List.of()));
@@ -225,6 +259,7 @@ class ProductChainDurableProgressionDriverTest {
                 new HashMap<>();
         private final Map<String, ReleaseResult> release = new HashMap<>();
         private int committedPage;
+        private boolean lastFailureDeterministic;
 
         private FakeClaims(List<List<String>> committedPages) {
             this.committedPages = committedPages;
@@ -266,6 +301,16 @@ class ProductChainDurableProgressionDriverTest {
                     + claimToken + ":" + fence);
             released.add(taskId);
             return release.getOrDefault(taskId, ReleaseResult.RELEASED);
+        }
+
+        @Override
+        public FailureDisposition recordFailure(
+                String taskId, long authorityEventCut,
+                String failureSha256, String reason,
+                boolean deterministic) {
+            lastFailureDeterministic = deterministic;
+            return deterministic ? FailureDisposition.BLOCKED
+                    : FailureDisposition.RETRY;
         }
 
         @Override

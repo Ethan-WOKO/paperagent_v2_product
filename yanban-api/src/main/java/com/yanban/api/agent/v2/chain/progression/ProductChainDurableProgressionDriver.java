@@ -187,7 +187,9 @@ public final class ProductChainDurableProgressionDriver {
             if (current(currentClaim)
                     != ProductChainProgressionClaimStore.CurrentResult.CURRENT) {
                 releaseOnExit = false;
-                result.fail(taskId, "progression claim changed during action");
+                result.fail(taskId,
+                        "progression claim changed during action",
+                        FailureKind.RECOVERABLE_STATE);
                 return;
             }
             ProductChainProgressionClaimStore.ProgressDisposition progress =
@@ -196,7 +198,8 @@ public final class ProductChainDurableProgressionDriver {
             if (progress == ProductChainProgressionClaimStore
                     .ProgressDisposition.BLOCKED) {
                 result.fail(taskId,
-                        "task blocked after repeated no-progress replan");
+                        "task blocked after repeated no-progress replan",
+                        FailureKind.TERMINAL_STATE);
             }
             result.advanced++;
         } catch (RuntimeException failure) {
@@ -205,16 +208,18 @@ public final class ProductChainDurableProgressionDriver {
             // as a stable wait and suppress the required retry.
             String reason = Objects.toString(
                     failure.getMessage(), failure.getClass().getSimpleName());
+            FailureKind kind = classify(failure, reason);
             if (acquired == null) {
                 releaseOnExit = false;
             } else {
                 var disposition = claims.recordFailure(
                         taskId, acquired.authorityEventCut(), sha256(reason),
-                        reason, deterministic(reason));
+                        reason, kind == FailureKind.TERMINAL_STATE
+                                || kind == FailureKind.BUG);
                 releaseOnExit = disposition == ProductChainProgressionClaimStore
                         .FailureDisposition.BLOCKED;
             }
-            result.fail(taskId, reason);
+            result.fail(taskId, reason, kind);
         } finally {
             if (acquired != null && releaseOnExit) {
                 try {
@@ -223,24 +228,55 @@ public final class ProductChainDurableProgressionDriver {
                                     acquired.claimToken(), acquired.fence());
                     if (released
                             != ProductChainProgressionClaimStore.ReleaseResult.RELEASED) {
-                        result.fail(taskId, "claim release was not authoritative: "
-                                + released.name());
+                        result.fail(taskId,
+                                "claim release was not authoritative: "
+                                        + released.name(),
+                                FailureKind.RECOVERABLE_STATE);
                     }
                 } catch (RuntimeException releaseFailure) {
                     result.fail(taskId, "claim release failed: "
                             + Objects.toString(releaseFailure.getMessage(),
-                            releaseFailure.getClass().getSimpleName()));
+                            releaseFailure.getClass().getSimpleName()),
+                            FailureKind.TRANSIENT);
                 }
             }
         }
     }
 
-    private static boolean deterministic(String reason) {
-        String value = reason.toUpperCase(java.util.Locale.ROOT);
-        return value.contains("CONTEXT_INPUT_BLOCKED")
+    static FailureKind classify(RuntimeException failure, String reason) {
+        String value = Objects.toString(reason, "")
+                .toUpperCase(java.util.Locale.ROOT);
+        String type = failure.getClass().getSimpleName()
+                .toUpperCase(java.util.Locale.ROOT);
+        if (value.contains("TIMEOUT") || value.contains("TIMED OUT")
+                || value.contains("TEMPORARILY UNAVAILABLE")
+                || value.contains("CONNECTION")
+                || value.contains("DATABASE UNAVAILABLE")
+                || type.contains("TRANSIENT")
+                || type.contains("TIMEOUT")) {
+            return FailureKind.TRANSIENT;
+        }
+        if (value.contains("CONTEXT_INPUT_BLOCKED")
                 || value.contains("PROJECTION BLOCKED:")
                 || value.contains("CONTEXT INPUT IS BLOCKED")
-                || value.matches(".*CHAIN_[A-Z0-9_]*CONTEXT_BLOCKED.*");
+                || value.matches(".*CHAIN_[A-Z0-9_]*CONTEXT_BLOCKED.*")
+                || value.startsWith("CHAIN_ANSWER_")
+                || value.startsWith("CHAIN_TERMINAL_")
+                || value.contains("MISSING_OR_AMBIGUOUS")) {
+            return FailureKind.TERMINAL_STATE;
+        }
+        if (failure instanceof IllegalArgumentException
+                || failure instanceof NullPointerException) {
+            return FailureKind.BUG;
+        }
+        return FailureKind.RECOVERABLE_STATE;
+    }
+
+    public enum FailureKind {
+        TRANSIENT,
+        RECOVERABLE_STATE,
+        TERMINAL_STATE,
+        BUG
     }
 
     private static String sha256(String value) {
@@ -322,10 +358,12 @@ public final class ProductChainDurableProgressionDriver {
         }
     }
 
-    public record TickFailure(String taskId, String reason) {
+    public record TickFailure(
+            String taskId, String reason, FailureKind kind) {
         public TickFailure {
             required(taskId, "taskId");
             required(reason, "reason");
+            Objects.requireNonNull(kind, "kind");
         }
     }
 
@@ -350,8 +388,9 @@ public final class ProductChainDurableProgressionDriver {
         private int skipped;
         private final List<TickFailure> failures = new ArrayList<>();
 
-        private void fail(String taskId, String reason) {
-            failures.add(new TickFailure(taskId, reason));
+        private void fail(
+                String taskId, String reason, FailureKind kind) {
+            failures.add(new TickFailure(taskId, reason, kind));
         }
 
         private TickResult freeze() {

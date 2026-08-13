@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.chain.progression;
 
+import com.yanban.api.agent.v2.chain.api.ProductChainAnswerDeliveryProgression;
 import com.yanban.api.agent.v2.chain.finalization.ProductChainCompletedOutcomeAdapter;
 import com.yanban.api.agent.v2.chain.context.ProductChainContextSourceFactory;
 import com.yanban.api.agent.v2.chain.context.ProductChainModelCallIdentity;
@@ -78,6 +79,7 @@ public final class ProductChainModelFailureProgression {
     private final ChatModelProvider provider;
     private final NamedParameterJdbcTemplate jdbc;
     private final ProductChainContextBuildFailureAuthority contextFailures;
+    private final ProductChainAnswerDeliveryProgression answer;
 
     public ProductChainModelFailureProgression(
             ProductChainFoundationRepositoryAdapter foundations,
@@ -92,7 +94,8 @@ public final class ProductChainModelFailureProgression {
             UserSettingsService settings,
             @Qualifier("chatModelProvider") ChatModelProvider provider,
             NamedParameterJdbcTemplate jdbc,
-            ProductChainContextBuildFailureAuthority contextFailures) {
+            ProductChainContextBuildFailureAuthority contextFailures,
+            ProductChainAnswerDeliveryProgression answer) {
         this.foundations = Objects.requireNonNull(foundations, "foundations");
         this.contexts = Objects.requireNonNull(contexts, "contexts");
         this.models = Objects.requireNonNull(models, "models");
@@ -109,6 +112,7 @@ public final class ProductChainModelFailureProgression {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.contextFailures = Objects.requireNonNull(
                 contextFailures, "contextFailures");
+        this.answer = Objects.requireNonNull(answer, "answer");
     }
 
     /** Resolves a rejected/stale formal-block review back to its exact source. */
@@ -608,13 +612,18 @@ public final class ProductChainModelFailureProgression {
             Instant now) {
         require(source.invocation().role() == ChainRole.ANSWER,
                 "CHAIN_ANSWER_MODEL_FAILURE_SOURCE_INVALID");
-        String deliveryId = ProductChainNextRoleSelector
-                .modelFailureDeliveryId(source.invocation().invocationId());
-        String eventId = id("delivery-event", deliveryId);
         String type = selected.sourceAuthorityType();
         String ref = selected.sourceAuthorityRef();
         require(formalSourceExists(task.taskId(), type, ref),
                 "CHAIN_ANSWER_MODEL_FAILURE_DELIVERY_SOURCE_INVALID");
+        if ("TASK_OUTCOME".equals(type)) {
+            answer.deliverOutcomeFallback(
+                    task, instruction, ref, ANSWER_ERROR_CODE, now);
+            return;
+        }
+        String deliveryId = ProductChainNextRoleSelector
+                .modelFailureDeliveryId(source.invocation().invocationId());
+        String eventId = id("delivery-event", deliveryId);
         ChainPersistenceRecords.DeliveryRecord delivery =
                 new ChainPersistenceRecords.DeliveryRecord(
                         deliveryId, task.taskId(), eventId,

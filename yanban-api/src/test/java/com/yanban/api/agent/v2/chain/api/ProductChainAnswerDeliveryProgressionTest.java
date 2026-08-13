@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.chain.api;
 
 import com.yanban.api.agent.v2.chain.finalization.ProductChainTerminalOutcomeAuthority;
+import com.yanban.api.agent.v2.persistence.ProductChainStepAuthorityAdapter;
 import io.paperagent.v2.chain.AnswerPayload;
 import io.paperagent.v2.chain.ChainContextRevisionStatus;
 import io.paperagent.v2.chain.ChainExecutionMode;
@@ -21,14 +22,80 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ProductChainAnswerDeliveryProgressionTest {
     private static final Instant NOW = Instant.parse("2026-08-08T06:00:00Z");
     private static final String HASH = "a".repeat(64);
+
+    @Test
+    void terminalAnswerUsesOutcomeRevisionWithoutRequiringPlanBinding() {
+        var task = mock(ChainPersistenceRecords.TaskRecord.class);
+        var outcome = mock(ChainPersistenceRecords.TaskOutcomeRecord.class);
+        var readiness = mock(ChainPersistenceRecords
+                .FinalizationReadinessRecord.class);
+        var terminal = mock(ProductChainTerminalOutcomeAuthority
+                .TerminalFacts.class);
+        var steps = mock(ProductChainStepAuthorityAdapter.class);
+        var revision = mock(io.paperagent.v2.contracts.PlanRevision.class);
+        var revisionId = new io.paperagent.v2.contracts.PlanRevisionId(
+                "revision-2");
+        var frameId = new io.paperagent.v2.contracts.TaskFrameId("frame-1");
+        var step = mock(io.paperagent.v2.contracts.PlanStep.class);
+        when(task.taskId()).thenReturn("task-1");
+        when(outcome.finalPlanRevisionId()).thenReturn("revision-2");
+        when(outcome.finalPlanId()).thenReturn("plan-1");
+        when(outcome.taskFrameId()).thenReturn("frame-1");
+        when(terminal.readiness()).thenReturn(readiness);
+        when(terminal.finalStepId()).thenReturn("step-final");
+        when(terminal.activationEventId()).thenReturn("activation-final");
+        when(readiness.finalPlanId()).thenReturn("plan-1");
+        when(readiness.finalPlanRevisionId()).thenReturn("revision-2");
+        when(revision.id()).thenReturn(revisionId);
+        when(revision.taskFrameId()).thenReturn(frameId);
+        when(revision.steps()).thenReturn(List.of(step));
+        when(step.id()).thenReturn(
+                new io.paperagent.v2.contracts.PlanStepId("step-final"));
+        when(steps.findPlanRevision("task-1", "revision-2"))
+                .thenReturn(Optional.of(revision));
+
+        var selected = ProductChainAnswerDeliveryProgression.terminalPlan(
+                task, outcome, terminal, steps);
+
+        assertEquals(revision, selected.revision());
+        assertEquals(step, selected.step());
+    }
+
+    @Test
+    void terminalAnswerFailsClosedWhenOutcomeRevisionIsUnavailable() {
+        var task = mock(ChainPersistenceRecords.TaskRecord.class);
+        var outcome = mock(ChainPersistenceRecords.TaskOutcomeRecord.class);
+        var readiness = mock(ChainPersistenceRecords
+                .FinalizationReadinessRecord.class);
+        var terminal = mock(ProductChainTerminalOutcomeAuthority
+                .TerminalFacts.class);
+        var steps = mock(ProductChainStepAuthorityAdapter.class);
+        when(task.taskId()).thenReturn("task-1");
+        when(outcome.finalPlanRevisionId()).thenReturn("revision-2");
+        when(terminal.readiness()).thenReturn(readiness);
+        when(terminal.finalStepId()).thenReturn("step-final");
+        when(terminal.activationEventId()).thenReturn("activation-final");
+        when(steps.findPlanRevision("task-1", "revision-2"))
+                .thenReturn(Optional.empty());
+
+        var failure = assertThrows(IllegalStateException.class, () ->
+                ProductChainAnswerDeliveryProgression.terminalPlan(
+                        task, outcome, terminal, steps));
+
+        assertEquals("CHAIN_ANSWER_PLAN_REVISION_MISSING",
+                failure.getMessage());
+    }
 
     @Test
     void latestDecisionUsesAuthoritySequenceRatherThanAuditTimestamp() {

@@ -18,6 +18,7 @@ import com.yanban.api.agent.v2.chain.persistence.ProductChainContextRepositoryAd
 import com.yanban.api.agent.v2.chain.persistence.ProductChainFoundationRepositoryAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainModelRepositoryAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainWorkflowRepositoryAdapter;
+import com.yanban.api.agent.v2.persistence.ProductChainStepAuthorityAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainFinalizationRepositoryAdapter;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.agent.AgentSession;
@@ -53,6 +54,8 @@ import io.paperagent.v2.chain.model.StrictChainProviderOutputParser;
 import io.paperagent.v2.chain.instruction.ChainInstructionStateReader;
 import io.paperagent.v2.chain.route.ChainRouteRuntime;
 import io.paperagent.v2.contracts.PlanId;
+import io.paperagent.v2.contracts.PlanRevision;
+import io.paperagent.v2.contracts.PlanStep;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -83,6 +86,8 @@ public final class ProductChainAnswerDeliveryProgression {
     private final NamedParameterJdbcTemplate jdbc;
     private final ChainDeliveryWriter deliveryWriter;
     private final ChainDeliveryMessagePort messages;
+    private final ProductChainDeliveryMessageAdapter productMessages;
+    private final ProductChainStepAuthorityAdapter stepAuthorities;
     private final ProductChainContextSourceFactory contextSources;
     private final ProductChainModelCallIdentity modelCallIdentity;
     private final ProductChainTerminalOutcomeAuthority terminalOutcomes;
@@ -100,6 +105,7 @@ public final class ProductChainAnswerDeliveryProgression {
             NamedParameterJdbcTemplate jdbc,
             ProductChainFinalizationRepositoryAdapter deliveryWriter,
             ProductChainDeliveryMessageAdapter messages,
+            ProductChainStepAuthorityAdapter stepAuthorities,
             ProductChainContextSourceFactory contextSources,
             ProductChainModelCallIdentity modelCallIdentity,
             ProductChainTerminalOutcomeAuthority terminalOutcomes) {
@@ -115,6 +121,9 @@ public final class ProductChainAnswerDeliveryProgression {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.deliveryWriter = Objects.requireNonNull(deliveryWriter, "deliveryWriter");
         this.messages = Objects.requireNonNull(messages, "messages");
+        this.productMessages = messages;
+        this.stepAuthorities = Objects.requireNonNull(
+                stepAuthorities, "stepAuthorities");
         this.contextSources = Objects.requireNonNull(
                 contextSources, "contextSources");
         this.modelCallIdentity = Objects.requireNonNull(
@@ -604,6 +613,68 @@ public final class ProductChainAnswerDeliveryProgression {
                 started.delivery().deliveryId(), now));
     }
 
+    /**
+     * Runs the optional model-authored terminal summary. If the frozen Outcome
+     * is valid but summary preparation or model generation fails in a known
+     * bounded way, a deterministic Outcome projection is delivered instead.
+     */
+    public void advancePersistentAnswer(
+            AgentSession session,
+            ChainPersistenceRecords.TaskRecord task,
+            ChainPersistenceRecords.InstructionRecord instruction,
+            Instant now) {
+        try {
+            invokePersistentAnswer(session, task, instruction, now);
+        } catch (RuntimeException failure) {
+            String diagnostic = fallbackDiagnostic(failure);
+            if (diagnostic == null) {
+                throw failure;
+            }
+            ChainPersistenceRecords.TaskOutcomeRecord outcome = finalization
+                    .findTaskOutcome(task.taskId())
+                    .orElseThrow(() -> failure);
+            // A fallback may summarize only an Outcome whose terminal root was
+            // already proven before model-specific preparation failed.
+            terminalOutcomes.requireExact(task, outcome);
+            deliverOutcomeFallback(
+                    task, instruction, outcome.outcomeId(), diagnostic, now);
+        }
+    }
+
+    /** Code-owned presentation fallback; TaskOutcome remains result authority. */
+    public ProductChainDeliveryMessageAdapter.OutcomeFallbackSubmission
+            deliverOutcomeFallback(
+                    ChainPersistenceRecords.TaskRecord task,
+                    ChainPersistenceRecords.InstructionRecord instruction,
+                    String outcomeId,
+                    String diagnosticCode,
+                    Instant now) {
+        Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(instruction, "instruction");
+        ChainPersistenceRecords.TaskOutcomeRecord outcome = finalization
+                .findTaskOutcome(task.taskId())
+                .filter(value -> value.outcomeId().equals(
+                        required(outcomeId, "outcomeId")))
+                .orElseThrow(() -> new IllegalStateException(
+                        "CHAIN_ANSWER_TASK_OUTCOME_IDENTITY_INVALID"));
+        if (!instruction.instructionId().equals(outcome.instructionId())
+                || !instruction.commandId().equals(
+                        outcome.sourceCommandId())) {
+            throw new IllegalStateException(
+                    "CHAIN_ANSWER_FALLBACK_INSTRUCTION_INVALID");
+        }
+        terminalOutcomes.requireExact(task, outcome);
+        return productMessages.deliverOutcomeFallback(
+                new ProductChainDeliveryMessageAdapter
+                        .OutcomeFallbackCommand(
+                        task.taskId(), outcome.outcomeId(),
+                        outcome.sourceCommandId(),
+                        required(diagnosticCode, "diagnosticCode"),
+                        ProductChainRuntimePolicySource.forTask(
+                                contexts, task.taskId()).policyVersion(),
+                        Objects.requireNonNull(now, "now")));
+    }
+
     /** Invokes persistent Answer and leaves only its accepted proposal. */
     public PersistentAnswerProposal invokePersistentAnswer(
             AgentSession session,
@@ -628,34 +699,10 @@ public final class ProductChainAnswerDeliveryProgression {
         boolean completed = outcome.outcomeType() == ChainTaskOutcomeStatus.COMPLETED;
         ChainWorkState answerState = completed
                 ? ChainWorkState.DELIVERING : ChainWorkState.TERMINAL;
-        List<ChainPersistenceRecords.PlanBindingRecord> exactBindings = workflow
-                .findPlanBindings(task.taskId()).stream()
-                .filter(value -> Objects.equals(value.taskFrameId(),
-                        outcome.taskFrameId()))
-                .filter(value -> Objects.equals(value.planId(),
-                        outcome.finalPlanId()))
-                .filter(value -> Objects.equals(value.planRevisionId(),
-                        outcome.finalPlanRevisionId()))
-                .toList();
-        if (exactBindings.size() != 1) {
-            throw new IllegalStateException(
-                    "CHAIN_ANSWER_PLAN_BINDING_MISSING_OR_AMBIGUOUS");
-        }
-        ChainPersistenceRecords.PlanBindingRecord binding =
-                exactBindings.get(0);
-        String answerStepId = terminal.finalStepId();
+        TerminalPlan plan = terminalPlan(
+                task, outcome, terminal, stepAuthorities);
+        String answerStepId = plan.step().id().value();
         String answerActivationId = terminal.activationEventId();
-        if (answerStepId == null) {
-            if (completed) {
-                throw new IllegalStateException(
-                        "CHAIN_ANSWER_TERMINAL_STEP_MISSING");
-            }
-            var fallback = executor.latestActivation(
-                    task.taskId(), binding.planRevisionId());
-            answerStepId = fallback.command().stepId();
-            answerActivationId = fallback.command().activationEventId();
-        }
-        executor.step(binding, answerStepId);
         String workspaceId = "product-workspace." + sha256(
                 "workspace\0AGENT_TURN:" + task.turnId());
         List<String> expectedArtifactRefs = outcome.finalArtifactId() == null
@@ -689,9 +736,10 @@ public final class ProductChainAnswerDeliveryProgression {
                         callIdentity.contextRevisionId(), task.taskId(),
                         callIdentity.parentContextRevisionId(), ChainRole.ANSWER,
                         answerState, "TASK_OUTCOME",
-                        instruction.instructionId(), binding.taskFrameId(), binding.planId(),
-                        binding.planRevisionId(), binding.planRevisionNumber(),
-                        answerStepId, answerActivationId,
+                        instruction.instructionId(), outcome.taskFrameId(),
+                        outcome.finalPlanId(), outcome.finalPlanRevisionId(),
+                        plan.revision().number(), answerStepId,
+                        answerActivationId,
                         task.projectId(), task.initialProjectVersion(), workspaceId,
                         outcome.finalArtifactId(), contextCandidateFingerprint,
                         contextValidation.validationId(),
@@ -887,28 +935,11 @@ public final class ProductChainAnswerDeliveryProgression {
                 : ChainProposalKind.ANSWER_STATUS_OR_FAILURE;
         ChainWorkState expectedState = completed
                 ? ChainWorkState.DELIVERING : ChainWorkState.TERMINAL;
-        List<ChainPersistenceRecords.PlanBindingRecord> bindings = workflow
-                .findPlanBindings(task.taskId()).stream()
-                .filter(value -> value.taskFrameId().equals(
-                        outcome.taskFrameId()))
-                .filter(value -> value.planId().equals(outcome.finalPlanId()))
-                .filter(value -> value.planRevisionId().equals(
-                        outcome.finalPlanRevisionId()))
-                .toList();
-        if (bindings.size() != 1) {
-            throw new IllegalStateException(
-                    "CHAIN_ANSWER_PLAN_BINDING_MISSING_OR_AMBIGUOUS");
-        }
-        ChainPersistenceRecords.PlanBindingRecord binding = bindings.get(0);
         var terminal = terminalOutcomes.requireExact(task, outcome);
-        String expectedStepId = terminal.finalStepId();
+        TerminalPlan plan = terminalPlan(
+                task, outcome, terminal, stepAuthorities);
+        String expectedStepId = plan.step().id().value();
         String expectedActivationId = terminal.activationEventId();
-        if (expectedStepId == null) {
-            var fallback = executor.latestActivation(
-                    task.taskId(), binding.planRevisionId());
-            expectedStepId = fallback.command().stepId();
-            expectedActivationId = fallback.command().activationEventId();
-        }
         String expectedContextId = ProductChainContextIdentity
                 .taskOutcomeAnswer(task.taskId(), outcome.outcomeId());
         List<ChainPersistenceRecords.WorkspaceCandidateRecord> candidates =
@@ -953,12 +984,12 @@ public final class ProductChainAnswerDeliveryProgression {
                 || !context.instructionId().equals(
                         instruction.instructionId())
                 || !Objects.equals(context.taskFrameId(),
-                        binding.taskFrameId())
-                || !Objects.equals(context.planId(), binding.planId())
+                        outcome.taskFrameId())
+                || !Objects.equals(context.planId(), outcome.finalPlanId())
                 || !Objects.equals(context.planRevisionId(),
-                        binding.planRevisionId())
+                        outcome.finalPlanRevisionId())
                 || !Objects.equals(context.planRevisionNumber(),
-                        binding.planRevisionNumber())
+                        plan.revision().number())
                 || !Objects.equals(context.stepId(), expectedStepId)
                 || !Objects.equals(context.activationEventId(),
                         expectedActivationId)
@@ -1505,6 +1536,69 @@ public final class ProductChainAnswerDeliveryProgression {
         return identity("context", required(taskId, "taskId")
                 + "\0ANSWER_DIRECT\0"
                 + required(routeDecisionId, "routeDecisionId"));
+    }
+
+    static TerminalPlan terminalPlan(
+            ChainPersistenceRecords.TaskRecord task,
+            ChainPersistenceRecords.TaskOutcomeRecord outcome,
+            ProductChainTerminalOutcomeAuthority.TerminalFacts terminal,
+            ProductChainStepAuthorityAdapter steps) {
+        Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(outcome, "outcome");
+        Objects.requireNonNull(terminal, "terminal");
+        Objects.requireNonNull(steps, "steps");
+        if (terminal.readiness() == null
+                || terminal.finalStepId() == null
+                || terminal.activationEventId() == null) {
+            throw new IllegalStateException(
+                    "CHAIN_ANSWER_OUTCOME_FALLBACK_REQUIRED");
+        }
+        PlanRevision revision = steps.findPlanRevision(
+                        task.taskId(), outcome.finalPlanRevisionId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "CHAIN_ANSWER_PLAN_REVISION_MISSING"));
+        if (!revision.id().value().equals(
+                        outcome.finalPlanRevisionId())
+                || !revision.taskFrameId().value().equals(
+                        outcome.taskFrameId())
+                || !terminal.readiness().finalPlanId().equals(
+                        outcome.finalPlanId())
+                || !terminal.readiness().finalPlanRevisionId().equals(
+                        revision.id().value())) {
+            throw new IllegalStateException(
+                    "CHAIN_ANSWER_PLAN_REVISION_IDENTITY_INVALID");
+        }
+        PlanStep step = revision.steps().stream()
+                .filter(value -> value.id().value().equals(
+                        terminal.finalStepId()))
+                .findFirst().orElseThrow(() -> new IllegalStateException(
+                        "CHAIN_ANSWER_TERMINAL_STEP_MISSING"));
+        return new TerminalPlan(revision, step);
+    }
+
+    private static String fallbackDiagnostic(RuntimeException failure) {
+        String message = Objects.toString(failure.getMessage(), "");
+        if (message.equals("Answer context input is blocked")) {
+            return "CHAIN_ANSWER_CONTEXT_INPUT_BLOCKED";
+        }
+        return switch (message) {
+            case "CHAIN_ANSWER_OUTCOME_FALLBACK_REQUIRED",
+                    "CHAIN_ANSWER_PLAN_REVISION_MISSING",
+                    "CHAIN_ANSWER_PLAN_REVISION_IDENTITY_INVALID",
+                    "CHAIN_ANSWER_PLAN_BINDING_MISSING_OR_AMBIGUOUS",
+                    "CHAIN_ANSWER_TERMINAL_STEP_MISSING",
+                    "CHAIN_ANSWER_CANDIDATE_IDENTITY_INVALID",
+                    "CHAIN_ANSWER_FINAL_DELIVERY_PROPOSAL_MISSING",
+                    "CHAIN_ANSWER_STATUS_FAILURE_PROPOSAL_MISSING" -> message;
+            default -> null;
+        };
+    }
+
+    record TerminalPlan(PlanRevision revision, PlanStep step) {
+        TerminalPlan {
+            Objects.requireNonNull(revision, "revision");
+            Objects.requireNonNull(step, "step");
+        }
     }
 
     private static String required(String value, String name) {
