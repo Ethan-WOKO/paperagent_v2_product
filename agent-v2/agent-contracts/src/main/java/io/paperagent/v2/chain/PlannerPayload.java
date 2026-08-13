@@ -11,6 +11,7 @@ public sealed interface PlannerPayload extends ChainProposalPayload permits
     record DirectRoute(
             String routeReason,
             String directTaskSpecification,
+            String inlineAnswerBody,
             List<String> userConstraints,
             List<String> answerRequiredRefs,
             boolean needsTool,
@@ -18,9 +19,28 @@ public sealed interface PlannerPayload extends ChainProposalPayload permits
             boolean needsProject,
             boolean needsPersistentProgress,
             GapValidation gapValidation) implements PlannerPayload {
+        /** Source-compatible constructor for pre-one-call test fixtures. */
+        public DirectRoute(
+                String routeReason,
+                String directTaskSpecification,
+                List<String> userConstraints,
+                List<String> answerRequiredRefs,
+                boolean needsTool,
+                boolean needsNetwork,
+                boolean needsProject,
+                boolean needsPersistentProgress,
+                GapValidation gapValidation) {
+            this(routeReason, directTaskSpecification,
+                    directTaskSpecification, userConstraints,
+                    answerRequiredRefs, needsTool, needsNetwork,
+                    needsProject, needsPersistentProgress, gapValidation);
+        }
+
         public DirectRoute {
             routeReason = ChainValues.required(routeReason, "routeReason");
             directTaskSpecification = ChainValues.required(directTaskSpecification, "directTaskSpecification");
+            inlineAnswerBody = ChainValues.required(
+                    inlineAnswerBody, "inlineAnswerBody");
             userConstraints = ChainValues.copy(userConstraints, "userConstraints");
             answerRequiredRefs = ChainValues.copy(answerRequiredRefs, "answerRequiredRefs");
             if (needsTool || needsNetwork || needsProject || needsPersistentProgress) {

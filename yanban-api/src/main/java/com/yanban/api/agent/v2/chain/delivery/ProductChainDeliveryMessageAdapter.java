@@ -10,6 +10,13 @@ import io.paperagent.v2.chain.ChainFoundationRepository;
 import io.paperagent.v2.chain.ChainModelRepository;
 import io.paperagent.v2.chain.ChainPersistenceRecords;
 import io.paperagent.v2.chain.ChainTaskOutcomeStatus;
+import io.paperagent.v2.chain.ChainExecutionMode;
+import io.paperagent.v2.chain.ChainProposalKind;
+import io.paperagent.v2.chain.ChainRole;
+import io.paperagent.v2.chain.ChainWorkState;
+import io.paperagent.v2.chain.ChainWorkflowRepository;
+import io.paperagent.v2.chain.PlannerPayload;
+import io.paperagent.v2.chain.model.StrictChainProviderOutputParser;
 import io.paperagent.v2.chain.delivery.ChainDeliveryMessagePort;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -40,6 +47,7 @@ public final class ProductChainDeliveryMessageAdapter
     private final ChainFoundationRepository foundations;
     private final ChainFinalizationRepository finalization;
     private final ChainModelRepository models;
+    private final ChainWorkflowRepository workflow;
     private final ChainDeliveryWriter deliveries;
     private final AgentTurnRepository turns;
     private final NamedParameterJdbcTemplate jdbc;
@@ -51,6 +59,7 @@ public final class ProductChainDeliveryMessageAdapter
             ChainFoundationRepository foundations,
             ChainFinalizationRepository finalization,
             ChainModelRepository models,
+            ChainWorkflowRepository workflow,
             ChainDeliveryWriter deliveries,
             AgentTurnRepository turns,
             NamedParameterJdbcTemplate jdbc,
@@ -60,6 +69,7 @@ public final class ProductChainDeliveryMessageAdapter
         this.finalization = Objects.requireNonNull(
                 finalization, "finalization");
         this.models = Objects.requireNonNull(models, "models");
+        this.workflow = Objects.requireNonNull(workflow, "workflow");
         this.deliveries = Objects.requireNonNull(deliveries, "deliveries");
         this.turns = Objects.requireNonNull(turns, "turns");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
@@ -70,6 +80,124 @@ public final class ProductChainDeliveryMessageAdapter
                 TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.terminalOutcomes = Objects.requireNonNull(
                 terminalOutcomes, "terminalOutcomes");
+    }
+
+    /** Atomically delivers the body produced by the accepted DIRECT Planner turn. */
+    public DirectPlannerSubmission deliverDirectPlanner(
+            DirectPlannerCommand command) {
+        Objects.requireNonNull(command, "command");
+        return required(write.execute(status ->
+                deliverDirectPlannerLocked(command)));
+    }
+
+    private DirectPlannerSubmission deliverDirectPlannerLocked(
+            DirectPlannerCommand command) {
+        ChainPersistenceRecords.TaskRecord task = lockTask(command.taskId());
+        ChainPersistenceRecords.RouteDecisionRecord route = workflow
+                .findRouteDecisions(task.taskId()).stream()
+                .filter(value -> value.routeDecisionId().equals(
+                        command.route().routeDecisionId()))
+                .findFirst().orElseThrow(() -> new IllegalStateException(
+                        "DIRECT Planner formal route is missing"));
+        require(sameIgnoringTime(route, command.route())
+                        && route.taskId().equals(task.taskId())
+                        && route.route() == ChainExecutionMode.DIRECT
+                        && route.instructionId().equals(
+                        command.instructionId())
+                        && !route.needsTool() && !route.needsNetwork()
+                        && !route.needsProject()
+                        && !route.needsPersistentProgress(),
+                "DIRECT Planner Delivery route is invalid");
+        ChainPersistenceRecords.ModelProposalRecord proposal = models
+                .findProposal(route.proposalId()).orElseThrow(() ->
+                        new IllegalStateException(
+                                "DIRECT Planner proposal is missing"));
+        require(proposal.taskId().equals(task.taskId())
+                        && proposal.role() == ChainRole.PLANNER
+                        && proposal.proposalKind()
+                        == ChainProposalKind.PLANNER_DIRECT_ROUTE
+                        && "ANSWER_BODY".equals(
+                        proposal.bodyAuthorityType())
+                        && proposal.bodyAuthorityRef() != null,
+                "DIRECT Planner proposal body authority is invalid");
+        ChainPersistenceRecords.ContentRecord content = models
+                .findContent(proposal.bodyAuthorityRef()).orElseThrow(() ->
+                        new IllegalStateException(
+                                "DIRECT Planner answer body is missing"));
+        require(content.taskId().equals(task.taskId())
+                        && content.invocationId().equals(
+                        proposal.invocationId())
+                        && sha256(content.body()).equals(
+                        content.bodySha256()),
+                "DIRECT Planner answer body changed");
+        PlannerPayload.DirectRoute payload = directPlannerPayload(
+                proposal, content);
+        require(route.directTaskSpecification().json().equals(
+                        canonicalObject("specification",
+                                payload.directTaskSpecification()))
+                        && route.userConstraints().json().equals(
+                        canonicalArray(payload.userConstraints()))
+                        && route.answerRequiredRefs().json().equals(
+                        canonicalArray(payload.answerRequiredRefs())),
+                "DIRECT Planner route changed validated answer binding");
+        String identity = sha256(task.taskId() + "\0"
+                + route.routeDecisionId() + "\0" + proposal.proposalId()
+                + "\0" + content.contentId());
+        String deliveryId = "delivery.direct-planner." + identity;
+        ChainPersistenceRecords.DeliveryRecord delivery = finalization
+                .findDeliveries(task.taskId()).stream()
+                .filter(value -> value.deliveryId().equals(deliveryId))
+                .findFirst().orElse(null);
+        if (delivery == null) {
+            long messageId = insertFallbackMessage(
+                    task, deliveryId, content.body());
+            ChainPersistenceRecords.DeliveryRecord requested =
+                    new ChainPersistenceRecords.DeliveryRecord(
+                            deliveryId, task.taskId(),
+                            "delivery.direct-planner.event." + identity,
+                            command.sourceCommandId(),
+                            route.routeDecisionId(), null, null, null,
+                            content.contentId(), messageId,
+                            command.committedAt());
+            var appended = deliveries.appendDelivery(
+                    new ChainPersistenceRecords.AuthoritativeFact<>(
+                            new ChainPersistenceRecords.AuthorityEventRequest(
+                                    requested.eventId(), requested.taskId(),
+                                    "DELIVERY", null,
+                                    sha256("DIRECT_PLANNER\0" + identity),
+                                    requested.createdAt()), requested));
+            require(sameIgnoringTime(requested, appended.fact()),
+                    "DIRECT Planner Delivery append changed identity");
+            delivery = appended.fact();
+        }
+        verifyDirectPlannerDelivery(
+                delivery, task, route, proposal, content,
+                command.sourceCommandId());
+        List<ChainPersistenceRecords.DeliveryEventRecord> events = finalization
+                .findDeliveryEvents(delivery.deliveryId()).stream()
+                .sorted(Comparator.comparingLong(
+                        ChainPersistenceRecords.DeliveryEventRecord
+                                ::eventSequence)).toList();
+        if (!events.isEmpty()) {
+            require(events.size() == 1,
+                    "DIRECT Planner Delivery event prefix is ambiguous");
+            ChainPersistenceRecords.DeliveryEventRecord event = events.get(0);
+            verifyDirectPlannerEvent(event, delivery, command);
+            AgentTurn turn = sourceTurn(task, delivery);
+            require(AgentTurn.STATUS_COMPLETED.equals(turn.getStatus())
+                            && Objects.equals(turn.getAssistantMessageId(),
+                            delivery.assistantMessageId()),
+                    "DIRECT Planner Delivery replay lacks completed Turn");
+            verifyFallbackMessage(message(delivery.assistantMessageId()),
+                    task, delivery.deliveryId(), content.body());
+            return new DirectPlannerSubmission(delivery, event, true);
+        }
+        AgentTurn turn = runningTurn(task, delivery);
+        ChainPersistenceRecords.DeliveryEventRecord event =
+                appendDirectPlannerSuccess(delivery, command);
+        turn.complete(delivery.assistantMessageId());
+        turns.saveAndFlush(turn);
+        return new DirectPlannerSubmission(delivery, event, false);
     }
 
     /**
@@ -303,6 +431,30 @@ public final class ProductChainDeliveryMessageAdapter
                     "retrying Delivery must keep its Turn open");
         }
         return new AttemptSubmission(existing, true);
+    }
+
+    private ChainPersistenceRecords.DeliveryEventRecord
+            appendDirectPlannerSuccess(
+                    ChainPersistenceRecords.DeliveryRecord delivery,
+                    DirectPlannerCommand command) {
+        String eventId = "delivery.direct-planner.success." + sha256(
+                delivery.deliveryId());
+        ChainPersistenceRecords.DeliveryEventRecord requested =
+                new ChainPersistenceRecords.DeliveryEventRecord(
+                        delivery.deliveryId(), 1L, delivery.taskId(), eventId,
+                        ChainDeliveryStatus.SUCCEEDED, 1, null,
+                        command.runtimePolicyVersion(), command.committedAt());
+        var appended = deliveries.appendDeliveryEvent(
+                new ChainPersistenceRecords.AuthoritativeFact<>(
+                        new ChainPersistenceRecords.AuthorityEventRequest(
+                                eventId, delivery.taskId(),
+                                "DELIVERY_SUCCEEDED", null,
+                                sha256(delivery.deliveryId()
+                                        + "\0DIRECT_PLANNER"),
+                                command.committedAt()), requested));
+        require(sameIgnoringTime(requested, appended.fact()),
+                "DIRECT Planner Delivery event changed identity");
+        return appended.fact();
     }
 
     private ChainPersistenceRecords.DeliveryEventRecord appendFallbackSuccess(
@@ -585,6 +737,47 @@ public final class ProductChainDeliveryMessageAdapter
         return rows.isEmpty() ? null : rows.get(0);
     }
 
+    private static void verifyDirectPlannerDelivery(
+            ChainPersistenceRecords.DeliveryRecord delivery,
+            ChainPersistenceRecords.TaskRecord task,
+            ChainPersistenceRecords.RouteDecisionRecord route,
+            ChainPersistenceRecords.ModelProposalRecord proposal,
+            ChainPersistenceRecords.ContentRecord content,
+            String sourceCommandId) {
+        require(delivery.taskId().equals(task.taskId())
+                        && delivery.sourceCommandId().equals(
+                        sourceCommandId)
+                        && Objects.equals(delivery.routeDecisionId(),
+                        route.routeDecisionId())
+                        && delivery.taskOutcomeId() == null
+                        && delivery.gapId() == null
+                        && delivery.decisionId() == null
+                        && Objects.equals(delivery.answerContentId(),
+                        content.contentId())
+                        && delivery.assistantMessageId() != null
+                        && proposal.bodyAuthorityRef().equals(
+                        content.contentId()),
+                "DIRECT Planner Delivery changed formal binding");
+    }
+
+    private static void verifyDirectPlannerEvent(
+            ChainPersistenceRecords.DeliveryEventRecord event,
+            ChainPersistenceRecords.DeliveryRecord delivery,
+            DirectPlannerCommand command) {
+        require(event.deliveryId().equals(delivery.deliveryId())
+                        && event.taskId().equals(delivery.taskId())
+                        && event.eventSequence() == 1L
+                        && event.attemptNo() == 1
+                        && event.eventKind() == ChainDeliveryStatus.SUCCEEDED
+                        && event.errorCode() == null
+                        && event.eventId().equals(
+                        "delivery.direct-planner.success."
+                                + sha256(delivery.deliveryId()))
+                        && event.runtimePolicyVersion().equals(
+                        command.runtimePolicyVersion()),
+                "DIRECT Planner Delivery replay changed event identity");
+    }
+
     private static void verifyFallbackDelivery(
             ChainPersistenceRecords.DeliveryRecord delivery,
             ChainPersistenceRecords.TaskOutcomeRecord outcome) {
@@ -711,6 +904,45 @@ public final class ProductChainDeliveryMessageAdapter
         }
     }
 
+    private static PlannerPayload.DirectRoute directPlannerPayload(
+            ChainPersistenceRecords.ModelProposalRecord proposal,
+            ChainPersistenceRecords.ContentRecord content) {
+        String rawPayload = proposal.payload().json().replace(
+                "\"answerBodyRef\":\"" + content.contentId() + "\"",
+                "\"inlineAnswerBody\":" + jsonString(content.body()));
+        var output = new StrictChainProviderOutputParser().parse(
+                "{\"schemaVersion\":\"1\",\"kind\":\"DIRECT_ROUTE\","
+                        + "\"payload\":" + rawPayload + "}",
+                ChainRole.PLANNER, ChainWorkState.PLANNING, null);
+        return (PlannerPayload.DirectRoute) output.payload();
+    }
+
+    private static String canonicalObject(String key, String value) {
+        return "{" + jsonString(key) + ":" + jsonString(value) + "}";
+    }
+
+    private static String canonicalArray(List<String> values) {
+        return values.stream().map(ProductChainDeliveryMessageAdapter
+                        ::jsonString)
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    private static String jsonString(String value) {
+        StringBuilder output = new StringBuilder("\"");
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            switch (character) {
+                case '"' -> output.append("\\\"");
+                case '\\' -> output.append("\\\\");
+                case '\n' -> output.append("\\n");
+                case '\r' -> output.append("\\r");
+                case '\t' -> output.append("\\t");
+                default -> output.append(character);
+            }
+        }
+        return output.append('"').toString();
+    }
+
     static String outcomeFallbackBody(
             ChainPersistenceRecords.TaskOutcomeRecord outcome,
             String diagnosticCode) {
@@ -778,6 +1010,37 @@ public final class ProductChainDeliveryMessageAdapter
     private record ReservationRow(
             String deliveryId, String taskId, String answerContentId,
             String answerBodySha256, long assistantMessageId) {
+    }
+
+    public record DirectPlannerCommand(
+            String taskId,
+            String instructionId,
+            String sourceCommandId,
+            ChainPersistenceRecords.RouteDecisionRecord route,
+            String runtimePolicyVersion,
+            Instant committedAt) {
+        public DirectPlannerCommand {
+            if (taskId == null || taskId.isBlank()
+                    || instructionId == null || instructionId.isBlank()
+                    || sourceCommandId == null || sourceCommandId.isBlank()
+                    || runtimePolicyVersion == null
+                    || runtimePolicyVersion.isBlank()) {
+                throw new IllegalArgumentException(
+                        "DIRECT Planner command identity must not be blank");
+            }
+            Objects.requireNonNull(route, "route");
+            Objects.requireNonNull(committedAt, "committedAt");
+        }
+    }
+
+    public record DirectPlannerSubmission(
+            ChainPersistenceRecords.DeliveryRecord delivery,
+            ChainPersistenceRecords.DeliveryEventRecord event,
+            boolean replayed) {
+        public DirectPlannerSubmission {
+            Objects.requireNonNull(delivery, "delivery");
+            Objects.requireNonNull(event, "event");
+        }
     }
 
     public record OutcomeFallbackCommand(

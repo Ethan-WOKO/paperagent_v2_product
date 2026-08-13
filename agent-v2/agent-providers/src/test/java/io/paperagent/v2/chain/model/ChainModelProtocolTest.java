@@ -110,6 +110,27 @@ class ChainModelProtocolTest {
     }
 
     @Test
+    void directRouteRequiresOneNonblankDeliverableAnswer() {
+        PlannerPayload.DirectRoute valid = new PlannerPayload.DirectRoute(
+                "plain knowledge question", "explain cross references",
+                "LaTeX 交叉引用使用 label 和 ref。", List.of(), List.of(),
+                false, false, false, false, null);
+        assertEquals(valid, parser.parse(envelope(valid), ChainRole.PLANNER,
+                ChainWorkState.PLANNING, null).payload());
+
+        String empty = envelope(valid).replace(
+                "LaTeX 交叉引用使用 label 和 ref。", "   ");
+        assertEquals(ChainProviderProtocolCode.TYPE_MISMATCH,
+                assertThrows(ChainProviderProtocolException.class,
+                        () -> parser.parse(empty, ChainRole.PLANNER,
+                                ChainWorkState.PLANNING, null)).code());
+        assertEquals(ChainProviderProtocolCode.INVALID_JSON,
+                assertThrows(ChainProviderProtocolException.class,
+                        () -> parser.parse("{not-json", ChainRole.PLANNER,
+                                ChainWorkState.PLANNING, null)).code());
+    }
+
+    @Test
     void validatesBoundGapAndStillPendingSuccessorWithoutChangingSchema() {
         GapValidation stillPending = new GapValidation("gap-1", List.of(
                 new GapValidation.Check("need owner value", false, "answer-1")),

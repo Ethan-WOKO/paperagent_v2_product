@@ -901,6 +901,17 @@ class ProjectChainRecoveryTest {
     }
 
     @Test
+    void oneCallDirectRouteSelectsMechanicalDeliveryInsteadOfAnswerModel() {
+        var selected = selection(Scenario.oneCallDirectRoute());
+
+        var mechanical = assertInstanceOf(
+                ProductChainNextRoleSelector
+                        .MechanicalDirectPlannerDelivery.class,
+                selected);
+        assertEquals("route-direct-1", mechanical.routeDecisionId());
+    }
+
+    @Test
     void reservedDeliveryUsesOnlyTypedMechanicalRecovery() {
         for (ChainTaskOutcomeStatus status : List.of(
                 ChainTaskOutcomeStatus.COMPLETED,
@@ -2609,6 +2620,7 @@ class ProjectChainRecoveryTest {
                      "PENDING_ITEM_VALIDATION", "provider", "model", 1,
                      ChainRuntimePolicy.V1.policyVersion(), NOW.plusSeconds(2));
             String payload = "{\"answerRequiredRefs\":[],"
+                    + "\"answerBodyRef\":\"content-validation-1\","
                     + "\"directTaskSpecification\":\"answer\","
                     + "\"gapValidation\":{\"checks\":[{"
                     + "\"closingCondition\":\"owner supplied\","
@@ -2624,7 +2636,8 @@ class ProjectChainRecoveryTest {
                     "proposal-validation-1", "task-1",
                     invocation.invocationId(), 1, ChainRole.PLANNER,
                     ChainProposalKind.PLANNER_DIRECT_ROUTE,
-                    json(payload), json("[]"), null, null,
+                    json(payload), json("[]"), "ANSWER_BODY",
+                    "content-validation-1",
                     NOW.plusSeconds(2));
             var accepted = new ChainPersistenceRecords.ProposalStateEventRecord(
                     proposal.proposalId(), 1, "task-1",
@@ -2651,6 +2664,47 @@ class ProjectChainRecoveryTest {
                     List.of(invocation), List.of(proposal),
                     Map.of(proposal.proposalId(), states), List.of(),
                     Optional.empty(), StableScenario.empty());
+        }
+
+        static Scenario oneCallDirectRoute() {
+            Scenario base = withInstruction(ChainInstructionRelation.INITIAL);
+            var invocation = new ChainPersistenceRecords.ModelInvocationRecord(
+                    "invocation-direct-1", "task-1", "context-direct-1",
+                    "completion-direct-1", ChainRole.PLANNER,
+                    ChainWorkState.PLANNING, "INITIAL_INTAKE", "provider",
+                    "model", 1, ChainRuntimePolicy.V1.policyVersion(), NOW);
+            var proposal = new ChainPersistenceRecords.ModelProposalRecord(
+                    "proposal-direct-1", "task-1", invocation.invocationId(),
+                    1, ChainRole.PLANNER,
+                    ChainProposalKind.PLANNER_DIRECT_ROUTE,
+                    json("{\"answerBodyRef\":\"content-direct-1\"}"),
+                    json("[]"), "ANSWER_BODY", "content-direct-1", NOW);
+            var accepted = new ChainPersistenceRecords.ProposalStateEventRecord(
+                    proposal.proposalId(), 1L, "task-1",
+                    "event-direct-accepted", ChainProposalState.ACCEPTED,
+                    null, null, NOW);
+            var route = new ChainPersistenceRecords.RouteDecisionRecord(
+                    "route-direct-1", "task-1", "event-direct-route",
+                    "instruction-1", proposal.proposalId(),
+                    ChainPersistenceRecords.RouteDecisionType.INITIAL, 0,
+                    io.paperagent.v2.chain.ChainExecutionMode.DIRECT,
+                    "knowledge answer",
+                    json("{\"specification\":\"explain\"}"), json("[]"),
+                    json("[]"), false, false, false, false,
+                    null, null, null, NOW.plusSeconds(1));
+            var bound = new ChainPersistenceRecords.ProposalStateEventRecord(
+                    proposal.proposalId(), 2L, "task-1",
+                    "event-direct-bound",
+                    ChainProposalState.REPLACED_BY_OFFICIAL_RESULT,
+                    "ROUTE_DECISION", route.routeDecisionId(),
+                    NOW.plusSeconds(1));
+            return new Scenario(
+                    List.of(base.bindings().get(0), accepted, route, bound),
+                    base.bindings(), base.instructions(), List.of(route),
+                    List.of(), List.of(), List.of(), List.of(), List.of(),
+                    Map.of(), List.of(invocation), List.of(proposal),
+                    Map.of(proposal.proposalId(), List.of(accepted, bound)),
+                    List.of(), Optional.empty(), StableScenario.empty());
         }
 
         static Scenario acceptedProposal() {

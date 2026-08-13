@@ -16,6 +16,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ProjectChainPlannerProgressionBoundaryTest {
 
     @Test
+    void directPlannerBranchDeliversWithoutPlanWorkspaceOrSecondModelCall()
+            throws Exception {
+        String source = Files.readString(sourcePath());
+        int branch = source.indexOf(
+                "if (typed instanceof PlannerPayload.DirectRoute direct)");
+        int nextBranch = source.indexOf(
+                "if (typed instanceof PlannerPayload.PersistentPlan persistent)",
+                branch);
+        String directBranch = source.substring(branch, nextBranch);
+
+        assertTrue(directBranch.contains(".commitDirect("));
+        assertTrue(directBranch.contains("deliverDirectPlanner("));
+        assertFalse(directBranch.contains("protocol.invoke("));
+        assertFalse(directBranch.contains("invokeDirectAnswer("));
+        assertFalse(directBranch.contains("commitInitial("));
+        assertFalse(directBranch.contains("Workspace"));
+        assertFalse(directBranch.contains("execute"));
+    }
+
+    @Test
     void persistentPlannerBranchStopsAfterTheFormalPlanCut()
             throws Exception {
         String source = Files.readString(sourcePath());

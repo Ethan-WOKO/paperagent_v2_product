@@ -72,6 +72,46 @@ class ChainModelProtocolTest {
     }
 
     @Test
+    void plannerDirectRoutePersistsItsAnswerAndReplaysWithOneProviderCall() {
+        Store store = new Store(completeContext(
+                ChainRole.PLANNER, ChainWorkState.PLANNING,
+                "planning"), Set.of());
+        AtomicInteger calls = new AtomicInteger();
+        PlannerPayload.DirectRoute direct = new PlannerPayload.DirectRoute(
+                "no persistent boundary", "explain LaTeX cross references",
+                "LaTeX 交叉引用通过标签和引用命令关联对象。",
+                List.of(), List.of(), false, false, false, false, null);
+        ChainModelProtocolService service = new ChainModelProtocolService(
+                store, store, store, store,
+                request -> {
+                    calls.incrementAndGet();
+                    return new ChainModelCallResult.Success(
+                            "direct", "STOP", 4, Map.of());
+                }, (raw, role, state, gap) -> new ProviderRoleOutput(
+                "1", direct.kind().wireName(), direct));
+        ChainModelProtocolRequest request = request(
+                ChainRole.PLANNER, ChainWorkState.PLANNING, "planning");
+
+        ChainModelProtocolOutcome.ProposalReady first = assertInstanceOf(
+                ChainModelProtocolOutcome.ProposalReady.class,
+                service.invoke(request));
+        ChainModelProtocolOutcome.ProposalReady replay = assertInstanceOf(
+                ChainModelProtocolOutcome.ProposalReady.class,
+                service.invoke(request));
+
+        assertEquals(1, calls.get());
+        assertEquals("LaTeX 交叉引用通过标签和引用命令关联对象。",
+                first.bodyContent().body());
+        assertEquals("ANSWER_BODY",
+                first.proposal().bodyAuthorityType());
+        assertTrue(first.proposal().payload().json().contains(
+                "answerBodyRef"));
+        assertFalse(first.proposal().payload().json().contains(
+                "LaTeX 交叉引用"));
+        assertTrue(replay.recovered());
+    }
+
+    @Test
     void recoveredProposalRequiresItsValidatedAttemptAndCanonicalDigest() {
         Store store = new Store(completeContext(), Set.of("route-1"));
         ChainModelProtocolService service = service(

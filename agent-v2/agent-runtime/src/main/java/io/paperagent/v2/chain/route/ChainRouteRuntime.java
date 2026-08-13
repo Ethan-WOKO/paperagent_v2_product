@@ -297,7 +297,10 @@ public final class ChainRouteRuntime {
 
     private static void validatePayload(
             ChainPersistenceRecords.ModelProposalRecord proposal, Object payload) {
-        String canonical = ChainRouteCanonical.payload(payload);
+        String canonical = payload instanceof PlannerPayload.DirectRoute
+                ? ChainRouteCanonical.payload(
+                payload, proposal.bodyAuthorityRef())
+                : ChainRouteCanonical.payload(payload);
         if (!canonical.equals(proposal.payload().json())
                 || !ChainRouteCanonical.sha256(canonical).equals(proposal.payload().sha256())) {
             throw failure(ChainRouteException.Code.PROPOSAL_PAYLOAD_MISMATCH,

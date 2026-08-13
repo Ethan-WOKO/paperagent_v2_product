@@ -7,6 +7,7 @@ import com.yanban.api.agent.v2.chain.model.ProductChainChatModelAdapter;
 import com.yanban.api.agent.v2.chain.model.ProductChainModelEndpoint;
 import com.yanban.api.agent.v2.chain.model.ProductChainModelMaterializationAdapter;
 import com.yanban.api.agent.v2.chain.model.ProductChainProposalAdmissionAdapter;
+import com.yanban.api.agent.v2.chain.delivery.ProductChainDeliveryMessageAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainContextRepositoryAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainFoundationRepositoryAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainModelRepositoryAdapter;
@@ -68,6 +69,7 @@ public final class ProjectChainPlannerProgression {
     private final ProductChainPlanTransitionDriver planTransitions;
     private final ProductChainContextSourceFactory contextSources;
     private final ProductChainModelCallIdentity modelCallIdentity;
+    private final ProductChainDeliveryMessageAdapter deliveryMessages;
 
     public ProjectChainPlannerProgression(
             ProductChainContextRepositoryAdapter contexts,
@@ -82,7 +84,8 @@ public final class ProjectChainPlannerProgression {
             io.paperagent.v2.chain.ChainFinalizationRepository finalization,
             ProductChainPlanTransitionDriver planTransitions,
             ProductChainContextSourceFactory contextSources,
-            ProductChainModelCallIdentity modelCallIdentity) {
+            ProductChainModelCallIdentity modelCallIdentity,
+            ProductChainDeliveryMessageAdapter deliveryMessages) {
         this.contexts = contexts;
         this.models = models;
         this.workflow = workflow;
@@ -99,6 +102,8 @@ public final class ProjectChainPlannerProgression {
                 contextSources, "contextSources");
         this.modelCallIdentity = Objects.requireNonNull(
                 modelCallIdentity, "modelCallIdentity");
+        this.deliveryMessages = Objects.requireNonNull(
+                deliveryMessages, "deliveryMessages");
     }
 
     public ProgressionResult advance(
@@ -259,6 +264,37 @@ public final class ProjectChainPlannerProgression {
     }
 
     /**
+     * Mechanically completes a one-call DIRECT result after a crash between
+     * Route commit and Delivery. No Provider is invoked.
+     */
+    public ProductChainDeliveryMessageAdapter.DirectPlannerSubmission
+            deliverAcceptedDirect(
+                    ChainPersistenceRecords.TaskRecord task,
+                    ChainPersistenceRecords.InstructionRecord instruction,
+                    String routeDecisionId,
+                    Instant committedAt) {
+        Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(instruction, "instruction");
+        ChainPersistenceRecords.RouteDecisionRecord route = workflow
+                .findRouteDecisions(task.taskId()).stream()
+                .filter(value -> value.routeDecisionId().equals(
+                        required(routeDecisionId, "routeDecisionId")))
+                .filter(value -> value.instructionId().equals(
+                        instruction.instructionId()))
+                .filter(value -> value.route()
+                        == io.paperagent.v2.chain.ChainExecutionMode.DIRECT)
+                .findFirst().orElseThrow(() -> failure(
+                        "CHAIN_DIRECT_PLANNER_ROUTE_MISSING"));
+        return deliveryMessages.deliverDirectPlanner(
+                new ProductChainDeliveryMessageAdapter.DirectPlannerCommand(
+                        task.taskId(), instruction.instructionId(),
+                        instruction.commandId(), route,
+                        ProductChainRuntimePolicySource.forTask(
+                                contexts, task.taskId()).policyVersion(),
+                        Objects.requireNonNull(committedAt, "committedAt")));
+    }
+
+    /**
      * Consumes one already persisted Planner proposal without invoking a
      * model. The proposal must still be bound to the current task Instruction
      * and its original COMPLETE ContextRevision.
@@ -352,8 +388,17 @@ public final class ProjectChainPlannerProgression {
             ChainPersistenceRecords.RouteDecisionRecord decision = new ChainRouteRuntime(models, workflow, (ChainRouteDecisionWriter) workflow,
                     new ChainInstructionStateReader(foundations, workflow, finalization), binder)
                     .commitDirect(new ChainRouteRuntime.InitialRouteRequest(common), direct);
+            var delivered = deliveryMessages.deliverDirectPlanner(
+                    new ProductChainDeliveryMessageAdapter
+                            .DirectPlannerCommand(
+                            task.taskId(), instruction.instructionId(),
+                            instruction.commandId(), decision,
+                            ProductChainRuntimePolicySource.forTask(
+                                    contexts, task.taskId()).policyVersion(),
+                            now));
             return new FormalCommit(
-                    new ProgressionResult(false, decision.eventId()),
+                    new ProgressionResult(false,
+                            delivered.event().eventId()),
                     "ROUTE_DECISION", decision.routeDecisionId());
         }
         if (typed instanceof PlannerPayload.PersistentPlan persistent) {
