@@ -36,6 +36,24 @@ class ProjectChainPlannerProgressionBoundaryTest {
     }
 
     @Test
+    void plannerAndDeliveryShareTheValidatedPersistedBodyDecoder()
+            throws Exception {
+        String planner = Files.readString(sourcePath());
+        String delivery = Files.readString(Path.of(
+                "src/main/java/com/yanban/api/agent/v2/chain/delivery/"
+                        + "ProductChainDeliveryMessageAdapter.java"));
+
+        assertTrue(planner.contains(
+                "ProductChainPersistedProposalDecoder.decode("));
+        assertFalse(planner.contains(
+                "proposal.payload().json() + \"}\""));
+        assertTrue(delivery.contains(
+                "ProductChainPersistedProposalDecoder.decode("));
+        assertFalse(delivery.contains(
+                "proposal.payload().json().replace("));
+    }
+
+    @Test
     void persistentPlannerBranchStopsAfterTheFormalPlanCut()
             throws Exception {
         String source = Files.readString(sourcePath());

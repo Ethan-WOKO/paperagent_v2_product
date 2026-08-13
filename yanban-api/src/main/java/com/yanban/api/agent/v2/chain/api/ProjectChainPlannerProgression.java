@@ -253,7 +253,7 @@ public final class ProjectChainPlannerProgression {
             throw new IllegalStateException("Planner model call failed");
         }
         var proposal = ready.proposal();
-        var typed = decodePayload(proposal, state);
+        var typed = decodePayload(ready, state, null);
         var admission = new ProductChainProposalAdmissionAdapter(
                 jdbc, transactions, models, models);
         admission.admit(new io.paperagent.v2.chain.model.ChainProposalAdmissionService.AdmissionRequest(
@@ -787,21 +787,31 @@ public final class ProjectChainPlannerProgression {
                 .orElseThrow(() -> new IllegalStateException("admitted proposal has no state"));
     }
 
-    private static PlannerPayload decodePayload(
+    private PlannerPayload decodePayload(
             ChainPersistenceRecords.ModelProposalRecord proposal,
             ChainWorkState state) {
         return decodePayload(proposal, state, null);
     }
 
-    private static PlannerPayload decodePayload(
+    private PlannerPayload decodePayload(
             ChainPersistenceRecords.ModelProposalRecord proposal,
             ChainWorkState state,
             String boundGapId) {
-        String raw = "{\"schemaVersion\":\"1\",\"kind\":\""
-                + proposal.proposalKind().wireName() + "\",\"payload\":"
-                + proposal.payload().json() + "}";
-        return (PlannerPayload) new io.paperagent.v2.chain.model.StrictChainProviderOutputParser()
-                .parse(raw, ChainRole.PLANNER, state, boundGapId).payload();
+        ChainPersistenceRecords.ContentRecord body =
+                proposal.bodyAuthorityRef() == null ? null : models
+                        .findContent(proposal.bodyAuthorityRef())
+                        .orElseThrow(() -> failure(
+                                "CHAIN_PLANNER_PROPOSAL_BODY_MISSING"));
+        return decodePayload(new ChainModelProtocolOutcome.ProposalReady(
+                proposal, body, 1, true), state, boundGapId);
+    }
+
+    private static PlannerPayload decodePayload(
+            ChainModelProtocolOutcome.ProposalReady ready,
+            ChainWorkState state,
+            String boundGapId) {
+        return (PlannerPayload) ProductChainPersistedProposalDecoder.decode(
+                ready, state, boundGapId).payload();
     }
 
     private static String identity(String prefix, String value) {

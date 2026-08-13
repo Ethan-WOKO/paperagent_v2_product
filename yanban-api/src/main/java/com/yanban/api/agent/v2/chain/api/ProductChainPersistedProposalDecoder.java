@@ -18,13 +18,13 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Objects;
 
 /** Restores a persisted ref-only proposal into its transient provider wire shape. */
-final class ProductChainPersistedProposalDecoder {
+public final class ProductChainPersistedProposalDecoder {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private ProductChainPersistedProposalDecoder() {
     }
 
-    static ProviderRoleOutput decode(
+    public static ProviderRoleOutput decode(
             ChainModelProtocolOutcome.ProposalReady ready,
             ChainWorkState state,
             String gapId) {
@@ -73,7 +73,7 @@ final class ProductChainPersistedProposalDecoder {
             ChainPersistenceRecords.ModelProposalRecord proposal,
             ChainPersistenceRecords.ContentRecord body,
             BodyFields fields) {
-        if (proposal.role() != fields.role()
+        if (!fields.roles().contains(proposal.role())
                 || !proposal.taskId().equals(body.taskId())
                 || !proposal.invocationId().equals(body.invocationId())
                 || !body.contentKind().name().equals(
@@ -87,13 +87,14 @@ final class ProductChainPersistedProposalDecoder {
     private static BodyFields bodyFields(ChainContentKind kind) {
         return switch (kind) {
             case ANSWER_BODY -> new BodyFields(
-                    ChainRole.ANSWER, "answerBodyRef", "inlineAnswerBody");
+                    java.util.Set.of(ChainRole.PLANNER, ChainRole.ANSWER),
+                    "answerBodyRef", "inlineAnswerBody");
             case CANDIDATE_STEP_RESULT -> new BodyFields(
-                    ChainRole.EXECUTOR, "candidateResultBodyRef",
-                    "inlineCandidateResultBody");
+                    java.util.Set.of(ChainRole.EXECUTOR),
+                    "candidateResultBodyRef", "inlineCandidateResultBody");
             case WORKSPACE_CHANGE_BODY -> new BodyFields(
-                    ChainRole.EXECUTOR, "workspaceChangeBodyRef",
-                    "inlineCanonicalChangeBody");
+                    java.util.Set.of(ChainRole.EXECUTOR),
+                    "workspaceChangeBodyRef", "inlineCanonicalChangeBody");
             default -> throw failure("CHAIN_PROPOSAL_BODY_KIND_INVALID");
         };
     }
@@ -117,6 +118,7 @@ final class ProductChainPersistedProposalDecoder {
     }
 
     private record BodyFields(
-            ChainRole role, String refField, String inlineField) {
+            java.util.Set<ChainRole> roles,
+            String refField, String inlineField) {
     }
 }

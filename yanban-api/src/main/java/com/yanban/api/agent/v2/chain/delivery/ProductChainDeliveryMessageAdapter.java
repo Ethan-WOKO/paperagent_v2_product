@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.chain.delivery;
 
+import com.yanban.api.agent.v2.chain.api.ProductChainPersistedProposalDecoder;
 import com.yanban.api.agent.v2.chain.finalization.ProductChainTerminalOutcomeAuthority;
 import com.yanban.core.agent.AgentTurn;
 import com.yanban.core.agent.AgentTurnRepository;
@@ -16,7 +17,7 @@ import io.paperagent.v2.chain.ChainRole;
 import io.paperagent.v2.chain.ChainWorkState;
 import io.paperagent.v2.chain.ChainWorkflowRepository;
 import io.paperagent.v2.chain.PlannerPayload;
-import io.paperagent.v2.chain.model.StrictChainProviderOutputParser;
+import io.paperagent.v2.chain.model.ChainModelProtocolOutcome;
 import io.paperagent.v2.chain.delivery.ChainDeliveryMessagePort;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -907,14 +908,11 @@ public final class ProductChainDeliveryMessageAdapter
     private static PlannerPayload.DirectRoute directPlannerPayload(
             ChainPersistenceRecords.ModelProposalRecord proposal,
             ChainPersistenceRecords.ContentRecord content) {
-        String rawPayload = proposal.payload().json().replace(
-                "\"answerBodyRef\":\"" + content.contentId() + "\"",
-                "\"inlineAnswerBody\":" + jsonString(content.body()));
-        var output = new StrictChainProviderOutputParser().parse(
-                "{\"schemaVersion\":\"1\",\"kind\":\"DIRECT_ROUTE\","
-                        + "\"payload\":" + rawPayload + "}",
-                ChainRole.PLANNER, ChainWorkState.PLANNING, null);
-        return (PlannerPayload.DirectRoute) output.payload();
+        var ready = new ChainModelProtocolOutcome.ProposalReady(
+                proposal, content, 1, true);
+        return (PlannerPayload.DirectRoute)
+                ProductChainPersistedProposalDecoder.decode(
+                        ready, ChainWorkState.PLANNING, null).payload();
     }
 
     private static String canonicalObject(String key, String value) {

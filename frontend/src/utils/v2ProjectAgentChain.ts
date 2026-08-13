@@ -114,9 +114,9 @@ export function shouldClearV2ProjectChainRecovery(
 }
 
 export function shouldRefreshV2ProjectChainTurn(
-  turn: Pick<V2NaturalLanguageTurnResponse, 'deliveryStatus' | 'pendingItem'>,
+  turn: Pick<V2NaturalLanguageTurnResponse, 'workState' | 'deliveryStatus' | 'pendingItem'>,
 ) {
-  if (isV2ProjectDeliveryTerminal(turn.deliveryStatus)) return false;
+  if (turn.workState === 'BLOCKED' || isV2ProjectDeliveryTerminal(turn.deliveryStatus)) return false;
   return turn.pendingItem?.status !== 'PENDING';
 }
 

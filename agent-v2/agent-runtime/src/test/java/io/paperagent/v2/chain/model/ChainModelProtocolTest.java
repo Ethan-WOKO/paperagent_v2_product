@@ -712,6 +712,57 @@ class ChainModelProtocolTest {
     }
 
     @Test
+    void plannerDirectFieldRepairPersistsOneValidatedAnswerAuthority() {
+        Store store = new Store(completeContext(
+                ChainRole.PLANNER, ChainWorkState.PLANNING,
+                "planning"), Set.of());
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger decodes = new AtomicInteger();
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        PlannerPayload.DirectRoute direct = new PlannerPayload.DirectRoute(
+                "plain knowledge question", "explain LaTeX references",
+                "LaTeX uses labels and references.", List.of(), List.of(),
+                false, false, false, false, null);
+        ChainModelCallPort provider = request -> {
+            calls.incrementAndGet();
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            if (decodes.incrementAndGet() == 1) {
+                throw new IllegalArgumentException(
+                        "PAYLOAD_VALIDATION_FAILED at $.payload: "
+                                + "directTaskSpecification must not be blank");
+            }
+            return new ProviderRoleOutput(
+                    "1", direct.kind().wireName(), direct);
+        };
+
+        ChainModelProtocolOutcome.ProposalReady ready = assertInstanceOf(
+                ChainModelProtocolOutcome.ProposalReady.class,
+                new ChainModelProtocolService(
+                        store, store, store, store, provider, decoder)
+                        .invoke(request(ChainRole.PLANNER,
+                                ChainWorkState.PLANNING, "planning")));
+
+        assertEquals(2, calls.get());
+        assertEquals(2, ready.attempts());
+        assertTrue(repairFeedback.get().contains(
+                "directTaskSpecification must not be blank"));
+        assertEquals(1, store.contents.size());
+        assertEquals(1, store.proposals.size());
+        assertEquals("LaTeX uses labels and references.",
+                ready.bodyContent().body());
+        assertTrue(ready.proposal().payload().json().contains(
+                "\"answerBodyRef\""));
+        assertFalse(ready.proposal().payload().json().contains(
+                "\"inlineAnswerBody\""));
+    }
+
+    @Test
     void plannerPersistentBoundaryRepairExplicitlyAllowsDirectRoute() {
         Store store = new Store(completeContext(
                 ChainRole.PLANNER, ChainWorkState.PLANNING,
