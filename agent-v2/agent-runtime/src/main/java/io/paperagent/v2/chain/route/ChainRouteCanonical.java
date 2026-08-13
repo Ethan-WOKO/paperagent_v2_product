@@ -24,7 +24,11 @@ final class ChainRouteCanonical {
     }
 
     static String payload(Object value) {
-        return json(toTree(value));
+        return payload(value, null);
+    }
+
+    static String payload(Object value, String answerBodyRef) {
+        return json(toTree(value, answerBodyRef));
     }
 
     static String jsonList(List<String> values) {
@@ -41,6 +45,10 @@ final class ChainRouteCanonical {
     }
 
     private static Object toTree(Object value) {
+        return toTree(value, null);
+    }
+
+    private static Object toTree(Object value, String answerBodyRef) {
         if (value == null || value instanceof String
                 || value instanceof Boolean || value instanceof Number) {
             return value;
@@ -50,19 +58,22 @@ final class ChainRouteCanonical {
         }
         if (value instanceof Collection<?> collection) {
             List<Object> elements = new ArrayList<>();
-            collection.forEach(element -> elements.add(toTree(element)));
+            collection.forEach(element -> elements.add(
+                    toTree(element, answerBodyRef)));
             return elements;
         }
         if (value instanceof Map<?, ?> map) {
             TreeMap<String, Object> fields = new TreeMap<>();
             map.forEach((key, fieldValue) ->
-                    fields.put(key.toString(), toTree(fieldValue)));
+                    fields.put(key.toString(),
+                            toTree(fieldValue, answerBodyRef)));
             return fields;
         }
         if (value.getClass().isArray()) {
             List<Object> elements = new ArrayList<>();
             for (int index = 0; index < Array.getLength(value); index++) {
-                elements.add(toTree(Array.get(value, index)));
+                elements.add(toTree(
+                        Array.get(value, index), answerBodyRef));
             }
             return elements;
         }
@@ -70,7 +81,15 @@ final class ChainRouteCanonical {
             TreeMap<String, Object> fields = new TreeMap<>();
             for (RecordComponent component : value.getClass().getRecordComponents()) {
                 try {
-                    fields.put(component.getName(), toTree(component.getAccessor().invoke(value)));
+                    String name = component.getName();
+                    if (answerBodyRef != null
+                            && "inlineAnswerBody".equals(name)) {
+                        fields.put("answerBodyRef", answerBodyRef);
+                    } else {
+                        fields.put(name, toTree(
+                                component.getAccessor().invoke(value),
+                                answerBodyRef));
+                    }
                 } catch (ReflectiveOperationException failure) {
                     throw new IllegalStateException("cannot canonicalize route payload", failure);
                 }

@@ -1,6 +1,7 @@
 package com.yanban.api.agent.v2.chain.progression;
 
 import com.yanban.api.agent.v2.chain.api.ProductChainAnswerDeliveryProgression;
+import com.yanban.api.agent.v2.chain.api.ProjectChainPlannerProgression;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainFinalizationRepositoryAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainFoundationRepositoryAdapter;
 import com.yanban.api.agent.v2.chain.persistence.ProductChainWorkflowRepositoryAdapter;
@@ -25,6 +26,7 @@ public final class ProductChainMechanicalProgression
     private final ProductChainAnswerDeliveryProgression answer;
     private final ProductChainModelFailureProgression modelFailures;
     private final ProductChainContextBuildFailureSuccessor contextFailures;
+    private final ProjectChainPlannerProgression planner;
     private final Clock clock;
 
     @Autowired
@@ -34,10 +36,10 @@ public final class ProductChainMechanicalProgression
             ProductChainWorkflowRepositoryAdapter workflow,
             ProductChainAnswerDeliveryProgression answer,
             ProductChainModelFailureProgression modelFailures,
-            ProductChainContextBuildFailureSuccessor contextFailures) {
+            ProductChainContextBuildFailureSuccessor contextFailures,
+            ProjectChainPlannerProgression planner) {
         this(foundations, finalization, workflow, answer, modelFailures,
-                contextFailures,
-                Clock.systemUTC());
+                contextFailures, planner, Clock.systemUTC());
     }
 
     ProductChainMechanicalProgression(
@@ -45,7 +47,8 @@ public final class ProductChainMechanicalProgression
             ProductChainFinalizationRepositoryAdapter finalization,
             ProductChainAnswerDeliveryProgression answer,
             Clock clock) {
-        this(foundations, finalization, null, answer, null, null, clock);
+        this(foundations, finalization, null, answer, null, null, null,
+                clock);
     }
 
     ProductChainMechanicalProgression(
@@ -54,7 +57,8 @@ public final class ProductChainMechanicalProgression
             ProductChainWorkflowRepositoryAdapter workflow,
             ProductChainAnswerDeliveryProgression answer,
             Clock clock) {
-        this(foundations, finalization, workflow, answer, null, null, clock);
+        this(foundations, finalization, workflow, answer, null, null, null,
+                clock);
     }
 
     ProductChainMechanicalProgression(
@@ -65,7 +69,7 @@ public final class ProductChainMechanicalProgression
             ProductChainModelFailureProgression modelFailures,
             Clock clock) {
         this(foundations, finalization, workflow, answer, modelFailures,
-                null, clock);
+                null, null, clock);
     }
 
     ProductChainMechanicalProgression(
@@ -75,6 +79,7 @@ public final class ProductChainMechanicalProgression
             ProductChainAnswerDeliveryProgression answer,
             ProductChainModelFailureProgression modelFailures,
             ProductChainContextBuildFailureSuccessor contextFailures,
+            ProjectChainPlannerProgression planner,
             Clock clock) {
         this.foundations = Objects.requireNonNull(foundations, "foundations");
         this.finalization = Objects.requireNonNull(
@@ -83,6 +88,7 @@ public final class ProductChainMechanicalProgression
         this.answer = Objects.requireNonNull(answer, "answer");
         this.modelFailures = modelFailures;
         this.contextFailures = contextFailures;
+        this.planner = planner;
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -90,6 +96,20 @@ public final class ProductChainMechanicalProgression
     public ProductChainTaskProgressionAdapter.ActionReceipt advance(
             ProductChainTaskProgressionAdapter.MechanicalCommand command) {
         Objects.requireNonNull(command, "command");
+        if (command.selection() instanceof ProductChainNextRoleSelector
+                .MechanicalDirectPlannerDelivery selected) {
+            if (planner == null) {
+                throw failure("CHAIN_DIRECT_PLANNER_DELIVERY_OWNER_MISSING");
+            }
+            var task = foundations.findTask(command.taskId()).orElseThrow(
+                    () -> failure("CHAIN_DIRECT_PLANNER_TASK_MISSING"));
+            planner.deliverAcceptedDirect(task, currentInstruction(task),
+                    selected.routeDecisionId(), clock.instant());
+            return new ProductChainTaskProgressionAdapter.ActionReceipt(
+                    ProductChainTaskProgressionAdapter.SelectedAction
+                            .mechanical("DIRECT_PLANNER_ROUTE",
+                                    selected.routeDecisionId()));
+        }
         if (command.selection() instanceof ProductChainNextRoleSelector
                 .MechanicalPermission permission) {
             return advancePermission(command, permission);

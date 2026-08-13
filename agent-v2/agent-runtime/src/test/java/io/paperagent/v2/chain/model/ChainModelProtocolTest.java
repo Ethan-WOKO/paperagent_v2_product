@@ -72,6 +72,46 @@ class ChainModelProtocolTest {
     }
 
     @Test
+    void plannerDirectRoutePersistsItsAnswerAndReplaysWithOneProviderCall() {
+        Store store = new Store(completeContext(
+                ChainRole.PLANNER, ChainWorkState.PLANNING,
+                "planning"), Set.of());
+        AtomicInteger calls = new AtomicInteger();
+        PlannerPayload.DirectRoute direct = new PlannerPayload.DirectRoute(
+                "no persistent boundary", "explain LaTeX cross references",
+                "LaTeX 交叉引用通过标签和引用命令关联对象。",
+                List.of(), List.of(), false, false, false, false, null);
+        ChainModelProtocolService service = new ChainModelProtocolService(
+                store, store, store, store,
+                request -> {
+                    calls.incrementAndGet();
+                    return new ChainModelCallResult.Success(
+                            "direct", "STOP", 4, Map.of());
+                }, (raw, role, state, gap) -> new ProviderRoleOutput(
+                "1", direct.kind().wireName(), direct));
+        ChainModelProtocolRequest request = request(
+                ChainRole.PLANNER, ChainWorkState.PLANNING, "planning");
+
+        ChainModelProtocolOutcome.ProposalReady first = assertInstanceOf(
+                ChainModelProtocolOutcome.ProposalReady.class,
+                service.invoke(request));
+        ChainModelProtocolOutcome.ProposalReady replay = assertInstanceOf(
+                ChainModelProtocolOutcome.ProposalReady.class,
+                service.invoke(request));
+
+        assertEquals(1, calls.get());
+        assertEquals("LaTeX 交叉引用通过标签和引用命令关联对象。",
+                first.bodyContent().body());
+        assertEquals("ANSWER_BODY",
+                first.proposal().bodyAuthorityType());
+        assertTrue(first.proposal().payload().json().contains(
+                "answerBodyRef"));
+        assertFalse(first.proposal().payload().json().contains(
+                "LaTeX 交叉引用"));
+        assertTrue(replay.recovered());
+    }
+
+    @Test
     void recoveredProposalRequiresItsValidatedAttemptAndCanonicalDigest() {
         Store store = new Store(completeContext(), Set.of("route-1"));
         ChainModelProtocolService service = service(
@@ -669,6 +709,57 @@ class ChainModelProtocolTest {
                 "Keep that requirementId bound"));
         assertTrue(repairFeedback.get().contains(
                 "preserve all unrelated fields"));
+    }
+
+    @Test
+    void plannerDirectFieldRepairPersistsOneValidatedAnswerAuthority() {
+        Store store = new Store(completeContext(
+                ChainRole.PLANNER, ChainWorkState.PLANNING,
+                "planning"), Set.of());
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger decodes = new AtomicInteger();
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        PlannerPayload.DirectRoute direct = new PlannerPayload.DirectRoute(
+                "plain knowledge question", "explain LaTeX references",
+                "LaTeX uses labels and references.", List.of(), List.of(),
+                false, false, false, false, null);
+        ChainModelCallPort provider = request -> {
+            calls.incrementAndGet();
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            if (decodes.incrementAndGet() == 1) {
+                throw new IllegalArgumentException(
+                        "PAYLOAD_VALIDATION_FAILED at $.payload: "
+                                + "directTaskSpecification must not be blank");
+            }
+            return new ProviderRoleOutput(
+                    "1", direct.kind().wireName(), direct);
+        };
+
+        ChainModelProtocolOutcome.ProposalReady ready = assertInstanceOf(
+                ChainModelProtocolOutcome.ProposalReady.class,
+                new ChainModelProtocolService(
+                        store, store, store, store, provider, decoder)
+                        .invoke(request(ChainRole.PLANNER,
+                                ChainWorkState.PLANNING, "planning")));
+
+        assertEquals(2, calls.get());
+        assertEquals(2, ready.attempts());
+        assertTrue(repairFeedback.get().contains(
+                "directTaskSpecification must not be blank"));
+        assertEquals(1, store.contents.size());
+        assertEquals(1, store.proposals.size());
+        assertEquals("LaTeX uses labels and references.",
+                ready.bodyContent().body());
+        assertTrue(ready.proposal().payload().json().contains(
+                "\"answerBodyRef\""));
+        assertFalse(ready.proposal().payload().json().contains(
+                "\"inlineAnswerBody\""));
     }
 
     @Test

@@ -66,6 +66,18 @@ class ChainModelProtocolTest {
                 ChainProviderProtocolException.class,
                 () -> parser.parse(forgedBodyRef, ChainRole.ANSWER,
                         ChainWorkState.DIRECT_ANSWERING, null)).code());
+
+        PlannerPayload.DirectRoute direct = new PlannerPayload.DirectRoute(
+                "plain knowledge question", "explain cross references",
+                "LaTeX 交叉引用使用 label 和 ref。", List.of(), List.of(),
+                false, false, false, false, null);
+        String plannerForgedBodyRef = envelope(direct).replace(
+                "\"inlineAnswerBody\":\"LaTeX 交叉引用使用 label 和 ref。\"",
+                "\"answerBodyRef\":\"content.forged\"");
+        assertEquals(ChainProviderProtocolCode.UNKNOWN_FIELD, assertThrows(
+                ChainProviderProtocolException.class,
+                () -> parser.parse(plannerForgedBodyRef, ChainRole.PLANNER,
+                        ChainWorkState.PLANNING, null)).code());
     }
 
     @Test
@@ -107,6 +119,27 @@ class ChainModelProtocolTest {
                 ChainProviderProtocolException.class,
                 () -> parser.parse(danglingComma, ChainRole.PLANNER,
                         ChainWorkState.PLANNING, null)).code());
+    }
+
+    @Test
+    void directRouteRequiresOneNonblankDeliverableAnswer() {
+        PlannerPayload.DirectRoute valid = new PlannerPayload.DirectRoute(
+                "plain knowledge question", "explain cross references",
+                "LaTeX 交叉引用使用 label 和 ref。", List.of(), List.of(),
+                false, false, false, false, null);
+        assertEquals(valid, parser.parse(envelope(valid), ChainRole.PLANNER,
+                ChainWorkState.PLANNING, null).payload());
+
+        String empty = envelope(valid).replace(
+                "LaTeX 交叉引用使用 label 和 ref。", "   ");
+        assertEquals(ChainProviderProtocolCode.TYPE_MISMATCH,
+                assertThrows(ChainProviderProtocolException.class,
+                        () -> parser.parse(empty, ChainRole.PLANNER,
+                                ChainWorkState.PLANNING, null)).code());
+        assertEquals(ChainProviderProtocolCode.INVALID_JSON,
+                assertThrows(ChainProviderProtocolException.class,
+                        () -> parser.parse("{not-json", ChainRole.PLANNER,
+                                ChainWorkState.PLANNING, null)).code());
     }
 
     @Test

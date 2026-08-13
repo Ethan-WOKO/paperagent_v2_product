@@ -91,6 +91,16 @@ describe('Project V2 Agent 正式链路投影', () => {
     }))).toBe('等待投递');
   });
 
+  it('后端确定性 BLOCKED 停止 GET 刷新，不再无限转圈', () => {
+    const blocked = turn({
+      workState: 'BLOCKED',
+      taskOutcomeStatus: null,
+      deliveryStatus: null,
+    });
+    expect(shouldRefreshV2ProjectChainTurn(blocked)).toBe(false);
+    expect(v2ProjectTurnLabel(blocked)).toBe('已停止（连续无进展）');
+  });
+
   it('PENDING gap 停止 GET 刷新并开放回复；回答提交后才继续读取正式投影', () => {
     const pending = turn({
       workState: 'WAITING_USER',

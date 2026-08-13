@@ -7,6 +7,7 @@ import io.paperagent.v2.chain.ChainProposalKind;
 import io.paperagent.v2.chain.ChainRole;
 import io.paperagent.v2.chain.ChainWorkState;
 import io.paperagent.v2.chain.ExecutorPayload;
+import io.paperagent.v2.chain.PlannerPayload;
 import io.paperagent.v2.chain.model.ChainModelProtocolOutcome;
 import org.junit.jupiter.api.Test;
 
@@ -67,6 +68,30 @@ class ProductChainPersistedProposalDecoderTest {
         assertThat(decoded.payload()).isInstanceOf(ExecutorPayload.WorkspaceChange.class);
         assertThat(((ExecutorPayload.WorkspaceChange) decoded.payload())
                 .inlineCanonicalChangeBody()).contains("class A {}");
+    }
+
+    @Test
+    void restoresPlannerDirectAnswerBodyFromItsExactAuthority() {
+        String payload = "{\"answerBodyRef\":\"" + CONTENT_ID + "\","
+                + "\"answerRequiredRefs\":[],"
+                + "\"directTaskSpecification\":\"解释 LaTeX 交叉引用\","
+                + "\"gapValidation\":null,\"needsNetwork\":false,"
+                + "\"needsPersistentProgress\":false,"
+                + "\"needsProject\":false,\"needsTool\":false,"
+                + "\"routeReason\":\"普通知识问题\","
+                + "\"userConstraints\":[]}";
+
+        var decoded = ProductChainPersistedProposalDecoder.decode(
+                ready(ChainProposalKind.PLANNER_DIRECT_ROUTE,
+                        ChainRole.PLANNER, ChainContentKind.ANSWER_BODY,
+                        payload, "LaTeX 使用 label 和 ref 完成交叉引用。"),
+                ChainWorkState.PLANNING, null);
+
+        assertThat(decoded.payload())
+                .isInstanceOf(PlannerPayload.DirectRoute.class);
+        assertThat(((PlannerPayload.DirectRoute) decoded.payload())
+                .inlineAnswerBody())
+                .isEqualTo("LaTeX 使用 label 和 ref 完成交叉引用。");
     }
 
     @Test

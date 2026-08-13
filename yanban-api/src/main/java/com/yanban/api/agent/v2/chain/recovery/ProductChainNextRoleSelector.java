@@ -340,6 +340,21 @@ public final class ProductChainNextRoleSelector
                 return new ControlWait(WaitKind.DELIVERY_TERMINAL,
                         "DELIVERY", delivered.value().deliveryId());
             }
+            ProductChainRecoverySource.ProposalProjection routeProposal =
+                    projection.proposals().stream().filter(value ->
+                            value.proposal().proposalId().equals(
+                                    latestRoute.value().proposalId()))
+                            .findFirst().orElse(null);
+            if (routeProposal != null
+                    && routeProposal.proposal().proposalKind()
+                    == ChainProposalKind.PLANNER_DIRECT_ROUTE
+                    && "ANSWER_BODY".equals(routeProposal.proposal()
+                    .bodyAuthorityType())
+                    && routeProposal.proposal().bodyAuthorityRef() != null) {
+                return new MechanicalDirectPlannerDelivery(
+                        latestRoute.value().routeDecisionId(),
+                        latestRoute.authoritySequence());
+            }
             return model(ChainRole.ANSWER,
                     ChainWorkState.DIRECT_ANSWERING,
                     "ROUTE_DECISION",
@@ -407,10 +422,23 @@ public final class ProductChainNextRoleSelector
     private static boolean targetsGap(
             ProductChainRecoverySource.ProposalProjection proposal,
             String gapId) {
+        String payloadJson = proposal.proposal().payload().json();
+        if (proposal.proposal().proposalKind()
+                == ChainProposalKind.PLANNER_DIRECT_ROUTE) {
+            if (proposal.proposal().bodyAuthorityRef() != null) {
+                payloadJson = payloadJson.replace(
+                        "\"answerBodyRef\":" + jsonString(
+                                proposal.proposal().bodyAuthorityRef()),
+                        "\"inlineAnswerBody\":\"persisted direct answer\"");
+            } else if (!payloadJson.contains("\"inlineAnswerBody\"")) {
+                payloadJson = "{\"inlineAnswerBody\":"
+                        + "\"legacy direct route requires Answer\","
+                        + payloadJson.substring(1);
+            }
+        }
         String raw = "{\"schemaVersion\":\"1\",\"kind\":\""
                 + proposal.proposal().proposalKind().wireName()
-                + "\",\"payload\":"
-                + proposal.proposal().payload().json() + "}";
+                + "\",\"payload\":" + payloadJson + "}";
         return new io.paperagent.v2.chain.model
                 .StrictChainProviderOutputParser().parse(
                 raw, proposal.invocation().role(),
@@ -803,6 +831,19 @@ public final class ProductChainNextRoleSelector
             validateFallbackDeliverySource(projection, delivery);
             return null;
         }
+        if (isDirectPlannerDelivery(projection, delivery)) {
+            if (!terminal || delivery.answerContentId() == null
+                    || delivery.assistantMessageId() == null
+                    || delivery.routeDecisionId() == null
+                    || delivery.taskOutcomeId() != null
+                    || delivery.gapId() != null
+                    || delivery.decisionId() != null) {
+                throw new IllegalStateException(
+                        "DIRECT Planner Delivery identity is invalid");
+            }
+            validateDirectPlannerDelivery(projection, delivery);
+            return null;
+        }
         if (isOutcomeFallbackDelivery(projection, delivery)) {
             if (!terminal || delivery.answerContentId() != null
                     || delivery.assistantMessageId() != null
@@ -905,6 +946,50 @@ public final class ProductChainNextRoleSelector
                     "Delivery Answer kind does not match its source");
         }
         return proposal;
+    }
+
+    private static boolean isDirectPlannerDelivery(
+            ProductChainRecoverySource.RoleProjection projection,
+            io.paperagent.v2.chain.ChainPersistenceRecords.DeliveryRecord
+                    delivery) {
+        if (!delivery.deliveryId().startsWith(
+                "delivery.direct-planner.")
+                || delivery.routeDecisionId() == null) {
+            return false;
+        }
+        return projection.routes().stream().anyMatch(value ->
+                value.value().routeDecisionId().equals(
+                        delivery.routeDecisionId())
+                        && value.value().route()
+                        == ChainExecutionMode.DIRECT);
+    }
+
+    private static void validateDirectPlannerDelivery(
+            ProductChainRecoverySource.RoleProjection projection,
+            io.paperagent.v2.chain.ChainPersistenceRecords.DeliveryRecord
+                    delivery) {
+        var route = projection.routes().stream().filter(value ->
+                value.value().routeDecisionId().equals(
+                        delivery.routeDecisionId())).findFirst()
+                .orElseThrow();
+        var proposal = projection.proposals().stream().filter(value ->
+                value.proposal().proposalId().equals(
+                        route.value().proposalId())).findFirst()
+                .orElseThrow();
+        if (!projection.taskId().equals(delivery.taskId())
+                || proposal.proposal().proposalKind()
+                != ChainProposalKind.PLANNER_DIRECT_ROUTE
+                || proposal.proposal().role() != ChainRole.PLANNER
+                || !Objects.equals(proposal.proposal().bodyAuthorityRef(),
+                delivery.answerContentId())
+                || !"ANSWER_BODY".equals(
+                proposal.proposal().bodyAuthorityType())
+                || projection.instructionValues().values().stream().noneMatch(
+                instruction -> delivery.sourceCommandId().equals(
+                        instruction.commandId()))) {
+            throw new IllegalStateException(
+                    "DIRECT Planner Delivery authority is invalid");
+        }
     }
 
     private static boolean isOutcomeFallbackDelivery(
@@ -1116,8 +1201,10 @@ public final class ProductChainNextRoleSelector
                         "frozen Delivery event prefix identity is invalid");
             }
             if (index == 0) {
-                boolean outcomeFallbackSuccess = delivery.deliveryId()
+                boolean outcomeFallbackSuccess = (delivery.deliveryId()
                         .startsWith("delivery.fallback.")
+                        || delivery.deliveryId().startsWith(
+                        "delivery.direct-planner."))
                         && event.eventKind()
                         == ChainDeliveryStatus.SUCCEEDED
                         && event.attemptNo() == 1
@@ -1363,6 +1450,7 @@ public final class ProductChainNextRoleSelector
 
     public sealed interface Selection permits Model,
             MechanicalDelivery, MechanicalFinalization, MechanicalProposal,
+            MechanicalDirectPlannerDelivery,
             MechanicalPermission, MechanicalModelFailure,
             MechanicalContextFailure,
             ControlWait {
@@ -1439,6 +1527,18 @@ public final class ProductChainNextRoleSelector
         private FailureSource {
             required(type, "type");
             required(ref, "ref");
+        }
+    }
+
+    public record MechanicalDirectPlannerDelivery(
+            String routeDecisionId, long authoritySequence)
+            implements Selection {
+        public MechanicalDirectPlannerDelivery {
+            required(routeDecisionId, "routeDecisionId");
+            if (authoritySequence < 1) {
+                throw new IllegalArgumentException(
+                        "authoritySequence must be positive");
+            }
         }
     }
 
@@ -1535,6 +1635,18 @@ public final class ProductChainNextRoleSelector
         Selection selection() {
             return selection;
         }
+    }
+
+    private static String jsonString(String value) {
+        StringBuilder result = new StringBuilder("\"");
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\\' || character == '"') {
+                result.append('\\');
+            }
+            result.append(character);
+        }
+        return result.append('"').toString();
     }
 
     private static String sha256(String value) {

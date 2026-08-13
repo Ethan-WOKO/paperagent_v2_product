@@ -4,6 +4,7 @@ import io.paperagent.v2.chain.AnswerPayload;
 import io.paperagent.v2.chain.ChainContentKind;
 import io.paperagent.v2.chain.ChainProposalPayload;
 import io.paperagent.v2.chain.ExecutorPayload;
+import io.paperagent.v2.chain.PlannerPayload;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.RecordComponent;
@@ -44,6 +45,10 @@ final class ChainModelCanonical {
         if (payload instanceof ExecutorPayload.StepResult value) {
             return new Body(ChainContentKind.CANDIDATE_STEP_RESULT,
                     value.inlineCandidateResultBody(), "text/plain");
+        }
+        if (payload instanceof PlannerPayload.DirectRoute value) {
+            return new Body(ChainContentKind.ANSWER_BODY,
+                    value.inlineAnswerBody(), "text/plain");
         }
         if (payload instanceof AnswerPayload.DirectAnswer value) {
             return new Body(ChainContentKind.ANSWER_BODY, value.inlineAnswerBody(), "text/plain");

@@ -152,6 +152,11 @@ public final class ProductChainTaskProgressionAdapter
                     "DELIVERY", delivery.deliveryId());
         }
         if (selection instanceof ProductChainNextRoleSelector
+                .MechanicalDirectPlannerDelivery direct) {
+            return SelectedAction.mechanical(
+                    "DIRECT_PLANNER_ROUTE", direct.routeDecisionId());
+        }
+        if (selection instanceof ProductChainNextRoleSelector
                 .MechanicalFinalization finalization) {
             return SelectedAction.mechanical(
                     "FINALIZATION_READINESS",
