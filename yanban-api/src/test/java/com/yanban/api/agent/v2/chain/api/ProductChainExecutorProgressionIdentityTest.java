@@ -16,7 +16,14 @@ import io.paperagent.v2.chain.ChainValidationConclusion;
 import io.paperagent.v2.chain.validation.ChainValidationBundleRuntime;
 import io.paperagent.v2.contracts.PlanRevision;
 import io.paperagent.v2.contracts.PlanRevisionId;
+import io.paperagent.v2.contracts.PlanStep;
+import io.paperagent.v2.contracts.PlanStepId;
+import io.paperagent.v2.contracts.BoundedExecutionHints;
+import java.time.Duration;
+import java.util.Set;
 import io.paperagent.v2.contracts.TaskFrameId;
+import io.paperagent.v2.contracts.ReceiptStatus;
+import com.yanban.api.agent.v2.chain.context.ProductChainExecutorActionContextProjection;
 import com.yanban.api.agent.v2.persistence.ProductChainStepAuthorityAdapter;
 import java.time.Instant;
 import java.util.List;
@@ -126,6 +133,92 @@ class ProductChainExecutorProgressionIdentityTest {
                 () -> ProductChainExecutorProgression
                         .validateExecutorCandidateBase(
                         workspaceCandidateId, currentFingerprint));
+    }
+
+    @Test
+    void readOnlyValidationSuccessRequiresStepResultBoundToExactReceipt() {
+        var success = new ProductChainExecutorProgression.SuccessfulReceipt(
+                "action-1", "receipt-1");
+        ExecutorPayload.StepResult bound = new ExecutorPayload.StepResult(
+                List.of(new ProposalFields.RequirementCoverage(
+                        "Sort.java compiles",
+                        ProposalFields.RequirementStatus.SATISFIED,
+                        List.of("receipt-1"))),
+                "Sort.java compiled successfully without modification",
+                List.of(), null, List.of("receipt-1"),
+                List.of(new ProposalFields.ValidationSource(
+                        "validation-compile", "receipt-1")),
+                List.of(), List.of("receipt-1"), List.of(), null);
+        ProviderRoleOutput valid = new ProviderRoleOutput(
+                "1", bound.kind().wireName(), bound);
+        ProviderRoleOutput repeatedTool = new ProviderRoleOutput(
+                "1", new ExecutorPayload.ToolAction(
+                        "sandbox.execute",
+                        "{\"paths\":[\"Sort.java\"],"
+                                + "\"argv\":[\"javac\",\"Sort.java\"]}",
+                        "Sort.java", "compile again", List.of("receipt"),
+                        "permission.sandbox-execute-install",
+                        List.of("Sort.java"), List.of(), null, null, null,
+                        null, null).kind().wireName(),
+                new ExecutorPayload.ToolAction(
+                        "sandbox.execute",
+                        "{\"paths\":[\"Sort.java\"],"
+                                + "\"argv\":[\"javac\",\"Sort.java\"]}",
+                        "Sort.java", "compile again", List.of("receipt"),
+                        "permission.sandbox-execute-install",
+                        List.of("Sort.java"), List.of(), null, null, null,
+                        null, null));
+
+        assertDoesNotThrow(() -> ProductChainExecutorProgression
+                .validateReceiptValidationSuccess(valid, success));
+        assertThrows(IllegalArgumentException.class, () ->
+                ProductChainExecutorProgression
+                        .validateReceiptValidationSuccess(
+                                repeatedTool, success));
+    }
+
+    @Test
+    void readOnlyValidationFailureRequiresStepBlockedWithoutRetry() {
+        var failure = new ProductChainExecutorActionContextProjection.Failure(
+                "action-1", "receipt-1", "proposal-action-1",
+                ReceiptStatus.FAILURE, "FAILED");
+        ExecutorPayload.StepBlocked blocked = new ExecutorPayload.StepBlocked(
+                "VALIDATION", "receipt-1",
+                List.of("action-1", "receipt-1"),
+                "javac returned a non-zero exit code",
+                "deliver the compilation failure conclusion", List.of(),
+                null, null, null);
+        ProviderRoleOutput valid = new ProviderRoleOutput(
+                "1", blocked.kind().wireName(), blocked);
+        ProviderRoleOutput retry = workspaceChange("NONE");
+
+        assertDoesNotThrow(() -> ProductChainExecutorProgression
+                .validateReceiptValidationFailure(valid, failure));
+        assertThrows(IllegalArgumentException.class, () ->
+                ProductChainExecutorProgression
+                        .validateReceiptValidationFailure(retry, failure));
+    }
+
+    @Test
+    void nonChangingStepRejectsWorkspaceMutationAndWriteScopes() {
+        PlanStep readOnly = new PlanStep(new PlanStepId("step-1"),
+                "compile", "compilation conclusion", Set.of(),
+                List.of("receipt exists"),
+                new BoundedExecutionHints(1, Duration.ofMinutes(1)),
+                List.of("do not modify"), false, null,
+                List.of("validation-compile"));
+        ProviderRoleOutput readOnlyAction = toolAction(List.of());
+        ProviderRoleOutput writingAction = toolAction(
+                List.of("Sort.java"));
+
+        assertDoesNotThrow(() -> ProductChainExecutorProgression
+                .validateStepMutationBoundary(readOnlyAction, readOnly));
+        assertThrows(IllegalArgumentException.class, () ->
+                ProductChainExecutorProgression.validateStepMutationBoundary(
+                        workspaceChange("NONE"), readOnly));
+        assertThrows(IllegalArgumentException.class, () ->
+                ProductChainExecutorProgression.validateStepMutationBoundary(
+                        writingAction, readOnly));
     }
 
     @Test
@@ -305,6 +398,18 @@ class ProductChainExecutorProgressionIdentityTest {
         return ProductChainExecutorProgression.executorContextId(
                 "task-1", "activation-1", "STEP_EXECUTION", "same instruction",
                 candidate, actions);
+    }
+
+    private static ProviderRoleOutput toolAction(List<String> writeScopes) {
+        ExecutorPayload.ToolAction payload = new ExecutorPayload.ToolAction(
+                "sandbox.execute",
+                "{\"paths\":[\"Sort.java\"],"
+                        + "\"argv\":[\"javac\",\"Sort.java\"]}",
+                "Sort.java", "compile", List.of("receipt"),
+                "permission.sandbox-execute-install",
+                List.of("Sort.java"), writeScopes, null, null, null,
+                null, null);
+        return new ProviderRoleOutput("1", payload.kind().wireName(), payload);
     }
 
     private static ProviderRoleOutput workspaceChange(String baseCandidateRef) {

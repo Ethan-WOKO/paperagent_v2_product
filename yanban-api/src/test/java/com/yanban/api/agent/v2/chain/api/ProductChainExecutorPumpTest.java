@@ -3,6 +3,7 @@ package com.yanban.api.agent.v2.chain.api;
 import io.paperagent.v2.chain.ChainPersistenceRecords;
 import io.paperagent.v2.chain.ChainProposalKind;
 import io.paperagent.v2.chain.ChainProposalState;
+import io.paperagent.v2.chain.ExecutorPayload;
 import io.paperagent.v2.chain.ChainRole;
 import io.paperagent.v2.chain.ChainWorkState;
 import io.paperagent.v2.chain.effect.ChainEffectRuntime;
@@ -15,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -73,6 +75,62 @@ class ProductChainExecutorPumpTest {
         assertEquals(ProductChainExecutorPump.Status.UNSUPPORTED_PROPOSAL, result.status());
         assertEquals(ChainProposalKind.PLANNER_DIRECT_ROUTE, result.unsupportedKind());
         assertEquals(0, admissions.get());
+    }
+
+    @Test
+    void stepBlockedIsAdmittedWithoutActionOrEffectAndWaitsForReflector() {
+        AtomicInteger admissions = new AtomicInteger();
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger effects = new AtomicInteger();
+        ExecutorPayload.StepBlocked blocked = new ExecutorPayload.StepBlocked(
+                "VALIDATION", "receipt.compile.1",
+                List.of("action.compile.1", "receipt.compile.1"),
+                "javac returned a non-zero exit code",
+                "report the negative compilation conclusion",
+                List.of(), null, null, null);
+        ChainPersistenceRecords.ModelProposalRecord proposal =
+                new ChainPersistenceRecords.ModelProposalRecord(
+                        "proposal-blocked", TASK, "invocation-1", 1,
+                        ChainRole.EXECUTOR,
+                        ChainProposalKind.EXECUTOR_STEP_BLOCKED,
+                        canonical("{}"), canonical("[]"), null, null, NOW);
+        ChainPersistenceRecords.ProposalStateEventRecord accepted =
+                new ChainPersistenceRecords.ProposalStateEventRecord(
+                        proposal.proposalId(), 1, TASK,
+                        "proposal-state-blocked", ChainProposalState.ACCEPTED,
+                        null, null, NOW);
+        ProductChainExecutorPump pump = new ProductChainExecutorPump(
+                request -> {
+                    admissions.incrementAndGet();
+                    assertEquals(proposal.proposalId(), request.proposalId());
+                    return new ChainProposalAdmissionService.AdmissionResult(
+                            accepted, true, false);
+                },
+                command -> {
+                    actions.incrementAndGet();
+                    throw new AssertionError("STEP_BLOCKED bound an action");
+                },
+                request -> {
+                    effects.incrementAndGet();
+                    throw new AssertionError("STEP_BLOCKED dispatched effect");
+                });
+
+        var ready = new ChainModelProtocolOutcome.ProposalReady(
+                proposal, null, 1, false);
+        ProductChainExecutorPump.Result result = pump.execute(
+                TASK, ready, NOW);
+        ProductChainExecutorPump.Result replay = pump.execute(
+                TASK, ready, NOW.plusSeconds(1));
+
+        assertEquals(ProductChainExecutorPump.Status.STEP_BLOCKED_ACCEPTED,
+                result.status());
+        assertEquals(result.proposalId(), replay.proposalId());
+        assertEquals(ProductChainExecutorPump.Status.STEP_BLOCKED_ACCEPTED,
+                replay.status());
+        assertEquals(blocked.kind(), proposal.proposalKind());
+        assertEquals(2, admissions.get());
+        assertEquals(0, actions.get());
+        assertEquals(0, effects.get());
     }
 
     @Test

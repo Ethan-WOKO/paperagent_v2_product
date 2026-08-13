@@ -153,6 +153,27 @@ public final class ProjectChainPlannerProgression {
                 "ROUTE_DECISION", routeDecisionId, now);
     }
 
+    static void validateActionReceiptOnlyPlan(
+            PlannerPayload.PersistentPlan plan) {
+        Objects.requireNonNull(plan, "plan");
+        var requirements = plan.taskFrameDraft().requirements();
+        boolean observedActionResult = requirements.publishRequirement()
+                == io.paperagent.v2.contracts.PublishRequirement.NOT_REQUIRED
+                && !requirements.validationRequirements().isEmpty()
+                && requirements.validationRequirements().stream().allMatch(
+                requirement -> requirement.subject()
+                        == io.paperagent.v2.contracts.ValidationSubject
+                        .ACTION_RECEIPT);
+        if (observedActionResult && plan.initialPlan().steps().stream()
+                .anyMatch(step -> step.mayChangeCandidate()
+                        || step.candidateValidationCompletionCondition()
+                        != null)) {
+            throw new IllegalArgumentException(
+                    "an ACTION_RECEIPT-only non-publishing Plan must not "
+                            + "modify or create a Candidate");
+        }
+    }
+
     private ProgressionResult advanceInternal(
             AgentSession session, ChainPersistenceRecords.TaskRecord task,
             ChainPersistenceRecords.InstructionRecord instruction,
@@ -166,6 +187,10 @@ public final class ProjectChainPlannerProgression {
             var output = new io.paperagent.v2.chain.model
                     .StrictChainProviderOutputParser()
                     .parse(raw, role, state, gap);
+            if (output.payload()
+                    instanceof PlannerPayload.PersistentPlan plan) {
+                validateActionReceiptOnlyPlan(plan);
+            }
             if (currentPlan != null
                     && output.payload()
                     instanceof PlannerPayload.PlanRevision revision) {

@@ -62,6 +62,9 @@ import io.paperagent.v2.chain.ChainApplicability;
 import io.paperagent.v2.chain.ReflectorPayload;
 import io.paperagent.v2.chain.ProviderRoleOutput;
 import io.paperagent.v2.chain.ExecutorPayload;
+import io.paperagent.v2.contracts.ReceiptStatus;
+import io.paperagent.v2.contracts.ToolCallId;
+import io.paperagent.v2.persistence.EffectOutcomeRepository;
 import io.paperagent.v2.contracts.PlanId;
 import io.paperagent.v2.contracts.PlanStep;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -107,6 +110,7 @@ public final class ProductChainExecutorProgression {
     private final ProductChainContextSourceFactory contextSources;
     private final ProductChainModelCallIdentity modelCallIdentity;
     private final ProductChainActionFailureProgression actionFailures;
+    private final EffectOutcomeRepository effectOutcomes;
 
     public ProductChainExecutorProgression(
             ProductChainContextRepositoryAdapter contexts,
@@ -128,7 +132,8 @@ public final class ProductChainExecutorProgression {
             ProductChainValidationBundleAuthority validationBundles,
             ProductChainContextSourceFactory contextSources,
             ProductChainModelCallIdentity modelCallIdentity,
-            ProductChainActionFailureProgression actionFailures) {
+            ProductChainActionFailureProgression actionFailures,
+            EffectOutcomeRepository effectOutcomes) {
         this.contexts = Objects.requireNonNull(contexts, "contexts");
         this.models = Objects.requireNonNull(models, "models");
         this.workflow = Objects.requireNonNull(workflow, "workflow");
@@ -156,6 +161,8 @@ public final class ProductChainExecutorProgression {
                 modelCallIdentity, "modelCallIdentity");
         this.actionFailures = Objects.requireNonNull(
                 actionFailures, "actionFailures");
+        this.effectOutcomes = Objects.requireNonNull(
+                effectOutcomes, "effectOutcomes");
     }
 
     /**
@@ -1074,6 +1081,9 @@ public final class ProductChainExecutorProgression {
         ProductChainExecutorActionContextProjection.Failure repairFailure =
                 failedExecution == null
                         ? null : actionProjection.latestFailure();
+        SuccessfulReceipt successfulReceipt = latestSuccessfulReceipt(
+                task.taskId(), activation.command().stepId(),
+                activation.command().activationEventId());
         // A later Executor turn can use the same instruction text while its
         // formal Candidate or Action authority has advanced. Include those
         // exact durable inputs in the deterministic identity so distinct
@@ -1128,9 +1138,18 @@ public final class ProductChainExecutorProgression {
                     new io.paperagent.v2.chain.model.StrictChainProviderOutputParser()
                             .parse(raw, role, state, gap);
             validateExecutorCandidateBase(output, expectedBaseCandidateRef);
+            validateStepMutationBoundary(output, step);
             validateExecutorStepResultValidationBindings(
                     output, step.validationRequirementIds());
-            if (repairFailure != null) {
+            boolean receiptValidation = receiptValidationStep(
+                    binding, step);
+            if (receiptValidation && successfulReceipt != null) {
+                validateReceiptValidationSuccess(output, successfulReceipt);
+            }
+            if (receiptValidation && repairFailure != null) {
+                validateReceiptValidationFailure(output, repairFailure);
+            }
+            if (repairFailure != null && !receiptValidation) {
                 String rejection = actionContext.validateRepair(
                         output, repairFailure);
                 if (rejection != null
@@ -2481,6 +2500,75 @@ public final class ProductChainExecutorProgression {
                         == io.paperagent.v2.contracts.ValidationSubject.CANDIDATE);
     }
 
+    private boolean receiptValidationStep(
+            ChainPersistenceRecords.PlanBindingRecord binding,
+            PlanStep step) {
+        var requirements = stepRequirements(binding, step);
+        return !step.mayChangeCandidate()
+                && !requirements.isEmpty()
+                && requirements.stream().allMatch(value -> value.subject()
+                == io.paperagent.v2.contracts.ValidationSubject
+                        .ACTION_RECEIPT);
+    }
+
+    private SuccessfulReceipt latestSuccessfulReceipt(
+            String taskId, String stepId, String activationEventId) {
+        return workflow.findActionBindings(taskId).stream()
+                .filter(action -> action.stepId().equals(stepId)
+                        && action.activationEventId().equals(
+                        activationEventId))
+                .max(Comparator.comparingInt(
+                        ChainPersistenceRecords.ActionBindingRecord::attemptNo))
+                .flatMap(action -> {
+                    var outcome = effectOutcomes.findResult(
+                            new ToolCallId(action.actionId()));
+                    if (!outcome.successful()
+                            || outcome.value().orElseThrow().receipt().status()
+                            != ReceiptStatus.SUCCESS) {
+                        return java.util.Optional.empty();
+                    }
+                    return java.util.Optional.of(new SuccessfulReceipt(
+                            action.actionId(), outcome.value().orElseThrow()
+                                    .receipt().id().value()));
+                }).orElse(null);
+    }
+
+    static void validateReceiptValidationSuccess(
+            ProviderRoleOutput output,
+            SuccessfulReceipt success) {
+        if (!(output.payload() instanceof ExecutorPayload.StepResult result)
+                || !result.receiptRefs().contains(success.receiptRef())
+                || result.validationSources().stream().noneMatch(source ->
+                source.receiptRef().equals(success.receiptRef()))) {
+            throw new IllegalArgumentException(
+                    "a completed read-only validation action requires "
+                            + "STEP_RESULT bound to its exact successful Receipt");
+        }
+    }
+
+    record SuccessfulReceipt(String actionId, String receiptRef) {
+        SuccessfulReceipt {
+            required(actionId, "actionId");
+            required(receiptRef, "receiptRef");
+        }
+    }
+
+    static void validateReceiptValidationFailure(
+            ProviderRoleOutput output,
+            ProductChainExecutorActionContextProjection.Failure failure) {
+        if (!(output.payload() instanceof ExecutorPayload.StepBlocked blocked)
+                || !blocked.errorRef().equals(failure.errorRef())
+                || !blocked.attemptedActionOrRepairRefs().contains(
+                failure.actionId())
+                || !blocked.attemptedActionOrRepairRefs().contains(
+                failure.errorRef())) {
+            throw new IllegalArgumentException(
+                    "a failed read-only validation action requires "
+                            + "STEP_BLOCKED bound to its exact Action and Receipt; "
+                            + "do not retry or modify the Project");
+        }
+    }
+
     private static String firstReceipt(
             ChainValidationRuntime.CommitResult validation) {
         if (validation == null) return null;
@@ -2590,6 +2678,21 @@ public final class ProductChainExecutorProgression {
                 || !taskFrameId.equals(publish.authorityRef())) {
             throw new IllegalArgumentException(
                     "publishRequirementAssessment must bind the exact TaskFrame");
+        }
+    }
+
+    static void validateStepMutationBoundary(
+            ProviderRoleOutput output, PlanStep step) {
+        Objects.requireNonNull(output, "output");
+        Objects.requireNonNull(step, "step");
+        if (step.mayChangeCandidate()) {
+            return;
+        }
+        if (output.payload() instanceof ExecutorPayload.WorkspaceChange
+                || output.payload() instanceof ExecutorPayload.ToolAction action
+                && !action.writeScopes().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "the active Step forbids Candidate and Workspace mutation");
         }
     }
 

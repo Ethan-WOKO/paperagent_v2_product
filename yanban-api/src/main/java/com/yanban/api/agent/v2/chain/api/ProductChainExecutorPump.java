@@ -289,6 +289,23 @@ public final class ProductChainExecutorPump {
         if (!proposal.taskId().equals(taskId)) {
             throw failure("CHAIN_EXECUTOR_PROPOSAL_TASK_MISMATCH");
         }
+        if (proposal.proposalKind()
+                == ChainProposalKind.EXECUTOR_STEP_BLOCKED) {
+            ChainProposalAdmissionService.AdmissionResult admitted =
+                    admission.admit(
+                            new ChainProposalAdmissionService.AdmissionRequest(
+                                    proposal.proposalId(), taskId,
+                                    identity("executor-step-blocked-accepted",
+                                            proposal.proposalId()),
+                                    true, null, proposal.payload().sha256(),
+                                    committedAt));
+            if (!admitted.executable()) {
+                return Result.proposalNotExecutable(
+                        proposal.proposalId(),
+                        admitted.state().stateKind().name());
+            }
+            return Result.stepBlockedAccepted(proposal.proposalId());
+        }
         if (proposal.proposalKind() != ChainProposalKind.EXECUTOR_TOOL_ACTION
                 && proposal.proposalKind()
                         != ChainProposalKind.EXECUTOR_WORKSPACE_CHANGE) {
@@ -417,6 +434,11 @@ public final class ProductChainExecutorPump {
                     null, null, null, null, null, 0, null);
         }
 
+        static Result stepBlockedAccepted(String proposalId) {
+            return new Result(Status.STEP_BLOCKED_ACCEPTED, proposalId, null,
+                    null, null, null, null, null, null, 0, null);
+        }
+
         static Result effect(
                 String proposalId,
                 String actionId,
@@ -538,6 +560,7 @@ public final class ProductChainExecutorPump {
         REPAIR_REJECTED,
         ACTION_FAILURE_STEP_BLOCK_COMMITTED,
         STEP_RESULT_COMMITTED,
+        STEP_BLOCKED_ACCEPTED,
         EFFECT_DISPATCHED
     }
 }

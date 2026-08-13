@@ -1,6 +1,12 @@
 package com.yanban.api.agent.v2.chain.api;
 
 import io.paperagent.v2.chain.ChainPersistenceRecords;
+import io.paperagent.v2.chain.PlannerPayload;
+import io.paperagent.v2.chain.ProposalFields;
+import io.paperagent.v2.contracts.PublishRequirement;
+import io.paperagent.v2.contracts.TaskRequirements;
+import io.paperagent.v2.contracts.ValidationRequirement;
+import io.paperagent.v2.contracts.ValidationSubject;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Modifier;
@@ -8,10 +14,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ProjectChainPlannerProgressionBoundaryTest {
 
@@ -51,6 +62,35 @@ class ProjectChainPlannerProgressionBoundaryTest {
                 "ProductChainPersistedProposalDecoder.decode("));
         assertFalse(delivery.contains(
                 "proposal.payload().json().replace("));
+    }
+
+    @Test
+    void actionReceiptOnlyNonPublishingPlanCannotFreezeMutation() {
+        PlannerPayload.PersistentPlan plan = mock(
+                PlannerPayload.PersistentPlan.class);
+        ProposalFields.TaskFrameDraft frame = mock(
+                ProposalFields.TaskFrameDraft.class);
+        ProposalFields.PlanDraft draft = mock(ProposalFields.PlanDraft.class);
+        ProposalFields.StepDraft step = mock(ProposalFields.StepDraft.class);
+        TaskRequirements requirements = TaskRequirements.explicit(List.of(
+                new ValidationRequirement("validation-compile",
+                        ValidationSubject.ACTION_RECEIPT,
+                        "compile receipt exists")),
+                PublishRequirement.NOT_REQUIRED);
+        when(plan.taskFrameDraft()).thenReturn(frame);
+        when(frame.requirements()).thenReturn(requirements);
+        when(plan.initialPlan()).thenReturn(draft);
+        when(draft.steps()).thenReturn(List.of(step));
+        when(step.candidateValidationCompletionCondition()).thenReturn(null);
+
+        when(step.mayChangeCandidate()).thenReturn(false);
+        assertDoesNotThrow(() -> ProjectChainPlannerProgression
+                .validateActionReceiptOnlyPlan(plan));
+
+        when(step.mayChangeCandidate()).thenReturn(true);
+        assertThrows(IllegalArgumentException.class, () ->
+                ProjectChainPlannerProgression
+                        .validateActionReceiptOnlyPlan(plan));
     }
 
     @Test
