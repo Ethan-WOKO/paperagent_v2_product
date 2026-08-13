@@ -969,6 +969,30 @@ class ProjectChainRecoveryTest {
     }
 
     @Test
+    void outcomeFallbackDeliveryIsTerminalAcrossRepeatedWakeups() {
+        var outcome = terminalOutcome(ChainTaskOutcomeStatus.COMPLETED);
+        String deliveryId = "delivery.fallback." + sha256(
+                "task-1\0" + outcome.outcomeId() + "\0OUTCOME_FALLBACK");
+        var delivery = new ChainPersistenceRecords.DeliveryRecord(
+                deliveryId, "task-1", "event-fallback-delivery", "command-1",
+                null, outcome.outcomeId(), null, null, null, null, NOW);
+        var succeeded = new ChainPersistenceRecords.DeliveryEventRecord(
+                deliveryId, 1L, "task-1", "event-fallback-success",
+                ChainDeliveryStatus.SUCCEEDED, 1, null,
+                ChainRuntimePolicy.V1.policyVersion(), NOW);
+        var scenario = Scenario.completed(outcome, delivery,
+                List.of(succeeded));
+
+        var first = selection(scenario, List.of(delivery),
+                Map.of(deliveryId, List.of(succeeded)));
+        var second = selection(scenario, List.of(delivery),
+                Map.of(deliveryId, List.of(succeeded)));
+
+        assertFalse(first instanceof ProductChainNextRoleSelector.Model);
+        assertEquals(first, second);
+    }
+
+    @Test
     void gapAndDecisionDeliveriesRejectAStaleInstructionSourceCommand() {
         for (DeliverySourceCase source : List.of(
                 DeliverySourceCase.GAP, DeliverySourceCase.DECISION)) {

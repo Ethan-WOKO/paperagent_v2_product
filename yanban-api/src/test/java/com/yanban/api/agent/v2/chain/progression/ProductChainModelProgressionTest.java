@@ -131,7 +131,7 @@ class ProductChainModelProgressionTest {
 
         fixture.progression.advance(fixture.command(directive));
 
-        verify(fixture.answer).invokePersistentAnswer(
+        verify(fixture.answer).advancePersistentAnswer(
                 fixture.session, fixture.task, fixture.instruction, NOW);
         verifyNoInteractions(fixture.planTransitions);
     }
@@ -148,7 +148,7 @@ class ProductChainModelProgressionTest {
 
         fixture.progression.advance(fixture.command(directive));
 
-        verify(fixture.answer).invokePersistentAnswer(
+        verify(fixture.answer).advancePersistentAnswer(
                 fixture.session, fixture.task, fixture.instruction, NOW);
         verifyNoInteractions(fixture.messages, fixture.planTransitions);
     }

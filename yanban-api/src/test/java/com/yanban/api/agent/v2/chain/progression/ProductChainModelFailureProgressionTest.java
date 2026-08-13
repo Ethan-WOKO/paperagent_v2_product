@@ -1,5 +1,6 @@
 package com.yanban.api.agent.v2.chain.progression;
 
+import com.yanban.api.agent.v2.chain.api.ProductChainAnswerDeliveryProgression;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -225,7 +226,8 @@ class ProductChainModelFailureProgressionTest {
                 mock(ProductChainModelCallIdentity.class),
                 mock(UserSettingsService.class),
                 mock(ChatModelProvider.class),
-                mock(NamedParameterJdbcTemplate.class), contextAuthority);
+                mock(NamedParameterJdbcTemplate.class), contextAuthority,
+                mock(ProductChainAnswerDeliveryProgression.class));
         var task = mock(ChainPersistenceRecords.TaskRecord.class);
         when(task.taskId()).thenReturn("task-1");
         var instruction = mock(ChainPersistenceRecords.InstructionRecord.class);
@@ -329,7 +331,8 @@ class ProductChainModelFailureProgressionTest {
                 mock(ProductChainContextSourceFactory.class),
                 mock(ProductChainModelCallIdentity.class),
                 mock(UserSettingsService.class), mock(ChatModelProvider.class),
-                mock(NamedParameterJdbcTemplate.class), authority);
+                mock(NamedParameterJdbcTemplate.class), authority,
+                mock(ProductChainAnswerDeliveryProgression.class));
         return new Fixture(progression, contexts, models, workflow, authority);
     }
 

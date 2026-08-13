@@ -803,6 +803,18 @@ public final class ProductChainNextRoleSelector
             validateFallbackDeliverySource(projection, delivery);
             return null;
         }
+        if (isOutcomeFallbackDelivery(projection, delivery)) {
+            if (!terminal || delivery.answerContentId() != null
+                    || delivery.assistantMessageId() != null
+                    || delivery.routeDecisionId() != null
+                    || delivery.gapId() != null
+                    || delivery.decisionId() != null) {
+                throw new IllegalStateException(
+                        "Outcome fallback Delivery identity is invalid");
+            }
+            validateOutcomeFallbackSource(projection, delivery);
+            return null;
+        }
         if (!projection.taskId().equals(delivery.taskId())
                 || delivery.answerContentId() == null
                 || delivery.assistantMessageId() == null
@@ -895,6 +907,27 @@ public final class ProductChainNextRoleSelector
         return proposal;
     }
 
+    private static boolean isOutcomeFallbackDelivery(
+            ProductChainRecoverySource.RoleProjection projection,
+            io.paperagent.v2.chain.ChainPersistenceRecords.DeliveryRecord
+                    delivery) {
+        if (delivery.taskOutcomeId() == null) {
+            return false;
+        }
+        var outcome = projection.outcome().filter(value ->
+                delivery.taskOutcomeId().equals(
+                        value.value().outcomeId())).orElse(null);
+        if (outcome == null) {
+            return false;
+        }
+        String expected = "delivery.fallback." + sha256(
+                projection.taskId() + "\0" + outcome.value().outcomeId()
+                        + "\0OUTCOME_FALLBACK");
+        return expected.equals(delivery.deliveryId())
+                && delivery.sourceCommandId().equals(
+                outcome.value().sourceCommandId());
+    }
+
     private static boolean isAnswerModelFailureDelivery(
             ProductChainRecoverySource.RoleProjection projection,
             io.paperagent.v2.chain.ChainPersistenceRecords.DeliveryRecord
@@ -931,6 +964,26 @@ public final class ProductChainNextRoleSelector
             return "CONTEXT_INPUT_BLOCKED";
         }
         return null;
+    }
+
+    private static void validateOutcomeFallbackSource(
+            ProductChainRecoverySource.RoleProjection projection,
+            io.paperagent.v2.chain.ChainPersistenceRecords.DeliveryRecord
+                    delivery) {
+        var outcome = projection.outcome().filter(value ->
+                delivery.taskOutcomeId().equals(
+                        value.value().outcomeId())).orElseThrow(() ->
+                new IllegalStateException(
+                        "Outcome fallback Delivery source is missing"));
+        if (!projection.taskId().equals(delivery.taskId())
+                || !outcome.value().sourceCommandId().equals(
+                        delivery.sourceCommandId())
+                || projection.instructionValues().values().stream().noneMatch(
+                        instruction -> delivery.sourceCommandId().equals(
+                                instruction.commandId()))) {
+            throw new IllegalStateException(
+                    "Outcome fallback Delivery source command is invalid");
+        }
     }
 
     private static void validateFallbackDeliverySource(
@@ -1063,13 +1116,19 @@ public final class ProductChainNextRoleSelector
                         "frozen Delivery event prefix identity is invalid");
             }
             if (index == 0) {
+                boolean outcomeFallbackSuccess = delivery.deliveryId()
+                        .startsWith("delivery.fallback.")
+                        && event.eventKind()
+                        == ChainDeliveryStatus.SUCCEEDED
+                        && event.attemptNo() == 1
+                        && event.errorCode() == null;
                 boolean preDeliveryFailure = preDeliveryFailureCode != null
                         && event.eventKind()
                         == ChainDeliveryStatus.DELIVERY_FAILED
                         && event.attemptNo() == 1
                         && preDeliveryFailureCode.equals(
                         event.errorCode());
-                if (!preDeliveryFailure
+                if (!preDeliveryFailure && !outcomeFallbackSuccess
                         && (event.eventKind()
                         != ChainDeliveryStatus.PENDING
                         || event.attemptNo() != 0)) {
@@ -1158,6 +1217,15 @@ public final class ProductChainNextRoleSelector
                         delivery -> delivery.value().deliveryId().equals(
                                 modelFailureDeliveryId(
                                         value.invocation().invocationId()))))
+                .filter(value -> !(value.invocation().role()
+                        == ChainRole.ANSWER
+                        && projection.outcome().isPresent()
+                        && taskOutcomeDelivery(projection,
+                        projection.outcome().orElseThrow().value()) != null
+                        && deliveryStatus(projection,
+                        taskOutcomeDelivery(projection,
+                                projection.outcome().orElseThrow().value()))
+                        == ChainDeliveryStatus.SUCCEEDED))
                 .filter(value -> projection.modelFailureStepBlocks().stream()
                         .noneMatch(block -> block.value().invocationId()
                                 .equals(value.invocation().invocationId())))

@@ -410,7 +410,7 @@ public final class ProductChainModelProgression
                 directive.sourceAuthorityType())
                 || "PROPOSAL_STATE".equals(
                 directive.sourceAuthorityType()))) {
-            answer.invokePersistentAnswer(session, task, instruction,
+            answer.advancePersistentAnswer(session, task, instruction,
                     clock.instant());
             return;
         }
