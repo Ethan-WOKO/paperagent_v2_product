@@ -23,7 +23,7 @@ import java.util.TreeMap;
 
 /** Role output schemas derived from the existing typed provider protocol. */
 public final class ProductChainRoleSchemaSource {
-    public static final String SCHEMA_VERSION = "product-chain-role-schema-v12";
+    public static final String SCHEMA_VERSION = "product-chain-role-schema-v13";
 
     private static final List<String> TOOL_ACTION_SELF_REPAIR_FIELDS = List.of(
             "priorErrorRef", "priorActionRef", "changeFromPriorAction",
@@ -277,6 +277,15 @@ public final class ProductChainRoleSchemaSource {
                     Map.of("minLength", ChainContextValue.number(1),
                             "bindingRule", ChainContextValue.text(
                             "COPY_BYTE_FOR_BYTE_TO_THE_ONE_BOUND_STEP_COMPLETION_CONDITIONS")));
+        }
+        if (recordType == PlannerPayload.DirectRoute.class
+                && component.getName().equals("inlineAnswerBody")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "semanticType", ChainContextValue.text(
+                            "COMPLETE_USER_VISIBLE_ANSWER_FROM_THIS_PROVIDER_CALL"),
+                    "minLength", ChainContextValue.number(1),
+                    "persistedReferenceField", ChainContextValue.text(
+                            "RUNTIME_OWNED_ANSWER_BODY_REF_FORBIDDEN_IN_PROVIDER_OUTPUT")));
         }
         if (recordType == PlannerPayload.UserInstructionDisposition.class
                 && component.getName().equals("classification")) {

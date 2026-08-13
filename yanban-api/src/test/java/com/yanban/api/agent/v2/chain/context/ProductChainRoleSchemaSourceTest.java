@@ -67,7 +67,12 @@ class ProductChainRoleSchemaSourceTest {
         assertTrue(schema.contains("allFalseRequiresKind"));
         assertTrue(schema.contains("DIRECT_ROUTE"));
         assertTrue(schema.contains("minItems\":1"));
-        assertTrue(schema.contains("product-chain-role-schema-v12"));
+        assertTrue(schema.contains("product-chain-role-schema-v13"));
+        assertTrue(schema.contains("inlineAnswerBody"));
+        assertTrue(schema.contains(
+                "COMPLETE_USER_VISIBLE_ANSWER_FROM_THIS_PROVIDER_CALL"));
+        assertTrue(schema.contains(
+                "RUNTIME_OWNED_ANSWER_BODY_REF_FORBIDDEN_IN_PROVIDER_OUTPUT"));
         assertTrue(schema.contains("EXACT_VALIDATION_REQUIREMENT_BINDING"));
         assertTrue(schema.contains(
                 "completionConditionCopiedByteForByte"));
@@ -90,7 +95,7 @@ class ProductChainRoleSchemaSourceTest {
         assertTrue(schema.contains("deleteForbidsText"));
         assertTrue(schema.contains(
                 "targetFilesExactlyMatchChangePathsInOrder"));
-        assertTrue(schema.contains("product-chain-role-schema-v12"));
+        assertTrue(schema.contains("product-chain-role-schema-v13"));
         assertTrue(schema.contains(
                 "EXACT_DESCRIPTOR_ID_FROM_ONE_VISIBLE_COMPLETE_TOOL_SCHEMA"));
         assertTrue(schema.contains(
