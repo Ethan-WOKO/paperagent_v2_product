@@ -400,7 +400,14 @@ public final class ProductChainChatModelAdapter implements ChainModelCallPort {
                     + "For a step-result form, validationSources contains exactly one binding for every ID in "
                     + "the active Step validationRequirementIds and no other ID; each binding uses a visible formal "
                     + "Receipt and that receiptRef also appears in receiptRefs. Use [] only when the active Step has "
-                    + "no validation requirement IDs.";
+                    + "no validation requirement IDs. For a non-changing Step whose declared validation subject is "
+                    + "ACTION_RECEIPT, an exact successful Receipt is the completed observation: return the "
+                    + "step-result form bound to that Receipt and never repeat the action. An exact FAILURE Receipt "
+                    + "with a non-zero process exit code is the requested negative observation, not repair authority: "
+                    + "return the step-blocked form bound to that Action and Receipt, without retry, mutation, or a "
+                    + "user question. This rule applies to command, compilation, test, and check observations. It "
+                    + "does not apply when the Step permits Candidate change, or to TIMEOUT, CANCELLED, unavailable, "
+                    + "or unknown execution outcomes; those retain their bounded recovery semantics.";
         }
         if (source.role() == io.paperagent.v2.chain.ChainRole.REFLECTOR
                 && formalFailureReview(source.callReason())) {

@@ -338,7 +338,13 @@ class ChainModelProtocolTest {
                         "validationSources contains exactly one binding for every ID",
                         "no other ID",
                         "receiptRef also appears in receiptRefs",
-                        "Use [] only when the active Step has no validation requirement IDs")
+                        "Use [] only when the active Step has no validation requirement IDs",
+                        "non-changing Step whose declared validation subject is ACTION_RECEIPT",
+                        "FAILURE Receipt with a non-zero process exit code",
+                        "requested negative observation, not repair authority",
+                        "without retry, mutation, or a user question",
+                        "does not apply when the Step permits Candidate change",
+                        "TIMEOUT, CANCELLED, unavailable, or unknown execution outcomes")
                 .doesNotContain("src/Example.java", "unused import", "Sort.java", "mergeSort");
         String reflector = captured.get(2).messages().get(0).content();
         assertThat(reflector)

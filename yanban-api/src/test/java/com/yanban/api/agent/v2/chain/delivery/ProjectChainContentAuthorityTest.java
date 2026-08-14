@@ -114,6 +114,43 @@ class ProjectChainContentAuthorityTest {
     }
 
     @Test
+    void cancellationAuthorityDeliversToOriginalTaskTurn() {
+        var task = new ChainPersistenceRecords.TaskRecord(
+                "task-1", "command-root", "instruction-root", null,
+                7, 8, 91, null, "request-root", "1".repeat(64),
+                null, null, 0, NOW);
+        var cancellation = new ChainPersistenceRecords.CommandRecord(
+                "command-cancel", 7, 8, "request-cancel",
+                ChainInstructionRelation.CANCEL,
+                "task-1", "request-root", null, "2".repeat(64),
+                null, null, "task-1", "event-cancel",
+                "instruction-cancel", ChainCommandStatus.COMMITTED,
+                null, NOW, NOW);
+
+        assertEquals(91L, ProductChainDeliveryMessageAdapter
+                .deliveryTurnId(task, cancellation));
+    }
+
+    @Test
+    void cancellationAuthorityCannotDeliverAcrossTasks() {
+        var task = new ChainPersistenceRecords.TaskRecord(
+                "task-1", "command-root", "instruction-root", null,
+                7, 8, 91, null, "request-root", "1".repeat(64),
+                null, null, 0, NOW);
+        var cancellation = new ChainPersistenceRecords.CommandRecord(
+                "command-cancel", 7, 8, "request-cancel",
+                ChainInstructionRelation.CANCEL,
+                "task-other", "request-other", null, "2".repeat(64),
+                null, null, "task-1", "event-cancel",
+                "instruction-cancel", ChainCommandStatus.COMMITTED,
+                null, NOW, NOW);
+
+        assertThrows(IllegalStateException.class, () ->
+                ProductChainDeliveryMessageAdapter.deliveryTurnId(
+                        task, cancellation));
+    }
+
+    @Test
     void directPlannerAnswerIsDeliveredOnceWithoutAnAnswerModelTurn()
             throws Exception {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(

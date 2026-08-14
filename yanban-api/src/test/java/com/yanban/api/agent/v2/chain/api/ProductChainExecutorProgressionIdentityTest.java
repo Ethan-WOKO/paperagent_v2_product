@@ -23,6 +23,12 @@ import java.time.Duration;
 import java.util.Set;
 import io.paperagent.v2.contracts.TaskFrameId;
 import io.paperagent.v2.contracts.ReceiptStatus;
+import io.paperagent.v2.contracts.ExecutionReceipt;
+import io.paperagent.v2.contracts.ReceiptId;
+import io.paperagent.v2.contracts.ToolCallId;
+import io.paperagent.v2.contracts.OutputCapture;
+import io.paperagent.v2.persistence.PersistedEffectResult;
+import io.paperagent.v2.persistence.PersistenceResult;
 import com.yanban.api.agent.v2.chain.context.ProductChainExecutorActionContextProjection;
 import com.yanban.api.agent.v2.persistence.ProductChainStepAuthorityAdapter;
 import java.time.Instant;
@@ -175,6 +181,29 @@ class ProductChainExecutorProgressionIdentityTest {
                 ProductChainExecutorProgression
                         .validateReceiptValidationSuccess(
                                 repeatedTool, success));
+    }
+
+    @Test
+    void onlyExplicitNonzeroProcessFailureIsAnObservedNegativeResult() {
+        var failure = new ProductChainExecutorActionContextProjection.Failure(
+                "action-1", "receipt-1", "proposal-action-1",
+                ReceiptStatus.FAILURE, "PROCESS_EXIT_NON_ZERO");
+        ExecutionReceipt processFailure = receipt(
+                ReceiptStatus.FAILURE, Optional.of(1),
+                Optional.of("PROCESS_EXIT_NON_ZERO"));
+        ExecutionReceipt timeout = receipt(
+                ReceiptStatus.TIMEOUT, Optional.empty(),
+                Optional.of("TIMEOUT"));
+
+        assertTrue(ProductChainExecutorProgression.isObservedActionFailure(
+                failure, PersistenceResult.found(new PersistedEffectResult(
+                        processFailure, "lease-1", 1))));
+        assertFalse(ProductChainExecutorProgression.isObservedActionFailure(
+                new ProductChainExecutorActionContextProjection.Failure(
+                        "action-1", "receipt-1", "proposal-action-1",
+                        ReceiptStatus.TIMEOUT, "TIMEOUT"),
+                PersistenceResult.found(new PersistedEffectResult(
+                        timeout, "lease-1", 1))));
     }
 
     @Test
@@ -392,6 +421,16 @@ class ProductChainExecutorProgressionIdentityTest {
                 none.validationId());
         assertEquals(null, none.requestDigest());
         assertEquals(null, none.receiptSetDigest());
+    }
+
+    private static ExecutionReceipt receipt(
+            ReceiptStatus status, Optional<Integer> exitCode,
+            Optional<String> resultCode) {
+        return new ExecutionReceipt(new ReceiptId("receipt-1"),
+                new ToolCallId("action-1"), status, Instant.EPOCH,
+                Instant.EPOCH.plusSeconds(1), exitCode, resultCode,
+                OutputCapture.empty(), OutputCapture.empty(), List.of(),
+                Optional.empty(), List.of());
     }
 
     private static String context(String candidate, String actions) {

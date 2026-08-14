@@ -859,16 +859,28 @@ public final class ProductChainDeliveryMessageAdapter
                 .findCommand(delivery.sourceCommandId()).orElseThrow(() ->
                         new IllegalStateException(
                                 "Delivery source command is missing"));
-        require(command.userId() == task.userId()
-                        && command.sessionId() == task.sessionId()
-                        && command.turnId() != null
-                        && command.status()
-                        != io.paperagent.v2.chain.ChainCommandStatus.FAILED
-                        && (command.resultTaskId() == null
-                        || task.taskId().equals(command.resultTaskId())),
-                "Delivery source command does not belong to the task");
-        return turns.findById(command.turnId()).orElseThrow(() ->
+        long deliveryTurnId = deliveryTurnId(task, command);
+        return turns.findById(deliveryTurnId).orElseThrow(() ->
                 new IllegalStateException("Delivery source Turn is missing"));
+    }
+
+    static long deliveryTurnId(
+            ChainPersistenceRecords.TaskRecord task,
+            ChainPersistenceRecords.CommandRecord command) {
+        boolean cancellation = command.commandKind()
+                == io.paperagent.v2.chain.ChainInstructionRelation.CANCEL;
+        boolean commandOwnsTask = command.userId() == task.userId()
+                && command.sessionId() == task.sessionId()
+                && command.status()
+                != io.paperagent.v2.chain.ChainCommandStatus.FAILED
+                && task.taskId().equals(command.resultTaskId())
+                && (cancellation
+                ? task.taskId().equals(command.targetTaskId())
+                        && command.turnId() == null
+                : command.turnId() != null);
+        require(commandOwnsTask,
+                "Delivery source command does not belong to the task");
+        return cancellation ? task.turnId() : command.turnId();
     }
 
     private ChainPersistenceRecords.TaskRecord lockTask(String taskId) {

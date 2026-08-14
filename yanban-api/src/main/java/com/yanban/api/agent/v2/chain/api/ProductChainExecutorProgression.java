@@ -1084,6 +1084,10 @@ public final class ProductChainExecutorProgression {
         SuccessfulReceipt successfulReceipt = latestSuccessfulReceipt(
                 task.taskId(), activation.command().stepId(),
                 activation.command().activationEventId());
+        boolean receiptValidation = receiptValidationStep(binding, step);
+        boolean observedActionFailure = receiptValidation
+                && repairFailure != null
+                && isObservedActionFailure(repairFailure);
         // A later Executor turn can use the same instruction text while its
         // formal Candidate or Action authority has advanced. Include those
         // exact durable inputs in the deterministic identity so distinct
@@ -1141,15 +1145,15 @@ public final class ProductChainExecutorProgression {
             validateStepMutationBoundary(output, step);
             validateExecutorStepResultValidationBindings(
                     output, step.validationRequirementIds());
-            boolean receiptValidation = receiptValidationStep(
-                    binding, step);
             if (receiptValidation && successfulReceipt != null) {
                 validateReceiptValidationSuccess(output, successfulReceipt);
             }
-            if (receiptValidation && repairFailure != null) {
+            if (observedActionFailure
+                    && output.payload()
+                    instanceof ExecutorPayload.StepBlocked) {
                 validateReceiptValidationFailure(output, repairFailure);
             }
-            if (repairFailure != null && !receiptValidation) {
+            if (repairFailure != null && !observedActionFailure) {
                 String rejection = actionContext.validateRepair(
                         output, repairFailure);
                 if (rejection != null
@@ -1183,6 +1187,25 @@ public final class ProductChainExecutorProgression {
                     || !Objects.equals(failure.errorRef(), failedExecution.errorRef())) {
                 return ProductChainExecutorPump.Result.repairRejected(
                         null, "REPAIR_FORMAL_FAILURE_MISSING");
+            }
+            if (observedActionFailure
+                    && outcome instanceof ChainModelProtocolOutcome
+                    .ProposalReady ready) {
+                if (ready.proposal().proposalKind()
+                        == ChainProposalKind.EXECUTOR_STEP_BLOCKED) {
+                    validateReceiptValidationFailure(
+                            ProductChainPersistedProposalDecoder.decode(
+                                    ready, ChainWorkState.EXECUTING, null),
+                            failure);
+                    return pump.execute(task.taskId(), outcome, now);
+                }
+                var decision = actionFailures.decide(
+                        task, binding, activation, ready, failure,
+                        "REPAIR_DID_NOT_CHANGE_ACTION", now);
+                return ProductChainExecutorPump.Result
+                        .actionFailureStepBlocked(
+                                ready.proposal().proposalId(),
+                                decision.stepBlockId());
             }
             String rejection = actionContext.validateRepair(outcome, failure);
             if (outcome instanceof ChainModelProtocolOutcome.ProposalReady ready
@@ -2531,6 +2554,30 @@ public final class ProductChainExecutorProgression {
                             action.actionId(), outcome.value().orElseThrow()
                                     .receipt().id().value()));
                 }).orElse(null);
+    }
+
+    private boolean isObservedActionFailure(
+            ProductChainExecutorActionContextProjection.Failure failure) {
+        if (failure.receiptStatus() != ReceiptStatus.FAILURE) {
+            return false;
+        }
+        return isObservedActionFailure(failure,
+                effectOutcomes.findResult(
+                        new ToolCallId(failure.actionId())));
+    }
+
+    static boolean isObservedActionFailure(
+            ProductChainExecutorActionContextProjection.Failure failure,
+            io.paperagent.v2.persistence.PersistenceResult<
+                    io.paperagent.v2.persistence.PersistedEffectResult> result) {
+        if (failure.receiptStatus() != ReceiptStatus.FAILURE
+                || !result.successful()) {
+            return false;
+        }
+        var receipt = result.value().orElseThrow().receipt();
+        return receipt.id().value().equals(failure.errorRef())
+                && receipt.status() == ReceiptStatus.FAILURE
+                && receipt.exitCode().filter(code -> code != 0).isPresent();
     }
 
     static void validateReceiptValidationSuccess(
