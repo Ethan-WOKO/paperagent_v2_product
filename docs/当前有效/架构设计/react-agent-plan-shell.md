@@ -58,7 +58,20 @@ Authenticated Turn
 - Receipt 必须引用已存在的 ToolRequested，且摘要必须一致；
 - 一个 ToolCall 只能有一个终态 Receipt，精确 Receipt 重放是 no-op。
 
-正式持久化和沙箱调用由共享网关 Issue #151 提供；本 Issue 只定义 Plan Shell 的产品侧编排和纯事实判定，不另建重复网关。
+本 Issue 的可运行切片把 Engine HTTP、产品 Project 网关和沙箱 Receipt 适配放在独立的 `reactplan` 命名空间下，避免依赖或修改其他实验分支。任务 JSON 与事件日志由 Engine 持久化；Plan/TaskFrame 仍进入现有 V2 持久化端口；沙箱执行状态与正式 Receipt 绑定落入独立的 `reactplan_sandbox_executions` 表。
+
+运行时拓扑：
+
+```text
+authenticated browser
+  -> Java /api/v1/react-agent (product authority + stable Plan)
+  -> local agent-engine-reactplan (ReAct loop + event/task recovery)
+  -> Java /internal/v1/agent-engine (short task grant)
+       -> frozen ProjectVersion workspace
+       -> existing sandbox broker (broker credential stays in Java)
+```
+
+长期 authority 和 `requestDigest` 不含任何 token。Java 在每次提交时另行签发绑定 taskId、用户、Turn、ProjectVersion 和到期时间的短期 grant；Engine 只能拿它调用网关，不能直接调用 broker。
 
 ## 复杂任务与后续 plan.update
 
@@ -70,8 +83,8 @@ Authenticated Turn
 
 ## 迁移和回滚
 
-- 新代码仅位于 `com.yanban.api.agent.reactplan`，不修改旧四角色链；
-- 本 Issue 不接 Engine HTTP、不实现 Project 写入/发布/回滚；
+- Java 新代码仅位于 `com.yanban.api.agent.reactplan`，Engine 位于 `agent-engine-reactplan/`，不修改旧四角色链；
+- 本 Issue 已接 Engine HTTP 和只读产品网关，但不实现 Project 写入/发布/回滚；
 - 未切流前旧链仍是默认路径；切流应由后续独立 Issue 通过显式开关完成；
 - 遇到回归可关闭新路径，不需要迁移或重写旧 Plan 数据。
 
@@ -83,3 +96,6 @@ Authenticated Turn
 - ToolCall/Receipt 精确重放、摘要冲突和恢复重建；
 - 编译成功、可信编译失败、系统失败、待处理影响和伪造 Receipt 绑定的完成判定；
 - 认证失败时不进入持久化。
+- Engine submit/status/SSE/cancel/answer 与重启恢复；
+- 真实 ProjectVersion 清单/按 hash 读取、白名单沙箱 argv 与有界正式 Receipt；
+- 服务 token、短期 task grant 和 broker 凭证三层隔离。
