@@ -6,12 +6,14 @@ Independent, lightweight TypeScript ReAct implementation of the frozen PaperAgen
 
 - Implements all five Engine HTTP/SSE operations with a deployment-scoped bearer credential.
 - Validates frozen JSON schemas and verifies the canonical authority digest.
-- Persists task projections, model budget, pending native tool calls and append-only JSONL events.
+- Persists task projections, model budget, pending native tool calls, append-only JSONL events, and an fsync-backed accepted-answer journal.
 - Keeps task grants only in memory. After restart, an exact task replay refreshes the grant and resumes unfinished work without reallocating model budget or sandbox call IDs.
+- Recovers journal-only answers, durable questions, and durable deliveries across projection-write crash windows without consuming an answer, asking a question, or invoking the model twice.
 - Maps model-native functions to `project.list`, `project.read`, and `sandbox.execute`; tools execute serially.
 - Uses the fixed 4096 output-token / 20 model-call budget and 1, 2, 4, 5, 5… sandbox polling schedule.
 - Emits bounded summaries only; project file bodies and credentials never enter the event stream.
-- Treats sandbox `FAILED` receipts as code-validation feedback that the model may repair, while transport, deadline, timeout, and system failures retain separate failure categories.
+- Treats sandbox `FAILED` receipts as code-validation evidence that the model may repair or accurately deliver to the user; transport, deadline, timeout, and system failures retain separate failure categories and do not produce a false delivery.
+- Accepts only schema-shaped gateway Problems and fails closed on malformed gateway JSON without reflecting untrusted error content.
 
 P1 is read/execute/deliver only. This Engine cannot write a Workspace, publish a ProjectVersion, access broker credentials, or select a gateway origin from task input.
 

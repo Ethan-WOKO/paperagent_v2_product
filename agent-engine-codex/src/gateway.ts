@@ -22,16 +22,33 @@ export class HttpGatewayClient implements GatewayClient {
   private async call<T>(url: string, grant: string, signal: AbortSignal, body?: unknown): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(url, { method: body === undefined ? "GET" : "POST", headers: { authorization: `Bearer ${grant}`, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal });
+      response = await fetch(url, { method: body === undefined ? "GET" : "POST", headers: { authorization: `Bearer ${grant}`, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: "error", signal });
     } catch (error) {
       if (signal.aborted) throw error;
       throw new EngineProblem(502, problem("GATEWAY_TRANSPORT_FAILED", "tool", "Product tool gateway request failed", true));
     }
     if (!response.ok) {
-      let gatewayProblem: { code?: string; category?: import("./types.js").Problem["category"]; message?: string; retryable?: boolean } = {};
-      try { gatewayProblem = await response.json() as typeof gatewayProblem; } catch { /* sanitized fallback */ }
-      throw new EngineProblem(response.status, problem(gatewayProblem.code ?? "GATEWAY_REQUEST_FAILED", gatewayProblem.category ?? "tool", gatewayProblem.message ?? `Product tool gateway returned HTTP ${response.status}`, gatewayProblem.retryable ?? response.status >= 500));
+      let candidate: unknown;
+      try { candidate = await response.json(); } catch { /* sanitized fallback */ }
+      const gatewayProblem = validProblem(candidate) ? candidate : null;
+      throw new EngineProblem(response.status, gatewayProblem ?? problem("GATEWAY_REQUEST_FAILED", "tool", `Product tool gateway returned HTTP ${response.status}`, response.status >= 500));
     }
-    return await response.json() as T;
+    try { return await response.json() as T; }
+    catch { throw new EngineProblem(502, problem("GATEWAY_RESPONSE_INVALID", "tool", "Product tool gateway returned an invalid JSON response", true)); }
   }
+}
+
+const PROBLEM_CATEGORIES = new Set(["request", "authorization", "model", "tool", "code_validation", "sandbox_system", "cancelled", "internal"]);
+const PROBLEM_KEYS = new Set(["contractVersion", "code", "category", "message", "retryable", "sourceRef"]);
+
+function validProblem(value: unknown): value is import("./types.js").Problem {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return Object.keys(candidate).every((key) => PROBLEM_KEYS.has(key))
+    && candidate.contractVersion === "1.0"
+    && typeof candidate.code === "string" && /^[A-Z][A-Z0-9_]{2,95}$/.test(candidate.code)
+    && typeof candidate.category === "string" && PROBLEM_CATEGORIES.has(candidate.category)
+    && typeof candidate.message === "string" && candidate.message.length >= 1 && candidate.message.length <= 1000
+    && typeof candidate.retryable === "boolean"
+    && (candidate.sourceRef === undefined || candidate.sourceRef === null || (typeof candidate.sourceRef === "string" && candidate.sourceRef.length <= 256));
 }

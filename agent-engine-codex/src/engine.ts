@@ -33,6 +33,7 @@ export class AgentEngine {
   private readonly grants = new Map<string, { value: string; expiresAt: string }>();
   private readonly active = new Map<string, Promise<void>>();
   private readonly submissionLocks = new Map<string, Promise<void>>();
+  private readonly answerLocks = new Map<string, Promise<void>>();
   private readonly cancellations = new Map<string, Promise<void>>();
   private readonly aborters = new Map<string, AbortController>();
   private readonly subscribers = new Map<string, Set<Subscriber>>();
@@ -67,7 +68,7 @@ export class AgentEngine {
     if (existing) {
       if (existing.view.requestDigest !== submission.requestDigest) throw new EngineProblem(409, problem("TASK_DIGEST_CONFLICT", "request", "taskId already belongs to another request digest"));
       this.grants.set(submission.taskId, { value: submission.gateway.taskGrant, expiresAt: submission.gateway.expiresAt });
-      if (!terminal(existing.view.state) && existing.view.state !== "waiting_user") this.schedule(existing);
+      if (!terminal(existing.view.state) && (existing.view.state !== "waiting_user" || existing.view.pendingQuestionId === null)) this.schedule(existing);
       return { contractVersion: "1.0", replayed: true, task: structuredClone(existing.view) };
     }
     const now = new Date().toISOString();
@@ -119,8 +120,19 @@ export class AgentEngine {
 
   async answer(taskId: string, value: { contractVersion: "1.0"; clientRequestId: string; questionId: string; answer: string; answerDigest: string }): Promise<TaskView> {
     this.options.validator.validate("task-answer", value);
-    const task = this.requireTask(taskId);
     if (sha256(value.answer) !== value.answerDigest) throw new EngineProblem(400, problem("ANSWER_DIGEST_INVALID", "request", "answerDigest does not match the exact answer bytes"));
+    const previous = this.answerLocks.get(taskId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolveLock) => { release = resolveLock; });
+    const barrier = previous.then(() => current);
+    this.answerLocks.set(taskId, barrier);
+    await previous;
+    try { return await this.acceptAnswer(taskId, value); }
+    finally { release(); if (this.answerLocks.get(taskId) === barrier) this.answerLocks.delete(taskId); }
+  }
+
+  private async acceptAnswer(taskId: string, value: { contractVersion: "1.0"; clientRequestId: string; questionId: string; answer: string; answerDigest: string }): Promise<TaskView> {
+    const task = this.requireTask(taskId);
     const requestReplay = task.acceptedAnswers.find((answer) => answer.clientRequestId === value.clientRequestId);
     if (requestReplay && (requestReplay.questionId !== value.questionId || requestReplay.answerDigest !== value.answerDigest)) throw new EngineProblem(409, problem("ANSWER_REQUEST_CONFLICT", "request", "clientRequestId was already used for another answer"));
     const questionReplay = task.acceptedAnswers.find((answer) => answer.questionId === value.questionId);
@@ -129,10 +141,11 @@ export class AgentEngine {
       return structuredClone(task.view);
     }
     if (task.view.state !== "waiting_user" || task.view.pendingQuestionId !== value.questionId) throw new EngineProblem(409, problem("QUESTION_NOT_PENDING", "request", "The question is not currently pending"));
-    const accepted: AcceptedAnswer = { clientRequestId: value.clientRequestId, questionId: value.questionId, answerDigest: value.answerDigest };
-    task.acceptedAnswers.push(accepted);
     const pending = task.pendingCalls[task.nextPendingCall];
     if (!pending || pending.name !== "ask_user") throw new EngineProblem(500, problem("QUESTION_STATE_INVALID", "internal", "Pending question state could not be resumed"));
+    const accepted: AcceptedAnswer & { answer: string } = { clientRequestId: value.clientRequestId, questionId: value.questionId, answerDigest: value.answerDigest, answer: value.answer };
+    await this.options.store.appendAnswer(taskId, accepted);
+    task.acceptedAnswers.push(accepted);
     task.messages.push({ role: "tool", toolCallId: pending.id, content: JSON.stringify({ answer: value.answer }) });
     task.nextPendingCall += 1;
     task.view.pendingQuestionId = null;
@@ -142,7 +155,7 @@ export class AgentEngine {
   }
 
   private schedule(task: PersistedTask): void {
-    if (this.active.has(task.view.taskId) || terminal(task.view.state) || task.view.state === "waiting_user") return;
+    if (!this.grants.has(task.view.taskId) || this.active.has(task.view.taskId) || terminal(task.view.state) || (task.view.state === "waiting_user" && task.view.pendingQuestionId !== null)) return;
     const controller = new AbortController();
     this.aborters.set(task.view.taskId, controller);
     const promise = this.run(task, controller.signal).finally(() => {
@@ -154,6 +167,10 @@ export class AgentEngine {
 
   private async run(task: PersistedTask, signal: AbortSignal): Promise<void> {
     try {
+      if (task.view.deliverySequence !== null && task.view.deliverySequence !== undefined) {
+        await this.status(task, "succeeded", null);
+        return;
+      }
       if (task.view.state !== "running") await this.status(task, "running", null);
       while (!terminal(task.view.state) && task.view.state !== "waiting_user") {
         this.checkCancelled(signal);
@@ -177,7 +194,6 @@ export class AgentEngine {
         if (calls.length === 0) {
           const conclusion = bounded(response.content?.trim() ?? "", 16000);
           if (!conclusion) throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls"));
-          if (task.lastSandboxStatus && task.lastSandboxStatus !== "SUCCEEDED") throw new EngineProblem(422, problem("SANDBOX_CODE_VALIDATION_FAILED", "code_validation", "The last sandbox validation did not succeed", false, task.receiptRefs.at(-1)));
           const delivery = await this.emit(task, { type: "delivery", conclusion, receiptRefs: [...task.receiptRefs] });
           task.view.deliverySequence = delivery.sequence;
           await this.options.store.save(task);

@@ -70,7 +70,13 @@ export interface ModelRequest {
 export interface ModelProvider { complete(request: ModelRequest): Promise<ModelResponse> }
 
 export interface PendingCall extends ModelToolCall { ordinal: number }
-export interface AcceptedAnswer { clientRequestId: string; questionId: string; answerDigest: string }
+export interface AcceptedAnswer {
+  clientRequestId: string;
+  questionId: string;
+  answerDigest: string;
+  /** Persisted so a journal-only recovery can reconstruct the exact tool reply. */
+  answer?: string;
+}
 
 export interface PersistedTask {
   authority: Authority;

@@ -47,6 +47,24 @@ describe("HttpGatewayClient", () => {
     expect(requests[1]?.body).toEqual({ contractVersion: "1.0", path: "Sort.java", expectedSha256: hash });
     expect(requests[2]?.body).toEqual(sandbox);
   });
+
+  it("fails closed for malformed success bodies and invalid problem projections", async () => {
+    let calls = 0;
+    const server = createServer((_request, response) => {
+      calls += 1;
+      response.setHeader("content-type", "application/json");
+      if (calls === 1) {
+        response.statusCode = 500;
+        return response.end(JSON.stringify({ contractVersion: "1.0", code: "BROKEN", category: "forged", message: "must-not-propagate", retryable: true }));
+      }
+      response.end("not-json");
+    });
+    servers.push(server); await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const client = new HttpGatewayClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    const signal = new AbortController().signal;
+    await expect(client.list(taskId, grant, signal)).rejects.toMatchObject({ status: 500, problem: { code: "GATEWAY_REQUEST_FAILED", category: "tool", message: "Product tool gateway returned HTTP 500" } });
+    await expect(client.list(taskId, grant, signal)).rejects.toMatchObject({ status: 502, problem: { code: "GATEWAY_RESPONSE_INVALID", category: "tool" } });
+  });
 });
 
 async function readBody(request: import("node:http").IncomingMessage): Promise<unknown> {
