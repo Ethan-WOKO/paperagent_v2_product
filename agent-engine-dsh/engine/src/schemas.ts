@@ -62,6 +62,22 @@ export function validateProblem(value: unknown): void {
   assertValid(ids.problem, value, 'problem');
 }
 
+export function validateFileList(value: unknown): void {
+  assertValid(ids.gateway + '#/$defs/fileList', value, 'gateway fileList');
+}
+
+export function validateFileRead(value: unknown): void {
+  assertValid(ids.gateway + '#/$defs/fileRead', value, 'gateway fileRead');
+}
+
+export function validateSandboxView(value: unknown): void {
+  assertValid(ids.gateway + '#/$defs/sandboxView', value, 'gateway sandboxView');
+}
+
+export function validateReceipt(value: unknown): void {
+  assertValid(ids.receipt, value, 'receipt');
+}
+
 export function schemaPresent(): boolean {
   return [...schemas.keys()].length >= 7;
 }

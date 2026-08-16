@@ -216,24 +216,34 @@ async function main() {
   await postJson(baseB, '/v1/tasks', tN);
   // wait until the message event lands (phase messaged) then kill mid-run
   let killedMidRun = false;
-  for (let i = 0; i < 100 && !killedMidRun; i++) {
-    const events = await readSse(baseB, '/v1/tasks/' + tN.taskId + '/events', 0);
-    if (events.some((e) => e.type === 'message')) {
-      procB.kill();
-      killedMidRun = true;
-    } else {
-      await new Promise((r) => setTimeout(r, 100));
+  let lastSeen = 0;
+  for (let i = 0; i < 200 && !killedMidRun; i++) {
+    const next = await readSse(baseB, '/v1/tasks/' + tN.taskId + '/events', lastSeen, 1);
+    if (next.length === 1) {
+      lastSeen = next[0].sequence;
+      if (next[0].type === 'message') {
+        procB.kill();
+        killedMidRun = true;
+      }
     }
   }
   check('S8d engine killed mid-run after message', killedMidRun);
   await new Promise((r) => setTimeout(r, 500));
   const procB2 = startEngine({ ENGINE_PORT: '18093', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirB, STUB_STEP_DELAY_MS: '100' });
   await waitUp(baseB, procB2);
+  // Cold-start recovery is PAUSED: the non-terminal task must not advance
+  // until Java resubmits the exact taskId/digest with a fresh grant.
+  await new Promise((r) => setTimeout(r, 600));
+  const pausedView = (await getJson(baseB, '/v1/tasks/' + tN.taskId)).body;
+  const persistedLines = readFileSync(join(dirB, tN.taskId, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).length;
+  check('S8e paused after cold start (no grant, no advance)', pausedView?.state === 'running' && pausedView?.lastSequence === persistedLines, `state=${pausedView?.state} seq=${pausedView?.lastSequence}/${persistedLines}`);
+  const replay = await postJson(baseB, '/v1/tasks', tN);
+  check('S8f exact replay re-arms paused task', replay.status === 202 && replay.body?.replayed === true, `status=${replay.status}`);
   const viewN = await waitForState(baseB, tN.taskId, ['succeeded', 'failed', 'cancelled']);
-  check('S8e non-terminal task resumes to terminal after restart', viewN?.state === 'succeeded', `state=${viewN?.state}`);
+  check('S8g non-terminal task resumes to terminal after replay', viewN?.state === 'succeeded', `state=${viewN?.state}`);
   const eventsN = await readSse(baseB, '/v1/tasks/' + tN.taskId + '/events', 0);
-  check('S8f no duplicated message after restart', eventsN.filter((e) => e.type === 'message').length === 1, `messages=${eventsN.filter((e) => e.type === 'message').length}`);
-  check('S8g sequences contiguous after restart', eventsN.map((e) => e.sequence).every((s, i) => s === i + 1));
+  check('S8h no duplicated message after restart', eventsN.filter((e) => e.type === 'message').length === 1, `messages=${eventsN.filter((e) => e.type === 'message').length}`);
+  check('S8i sequences contiguous after restart', eventsN.map((e) => e.sequence).every((s, i) => s === i + 1));
   procB2.kill();
 
   // ---- Instance C: cancel ----
@@ -280,6 +290,12 @@ async function main() {
   check('S6g exact answer replay 202', a4.status === 202);
   const viewD2 = await waitForState(baseD, t6.taskId, ['succeeded']);
   check('S6h succeeds after answer', viewD2?.state === 'succeeded', `state=${viewD2?.state}`);
+  // Post-terminal idempotency: an exact accepted answer stays 202 after the
+  // task ended; different content still conflicts with 409.
+  const a5 = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, answerBody('c'.repeat(20), 'q1', 'yes'));
+  check('S6i exact replay after terminal 202', a5.status === 202, `status=${a5.status}`);
+  const a6 = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, answerBody('c'.repeat(20), 'q1', 'no'));
+  check('S6j conflicting replay after terminal 409', a6.status === 409, `status=${a6.status} code=${a6.body?.code}`);
   procD.kill();
 
   // ---- Instance E: expired grant ----

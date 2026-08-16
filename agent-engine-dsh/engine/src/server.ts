@@ -62,12 +62,9 @@ export class EngineServer {
       const authority = this.restoreAuthority(taskId);
       const runtime = new TaskRuntime(meta, options.store, authority, { taskGrant: '', expiresAt: '1970-01-01T00:00:00Z' }, options.runnerFactory(meta, authority));
       this.runtimes.set(taskId, runtime);
-      // Non-terminal recovery: queued tasks start, running tasks resume,
-      // waiting_user tasks stay parked until /answer.
-      if (!runtime.isTerminal()) {
-        if (runtime.state === 'queued') runtime.start();
-        else runtime.resume();
-      }
+      // Cold-start recovery is PAUSED: a non-terminal task never runs with an
+      // empty grant. Java must resubmit the exact taskId/digest with a fresh
+      // grant, which re-arms the runner below in submit().
     }
   }
 
@@ -117,9 +114,10 @@ export class EngineServer {
         if (action === 'answer' && req.method === 'POST') return this.answer(req, res, taskId);
       }
       sendProblem(res, 404, problem('NOT_FOUND', 'request', 'unknown endpoint', false));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      sendProblem(res, 500, problem('INTERNAL', 'internal', message.slice(0, 1000), false));
+    } catch {
+      // Uniform sanitization: raw exception text, paths, or configuration
+      // never reach the caller.
+      sendProblem(res, 500, problem('INTERNAL', 'internal', 'internal engine error', false));
     }
   }
 
@@ -134,9 +132,8 @@ export class EngineServer {
     let submission;
     try {
       submission = parseTaskSubmission(body);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      sendProblem(res, 400, problem('INVALID_SUBMISSION', 'request', 'task submission violates the frozen contract: ' + message.slice(0, 600), false));
+    } catch {
+      sendProblem(res, 400, problem('INVALID_SUBMISSION', 'request', 'task submission violates the frozen contract', false));
       return;
     }
     const computed = requestDigestOf(submission.authority);
@@ -248,19 +245,14 @@ export class EngineServer {
     let parsed;
     try {
       parsed = parseAnswerBody(body);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      sendProblem(res, 400, problem('INVALID_ANSWER', 'request', 'answer body violates the frozen contract: ' + message.slice(0, 600), false));
+    } catch {
+      sendProblem(res, 400, problem('INVALID_ANSWER', 'request', 'answer body violates the frozen contract', false));
       return;
     }
 
-    if (runtime.pendingQuestion() !== parsed.questionId || runtime.state !== 'waiting_user') {
-      sendProblem(res, 409, problem('QUESTION_NOT_PENDING', 'request', 'questionId is not the currently pending question', false, taskId));
-      return;
-    }
-
-    // Idempotency by clientRequestId first: the same request id must always
-    // name the same question and digest.
+    // Idempotent replay wins over state checks: an exact accepted answer stays
+    // 202 after success, failure, or restart; conflicts always 409 and never
+    // rewrite the first accepted answer.
     const byRequestId = runtime.answerByRequestId(parsed.clientRequestId);
     if (byRequestId !== null) {
       if (byRequestId.questionId === parsed.questionId && byRequestId.answerDigest === parsed.answerDigest) {
@@ -280,6 +272,11 @@ export class EngineServer {
         return;
       }
       sendProblem(res, 409, problem('QUESTION_ANSWER_CONFLICT', 'request', 'question already answered with a different answerDigest', false, taskId));
+      return;
+    }
+
+    if (runtime.pendingQuestion() !== parsed.questionId || runtime.state !== 'waiting_user') {
+      sendProblem(res, 409, problem('QUESTION_NOT_PENDING', 'request', 'questionId is not the currently pending question', false, taskId));
       return;
     }
 

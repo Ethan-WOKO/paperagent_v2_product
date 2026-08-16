@@ -160,14 +160,18 @@ export class DshRunner implements Runner {
       });
       task.emit('status', { state: 'succeeded', error: null });
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      // Uniform sanitization: raw error text, paths, and configuration never
+      // reach the caller; the code classifies the failure only.
+      const raw = e instanceof Error ? e.message : String(e);
+      const code = /^[A-Z][A-Z0-9_]{2,95}$/.test(raw) ? raw : 'MODEL_LOOP_FAILED';
+      const category = code.startsWith('TASK_GRANT') ? 'authorization' : code.startsWith('SANDBOX') ? 'sandbox_system' : code.startsWith('ENGINE_') || code.startsWith('GATEWAY_') ? 'internal' : 'model';
       task.emit('status', {
         state: 'failed',
         error: {
           contractVersion: '1.0',
-          code: 'MODEL_LOOP_FAILED',
-          category: 'model',
-          message: message.slice(0, 1000),
+          code,
+          category,
+          message: 'model loop failed to complete the task',
           retryable: false,
           sourceRef: null,
         },

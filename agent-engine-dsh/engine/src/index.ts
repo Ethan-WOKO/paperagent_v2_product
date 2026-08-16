@@ -43,10 +43,10 @@ const submissionLog = join(dataDir, 'gateway-submissions.jsonl');
 
 function gatewayFor(task: TaskRuntime): GatewayClient {
   const baseUrl = process.env.ENGINE_GATEWAY_BASE_URL;
-  if (baseUrl) {
-    return new HttpGatewayClient(baseUrl, task.meta.taskId, task.grant.taskGrant);
+  if (!baseUrl) {
+    throw new Error('ENGINE_GATEWAY_BASE_URL_MISSING');
   }
-  return new StubGateway(gatewayFiles, new Map([['src/main/java/Sort.java', fixtureContent]]), submissionLog);
+  return new HttpGatewayClient(baseUrl, task.meta.taskId, task.grant.taskGrant);
 }
 
 const SYSTEM_PROMPT =
@@ -58,6 +58,11 @@ const SYSTEM_PROMPT =
 
 async function buildRunnerFactory(): Promise<(meta: TaskMeta, authority: Record<string, unknown>) => Runner> {
   if (runnerKind === 'dsh') {
+    // Formal entry is fail-closed: the DSH runner requires the real product
+    // gateway; there is no fixture/stub fallback in production.
+    if (!process.env.ENGINE_GATEWAY_BASE_URL) {
+      throw new Error('ENGINE_RUNNER=dsh requires ENGINE_GATEWAY_BASE_URL');
+    }
     const dsh: DshRuntime = await bootDsh(join(here, '..', 'cordis.yml'));
     console.log('DSH tree booted (runner=dsh)');
     const dshRunner = new DshRunner(dsh, gatewayFor, SYSTEM_PROMPT);

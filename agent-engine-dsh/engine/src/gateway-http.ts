@@ -1,3 +1,4 @@
+import { validateFileList, validateFileRead, validateReceipt, validateSandboxView } from './schemas.ts';
 import type {
   GatewayClient,
   WorkspaceFileEntry,
@@ -32,28 +33,34 @@ export class HttpGatewayClient implements GatewayClient {
     });
     const text = await res.text();
     if (!res.ok) {
+      // Sanitized: never echo raw gateway bodies, paths, or configuration.
       let code = 'GATEWAY_' + res.status;
       try {
-        const parsed = JSON.parse(text) as { code?: string; message?: string };
-        code = parsed.code ?? code;
+        const parsed = JSON.parse(text) as { code?: string };
+        if (typeof parsed.code === 'string' && /^[A-Z][A-Z0-9_]{2,95}$/.test(parsed.code)) {
+          code = parsed.code;
+        }
       } catch {
         /* non-JSON error body */
       }
-      throw new Error(code + ': ' + text.slice(0, 400));
+      throw new Error(code);
     }
     return JSON.parse(text) as T;
   }
 
   async listWorkspaceFiles(): Promise<WorkspaceFileEntry[]> {
     const body = await this.request<{ files: WorkspaceFileEntry[] }>(`/internal/v1/agent-engine/tasks/${this.taskId}/workspace/files`);
+    validateFileList(body);
     return body.files;
   }
 
   async readWorkspaceFile(path: string, expectedSha256: string): Promise<FileRead> {
-    return this.request<FileRead>(`/internal/v1/agent-engine/tasks/${this.taskId}/workspace/read`, {
+    const body = await this.request<FileRead>(`/internal/v1/agent-engine/tasks/${this.taskId}/workspace/read`, {
       method: 'POST',
       body: JSON.stringify({ contractVersion: '1.0', path, expectedSha256 }),
     });
+    validateFileRead(body);
+    return body;
   }
 
   async submitSandbox(request: SandboxSubmitRequest): Promise<SandboxView> {
@@ -68,14 +75,19 @@ export class HttpGatewayClient implements GatewayClient {
         timeoutMillis: request.timeoutMillis,
       }),
     });
+    validateSandboxView(view);
     return view;
   }
 
   async getSandboxExecution(clientRequestId: string): Promise<SandboxView> {
-    return this.request<SandboxView>(`/internal/v1/agent-engine/tasks/${this.taskId}/sandbox-executions/${clientRequestId}`);
+    const view = await this.request<SandboxView>(`/internal/v1/agent-engine/tasks/${this.taskId}/sandbox-executions/${clientRequestId}`);
+    validateSandboxView(view);
+    return view;
   }
 
   async getSandboxReceipt(receiptRef: string): Promise<ReceiptProjection> {
-    return this.request<ReceiptProjection>(`/internal/v1/agent-engine/tasks/${this.taskId}/receipts/${receiptRef}`);
+    const receipt = await this.request<ReceiptProjection>(`/internal/v1/agent-engine/tasks/${this.taskId}/receipts/${receiptRef}`);
+    validateReceipt(receipt);
+    return receipt;
   }
 }
