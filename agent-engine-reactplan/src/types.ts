@@ -58,6 +58,30 @@ export interface ChatMessage {
 }
 
 export interface ModelToolCall { id: string; name: string; arguments: string }
+export interface RegisteredToolSpec {
+  type: "function";
+  function: { name: string; description: string; parameters: unknown };
+}
+export interface RegisteredToolCatalog {
+  contractVersion: "1.0";
+  taskId: string;
+  projectVersion: string;
+  catalogDigest: string;
+  tools: RegisteredToolSpec[];
+}
+export interface RegisteredToolResult {
+  contractVersion: "1.0";
+  callId: string;
+  toolName: string;
+  requestDigest: string;
+  success: boolean;
+  output: unknown | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  retryable: boolean;
+  evidenceRefs: string[];
+  version: string | null;
+}
 export interface ModelResponse { content: string | null; toolCalls: ModelToolCall[]; usage?: { promptTokens: number; completionTokens: number } }
 export interface ModelRequest {
   provider: string;
@@ -83,6 +107,8 @@ export interface PersistedTask {
   pendingCalls: PendingCall[];
   nextPendingCall: number;
   acceptedAnswers: AcceptedAnswer[];
+  registeredTools?: RegisteredToolSpec[];
+  registeredToolCatalogDigest?: string;
 }
 
 export interface FileEntry { path: string; sizeBytes: number; sha256: string; mediaType: string }

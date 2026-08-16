@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentEngine } from "../src/engine.js";
 import type { GatewayClient, SandboxRequest } from "../src/gateway.js";
 import { TaskStore } from "../src/store.js";
-import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, Receipt, SandboxView, TaskSubmission } from "../src/types.js";
-import { digestObject, sha256 } from "../src/util.js";
+import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, TaskSubmission } from "../src/types.js";
+import { digestObject, EngineProblem, problem, sha256 } from "../src/util.js";
 import { ContractValidator } from "../src/validation.js";
 
 const contractDirectory = resolve(process.cwd(), "../agent-engine-contract");
@@ -43,6 +43,22 @@ describe("AgentEngine", () => {
     expect(JSON.stringify(provider.requests)).not.toContain("receipt.1");
     expect(gateway.maximumConcurrent).toBe(1);
     expect(provider.requests.every((request) => request.maxOutputTokens === 4096)).toBe(true);
+    expect(JSON.stringify(provider.requests[0]?.tools)).toContain("project_search");
+  });
+
+  it("invokes a frozen read-only registered product tool without leaking its output into events", async () => {
+    const provider = new ScriptedProvider([
+      tool("project_search", { query: "order-service", maxResults: 20 }),
+      { content: "Located the requested module.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    const events = await engine.events(taskId);
+    expect(events.filter((event) => event.type === "tool" && event.state === "requested")
+      .map((event) => event.type === "tool" ? event.name : "")).toEqual(["project.read"]);
+    expect(JSON.stringify(events)).not.toContain("PRIVATE_SEARCH_RESULT");
+    expect(JSON.stringify(provider.requests)).toContain("PRIVATE_SEARCH_RESULT");
   });
 
   it("accepts exact replay, refreshes the grant, and rejects a digest conflict", async () => {
@@ -127,6 +143,23 @@ describe("AgentEngine", () => {
     expect(delivery?.type === "delivery" ? delivery.receiptRefs : []).toEqual(["receipt.failed"]);
   });
 
+  it("returns a policy-rejected sandbox request to the model so it can repair argv", async () => {
+    const gateway = new RejectingOnceGateway();
+    const provider = new ScriptedProvider([
+      tool("execute_in_sandbox", { argv: ["java", "Sort.java"], inputs: [{ path: "nested/Sort.java", sha256: fileHash }], timeoutMillis: 5000 }),
+      tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "nested/Sort.java"], inputs: [{ path: "nested/Sort.java", sha256: fileHash }], timeoutMillis: 5000 }),
+      { content: "Recovered with an allowed command.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, gateway);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    const sandboxEvents = (await engine.events(taskId)).filter(
+      (event) => event.type === "tool" && event.name === "sandbox.execute");
+    expect(sandboxEvents.some((event) => event.type === "tool"
+      && event.state === "failed" && event.outputSummary?.includes("SANDBOX_COMMAND_DENIED"))).toBe(true);
+    expect(gateway.submissions).toBe(2);
+  });
+
   it("starts the sandbox deadline after acceptance and never polls beyond it", async () => {
     let clock = 0; const sleeps: number[] = [];
     const gateway = new NeverTerminalGateway(() => { clock = 30_000; });
@@ -165,6 +198,8 @@ class NeverProvider implements ModelProvider {
 class FakeGateway implements GatewayClient {
   concurrent = 0; maximumConcurrent = 0;
   private async operation<T>(value: T): Promise<T> { this.concurrent += 1; this.maximumConcurrent = Math.max(this.maximumConcurrent, this.concurrent); await Promise.resolve(); this.concurrent -= 1; return value; }
+  tools(taskIdValue: string): Promise<RegisteredToolCatalog> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, catalogDigest: "c".repeat(64), tools: [{ type: "function", function: { name: "project_search", description: "Search the frozen Project.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } }] }); }
+  invoke(_taskId: string, _grant: string, request: { callId: string; toolName: string; requestDigest: string }): Promise<RegisteredToolResult> { return this.operation({ contractVersion: "1.0", callId: request.callId, toolName: request.toolName, requestDigest: request.requestDigest, success: true, output: { projectVersion, hits: [{ path: "services/order-service/pom.xml", line: "PRIVATE_SEARCH_RESULT" }] }, errorCode: null, errorMessage: null, retryable: false, evidenceRefs: ["project:1:search"], version: projectVersion }); }
   list(taskIdValue: string): Promise<FileList> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, files: [{ path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java" }] }); }
   read(): Promise<FileRead> { return this.operation({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java", encoding: "utf-8", content: "SECRET_FILE_BODY", truncated: false }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
@@ -192,6 +227,18 @@ class NeverTerminalGateway extends FakeGateway {
   override execution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> {
     this.polls += 1;
     return Promise.resolve({ contractVersion: "1.0", clientRequestId, requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 1000 }), executionRef: "execution.never", state: "RUNNING", receiptRef: null });
+  }
+}
+
+class RejectingOnceGateway extends FakeGateway {
+  submissions = 0;
+  override submit(taskIdValue: string, grantValue: string, request: SandboxRequest): Promise<SandboxView> {
+    this.submissions += 1;
+    if (this.submissions === 1) {
+      return Promise.reject(new EngineProblem(400,
+        problem("SANDBOX_COMMAND_DENIED", "request", "rejected")));
+    }
+    return super.submit(taskIdValue, grantValue, request);
   }
 }
 

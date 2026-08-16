@@ -69,7 +69,7 @@ final class ReactPlanRuntimeController {
         long after = lastEventId == null ? 0 : lastEventId;
         InputStream source = runtime.events(userId, turnId, taskId, after);
         StreamingResponseBody body = output -> {
-            try (source) { source.transferTo(output); }
+            try (source) { ReactPlanEventStreamCopier.copyAndFlush(source, output); }
         };
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)

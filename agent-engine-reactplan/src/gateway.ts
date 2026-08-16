@@ -1,8 +1,10 @@
-import type { FileList, FileRead, Receipt, SandboxView } from "./types.js";
+import type { FileList, FileRead, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView } from "./types.js";
 import { EngineProblem, problem } from "./util.js";
 
 export interface SandboxRequest { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; argv: string[]; inputs: Array<{ path: string; sha256: string }>; timeoutMillis: number }
 export interface GatewayClient {
+  tools(taskId: string, grant: string, signal: AbortSignal): Promise<RegisteredToolCatalog>;
+  invoke(taskId: string, grant: string, request: { contractVersion: "1.0"; callId: string; toolName: string; arguments: Record<string, unknown>; requestDigest: string }, signal: AbortSignal): Promise<RegisteredToolResult>;
   list(taskId: string, grant: string, signal: AbortSignal): Promise<FileList>;
   read(taskId: string, grant: string, path: string, expectedSha256: string, signal: AbortSignal): Promise<FileRead>;
   submit(taskId: string, grant: string, request: SandboxRequest, signal: AbortSignal): Promise<SandboxView>;
@@ -13,6 +15,8 @@ export interface GatewayClient {
 export class HttpGatewayClient implements GatewayClient {
   constructor(private readonly origin: string) {}
   private base(taskId: string): string { return `${this.origin.replace(/\/$/, "")}/internal/v1/agent-engine/tasks/${encodeURIComponent(taskId)}`; }
+  tools(taskId: string, grant: string, signal: AbortSignal): Promise<RegisteredToolCatalog> { return this.call(`${this.base(taskId)}/tools`, grant, signal); }
+  invoke(taskId: string, grant: string, request: { contractVersion: "1.0"; callId: string; toolName: string; arguments: Record<string, unknown>; requestDigest: string }, signal: AbortSignal): Promise<RegisteredToolResult> { return this.call(`${this.base(taskId)}/tool-calls`, grant, signal, request); }
   list(taskId: string, grant: string, signal: AbortSignal): Promise<FileList> { return this.call(`${this.base(taskId)}/workspace/files`, grant, signal); }
   read(taskId: string, grant: string, path: string, expectedSha256: string, signal: AbortSignal): Promise<FileRead> { return this.call(`${this.base(taskId)}/workspace/read`, grant, signal, { contractVersion: "1.0", path, expectedSha256 }); }
   submit(taskId: string, grant: string, request: SandboxRequest, signal: AbortSignal): Promise<SandboxView> { return this.call(`${this.base(taskId)}/sandbox-executions`, grant, signal, request); }

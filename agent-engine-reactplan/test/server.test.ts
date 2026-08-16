@@ -19,7 +19,11 @@ afterEach(async () => { await Promise.all(servers.splice(0).map((server) => new 
 describe("Engine HTTP control plane", () => {
   it("requires the service bearer and replays SSE strictly after Last-Event-ID", async () => {
     const directory = await mkdtemp(resolve(tmpdir(), "paperagent-server-"));
-    const engine = new AgentEngine({ store: new TaskStore(directory), provider: new FinalProvider(), gateway: {} as GatewayClient, validator: new ContractValidator(resolve(process.cwd(), "../agent-engine-contract")) });
+    const gateway = {
+      tools: () => Promise.resolve({ contractVersion: "1.0" as const, taskId,
+        projectVersion: "2".repeat(64), catalogDigest: "3".repeat(64), tools: [] })
+    } as unknown as GatewayClient;
+    const engine = new AgentEngine({ store: new TaskStore(directory), provider: new FinalProvider(), gateway, validator: new ContractValidator(resolve(process.cwd(), "../agent-engine-contract")) });
     await engine.initialize();
     const server = createEngineServer(engine, token); servers.push(server);
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));

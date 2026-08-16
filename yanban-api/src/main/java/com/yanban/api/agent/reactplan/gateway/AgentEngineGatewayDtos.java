@@ -1,5 +1,6 @@
 package com.yanban.api.agent.reactplan.gateway;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.util.List;
 
@@ -23,6 +24,20 @@ public final class AgentEngineGatewayDtos {
                           String status, Integer exitCode, BoundedOutput stdout, BoundedOutput stderr,
                           String inputFingerprint, List<ReceiptInput> inputs,
                           Instant startedAt, Instant finishedAt) { }
+    public record RegisteredToolFunction(String name, String description, JsonNode parameters) { }
+    public record RegisteredToolSpec(String type, RegisteredToolFunction function) { }
+    public record RegisteredToolCatalog(String contractVersion, String taskId,
+                                        String projectVersion, String catalogDigest,
+                                        List<RegisteredToolSpec> tools) { }
+    public record RegisteredToolCall(String contractVersion, String callId,
+                                     String toolName, JsonNode arguments,
+                                     String requestDigest) { }
+    public record RegisteredToolResult(String contractVersion, String callId,
+                                       String toolName, String requestDigest,
+                                       boolean success, JsonNode output,
+                                       String errorCode, String errorMessage,
+                                       boolean retryable, List<String> evidenceRefs,
+                                       String version) { }
     public record Problem(String contractVersion, String code, String category,
                           String message, boolean retryable) { }
 }

@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
-    [long]$TurnId,
+    [long]$SessionId,
+    [string]$ClientRequestId = ("request." + [guid]::NewGuid().ToString("N")),
     [string]$ApiOrigin = "http://127.0.0.1:8080",
     [string]$Instruction = "读取 Sort.java，在沙箱中用 yanban-runner java Sort.java 编译或运行，并根据正式回执解释结果。",
     [int]$PollSeconds = 2,
@@ -17,20 +18,23 @@ if ($PollSeconds -lt 1 -or $MaximumPolls -lt 1) {
 }
 
 $headers = @{ Authorization = "Bearer $accessToken" }
-$base = "$($ApiOrigin.TrimEnd('/'))/api/v1/react-agent/turns/$TurnId/tasks"
+$intake = "$($ApiOrigin.TrimEnd('/'))/api/v1/react-agent/sessions/$SessionId/tasks"
 $request = @{
+    clientRequestId = $ClientRequestId
     instruction = $Instruction
     provider = "deepseek"
     model = "deepseek-chat"
 } | ConvertTo-Json
 
-$accepted = Invoke-RestMethod -Method Post -Uri $base -Headers $headers `
+$accepted = Invoke-RestMethod -Method Post -Uri $intake -Headers $headers `
     -ContentType "application/json" -Body $request
+$turnId = $accepted.turnId
 $taskId = if ($accepted.taskId) { $accepted.taskId } else { $accepted.task.taskId }
-if ([string]::IsNullOrWhiteSpace($taskId)) {
-    throw "The product accepted the request but returned no taskId."
+if ($turnId -le 0 -or [string]::IsNullOrWhiteSpace($taskId)) {
+    throw "The product accepted the request but returned no Turn/task identity."
 }
-Write-Host "Accepted task: $taskId"
+Write-Host "Accepted turn=$turnId task=$taskId clientRequestId=$ClientRequestId"
+$base = "$($ApiOrigin.TrimEnd('/'))/api/v1/react-agent/turns/$turnId/tasks"
 
 $view = $null
 for ($attempt = 1; $attempt -le $MaximumPolls; $attempt++) {

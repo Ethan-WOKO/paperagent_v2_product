@@ -64,14 +64,18 @@ Authenticated Turn
 
 ```text
 authenticated browser
-  -> Java /api/v1/react-agent (product authority + stable Plan)
+  -> Java /api/v1/react-agent/sessions/{sessionId}/tasks
+       -> idempotent user message + Turn + stable Plan
   -> local agent-engine-reactplan (ReAct loop + event/task recovery)
   -> Java /internal/v1/agent-engine (short task grant)
+       -> frozen read-only registered Project tool catalog
        -> frozen ProjectVersion workspace
        -> existing sandbox broker (broker credential stays in Java)
 ```
 
 长期 authority 和 `requestDigest` 不含任何 token。Java 在每次提交时另行签发绑定 taskId、用户、Turn、ProjectVersion 和到期时间的短期 grant；Engine 只能拿它调用网关，不能直接调用 broker。
+
+产品已经注册的 Project 工具不在 Engine 中复制实现。Java 依据现有 `ToolRegistry` 和产品工具策略只筛选当前任务可见的 `NONE/READ_ONLY` 工具，把名称、说明和参数 schema 通过短期 grant 网关提供给 Engine；Engine 在第一次模型调用前冻结目录，并把模型调用转回同一 Java executor。每次执行前后都重新核对 Turn、Project 和 ProjectVersion。工具结果正文只进入模型观察，公开事件只保留工具名、请求摘要和有界状态摘要。
 
 ## 复杂任务与后续 plan.update
 

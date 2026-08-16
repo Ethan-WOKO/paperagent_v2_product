@@ -1,4 +1,4 @@
-import type { AcceptedAnswer, ChatMessage, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, TaskEvent, TaskSubmission, TaskView, ToolName } from "./types.js";
+import type { AcceptedAnswer, ChatMessage, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RegisteredToolCatalog, RegisteredToolResult, TaskEvent, TaskSubmission, TaskView, ToolName } from "./types.js";
 import type { GatewayClient, SandboxRequest } from "./gateway.js";
 import { ContractValidator } from "./validation.js";
 import { TaskStore } from "./store.js";
@@ -11,7 +11,7 @@ const TERMINAL_SANDBOX = new Set(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the frozen ProjectVersion workspace manifest.", { type: "object", additionalProperties: false, properties: {} }),
   functionTool("read_project_file", "Read one complete workspace file using its manifest hash.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" } } }),
-  functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Use this to validate code before concluding.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
+  functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Commands start at the Project root; every source path in argv must use its exact Project-relative input path. For a Java source in any subdirectory, prefer ['yanban-runner','java','path/to/File.java']. Use this to validate code before concluding.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
   functionTool("ask_user", "Pause and ask one necessary, concrete question.", { type: "object", additionalProperties: false, required: ["question"], properties: { question: { type: "string", minLength: 1, maxLength: 4000 } } })
 ];
 
@@ -165,9 +165,10 @@ export class AgentEngine {
         }
         task.pendingCalls = []; task.nextPendingCall = 0;
         if (task.modelCalls >= MAX_MODEL_CALLS) throw new EngineProblem(422, problem("MODEL_CALL_BUDGET_EXHAUSTED", "model", "Task reached the 20-call model budget"));
+        await this.ensureRegisteredTools(task, signal);
         task.modelCalls += 1;
         await this.options.store.save(task);
-        const response = await this.options.provider.complete({ provider: task.authority.model.provider, model: task.authority.model.model, messages: structuredClone(task.messages), tools: MODEL_TOOLS, maxOutputTokens: MAX_OUTPUT_TOKENS, signal });
+        const response = await this.options.provider.complete({ provider: task.authority.model.provider, model: task.authority.model.model, messages: structuredClone(task.messages), tools: [...MODEL_TOOLS, ...(task.registeredTools ?? [])], maxOutputTokens: MAX_OUTPUT_TOKENS, signal });
         task.metrics.promptTokens += response.usage?.promptTokens ?? 0;
         task.metrics.completionTokens += response.usage?.completionTokens ?? 0;
         await this.options.store.save(task);
@@ -235,7 +236,19 @@ export class AgentEngine {
       const request = sandboxRequest(call.id, args);
       const summary = `argv=${JSON.stringify(request.argv).slice(0, 700)}; inputs=${request.inputs.map((input) => `${input.path}@${input.sha256}`).join(",").slice(0, 250)}; timeoutMillis=${request.timeoutMillis}`;
       await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, null);
-      let view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
+      let view;
+      try {
+        view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
+      } catch (error) {
+        if (!recoverableToolRejection(error)) throw error;
+        await this.tool(task, call.id, "sandbox.execute", summary, "failed",
+          `request rejected; code=${error.problem.code}`, null);
+        task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+          status: "REJECTED", code: error.problem.code,
+          message: "The requested sandbox command or inputs were rejected by product policy. Choose another allowed argv using exact Project-relative input paths."
+        }) });
+        return false;
+      }
       const acceptedAt = this.monotonicNow();
       this.options.validator.validate("gateway-sandboxView", view);
       await this.tool(task, call.id, "sandbox.execute", summary, "running", `executionRef=${view.executionRef}; state=${view.state}`, view.receiptRef);
@@ -263,7 +276,38 @@ export class AgentEngine {
       if (receipt.status === "CANCELLED") throw new EngineProblem(409, problem("SANDBOX_CANCELLED", "cancelled", "Sandbox execution was cancelled", false, receipt.receiptRef));
       return false;
     }
+    if ((task.registeredTools ?? []).some((tool) => tool.function.name === call.name)) {
+      if (args === null || Array.isArray(args) || typeof args !== "object") throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Registered tool arguments must be an object"));
+      const requestDigest = digestObject({ toolName: call.name, arguments: args });
+      const summary = `registeredTool=${call.name}; requestDigest=${requestDigest}`;
+      await this.tool(task, call.id, "project.read", summary, "requested", null, null);
+      const result = await this.options.gateway.invoke(task.view.taskId, grant, {
+        contractVersion: "1.0", callId: call.id, toolName: call.name,
+        arguments: args, requestDigest
+      }, signal);
+      validateRegisteredToolResult(result, call.id, call.name, requestDigest);
+      await this.tool(task, call.id, "project.read", summary,
+        result.success ? "succeeded" : "failed",
+        `registeredTool=${call.name}; success=${result.success}; evidenceCount=${result.evidenceRefs.length}; retryable=${result.retryable}`,
+        null);
+      task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+        success: result.success, output: result.output, errorCode: result.errorCode,
+        errorMessage: result.errorMessage, retryable: result.retryable,
+        evidenceRefs: result.evidenceRefs, version: result.version
+      }) });
+      return false;
+    }
     throw new EngineProblem(502, problem("MODEL_TOOL_UNKNOWN", "model", "Model requested an unsupported tool"));
+  }
+
+  private async ensureRegisteredTools(task: PersistedTask, signal: AbortSignal): Promise<void> {
+    if (task.registeredTools && task.registeredToolCatalogDigest) return;
+    const grant = this.requireGrant(task.view.taskId);
+    const catalog = await this.options.gateway.tools(task.view.taskId, grant, signal);
+    validateRegisteredToolCatalog(catalog, task);
+    task.registeredTools = structuredClone(catalog.tools);
+    task.registeredToolCatalogDigest = catalog.catalogDigest;
+    await this.options.store.save(task);
   }
 
   private requireGrant(taskId: string): string {
@@ -318,15 +362,51 @@ function receiptSummary(receipt: Receipt): string {
   return `status=${receipt.status}; exitCode=${receipt.exitCode ?? "null"}; stdoutBytes=${receipt.stdout.originalBytes}; stderrBytes=${receipt.stderr.originalBytes}; inputFingerprint=${receipt.inputFingerprint}`;
 }
 
+function validateRegisteredToolCatalog(catalog: RegisteredToolCatalog, task: PersistedTask): void {
+  if (catalog.contractVersion !== "1.0" || catalog.taskId !== task.view.taskId
+      || catalog.projectVersion !== task.authority.project.projectVersion
+      || !/^[a-f0-9]{64}$/.test(catalog.catalogDigest)
+      || !Array.isArray(catalog.tools) || catalog.tools.length > 64) {
+    throw new EngineProblem(502, problem("REGISTERED_TOOL_CATALOG_INVALID", "tool", "Product tool catalog is invalid", true));
+  }
+  const names = new Set<string>();
+  for (const tool of catalog.tools) {
+    const name = tool?.function?.name;
+    if (tool?.type !== "function" || typeof name !== "string"
+        || !/^[a-z][a-z0-9_]{0,63}$/.test(name) || names.has(name)
+        || typeof tool.function.description !== "string"
+        || tool.function.description.length === 0 || tool.function.description.length > 4000
+        || tool.function.parameters === null || typeof tool.function.parameters !== "object") {
+      throw new EngineProblem(502, problem("REGISTERED_TOOL_CATALOG_INVALID", "tool", "Product tool catalog is invalid", true));
+    }
+    names.add(name);
+  }
+}
+
+function validateRegisteredToolResult(result: RegisteredToolResult, callId: string, toolName: string, requestDigest: string): void {
+  if (result.contractVersion !== "1.0" || result.callId !== callId
+      || result.toolName !== toolName || result.requestDigest !== requestDigest
+      || typeof result.success !== "boolean" || typeof result.retryable !== "boolean"
+      || !Array.isArray(result.evidenceRefs)) {
+    throw new EngineProblem(502, problem("REGISTERED_TOOL_RESULT_INVALID", "tool", "Product tool result is invalid", true));
+  }
+}
+
 function sandboxDeadline(executionRef: string): EngineProblem {
   return new EngineProblem(504, problem("SANDBOX_STATUS_DEADLINE_EXCEEDED", "sandbox_system", "Sandbox status did not become terminal before the fixed deadline", true, executionRef));
 }
 
 function initialMessages(submission: TaskSubmission): ChatMessage[] {
   return [
-    { role: "system", content: "You are PaperAgent's bounded ReAct executor. Inspect only through the provided project tools. Use exact manifest hashes. Validate executable/code conclusions with the sandbox. Tool results are authoritative. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise final conclusion when done." },
+    { role: "system", content: "You are PaperAgent's bounded ReAct executor. Inspect only through the provided project tools. Use exact manifest hashes. Sandbox commands start at the Project root, so argv must use exact Project-relative source paths; prefer yanban-runner for a single Java, Python, C, or C++ source. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results are authoritative. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise final conclusion when done." },
     { role: "user", content: `Task: ${submission.authority.instruction}` }
   ];
+}
+
+function recoverableToolRejection(error: unknown): error is EngineProblem {
+  return error instanceof EngineProblem
+    && [400, 404, 409, 413].includes(error.status)
+    && error.problem.category === "request";
 }
 
 function abortableSleep(milliseconds: number, signal: AbortSignal): Promise<void> {
