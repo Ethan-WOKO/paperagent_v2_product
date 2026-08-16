@@ -69,6 +69,20 @@ class AgentEngineWorkspaceGatewayTest {
                         failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_PATH_INVALID"));
     }
 
+    @Test
+    void rejectsTaskIdReuseWithDifferentFrozenAuthority() {
+        byte[] content = "safe".getBytes(StandardCharsets.UTF_8);
+        AgentEngineWorkspaceGateway gateway = gateway(content, sha256(content));
+        gateway.list(authority());
+        EngineTaskAuthority conflicting = new EngineTaskAuthority(
+                TASK, "8".repeat(64), 11, 12, 13, 14, VERSION,
+                true, true, Instant.parse("2026-08-16T11:05:00Z"));
+
+        assertThatThrownBy(() -> gateway.list(conflicting))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo("TASK_AUTHORITY_CONFLICT"));
+    }
+
     private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {
         AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
         AuthenticatedAgentTurnProjectVersionSourceFactory sources =

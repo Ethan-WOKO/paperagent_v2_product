@@ -1,6 +1,7 @@
 package com.yanban.api.agent.engine;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -35,7 +36,7 @@ class AgentEngineSandboxExecutionTransactions {
     AgentEngineSandboxExecutionEntity dispatched(
             String taskId, String clientRequestId, String brokerRef, String state) {
         AgentEngineSandboxExecutionEntity value = repository.lock(taskId, clientRequestId).orElseThrow();
-        value.dispatched(brokerRef, state, LocalDateTime.now());
+        value.dispatched(brokerRef, state, LocalDateTime.now(ZoneOffset.UTC));
         return repository.saveAndFlush(value);
     }
 
@@ -44,7 +45,7 @@ class AgentEngineSandboxExecutionTransactions {
             String taskId, String clientRequestId, String state,
             String receiptRef, String receiptJson) {
         AgentEngineSandboxExecutionEntity value = repository.lock(taskId, clientRequestId).orElseThrow();
-        value.terminal(state, receiptRef, receiptJson, LocalDateTime.now());
+        value.terminal(state, receiptRef, receiptJson, LocalDateTime.now(ZoneOffset.UTC));
         return repository.saveAndFlush(value);
     }
 }

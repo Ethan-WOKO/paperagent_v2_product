@@ -33,6 +33,7 @@ class AgentEngineSandboxExecutionPersistenceTest {
         transactions.dispatched(TASK, CALL, "broker-1", "RUNNING");
         transactions.terminal(TASK, CALL, "SUCCEEDED",
                 "receipt." + "5".repeat(64), "{\"status\":\"SUCCEEDED\"}");
+        transactions.dispatched(TASK, CALL, "broker-1", "RUNNING");
 
         entities.clear();
         AgentEngineSandboxExecutionEntity recovered = transactions.find(TASK, CALL).orElseThrow();

@@ -158,13 +158,20 @@ final class AgentEngineWorkspaceGateway {
                         Math.min(storage.getMaxFileBytes(), 10L * 1024 * 1024),
                         storage.getMaxTotalBytes(),
                         Math.min(storage.getMaxFiles(), CONTRACT_MAX_FILES)));
+        WorkspaceBinding binding = WorkspaceBinding.from(authority);
         try {
-            return active.computeIfAbsent(authority.taskId(), ignored -> {
+            BoundWorkspace bound = active.computeIfAbsent(authority.taskId(), ignored -> {
                 WorkspacePort port = new LocalWorkspaceProvider(
                         root.resolve(authority.taskId()),
                         sources.create(authority.userId(), authority.turnId()));
-                return new BoundWorkspace(port, port.materialize(spec));
+                return new BoundWorkspace(binding, port, port.materialize(spec));
             });
+            if (!bound.binding().equals(binding)) {
+                throw EngineGatewayException.forbidden("TASK_AUTHORITY_CONFLICT");
+            }
+            return bound;
+        } catch (EngineGatewayException failure) {
+            throw failure;
         } catch (RuntimeException failure) {
             throw EngineGatewayException.conflict("WORKSPACE_MATERIALIZATION_FAILED");
         }
@@ -217,6 +224,18 @@ final class AgentEngineWorkspaceGateway {
 
     record ResolvedInputs(Map<String, String> files, List<ReceiptInput> inputs,
                           String inputFingerprint) { }
-    private record BoundWorkspace(WorkspacePort port,
+    private record WorkspaceBinding(
+            String taskId, String requestDigest, long userId, long turnId,
+            long sessionId, long projectId, String projectVersion,
+            boolean readProject, boolean executeSandbox) {
+        private static WorkspaceBinding from(EngineTaskAuthority authority) {
+            return new WorkspaceBinding(
+                    authority.taskId(), authority.requestDigest(), authority.userId(),
+                    authority.turnId(), authority.sessionId(), authority.projectId(),
+                    authority.projectVersion(), authority.readProject(),
+                    authority.executeSandbox());
+        }
+    }
+    private record BoundWorkspace(WorkspaceBinding binding, WorkspacePort port,
                                   VerifiedWorkspaceMaterialization materialized) { }
 }

@@ -15,6 +15,8 @@ import java.time.LocalDateTime;
         @UniqueConstraint(name = "uk_engine_sandbox_execution_ref", columnNames = "execution_ref"),
         @UniqueConstraint(name = "uk_engine_sandbox_receipt_ref", columnNames = "receipt_ref")})
 class AgentEngineSandboxExecutionEntity {
+    private static final java.util.Set<String> TERMINAL = java.util.Set.of(
+            "SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR");
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -74,6 +76,9 @@ class AgentEngineSandboxExecutionEntity {
     void dispatched(String brokerExecutionRef, String state, LocalDateTime now) {
         if (this.brokerExecutionRef != null && !this.brokerExecutionRef.equals(brokerExecutionRef)) {
             throw new IllegalStateException("broker execution identity is immutable");
+        }
+        if (TERMINAL.contains(this.state)) {
+            return;
         }
         this.brokerExecutionRef = brokerExecutionRef;
         this.state = state;

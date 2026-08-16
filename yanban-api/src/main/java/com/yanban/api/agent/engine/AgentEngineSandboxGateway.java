@@ -100,6 +100,7 @@ final class AgentEngineSandboxGateway {
         SandboxDispatch dispatch = dispatch(stored);
         if (brokerView == null
                 || !value.brokerExecutionRef().equals(brokerView.executionId())
+                || !dispatch.idempotencyKey().equals(brokerView.idempotencyKey())
                 || !dispatch.requestDigest().equals(brokerView.requestDigest())
                 || dispatch.fence() != brokerView.fence()) {
             throw EngineGatewayException.conflict("SANDBOX_BROKER_IDENTITY_CONFLICT");
@@ -145,6 +146,8 @@ final class AgentEngineSandboxGateway {
                     "SANDBOX_SUBMIT_UNAVAILABLE");
         }
         if (response == null || response.executionId() == null
+                || response.executionId().isBlank()
+                || !request.idempotencyKey().equals(response.idempotencyKey())
                 || !request.requestDigest().equals(response.requestDigest())
                 || request.fence() != response.fence()) {
             throw EngineGatewayException.conflict("SANDBOX_BROKER_IDENTITY_CONFLICT");
