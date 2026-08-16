@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/receipt.schema.json",
+  "title": "SandboxReceiptProjection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "receiptRef", "executionRef", "status", "exitCode", "stdout", "stderr", "inputFingerprint", "inputs", "startedAt", "finishedAt"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "receiptRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "executionRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "status": { "enum": ["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"] },
+    "exitCode": { "type": ["integer", "null"], "minimum": -2147483648, "maximum": 2147483647 },
+    "stdout": { "$ref": "#/$defs/boundedOutput" },
+    "stderr": { "$ref": "#/$defs/boundedOutput" },
+    "inputFingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/input" }
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "SUCCEEDED" } }, "required": ["status"] },
+      "then": { "properties": { "exitCode": { "const": 0 } } }
+    },
+    {
+      "if": { "properties": { "status": { "enum": ["TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"] } }, "required": ["status"] },
+      "then": { "properties": { "exitCode": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\\\]+$"
+    },
+    "boundedOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "truncated", "originalBytes"],
+      "properties": {
+        "text": { "type": "string", "maxLength": 65536 },
+        "truncated": { "type": "boolean" },
+        "originalBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "sizeBytes"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 10485760 }
+      }
+    }
+  }
+}

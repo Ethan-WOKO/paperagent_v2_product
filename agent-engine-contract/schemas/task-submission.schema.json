@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/task-submission.schema.json",
+  "title": "TaskSubmission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "taskId", "requestDigest", "authority", "gateway"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "taskId": { "$ref": "#/$defs/taskId" },
+    "requestDigest": { "$ref": "#/$defs/sha256" },
+    "authority": { "$ref": "#/$defs/authority" },
+    "gateway": { "$ref": "#/$defs/gateway" }
+  },
+  "$defs": {
+    "taskId": {
+      "type": "string",
+      "pattern": "^task\\.[a-f0-9]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runMode", "sessionRef", "project", "instruction", "permissions", "model"],
+      "properties": {
+        "runMode": { "const": "PERSISTENT_PLAN_EXECUTE" },
+        "sessionRef": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "project": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["projectId", "projectVersion"],
+          "properties": {
+            "projectId": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+            "projectVersion": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "instruction": { "type": "string", "minLength": 1, "maxLength": 16000 },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["readProject", "writeWorkspace", "executeSandbox"],
+          "properties": {
+            "readProject": { "const": true },
+            "writeWorkspace": { "const": false },
+            "executeSandbox": { "const": true }
+          }
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "model"],
+          "properties": {
+            "provider": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "model": { "type": "string", "minLength": 1, "maxLength": 128 }
+          }
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskGrant", "expiresAt"],
+      "properties": {
+        "taskGrant": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 4096,
+          "writeOnly": true,
+          "description": "Ephemeral task-bound secret; excluded from digest and persistence."
+        },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

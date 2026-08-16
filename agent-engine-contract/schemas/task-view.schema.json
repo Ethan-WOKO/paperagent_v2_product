@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/task-view.schema.json",
+  "title": "TaskView",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "taskId", "requestDigest", "state", "lastSequence", "createdAt", "updatedAt"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+    "requestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "state": {
+      "enum": ["queued", "running", "waiting_user", "succeeded", "failed", "cancelled"]
+    },
+    "lastSequence": { "type": "integer", "minimum": 0 },
+    "pendingQuestionId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+    "deliverySequence": { "type": ["integer", "null"], "minimum": 1 },
+    "terminalSequence": { "type": ["integer", "null"], "minimum": 1 },
+    "error": {
+      "oneOf": [
+        { "$ref": "problem.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "waiting_user" } }, "required": ["state"] },
+      "then": { "properties": { "pendingQuestionId": { "type": "string", "minLength": 1 } }, "required": ["pendingQuestionId"] }
+    },
+    {
+      "if": { "properties": { "state": { "enum": ["succeeded", "failed", "cancelled"] } }, "required": ["state"] },
+      "then": { "properties": { "terminalSequence": { "type": "integer", "minimum": 1 } }, "required": ["terminalSequence"] }
+    },
+    {
+      "if": { "properties": { "state": { "const": "succeeded" } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "deliverySequence": { "type": "integer", "minimum": 1 },
+          "error": { "type": "null" }
+        },
+        "required": ["deliverySequence", "error"]
+      }
+    },
+    {
+      "if": { "properties": { "state": { "const": "failed" } }, "required": ["state"] },
+      "then": { "properties": { "error": { "$ref": "problem.schema.json" } }, "required": ["error"] }
+    }
+  ]
+}
