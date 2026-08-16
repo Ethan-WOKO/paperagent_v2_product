@@ -11,10 +11,10 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.TreeMap;
 
-final class ReactPlanCanonicalJson {
+public final class ReactPlanCanonicalJson {
     private ReactPlanCanonicalJson() { }
 
-    static String digest(ObjectMapper json, Object value) {
+    public static String digest(ObjectMapper json, Object value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(json.writeValueAsString(sort(json.valueToTree(value)))
@@ -24,7 +24,7 @@ final class ReactPlanCanonicalJson {
         }
     }
 
-    static String sha256Utf8(String value) {
+    public static String sha256Utf8(String value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(value.getBytes(StandardCharsets.UTF_8)));

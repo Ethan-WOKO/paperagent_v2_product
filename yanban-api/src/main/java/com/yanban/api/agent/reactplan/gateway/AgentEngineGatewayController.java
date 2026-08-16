@@ -25,13 +25,31 @@ final class AgentEngineGatewayController {
     private final AgentEngineTaskGrantService grants;
     private final AgentEngineWorkspaceGateway workspaces;
     private final AgentEngineSandboxGateway sandboxes;
+    private final AgentEngineRegisteredToolGateway registeredTools;
 
     AgentEngineGatewayController(AgentEngineTaskGrantService grants,
                                  AgentEngineWorkspaceGateway workspaces,
-                                 AgentEngineSandboxGateway sandboxes) {
+                                 AgentEngineSandboxGateway sandboxes,
+                                 AgentEngineRegisteredToolGateway registeredTools) {
         this.grants = grants;
         this.workspaces = workspaces;
         this.sandboxes = sandboxes;
+        this.registeredTools = registeredTools;
+    }
+
+    @GetMapping("/tools")
+    AgentEngineGatewayDtos.RegisteredToolCatalog tools(
+            @PathVariable String taskId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+        return registeredTools.catalog(grants.verify(authorization, taskId, false));
+    }
+
+    @PostMapping("/tool-calls")
+    AgentEngineGatewayDtos.RegisteredToolResult invoke(
+            @PathVariable String taskId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestBody AgentEngineGatewayDtos.RegisteredToolCall request) {
+        return registeredTools.invoke(grants.verify(authorization, taskId, false), request);
     }
 
     @GetMapping("/workspace/files")

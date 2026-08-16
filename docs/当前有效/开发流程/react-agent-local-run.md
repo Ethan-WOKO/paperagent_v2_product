@@ -2,7 +2,7 @@
 
 ## 现在能测试什么
 
-这条链路已经支持：认证用户提交 Project 任务、读取该 Turn 冻结的 ProjectVersion、让模型多轮选择工具、通过产品沙箱 broker 执行 Java、保存正式 Receipt、查看状态/SSE、取消、回答追问以及 Engine 重启恢复。
+这条链路已经支持：认证用户从 Project session 直接提交任务、由产品创建幂等 Turn、读取该 Turn 冻结的 ProjectVersion、让模型从现有只读 Project 工具和沙箱工具中多轮自主选择、保存正式 Receipt、查看状态/SSE、取消、回答追问以及 Engine 重启恢复。
 
 P1 是只读链路：不会修改、发布或回滚 Project。
 
@@ -70,25 +70,27 @@ npm start
 
 ## 4. 提交 Sort.java 测试
 
-先在正常产品页面登录，创建或选中包含 `Sort.java` 的 Project，并进入绑定该 Project 的 Agent Turn。准备登录 access token 与 `turnId`：
+先在正常产品页面登录，创建或选中包含 `Sort.java` 的 Project，并创建绑定该 Project 的 Agent session。用户不需要提前创建 Turn；新入口会为这次请求确定性创建。准备登录 access token 与 `sessionId`：
 
 ```powershell
 $api = "http://127.0.0.1:8080"
 $accessToken = "paste-your-product-access-token"
-$turnId = 123
+$sessionId = 123
 $headers = @{ Authorization = "Bearer $accessToken" }
 $request = @{
+  clientRequestId = "request.manual-test-0001"
   instruction = "读取 Sort.java，在沙箱中用 yanban-runner java Sort.java 编译或运行，并根据正式回执解释结果。"
   provider = "deepseek"
   model = "deepseek-chat"
 } | ConvertTo-Json
-$task = Invoke-RestMethod -Method Post -Uri "$api/api/v1/react-agent/turns/$turnId/tasks" -Headers $headers -ContentType "application/json" -Body $request
+$task = Invoke-RestMethod -Method Post -Uri "$api/api/v1/react-agent/sessions/$sessionId/tasks" -Headers $headers -ContentType "application/json" -Body $request
 $task
 ```
 
 复制返回的 `taskId`，查看状态：
 
 ```powershell
+$turnId = $task.turnId
 $taskId = $task.taskId
 Invoke-RestMethod -Uri "$api/api/v1/react-agent/turns/$turnId/tasks/$taskId" -Headers $headers
 curl.exe -N -H "Authorization: Bearer $accessToken" -H "Last-Event-ID: 0" "$api/api/v1/react-agent/turns/$turnId/tasks/$taskId/events"
@@ -112,12 +114,14 @@ Invoke-RestMethod -Method Post -Uri "$api/api/v1/react-agent/turns/$turnId/tasks
 
 ```powershell
 $env:PAPERAGENT_ACCESS_TOKEN = "paste-your-product-access-token"
-.\agent-engine-reactplan\scripts\submit-sort-task.ps1 -TurnId 123
+.\agent-engine-reactplan\scripts\submit-sort-task.ps1 -SessionId 123
 ```
 
 ## 恢复验证
 
-任务运行中停止 Engine，再用完全相同的 `AGENT_ENGINE_DATA_DIR` 和环境变量启动。然后用完全相同的 Turn 和 instruction 再执行一次“提交任务”请求：Java 会重放同一个 Plan，并签发新的短期 grant；Engine 会识别同一 task/digest、恢复执行而不新建任务。重新请求状态或 SSE 时 sequence 不会倒退或重复。短期 grant 不写入磁盘，因此恢复必须经过这次认证重放，不能绕过产品权限。
+任务运行中停止 Engine，再用完全相同的 `AGENT_ENGINE_DATA_DIR` 和环境变量启动。然后用完全相同的 session、`clientRequestId` 和请求内容再次提交：Java 会重用同一个 Turn 和 Plan，并签发新的短期 grant；Engine 会识别同一 task/digest、恢复执行而不新建任务。同一个 `clientRequestId` 改变内容会返回 409。重新请求状态或 SSE 时 sequence 不会倒退或重复。短期 grant 不写入磁盘，因此恢复必须经过这次认证重放，不能绕过产品权限。
+
+注册工具由 Java 根据当前 Project 权限动态筛选并在任务第一次模型调用前冻结。当前只暴露 `NONE/READ_ONLY` 类型，例如 `project_manifest`、`project_search`、`project_read_file` 和已注册的只读分析工具；Candidate、写入和外部副作用工具不会进入 P1。沙箱命令从 Project 根目录开始，子目录源码必须使用完整 Project 相对路径，例如 `yanban-runner java services/order-service/Sort.java`。
 
 ## 常见失败
 
