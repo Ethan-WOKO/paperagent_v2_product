@@ -1,0 +1,24 @@
+{
+  "contractVersion": "1.0",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "requestDigest": "b032560b2cff0af91ac72eef1d6b3bd9a73dd2896b903f49b547559f16a7ad3d",
+  "authority": {
+    "runMode": "PERSISTENT_PLAN_EXECUTE",
+    "sessionRef": "session.1",
+    "project": {
+      "projectId": "95",
+      "projectVersion": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "instruction": "Modify Sort.java.",
+    "permissions": {
+      "readProject": true,
+      "writeWorkspace": true,
+      "executeSandbox": true
+    },
+    "model": { "provider": "deepseek", "model": "deepseek-v4-pro" }
+  },
+  "gateway": {
+    "taskGrant": "grant.test-only-0123456789abcdef0123456789abcdef",
+    "expiresAt": "2030-01-01T00:00:00Z"
+  }
+}
