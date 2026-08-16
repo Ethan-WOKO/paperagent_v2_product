@@ -144,6 +144,7 @@ export class TaskRuntime {
       if (this.meta.state === 'waiting_user') {
         this.meta.state = 'running';
         this.meta.pendingQuestionId = null;
+        this.meta.pendingQuestionText = null;
       }
       this.meta.deliverySequence = this.meta.lastSequence;
     }
@@ -157,9 +158,11 @@ export class TaskRuntime {
     this.armRunner();
   }
 
-  /** Non-terminal recovery: resume the runner without re-emitting 'running'. */
+  /** Non-terminal recovery: resume the runner without re-emitting 'running'.
+   * waiting_user tasks re-arm too: after restart the in-process ask_user gate is
+   * gone and only the runner can re-establish it and consume a delivered answer. */
   resume(): void {
-    if (this.isTerminal() || this.meta.state === 'waiting_user') return;
+    if (this.isTerminal()) return;
     this.armRunner();
   }
 
@@ -206,10 +209,19 @@ export class TaskRuntime {
     return null;
   }
 
-  recordAnswer(questionId: string, answerDigest: string, clientRequestId: string): void {
-    const record: AnswerRecord = { questionId, answerDigest, clientRequestId, acceptedAt: new Date().toISOString() };
+  recordAnswer(questionId: string, answer: string, answerDigest: string, clientRequestId: string): void {
+    const record: AnswerRecord = { questionId, answer, answerDigest, clientRequestId, acceptedAt: new Date().toISOString() };
     this.answeredQuestions.set(questionId, record);
     this.store.appendAnswer(this.meta.taskId, record);
+    // Note: pendingQuestionId stays set while the state is waiting_user — the
+    // frozen task-view schema requires a non-null string there. It is consumed
+    // when the state leaves waiting_user (delivery or terminal status), and
+    // answer idempotency never depends on its clearing.
+  }
+
+  /** Persisted answer BODY for a questionId (survives restart), or null. */
+  answerBodyFor(questionId: string): string | null {
+    return this.answeredQuestions.get(questionId)?.answer ?? null;
   }
 
   pendingQuestion(): string | null {
@@ -218,15 +230,31 @@ export class TaskRuntime {
 
   private answerGates = new Map<string, (answer: string) => void>();
 
-  /** Ask the user: emits the question event and returns the question id plus a
-   * promise resolving with the delivered answer. Used by the DSH ask_user tool. */
+  /** Ask the user: emits the question event, persists the question text and the
+   * 'questioned' phase, and returns the question id plus a promise resolving
+   * with the delivered answer. Used by the DSH ask_user tool. */
   askUser(text: string): { questionId: string; answerPromise: Promise<string> } {
     const questionId = 'q' + this.meta.lastSequence + '.' + Math.random().toString(36).slice(2, 10);
-    this.emit('question', { questionId, text: text.slice(0, 4000) });
+    const bounded = text.slice(0, 4000);
+    this.emit('question', { questionId, text: bounded });
+    this.meta.pendingQuestionText = bounded;
+    this.setRunnerPhase('questioned');
     const answerPromise = new Promise<string>((resolve) => {
       this.answerGates.set(questionId, resolve);
     });
     return { questionId, answerPromise };
+  }
+
+  /** Re-arm the answer gate for a persisted pending question after restart. The
+   * caller must re-check answerBodyFor after arming: an answer may have been
+   * recorded between the first check and this call. */
+  awaitAnswer(questionId: string): { answerPromise: Promise<string> } {
+    let resolveAnswer: (answer: string) => void = () => {};
+    const answerPromise = new Promise<string>((resolve) => {
+      resolveAnswer = resolve;
+    });
+    this.answerGates.set(questionId, resolveAnswer);
+    return { answerPromise };
   }
 
   /** Resolve a pending ask_user gate. Returns false when no gate is waiting. */

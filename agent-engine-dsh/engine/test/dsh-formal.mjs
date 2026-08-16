@@ -1,6 +1,14 @@
 // Formal-path tests with the real DshRunner + HttpGatewayClient, no stub:
 //  - T4-recovery: crash after Receipt, restart, exact replay → no duplicate
 //    sandbox dispatch, contiguous events, delivery reuses the original receipt.
+//  - F1: fresh tasks take the fresh path (instruction, never 'Continue').
+//  - F2: sandbox digest covers argv+inputs+timeoutMillis canonically; the mock
+//    gateway rejects any non-canonical digest.
+//  - F3: crash inside the submit→receipt window (executionRef + fixed deadline
+//    persisted BEFORE the receipt) → recovery polls the ORIGINAL execution with
+//    the SAME deadline, never re-dispatches.
+//  - F4: waiting_user restart → replay re-arms, the accepted answer BODY is
+//    injected into the model transcript and the loop resumes.
 //  - Budget: 20 model calls allowed, the 21st is rejected before dispatch.
 //  - ask_user: formal question/answer gate (no stub finalizer).
 import { spawn } from 'node:child_process';
@@ -228,6 +236,191 @@ async function main() {
     check('A4 loop resumed after answer (message event)', events.some((e) => e.type === 'message'), '');
     check('A5 no stub finalizer artifacts', events.every((e) => e.type !== 'delivery' || (e.receiptRefs ?? []).every((r) => !String(r).startsWith('receipt.stub'))), '');
     proc.kill();
+    gw.close();
+  }
+
+  // ---- F1: fresh tasks must take the fresh path ----
+  {
+    const gatewayPort = 18316;
+    const gwLog = join(baseDir, 'gw-f1.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog });
+    const dir = join(baseDir, 'f1');
+    const base = 'http://127.0.0.1:18317';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18317',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '1'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['succeeded', 'failed'], 200);
+    check('F1a fresh run succeeds through the canonical-digest mock', view?.state === 'succeeded', `state=${view?.state}`);
+    const calls = existsSync(join(dir, 'fake-llm-calls.jsonl'))
+      ? readFileSync(join(dir, 'fake-llm-calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+    const firstUserTexts = (calls[0]?.userTexts ?? []).join(' ');
+    check('F1b first model call received the task instruction (no fake resume)', firstUserTexts.includes('Check whether') && !firstUserTexts.includes('Continue to completion.'), `first=${firstUserTexts.slice(0, 80)}`);
+    const gwLines = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F1c exactly one gateway submission (digest accepted)', gwLines === 1, `submissions=${gwLines}`);
+    proc.kill();
+    gw.close();
+  }
+
+  // ---- F2: sandbox digest covers argv+inputs+timeoutMillis canonically ----
+  {
+    const { canonicalJson, sha256Hex } = await import('../src/canonical.ts');
+    const { createHash } = await import('node:crypto');
+    const inputs = [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }];
+    const argv = ['javac', 'src/main/java/Sort.java'];
+    const d1 = sha256Hex(canonicalJson({ argv, inputs, timeoutMillis: 120000 }));
+    const d2 = sha256Hex(canonicalJson({ argv, inputs, timeoutMillis: 150000 }));
+    const oldForm = createHash('sha256').update(JSON.stringify([argv, inputs])).digest('hex');
+    check('F2a timeoutMillis participates in the digest', d1 !== d2, '');
+    check('F2b digest is canonical JSON, not the legacy array form', d1 !== oldForm, '');
+
+    // Negative control through the gateway double: a submission digest in the
+    // legacy form must be rejected with SUBMIT_DIGEST_INVALID.
+    const gatewayPort = 18318;
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: join(baseDir, 'gw-f2.jsonl') });
+    const raw = await fetch(`http://127.0.0.1:${gatewayPort}/internal/v1/agent-engine/tasks/task.${'a'.repeat(64)}/sandbox-executions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + 'g'.repeat(48) },
+      body: JSON.stringify({
+        contractVersion: '1.0',
+        clientRequestId: 'call.' + '9'.repeat(20),
+        requestDigest: oldForm,
+        argv,
+        inputs,
+        timeoutMillis: 120000,
+      }),
+    });
+    const rejected = await raw.json();
+    check('F2c mock gateway rejects a non-canonical digest', raw.status === 400 && rejected.code === 'SUBMIT_DIGEST_INVALID', `status=${raw.status} code=${rejected.code}`);
+    gw.close();
+  }
+
+  // ---- F3: crash inside the submit→receipt window ----
+  {
+    const gatewayPort = 18320;
+    const gwLog = join(baseDir, 'gw-f3.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, holdPolls: 2 });
+    const dir = join(baseDir, 'f3');
+    const base = 'http://127.0.0.1:18321';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_DELAY_MS: '5000',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18321',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '8'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    // Kill as soon as the PROVISIONAL ledger entry (executionRef + fixed
+    // deadline, receiptRef still null) is persisted — i.e. after the 202, before
+    // any receipt was fetched.
+    const ledgerPath = join(dir, t.taskId, 'tool-ledger.jsonl');
+    let killed = false;
+    for (let i = 0; i < 100 && !killed; i++) {
+      if (existsSync(ledgerPath) && readFileSync(ledgerPath, 'utf8').includes('"receiptRef":null')) {
+        proc.kill();
+        killed = true;
+      }
+      await sleep(100);
+    }
+    check('F3a killed in the submit→receipt window', killed, '');
+    const gwMid = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F3b one gateway submission before the crash', gwMid === 1, `submissions=${gwMid}`);
+    await sleep(600);
+
+    const proc2 = startEngine(env);
+    await waitUp(base, proc2);
+    const paused = (await get(base, '/v1/tasks/' + t.taskId)).body;
+    check('F3c paused after restart', paused?.state === 'running', `state=${paused?.state}`);
+    const replay = await post(base, '/v1/tasks', t);
+    check('F3d exact replay re-arms', replay.status === 202 && replay.body?.replayed === true, `status=${replay.status}`);
+    const view = await waitForState(base, t.taskId, ['succeeded', 'failed', 'cancelled']);
+    check('F3e terminal after recovery', view?.state === 'succeeded', `state=${view?.state}`);
+    const gwAfter = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F3f never re-dispatches the same call', gwAfter === 1, `submissions=${gwAfter}`);
+    const ledger = readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const clientIds = new Set(ledger.map((entry) => entry.clientRequestId));
+    check('F3g one stable clientRequestId across the crash', clientIds.size === 1, `ids=${[...clientIds].join(',')}`);
+    const provisional = ledger.find((entry) => entry.receiptRef === null);
+    const completed = ledger.find((entry) => typeof entry.receiptRef === 'string');
+    check('F3h fixed deadline persisted before the receipt and reused', provisional != null && completed != null && Number(provisional.deadlineAt) === Number(completed.deadlineAt), `deadlineAt=${provisional?.deadlineAt}`);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    const delivery = events.find((e) => e.type === 'delivery');
+    check('F3i delivery carries the receipt after recovery', (delivery?.receiptRefs ?? []).length > 0, `receiptRefs=${(delivery?.receiptRefs ?? []).join(',')}`);
+    check('F3j contiguous sequences after recovery', events.map((e) => e.sequence).every((s, i) => s === i + 1), `count=${events.length}`);
+    proc2.kill();
+    gw.close();
+  }
+
+  // ---- F4: waiting_user restart — answer body reaches the resumed loop ----
+  {
+    const gatewayPort = 18322;
+    const gwLog = join(baseDir, 'gw-f4.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog });
+    const dir = join(baseDir, 'f4');
+    const base = 'http://127.0.0.1:18323';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_MODE: 'ask',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18323',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '2'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const waiting = await waitForState(base, t.taskId, ['waiting_user'], 200);
+    check('F4a waiting_user reached', waiting?.pendingQuestionId != null, `questionId=${waiting?.pendingQuestionId}`);
+    proc.kill();
+    await sleep(600);
+
+    const proc2 = startEngine(env);
+    await waitUp(base, proc2);
+    const paused = (await get(base, '/v1/tasks/' + t.taskId)).body;
+    check('F4b waiting_user paused after restart (question persisted)', paused?.state === 'waiting_user' && paused?.pendingQuestionId === waiting?.pendingQuestionId, `state=${paused?.state}`);
+    const replay = await post(base, '/v1/tasks', t);
+    check('F4c replay re-arms the waiting_user task', replay.status === 202 && replay.body?.replayed === true, `status=${replay.status}`);
+    const answerBody = 'yes, continue with the javac approach';
+    const sha = (await import('node:crypto')).createHash('sha256').update(answerBody).digest('hex');
+    const a = await post(base, `/v1/tasks/${t.taskId}/answer`, {
+      contractVersion: '1.0',
+      clientRequestId: 'answer.' + '4'.repeat(20),
+      questionId: waiting.pendingQuestionId,
+      answer: answerBody,
+      answerDigest: sha,
+    });
+    check('F4d answer accepted after restart', a.status === 202, `status=${a.status}`);
+    const view = await waitForState(base, t.taskId, ['failed', 'succeeded'], 200);
+    check('F4e terminal after resumed loop', view?.state === 'failed', `state=${view?.state}`);
+    check('F4f receipt gate code', view?.error?.code === 'RECEIPT_REQUIRED_NOT_SATISFIED', `code=${view?.error?.code}`);
+    const calls = existsSync(join(dir, 'fake-llm-calls.jsonl'))
+      ? readFileSync(join(dir, 'fake-llm-calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+    check('F4g delivered answer BODY reached the model transcript', calls.some((c) => (c.userTexts ?? []).join(' ').includes(answerBody)), `calls=${calls.length}`);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    check('F4h exactly one question event (never re-asked)', events.filter((e) => e.type === 'question').length === 1, '');
+    check('F4i loop resumed after answer (message event)', events.some((e) => e.type === 'message'), '');
+    check('F4j contiguous sequences', events.map((e) => e.sequence).every((s, i) => s === i + 1), `count=${events.length}`);
+    proc2.kill();
     gw.close();
   }
 

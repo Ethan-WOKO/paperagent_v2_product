@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { GatewayClient } from '../gateway.ts';
+import type { SandboxView } from '../gateway.ts';
 import type { TaskRuntime } from '../task.ts';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
+import { canonicalJson, sha256Hex } from '../canonical.ts';
 
 /** Fixed sandbox polling policy (contract §6): 1,2,4,5,5… seconds, no jitter;
  * deadline is timeoutMillis + 30s from local 202 receipt. */
@@ -29,8 +31,39 @@ function stableCallId(task: TaskRuntime, callSeq: number): string {
   return 'call.' + createHash('sha256').update(task.meta.taskId + ':' + callSeq).digest('hex').slice(0, 20);
 }
 
-function argvDigest(argv: string[], inputs: { path: string; sha256: string }[]): string {
-  return createHash('sha256').update(JSON.stringify([argv, inputs])).digest('hex');
+/** Sandbox request digest: contract §4 canonical JSON over the exact submit
+ * semantics — argv, inputs and timeoutMillis — with keys sorted by Unicode
+ * code point and arrays keeping order. timeoutMillis participates so a
+ * different budget can never collide with a prior execution. */
+function sandboxDigest(argv: string[], inputs: { path: string; sha256: string }[], timeoutMillis: number): string {
+  return sha256Hex(canonicalJson({ argv, inputs, timeoutMillis }));
+}
+
+const TERMINAL_VIEW_STATES = new Set(['SUCCEEDED', 'FAILED', 'TIMED_OUT', 'CANCELLED', 'SYSTEM_ERROR']);
+
+/** Serial polling until a terminal view or the FIXED deadline (contract §6:
+ * acceptance time + timeoutMillis + 30s, persisted in the ledger so recovery
+ * can never extend the deadline). */
+async function pollToTerminal(
+  gateway: GatewayClient,
+  task: TaskRuntime,
+  clientRequestId: string,
+  executionRef: string | null,
+  deadlineAt: number,
+  argv: string[],
+): Promise<SandboxView> {
+  let poll = 0;
+  let view = await gateway.getSandboxExecution(clientRequestId, executionRef);
+  while (!TERMINAL_VIEW_STATES.has(view.state)) {
+    if (Date.now() >= deadlineAt) {
+      task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'failed', inputSummary: argv.join(' '), outputSummary: 'sandbox status deadline exceeded', receiptRef: null });
+      throw new Error('SANDBOX_STATUS_DEADLINE_EXCEEDED');
+    }
+    await new Promise((r) => setTimeout(r, pollDelayMs(poll)));
+    poll++;
+    view = await gateway.getSandboxExecution(clientRequestId, executionRef);
+  }
+  return view;
 }
 
 /** Tool bodies emit TaskEvents directly and return bounded canonical values.
@@ -113,43 +146,65 @@ export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): Pr
       const inputs = args.inputs.map((i) => ({ path: String(i.path), sha256: String(i.sha256) }));
       const argv = args.argv.map(String);
       const timeoutMillis = Math.min(Math.max(Number(args.timeoutMillis) || 120000, 1000), 300000);
-      const digest = argvDigest(argv, inputs);
+      const digest = sandboxDigest(argv, inputs, timeoutMillis);
       const ledger = task.readToolLedger();
 
-      // Recovery reuses the exact prior call: the same argv digest must never
-      // mint a new clientRequestId or dispatch a second effect.
-      const prior = ledger.find((entry) => entry.argvDigest === digest && typeof entry.receiptRef === 'string');
-      if (prior) {
-        const clientRequestId = String(prior.clientRequestId);
-        const receiptRef = String(prior.receiptRef);
-        const receipt = await gateway.getSandboxReceipt(receiptRef);
-        receiptRefs.push(receiptRef);
-        task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'succeeded', inputSummary: argv.join(' '), outputSummary: `reused receipt exit code ${receipt.exitCode ?? 'n/a'}`, receiptRef });
-        return { status: receipt.status, exitCode: receipt.exitCode, stdout: receipt.stdout.text, stderr: receipt.stderr.text, truncated: receipt.stdout.truncated || receipt.stderr.truncated };
+      // findLast without ES2023 dependency: latest ledger entry for this digest.
+      let prior: Record<string, unknown> | null = null;
+      for (let i = ledger.length - 1; i >= 0; i--) {
+        if (ledger[i].kind === 'sandbox' && ledger[i].argvDigest === digest) {
+          prior = ledger[i];
+          break;
+        }
       }
 
-      const callSeq = ledger.filter((entry) => entry.kind === 'sandbox').length + 1;
+      // Recovery: the exact same digest never mints a new call or re-dispatches.
+      if (prior !== null) {
+        const clientRequestId = String(prior.clientRequestId);
+        const executionRef = typeof prior.executionRef === 'string' ? prior.executionRef : null;
+        const deadlineAt = Number(prior.deadlineAt);
+        if (typeof prior.receiptRef === 'string') {
+          // Already completed: reuse the formal Receipt without any new effect.
+          const receiptRef = String(prior.receiptRef);
+          const receipt = await gateway.getSandboxReceipt(receiptRef, {
+            executionRef,
+            viewState: typeof prior.status === 'string' ? (prior.status as SandboxView['state']) : null,
+            inputs,
+          });
+          receiptRefs.push(receiptRef);
+          task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: receipt.status === 'SUCCEEDED' ? 'succeeded' : 'failed', inputSummary: argv.join(' '), outputSummary: `reused receipt exit code ${receipt.exitCode ?? 'n/a'}`, receiptRef });
+          return { status: receipt.status, exitCode: receipt.exitCode, stdout: receipt.stdout.text, stderr: receipt.stderr.text, truncated: receipt.stdout.truncated || receipt.stderr.truncated };
+        }
+        // Crash window between submit and receipt: resume polling the ORIGINAL
+        // execution with the persisted fixed deadline (never a fresh one).
+        const view = await pollToTerminal(gateway, task, clientRequestId, executionRef, deadlineAt, argv);
+        if (view.receiptRef) {
+          const receipt = await gateway.getSandboxReceipt(view.receiptRef, { executionRef: view.executionRef, viewState: view.state, inputs });
+          receiptRefs.push(receipt.receiptRef);
+          task.appendToolLedger({ kind: 'sandbox', clientRequestId, requestDigest: digest, argvDigest: digest, executionRef, deadlineAt, receiptRef: receipt.receiptRef, status: receipt.status });
+          task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: receipt.status === 'SUCCEEDED' ? 'succeeded' : 'failed', inputSummary: argv.join(' '), outputSummary: `exit code ${receipt.exitCode ?? 'n/a'}`, receiptRef: receipt.receiptRef });
+          return { status: receipt.status, exitCode: receipt.exitCode, stdout: receipt.stdout.text, stderr: receipt.stderr.text, truncated: receipt.stdout.truncated || receipt.stderr.truncated };
+        }
+        task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'failed', inputSummary: argv.join(' '), outputSummary: `state ${view.state}`, receiptRef: view.receiptRef });
+        return { status: view.state, exitCode: null, stdout: '', stderr: '' };
+      }
+
+      const callSeq = new Set(ledger.filter((entry) => entry.kind === 'sandbox').map((entry) => String(entry.clientRequestId))).size + 1;
       const clientRequestId = stableCallId(task, callSeq);
       const submit = { clientRequestId, requestDigest: digest, argv, inputs, timeoutMillis };
       task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'requested', inputSummary: argv.join(' '), outputSummary: null, receiptRef: null });
-      const startedAt = performanceNowMs();
-      let view = await gateway.submitSandbox(submit);
+      const view = await gateway.submitSandbox(submit);
+      // Fixed deadline from local acceptance of the 202 (contract §6); persisted
+      // BEFORE any receipt so a crash here can never re-dispatch or extend it.
+      const deadlineAt = Date.now() + timeoutMillis + 30000;
+      const executionRef = view.executionRef;
+      task.appendToolLedger({ kind: 'sandbox', callSeq, clientRequestId, requestDigest: digest, argvDigest: digest, executionRef, deadlineAt, receiptRef: null, status: null });
       task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'running', inputSummary: argv.join(' '), outputSummary: null, receiptRef: null });
-      const deadline = startedAt + timeoutMillis + 30000;
-      let poll = 0;
-      while (view.state === 'QUEUED' || view.state === 'RUNNING') {
-        if (performanceNowMs() >= deadline) {
-          task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'failed', inputSummary: argv.join(' '), outputSummary: 'sandbox status deadline exceeded', receiptRef: null });
-          return { status: 'SYSTEM_ERROR', code: 'SANDBOX_STATUS_DEADLINE_EXCEEDED', exitCode: null, stdout: '', stderr: '' };
-        }
-        await new Promise((r) => setTimeout(r, pollDelayMs(poll)));
-        poll++;
-        view = await gateway.getSandboxExecution(clientRequestId);
-      }
-      if (view.receiptRef) {
-        const receipt = await gateway.getSandboxReceipt(view.receiptRef);
+      const terminalView = await pollToTerminal(gateway, task, clientRequestId, executionRef, deadlineAt, argv);
+      if (terminalView.receiptRef) {
+        const receipt = await gateway.getSandboxReceipt(terminalView.receiptRef, { executionRef: terminalView.executionRef, viewState: terminalView.state, inputs });
         receiptRefs.push(receipt.receiptRef);
-        task.appendToolLedger({ kind: 'sandbox', callSeq, clientRequestId, requestDigest: digest, argvDigest: digest, receiptRef: receipt.receiptRef, status: receipt.status });
+        task.appendToolLedger({ kind: 'sandbox', callSeq, clientRequestId, requestDigest: digest, argvDigest: digest, executionRef, deadlineAt, receiptRef: receipt.receiptRef, status: receipt.status });
         task.emit('tool', {
           callId: clientRequestId,
           name: 'sandbox.execute',
@@ -166,14 +221,10 @@ export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): Pr
           truncated: receipt.stdout.truncated || receipt.stderr.truncated,
         };
       }
-      task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'failed', inputSummary: argv.join(' '), outputSummary: `state ${view.state}`, receiptRef: view.receiptRef });
-      return { status: view.state, exitCode: null, stdout: '', stderr: '' };
+      task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'failed', inputSummary: argv.join(' '), outputSummary: `state ${terminalView.state}`, receiptRef: terminalView.receiptRef });
+      return { status: terminalView.state, exitCode: null, stdout: '', stderr: '' };
     },
   } as never) as ToolDefinition;
 
   return { listTool, readTool, sandboxTool, askUserTool, collectReceiptRefs: () => [...receiptRefs] };
-}
-
-function performanceNowMs(): number {
-  return Math.floor(performance.now());
 }

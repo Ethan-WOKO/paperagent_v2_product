@@ -46,14 +46,19 @@ export interface ReceiptProjection {
   inputs: { path: string; sha256: string; sizeBytes: number }[];
 }
 
-/** Engine-side gateway seam. P1 uses StubGateway until the #151 product
- * gateway exists; the real HTTP client plugs in with the same interface. */
+/** Engine-side gateway seam. P1 uses StubGateway only for control-plane
+ * conformance (ENGINE_RUNNER=stub); the formal path uses the real HTTP client
+ * with the same interface. Binding expectations are optional: the HTTP client
+ * enforces them, the stub is a permissive test double. */
 export interface GatewayClient {
   listWorkspaceFiles(): Promise<WorkspaceFileEntry[]>;
   readWorkspaceFile(path: string, expectedSha256: string): Promise<FileRead>;
   submitSandbox(request: SandboxSubmitRequest): Promise<SandboxView>;
-  getSandboxExecution(clientRequestId: string): Promise<SandboxView>;
-  getSandboxReceipt(receiptRef: string): Promise<ReceiptProjection>;
+  getSandboxExecution(clientRequestId: string, expectedExecutionRef?: string | null): Promise<SandboxView>;
+  getSandboxReceipt(
+    receiptRef: string,
+    expected?: { executionRef: string | null; viewState: SandboxView['state'] | null; inputs: { path: string; sha256: string }[] | null },
+  ): Promise<ReceiptProjection>;
 }
 
 export class StubGateway implements GatewayClient {
@@ -145,13 +150,16 @@ export class StubGateway implements GatewayClient {
     return this.viewOf(view);
   }
 
-  async getSandboxExecution(clientRequestId: string): Promise<SandboxView> {
+  async getSandboxExecution(clientRequestId: string, _expectedExecutionRef?: string | null): Promise<SandboxView> {
     const existing = this.submissions.get(clientRequestId);
     if (!existing) throw new Error('EXECUTION_NOT_FOUND');
     return this.viewOf(existing);
   }
 
-  async getSandboxReceipt(receiptRef: string): Promise<ReceiptProjection> {
+  async getSandboxReceipt(
+    receiptRef: string,
+    _expected?: { executionRef: string | null; viewState: SandboxView['state'] | null; inputs: { path: string; sha256: string }[] | null },
+  ): Promise<ReceiptProjection> {
     for (const value of this.submissions.values()) {
       if (value.receipt?.receiptRef === receiptRef) return value.receipt;
     }

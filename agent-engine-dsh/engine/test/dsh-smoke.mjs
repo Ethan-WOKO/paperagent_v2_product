@@ -1,6 +1,7 @@
 // Real-model smoke: DSH ReactLoopAgent + deepseek-v4-pro on the T1 task,
 // gateway = controlled HTTP mock implementing the contract endpoints (no
-// in-process StubGateway). Proves the formal path minus the #151 Java gateway.
+// in-process StubGateway). Proves the formal path minus the #151 Java gateway;
+// it is NOT evidence for a real #151/E2B T1 run.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,10 +11,11 @@ import { createHash } from 'node:crypto';
 import { startMockGateway } from './mock-gateway.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const envFile = readFileSync('C:/java_file/private_helper_Agent/paperagent_v2_product/.env', 'utf8');
-const apiKey = envFile.match(/^\s*DEEPSEEK_API_KEY\s*=\s*(.*)\s*$/m)?.[1] ?? '';
+// The API key comes ONLY from the process environment (DEEPSEEK_API_KEY);
+// this file never reads repo-local .env files.
+const apiKey = process.env.DEEPSEEK_API_KEY ?? '';
 if (!apiKey) {
-  console.error('DEEPSEEK_API_KEY missing from .env');
+  console.error('DEEPSEEK_API_KEY missing from the environment');
   process.exit(1);
 }
 

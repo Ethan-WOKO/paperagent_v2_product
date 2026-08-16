@@ -39,13 +39,22 @@ const SYSTEM_PROMPT =
   'conclusion with evidence.';
 
 /** dsh runner: every gateway call reads the CURRENT task grant (replay may
- * refresh it mid-flight). */
+ * refresh it mid-flight). The frozen ProjectVersion from the task authority is
+ * bound to every file-manifest response. */
 function gatewayFor(task: TaskRuntime): GatewayClient {
   const baseUrl = process.env.ENGINE_GATEWAY_BASE_URL;
   if (!baseUrl) {
     throw new Error('ENGINE_GATEWAY_BASE_URL_MISSING');
   }
-  return new HttpGatewayClient(baseUrl, task.meta.taskId, () => task.grant.taskGrant);
+  return new HttpGatewayClient(
+    baseUrl,
+    task.meta.taskId,
+    () => task.grant.taskGrant,
+    () => {
+      const project = task.authority.project as { projectVersion?: string } | undefined;
+      return typeof project?.projectVersion === 'string' ? project.projectVersion : null;
+    },
+  );
 }
 
 function stubFixture(): { gatewayFiles: { path: string; sizeBytes: number; sha256: string; mediaType: string }[]; content: string } {

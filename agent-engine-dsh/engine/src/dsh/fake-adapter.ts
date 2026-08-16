@@ -4,9 +4,13 @@ import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelIn
 
 /** Deterministic fake adapter for formal-path tests: scripts tool calls and
  * final text without a provider. Every stream() call is counted in the engine
- * data dir so budget/recovery tests can assert exact provider-call counts. */
+ * data dir so budget/recovery tests can assert exact provider-call counts, and
+ * each call logs the user-side transcript so tests can prove what text the
+ * loop actually sent to the model (instruction on fresh runs, delivered
+ * answer body after waiting_user recovery). */
 export class FakeAdapter extends LlmAdapter {
   private readonly callsLogPath: string;
+  private callCount = 0;
 
   constructor(callsLogPath: string) {
     super();
@@ -29,27 +33,71 @@ export class FakeAdapter extends LlmAdapter {
     return { id: model, name: model, provider, model } as unknown as LlmResolvedModelInfo;
   }
 
+  private userTexts(options: GenerateOptions): string[] {
+    const texts: string[] = [];
+    for (const message of options.messages as { role?: string; content?: { type?: string; text?: string }[] }[]) {
+      if (message.role !== 'user') continue;
+      const text = (message.content ?? [])
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text ?? '')
+        .join('');
+      if (text.trim().length > 0) texts.push(text);
+    }
+    return texts;
+  }
+
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    appendFileSync(this.callsLogPath, JSON.stringify({ at: new Date().toISOString() }) + '\n', 'utf8');
+    this.callCount++;
     const mode = process.env.FAKE_MODE ?? 'normal';
+    appendFileSync(
+      this.callsLogPath,
+      JSON.stringify({ at: new Date().toISOString(), call: this.callCount, userTexts: this.userTexts(options).map((t) => t.slice(0, 500)) }) + '\n',
+      'utf8',
+    );
     const sawToolResult = options.messages.some((message) => (message.content ?? []).some((block) => (block as { type: string }).type === 'tool-result'));
-    const finalize = mode === 'normal' || mode === 'ask' ? sawToolResult : false;
-    if (finalize) {
+
+    const finalizeText = 'Conclusion: the sandbox run succeeded with exit code 0. No files were modified.';
+    async function* finalize(): AsyncIterable<StreamChunk> {
       const delayMs = Number(process.env.FAKE_DELAY_MS ?? 0);
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
       yield { type: 'block-start', index: 0, blockType: 'text' };
-      yield { type: 'text-delta', index: 0, text: 'Conclusion: the sandbox run succeeded with exit code 0. No files were modified.' };
-      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Conclusion: the sandbox run succeeded with exit code 0. No files were modified.' } };
+      yield { type: 'text-delta', index: 0, text: finalizeText };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: finalizeText } };
       yield { type: 'finish', reason: { kind: 'stop' } };
+    }
+
+    // ask mode: first call asks the user. A call whose transcript already
+    // carries the runner-injected answer ("The user answered the pending
+    // question…") finalizes immediately — that is the waiting_user recovery
+    // path, where the ask_user tool never runs again.
+    if (mode === 'ask') {
+      const sawInjectedAnswer = this.userTexts(options).some((t) => t.startsWith('The user answered the pending question'));
+      if (this.callCount > 1 || sawInjectedAnswer) {
+        yield* finalize();
+        return;
+      }
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+      yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'ask_user', argumentsDelta: JSON.stringify({ question: 'Should I continue?' }) };
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'ask_user', arguments: JSON.stringify({ question: 'Should I continue?' }) } as never };
+      yield { type: 'finish', reason: { kind: 'tool-calls' } };
       return;
     }
-    const toolName = mode === 'ask' ? 'ask_user' : 'sandbox_execute';
-    const args = mode === 'ask'
-      ? JSON.stringify({ question: 'Should I continue?' })
-      : JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 });
+
+    if (mode === 'normal' && sawToolResult) {
+      yield* await finalize();
+      return;
+    }
+    if (mode === 'budget') {
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+      yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) };
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) } as never };
+      yield { type: 'finish', reason: { kind: 'tool-calls' } };
+      return;
+    }
+    // normal mode, first call: run the sandbox once.
     yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-    yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: toolName, argumentsDelta: args };
-    yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: toolName, arguments: args } as never };
+    yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) };
+    yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) } as never };
     yield { type: 'finish', reason: { kind: 'tool-calls' } };
   }
 }

@@ -117,9 +117,14 @@ export class DshRunner implements Runner {
       });
       const agent = handle.agent;
       agentId = String(agent.id);
-      task.setRunnerPhase('started');
-
+      // Resume detection must read the PERSISTED phase BEFORE the first write:
+      // capturing it after setRunnerPhase('started') would always look resumed.
       const resumed = task.meta.runnerPhase !== 'init';
+      const questionedResume = task.meta.runnerPhase === 'questioned' && task.meta.pendingQuestionId !== null;
+      if (!resumed) {
+        task.setRunnerPhase('started');
+      }
+
       const userText = (text: string) => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } } as never) as never;
       let resolveRunning: () => void = () => {};
       const sawRunning = new Promise<void>((resolve) => {
@@ -128,7 +133,58 @@ export class DshRunner implements Runner {
       const offStatus = this.dsh.onAgentStatus((sid, status) => {
         if (sid === taskId && status === 'running') resolveRunning();
       });
-      if (resumed) {
+      if (questionedResume) {
+        // Restart with a pending question: the in-process ask_user tool gate is
+        // gone. Consume the persisted answer body if one was already accepted;
+        // otherwise re-arm the gate and wait for the control plane to deliver it.
+        const questionId = task.meta.pendingQuestionId;
+        if (questionId === null) {
+          // questionedResume requires a pending id; a state mismatch is a
+          // program-enforced internal failure, never a silent continue.
+          task.emit('status', {
+            state: 'failed',
+            error: {
+              contractVersion: '1.0',
+              code: 'ENGINE_QUESTION_STATE_MISMATCH',
+              category: 'internal',
+              message: 'questioned runner phase without a pending question',
+              retryable: false,
+              sourceRef: null,
+            },
+          });
+          return;
+        }
+        let answerBody = task.answerBodyFor(questionId);
+        if (answerBody === null) {
+          const gate = task.awaitAnswer(questionId);
+          answerBody = task.answerBodyFor(questionId);
+          if (answerBody === null) {
+            let stopCancelWait: () => void = () => {};
+            const cancelWait = new Promise<null>((resolve) => {
+              const timer = setInterval(() => {
+                if (isCancelled()) {
+                  clearInterval(timer);
+                  resolve(null);
+                }
+              }, 200);
+              stopCancelWait = () => clearInterval(timer);
+            });
+            answerBody = await Promise.race([gate.answerPromise, cancelWait]);
+            stopCancelWait();
+            if (answerBody === null) {
+              task.cancelFinalize();
+              return;
+            }
+          }
+        }
+        const questionText = task.meta.pendingQuestionText ?? '';
+        agent.inject(
+          userText(
+            `The user answered the pending question${questionText ? ` ("${questionText.slice(0, 500)}")` : ''}:\n${answerBody}\nContinue the task with this answer.`,
+          ),
+        );
+        agent.followup(userText('Continue to completion.'));
+      } else if (resumed) {
         const summary = `Continuation after engine restart. Prior assistant output:\n${latestAssistantText || '(none)'}\nContinue the task to completion; tool calls are idempotent.`;
         agent.inject(userText(summary));
         agent.followup(userText('Continue to completion.'));
@@ -189,7 +245,13 @@ export class DshRunner implements Runner {
       // reach the caller; the code classifies the failure only.
       const raw = e instanceof Error ? e.message : String(e);
       const code = /^[A-Z][A-Z0-9_]{2,95}$/.test(raw) ? raw : 'MODEL_LOOP_FAILED';
-      const category = code.startsWith('TASK_GRANT') ? 'authorization' : code.startsWith('SANDBOX') ? 'sandbox_system' : code.startsWith('ENGINE_') || code.startsWith('GATEWAY_') ? 'internal' : 'model';
+      const category = code.startsWith('TASK_GRANT')
+        ? 'authorization'
+        : code.startsWith('SANDBOX_STATUS_')
+          ? 'sandbox_system'
+          : code.startsWith('SANDBOX_') || code.startsWith('FILE_') || code.startsWith('RECEIPT_') || code.startsWith('ENGINE_') || code.startsWith('GATEWAY_')
+            ? 'internal'
+            : 'model';
       task.emit('status', {
         state: 'failed',
         error: {

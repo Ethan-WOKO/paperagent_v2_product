@@ -10,6 +10,7 @@ export interface TaskMeta {
   state: 'queued' | 'running' | 'waiting_user' | 'succeeded' | 'failed' | 'cancelled';
   lastSequence: number;
   pendingQuestionId: string | null;
+  pendingQuestionText: string | null;
   deliverySequence: number | null;
   terminalSequence: number | null;
   error: unknown | null;
@@ -26,6 +27,7 @@ export interface StoredEvent {
 
 export interface AnswerRecord {
   questionId: string;
+  answer: string;
   answerDigest: string;
   clientRequestId: string;
   acceptedAt: string;
@@ -68,6 +70,7 @@ export class TaskStore {
       state: 'queued',
       lastSequence: 0,
       pendingQuestionId: null,
+      pendingQuestionText: null,
       deliverySequence: null,
       terminalSequence: null,
       error: null,

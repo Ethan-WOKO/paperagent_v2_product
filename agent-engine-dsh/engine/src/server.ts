@@ -151,9 +151,11 @@ export class EngineServer {
       existing.grant = submission.gateway;
       // Exact replay refreshes the short-lived task grant and re-arms a
       // non-terminal task; events and side effects are never replayed.
+      // waiting_user re-arms too: the runner must re-establish the ask_user
+      // gate (or consume an already-persisted answer) after restart.
       if (!existing.isTerminal()) {
         if (existing.state === 'queued') existing.start();
-        else if (existing.state === 'running') existing.resume();
+        else existing.resume();
       }
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ contractVersion: '1.0', replayed: true, task: existing.view() }));
@@ -280,7 +282,7 @@ export class EngineServer {
       return;
     }
 
-    runtime.recordAnswer(parsed.questionId, parsed.answerDigest, parsed.clientRequestId);
+    runtime.recordAnswer(parsed.questionId, parsed.answer, parsed.answerDigest, parsed.clientRequestId);
     this.options.onAnswer(runtime, { questionId: parsed.questionId, answer: parsed.answer });
     res.writeHead(202, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(runtime.view()));
