@@ -123,6 +123,22 @@ describe("AgentEngine", () => {
     expect(sleeps).toEqual([1000, 2000]);
     expect(engine.get(taskId).error).toMatchObject({ code: "SANDBOX_CODE_VALIDATION_FAILED", category: "code_validation" });
   });
+
+  it("starts the sandbox deadline after acceptance and never polls beyond it", async () => {
+    let clock = 0; const sleeps: number[] = [];
+    const gateway = new NeverTerminalGateway(() => { clock = 30_000; });
+    const engine = new AgentEngine({
+      store: new TaskStore(await temporaryDirectory()),
+      provider: new ScriptedProvider([tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 1000 })]),
+      gateway, validator: new ContractValidator(contractDirectory), monotonicNow: () => clock,
+      sleep: async (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; }
+    });
+    await engine.initialize(); await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+    expect(engine.get(taskId).error).toMatchObject({ code: "SANDBOX_STATUS_DEADLINE_EXCEEDED", category: "sandbox_system" });
+    expect(sleeps).toEqual([1000, 2000, 4000, 5000, 5000, 5000, 5000, 4000]);
+    expect(gateway.polls).toBe(7);
+  });
 });
 
 class ScriptedProvider implements ModelProvider {
@@ -161,6 +177,19 @@ class PollingFailedGateway extends FakeGateway {
     return Promise.resolve({ contractVersion: "1.0", clientRequestId, requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }), executionRef: "execution.failed", state: this.polls === 1 ? "RUNNING" : "FAILED", receiptRef: this.polls === 1 ? null : "receipt.failed" });
   }
   override receipt(): Promise<Receipt> { return Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.failed", executionRef: "execution.failed", status: "FAILED", exitCode: 1, stdout: { text: "", truncated: false, originalBytes: 0 }, stderr: { text: "compile error", truncated: false, originalBytes: 13 }, inputFingerprint: "e".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class NeverTerminalGateway extends FakeGateway {
+  polls = 0;
+  constructor(private readonly onAccepted: () => void) { super(); }
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.onAccepted();
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.never", state: "QUEUED", receiptRef: null });
+  }
+  override execution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> {
+    this.polls += 1;
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId, requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 1000 }), executionRef: "execution.never", state: "RUNNING", receiptRef: null });
+  }
 }
 
 function tool(name: string, args: unknown): ModelResponse { return { content: null, toolCalls: [{ id: "provider-call", name, arguments: JSON.stringify(args) }] }; }

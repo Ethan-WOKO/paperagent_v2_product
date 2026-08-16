@@ -229,14 +229,16 @@ export class AgentEngine {
       const request = sandboxRequest(call.id, args);
       const summary = `argv=${JSON.stringify(request.argv).slice(0, 700)}; inputs=${request.inputs.map((input) => `${input.path}@${input.sha256}`).join(",").slice(0, 250)}; timeoutMillis=${request.timeoutMillis}`;
       await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, null);
-      const acceptedAt = this.monotonicNow();
       let view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
+      const acceptedAt = this.monotonicNow();
       this.options.validator.validate("gateway-sandboxView", view);
       await this.tool(task, call.id, "sandbox.execute", summary, "running", `executionRef=${view.executionRef}; state=${view.state}`, view.receiptRef);
       const delays = [1000, 2000, 4000]; let poll = 0;
       while (!TERMINAL_SANDBOX.has(view.state)) {
-        if (this.monotonicNow() - acceptedAt >= request.timeoutMillis + 30000) throw new EngineProblem(504, problem("SANDBOX_STATUS_DEADLINE_EXCEEDED", "sandbox_system", "Sandbox status did not become terminal before the fixed deadline", true, view.executionRef));
-        await this.sleep(delays[poll] ?? 5000, signal); poll += 1;
+        const remaining = request.timeoutMillis + 30000 - (this.monotonicNow() - acceptedAt);
+        if (remaining <= 0) throw sandboxDeadline(view.executionRef);
+        await this.sleep(Math.min(delays[poll] ?? 5000, remaining), signal); poll += 1;
+        if (this.monotonicNow() - acceptedAt >= request.timeoutMillis + 30000) throw sandboxDeadline(view.executionRef);
         view = await this.options.gateway.execution(task.view.taskId, grant, request.clientRequestId, signal);
         this.options.validator.validate("gateway-sandboxView", view);
       }
@@ -305,6 +307,10 @@ function sandboxRequest(callId: string, args: Record<string, unknown>): SandboxR
 
 function receiptSummary(receipt: Receipt): string {
   return `status=${receipt.status}; exitCode=${receipt.exitCode ?? "null"}; stdoutBytes=${receipt.stdout.originalBytes}; stderrBytes=${receipt.stderr.originalBytes}; inputFingerprint=${receipt.inputFingerprint}`;
+}
+
+function sandboxDeadline(executionRef: string): EngineProblem {
+  return new EngineProblem(504, problem("SANDBOX_STATUS_DEADLINE_EXCEEDED", "sandbox_system", "Sandbox status did not become terminal before the fixed deadline", true, executionRef));
 }
 
 function initialMessages(submission: TaskSubmission): ChatMessage[] {
