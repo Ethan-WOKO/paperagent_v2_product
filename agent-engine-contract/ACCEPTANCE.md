@@ -20,6 +20,11 @@ DSH 与 Codex Engine 必须使用：
 开发 smoke 每项运行 3 次；候选胜负评测每项运行至少 10 次并报告所有样本，不只报告
 中位数。评测顺序随机交错，避免先后顺序和外部服务状态偏置。
 
+固定执行预算为：每次模型请求最多 4096 output token、每任务最多 20 次模型请求、
+并行工具调用数 1、禁用 subagent。Sandbox 状态轮询固定为 1、2、4、5、5……秒且不加
+jitter，总截止时间为提交接受时刻加 `timeoutMillis + 30000 ms`。空闲 SSE heartbeat
+固定为 15000 ms。
+
 ## 2. P1 必过任务
 
 ### T1：带第三方依赖的 Java 只读编译验证
@@ -57,6 +62,8 @@ Project 中的 Java 文件引用非 JDK 依赖。Agent 必须先读取文件/imp
 - 沙箱提交后、Receipt 已持久化时重启 Engine；
 - 重启后继续交付且不重复沙箱副作用；
 - SSE 使用 Last-Event-ID 无缺失、无重复地继续。
+- 同 questionId/answerDigest 精确重放只消费一次；不同 answerDigest 返回 409 且保留
+  第一个答案。
 
 ### T5：取消
 

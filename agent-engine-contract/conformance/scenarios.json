@@ -30,6 +30,26 @@
       "expectation": "Repeated cancellation converges on one cancelled terminal event; cancellation after another terminal state does not rewrite it."
     },
     {
+      "id": "answer-exact-replay",
+      "expectation": "The same questionId and answerDigest is accepted as a replay and consumes the pending question exactly once."
+    },
+    {
+      "id": "answer-content-conflict",
+      "expectation": "The same questionId with a different answerDigest returns 409 QUESTION_ANSWER_CONFLICT and preserves the first answer."
+    },
+    {
+      "id": "fixed-model-budget",
+      "expectation": "Every provider request consumes one of 20 model-call slots, maxOutputTokens is 4096, tools are serial, and recovery never resets the budget."
+    },
+    {
+      "id": "fixed-sandbox-polling",
+      "expectation": "Sandbox status polls use 1, 2, 4, 5, 5... second delays without jitter and stop at timeoutMillis plus 30000 ms."
+    },
+    {
+      "id": "fixed-sse-heartbeat",
+      "expectation": "An idle live SSE stream emits a non-persisted comment heartbeat every 15000 ms without consuming a sequence."
+    },
+    {
       "id": "task-grant-boundary",
       "expectation": "Expired, wrong-task, wrong-permission and malformed task grants are rejected before Workspace or Sandbox access."
     },

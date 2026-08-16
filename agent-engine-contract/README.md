@@ -85,12 +85,50 @@ Java 用相同 taskId/digest 重新提交以恢复运行时凭证；凭证本身
 - 每个任务的持久事件 `sequence` 从 1 开始严格连续递增。
 - SSE `id` 必须是该事件十进制 `sequence`，`data` 是完整 `TaskEvent` JSON。
 - `Last-Event-ID: N` 只返回 `sequence > N` 的事件。
-- SSE comment heartbeat 不分配 sequence，也不进入持久日志。
+- 空闲 live SSE 每 15000 ms 发送一次 comment heartbeat。heartbeat 不分配 sequence，
+  也不进入持久日志。
 - 断线和 Engine 重启后必须从持久事件继续；不得从用户消息重新创建任务。
 - 每个任务最多一个终态 status。`succeeded` 前必须先有且只有一个 delivery。
 - 取消是幂等的；已经终态的任务保持原终态。
 
-## 6. 数据最小化
+### 5.1 用户回答幂等
+
+`answerDigest` 是 `answer` 精确 UTF-8 字节的小写 SHA-256。Engine 必须先验证摘要，再
+以 `questionId` 冻结首个已接受答案：
+
+- 同 questionId、同 answerDigest 是精确重放，返回 202，不再消费一次；
+- 同 questionId、不同 answerDigest 返回 409 `QUESTION_ANSWER_CONFLICT`；
+- 同 clientRequestId 被另一 questionId 或 answerDigest 使用时返回 409
+  `ANSWER_REQUEST_CONFLICT`；
+- 非当前 pending question 返回 409 `QUESTION_NOT_PENDING`。
+
+任何冲突都保留第一个已接受答案，不改写事件历史。
+
+### 5.2 工具事件命名
+
+`tool.name` 是合同稳定名，只允许 `project.list`、`project.read` 和
+`sandbox.execute`。它与模型可见函数名无关；Engine 负责在内部映射，SSE 消费方不得
+看到框架或 provider 私有工具名。
+
+## 6. P1 固定执行预算
+
+双方必须使用完全相同的硬上限：
+
+- 每次模型请求 `maxOutputTokens = 4096`；
+- 每个任务最多 20 次模型请求，所有继续、纠错和最终合成调用均计入；
+- 每次向 provider 发出可能消费 token 的请求时立即占用一次预算；
+- 并行工具调用数为 1；同一模型响应包含多个 tool call 时按原顺序串行处理；
+- 不启用 subagent。
+
+达到模型调用上限必须产生有界失败，不得通过任务恢复重置预算。
+
+Sandbox 202 后按 1、2、4、5、5……秒串行轮询，不加 jitter。截止时间从接受提交起为
+`timeoutMillis + 30000 ms`；“接受提交”是 Engine 收到 202 时记录的本地 monotonic
+时刻，不依赖两台机器的 wall clock。截止时仍无终态，Engine 产生
+`SANDBOX_STATUS_DEADLINE_EXCEEDED`，category 为 `sandbox_system`，不得让模型自行继续
+无限轮询。相同 clientRequestId 的后续恢复仍只能查询原执行。
+
+## 7. 数据最小化
 
 事件中的工具输入和输出只允许有界摘要与权威引用。禁止进入事件或错误：
 
@@ -102,17 +140,24 @@ Java 用相同 taskId/digest 重新提交以恢复运行时凭证；凭证本身
 文件正文只通过受 task grant 保护的 Workspace read 响应传给 Engine。正式 Receipt 可
 返回有界 stdout/stderr，并显式声明是否截断。
 
-## 7. P1 与 P2 边界
+`mediaType` 只用于展示和诊断。Engine 不得用它推断解析器、权限、文件语义或可执行性；
+这些判断只来自产品工具合同和服务端 policy。
+
+## 8. P1 与 P2 边界
 
 P1 是严格只读 Project 验证：真实冻结 ProjectVersion → Workspace list/read → 沙箱
 执行 → 正式 Receipt → Engine 恢复 → 最终交付。P1 不产生 Workspace diff、Candidate
 或新 ProjectVersion。
 
+通用 delivery 允许空 `receiptRefs`，以兼容未来无正式工具回执的回答。但 P1 T1–T5
+验收任务涉及沙箱，成功 delivery 必须携带至少一个正式 Receipt 引用；该要求由
+conformance/acceptance 行为测试强制，而不是由通用事件 schema 强制。
+
 P2 才增加 Workspace 写入和自动发布。`publish` 永远不是模型工具；确定性终结器必须
 证明最终 Candidate 内容与最后一次成功沙箱的全部输入 hash 完全一致，才可创建新的
 不可变 ProjectVersion，并保留前一版本回滚入口。
 
-## 8. 本地合同验证
+## 9. 本地合同验证
 
 ```powershell
 python agent-engine-contract/conformance/validate_contract.py

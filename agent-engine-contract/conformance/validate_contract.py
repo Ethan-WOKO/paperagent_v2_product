@@ -130,6 +130,12 @@ def validate_digest() -> None:
     assert "taskGrant" not in submission["authority"], "secret entered digest authority"
 
 
+def validate_answer_digest() -> None:
+    answer = load_json(CONFORMANCE / "fixtures/positive/task-answer.json")
+    actual = hashlib.sha256(answer["answer"].encode("utf-8")).hexdigest()
+    assert actual == answer["answerDigest"], "answer digest mismatch"
+
+
 def validate_scenarios() -> int:
     scenarios = load_json(CONFORMANCE / "scenarios.json")
     ids = [row["id"] for row in scenarios["requiredScenarios"]]
@@ -141,6 +147,11 @@ def validate_scenarios() -> int:
         "sandbox-digest-conflict",
         "restart-after-receipt",
         "cancel-idempotent",
+        "answer-exact-replay",
+        "answer-content-conflict",
+        "fixed-model-budget",
+        "fixed-sandbox-polling",
+        "fixed-sse-heartbeat",
         "task-grant-boundary",
         "event-redaction",
     }
@@ -182,6 +193,7 @@ def main() -> int:
     operation_count = validate_openapi()
     event_count = validate_event_sequence(schemas, registry)
     validate_digest()
+    validate_answer_digest()
     scenario_count = validate_scenarios()
 
     print(
