@@ -1,0 +1,7 @@
+{
+  "contractVersion": "1.0",
+  "clientRequestId": "answer.0123456789abcdef",
+  "questionId": "question.java-version",
+  "answer": "Use Java 17.",
+  "answerDigest": "not-a-sha256"
+}

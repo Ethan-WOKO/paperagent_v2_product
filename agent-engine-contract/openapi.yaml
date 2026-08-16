@@ -72,7 +72,8 @@ paths:
       description: >-
         Each persisted event is encoded as `id: <sequence>` and one JSON data
         value conforming to TaskEvent. Last-Event-ID N returns only sequence > N.
-        Comment heartbeats have no id and are not persisted.
+        During an otherwise idle live stream the Engine emits an SSE comment
+        heartbeat every 15000 ms. Heartbeats have no id and are not persisted.
       security:
         - EngineServiceBearer: []
       parameters:
@@ -137,17 +138,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [contractVersion, clientRequestId, questionId, answer]
-              properties:
-                contractVersion: { const: '1.0' }
-                clientRequestId:
-                  type: string
-                  pattern: '^answer\.[A-Za-z0-9_-]{16,120}$'
-                questionId: { type: string, minLength: 1, maxLength: 128 }
-                answer: { type: string, minLength: 1, maxLength: 16000 }
+            schema: { $ref: ./schemas/task-answer.schema.json }
       responses:
         '202':
           description: Answer accepted or exact replay accepted.
@@ -157,7 +148,14 @@ paths:
         '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: >-
+            The question is not pending, the question already accepted a
+            different answer digest, or clientRequestId was reused for another
+            answer. Existing accepted input is never overwritten.
+          content:
+            application/json:
+              schema: { $ref: ./schemas/problem.schema.json }
   /internal/v1/agent-engine/tasks/{taskId}/workspace/files:
     parameters:
       - $ref: '#/components/parameters/TaskId'
@@ -214,6 +212,9 @@ paths:
         authoritative Workspace, computes broker canonical digest, owns broker
         credentials and persists the formal Receipt. The Engine never supplies
         broker identity, fence, policy digest, host paths or file contents.
+        After a 202 response the Engine polls the status endpoint after 1, 2,
+        4, 5, 5... seconds, serially and without jitter. Polling ends at
+        timeoutMillis plus 30000 ms measured from acceptance.
       security:
         - TaskGrantBearer: []
       requestBody:
@@ -239,6 +240,11 @@ paths:
       tags: [Product tool gateway]
       operationId: getSandboxExecution
       summary: Read sandbox status without resubmitting or advancing execution
+      description: >-
+        P1 clients use serial fixed exponential polling delays of 1, 2, 4,
+        5, 5... seconds without jitter. If no terminal projection exists by
+        the submit acceptance time plus timeoutMillis plus 30000 ms, the Engine
+        fails with SANDBOX_STATUS_DEADLINE_EXCEEDED in sandbox_system category.
       security:
         - TaskGrantBearer: []
       responses:

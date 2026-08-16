@@ -84,7 +84,10 @@
         "occurredAt": { "type": "string", "format": "date-time" },
         "type": { "const": "tool" },
         "callId": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "name": { "enum": ["project.list", "project.read", "sandbox.execute"] },
+        "name": {
+          "enum": ["project.list", "project.read", "sandbox.execute"],
+          "description": "Stable contract name, independent of the model-visible tool name."
+        },
         "state": { "enum": ["requested", "running", "succeeded", "failed", "cancelled"] },
         "inputSummary": { "type": "string", "maxLength": 1000 },
         "outputSummary": { "type": ["string", "null"], "maxLength": 2000 },
@@ -104,7 +107,7 @@
         "conclusion": { "type": "string", "minLength": 1, "maxLength": 16000 },
         "receiptRefs": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 64,
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1, "maxLength": 256 }
