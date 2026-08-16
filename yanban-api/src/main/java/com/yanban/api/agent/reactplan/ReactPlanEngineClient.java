@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -20,6 +21,7 @@ final class ReactPlanEngineClient {
     private final ReactPlanRuntimeProperties properties;
     private final HttpClient http;
 
+    @Autowired
     ReactPlanEngineClient(ObjectMapper json, ReactPlanRuntimeProperties properties) {
         this(json, properties, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5)).build());
