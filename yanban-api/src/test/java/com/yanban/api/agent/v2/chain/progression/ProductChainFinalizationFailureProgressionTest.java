@@ -65,7 +65,9 @@ class ProductChainFinalizationFailureProgressionTest {
                 ProductChainFinalizationFailureProgression.validatePayload(
                         payload, source))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("CHAIN_FINALIZATION_FAILURE_FACT_REF_MISSING");
+                .hasMessageContaining(
+                        "CHAIN_FINALIZATION_FAILURE_FACT_REF_MISSING",
+                        "sourceRef=publish-failure-1");
     }
 
     @Test
@@ -80,7 +82,9 @@ class ProductChainFinalizationFailureProgressionTest {
                 ProductChainFinalizationFailureProgression.validatePayload(
                         payload, source))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("CHAIN_FINALIZATION_FAILURE_REFLECTOR_KIND_INVALID");
+                .hasMessageContaining(
+                        "CHAIN_FINALIZATION_FAILURE_REFLECTOR_KIND_INVALID",
+                        "REPLAN_REQUIRED, NEED_PERMISSION, or TASK_FAILED");
     }
 
     @Test

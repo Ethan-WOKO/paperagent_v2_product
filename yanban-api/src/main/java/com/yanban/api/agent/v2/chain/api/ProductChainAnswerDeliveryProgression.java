@@ -454,7 +454,10 @@ public final class ProductChainAnswerDeliveryProgression {
             if (!(decoded.payload() instanceof AnswerPayload.UserQuestion value)
                     || !value.gapId().equals(pending.gapId())) {
                 throw new IllegalStateException(
-                        "CHAIN_PENDING_ANSWER_GAP_IDENTITY_INVALID");
+                        "CHAIN_PENDING_ANSWER_GAP_IDENTITY_INVALID; this "
+                                + "call requires ANSWER_USER_QUESTION with "
+                                + "gapId=" + pending.gapId()
+                                + " copied from the frozen bound PendingItem");
             }
             return decoded;
         };

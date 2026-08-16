@@ -539,17 +539,26 @@ public final class ProductChainStepBlockedProgression {
         require(payload.review().reviewedObjectRefs().contains(event)
                         && payload.review().directFactRefs().contains(event)
                         && payload.review().directFactRefs().contains(error),
-                "CHAIN_STEP_BLOCK_REFLECTOR_FACT_REF_MISSING");
+                "CHAIN_STEP_BLOCK_REFLECTOR_FACT_REF_MISSING; expected "
+                        + "reviewedObjectRefs to contain event=" + event
+                        + " and directFactRefs to contain event=" + event
+                        + " and errorRef=" + error);
         if (payload instanceof ReflectorPayload.ContinueStep continued) {
             require(continued.gapOrErrorRefs().contains(error),
-                    "CHAIN_STEP_BLOCK_CONTINUATION_ERROR_REF_MISSING");
+                    "CHAIN_STEP_BLOCK_CONTINUATION_ERROR_REF_MISSING; "
+                            + "expected gapOrErrorRefs to contain errorRef="
+                            + error);
         }
         if (payload instanceof ReflectorPayload.TaskFailed failed) {
             require(failed.failureFactRefs().contains(event)
                             && failed.failureFactRefs().contains(error)
                             && failed.failureCategory().equals(
                             source.payload().failureCategory()),
-                    "CHAIN_STEP_BLOCK_TASK_FAILED_BINDING_INVALID");
+                    "CHAIN_STEP_BLOCK_TASK_FAILED_BINDING_INVALID; expected "
+                            + "failureFactRefs to contain event=" + event
+                            + " and errorRef=" + error
+                            + " and failureCategory="
+                            + source.payload().failureCategory());
         }
     }
 

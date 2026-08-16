@@ -177,10 +177,14 @@ class ProductChainExecutorProgressionIdentityTest {
 
         assertDoesNotThrow(() -> ProductChainExecutorProgression
                 .validateReceiptValidationSuccess(valid, success));
-        assertThrows(IllegalArgumentException.class, () ->
-                ProductChainExecutorProgression
-                        .validateReceiptValidationSuccess(
-                                repeatedTool, success));
+        IllegalArgumentException rejected = assertThrows(
+                IllegalArgumentException.class, () ->
+                        ProductChainExecutorProgression
+                                .validateReceiptValidationSuccess(
+                                        repeatedTool, success));
+        assertTrue(rejected.getMessage().contains(
+                "STEP_RESULT bound to its exact successful Receipt"));
+        assertTrue(rejected.getMessage().contains("receiptRef=receipt-1"));
     }
 
     @Test
@@ -223,9 +227,13 @@ class ProductChainExecutorProgressionIdentityTest {
 
         assertDoesNotThrow(() -> ProductChainExecutorProgression
                 .validateReceiptValidationFailure(valid, failure));
-        assertThrows(IllegalArgumentException.class, () ->
-                ProductChainExecutorProgression
-                        .validateReceiptValidationFailure(retry, failure));
+        IllegalArgumentException rejected = assertThrows(
+                IllegalArgumentException.class, () ->
+                        ProductChainExecutorProgression
+                                .validateReceiptValidationFailure(
+                                        retry, failure));
+        assertTrue(rejected.getMessage().contains("errorRef=receipt-1"));
+        assertTrue(rejected.getMessage().contains("actionRef=action-1"));
     }
 
     @Test

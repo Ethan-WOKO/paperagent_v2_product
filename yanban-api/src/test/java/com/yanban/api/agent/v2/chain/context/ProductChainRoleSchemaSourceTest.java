@@ -67,7 +67,7 @@ class ProductChainRoleSchemaSourceTest {
         assertTrue(schema.contains("allFalseRequiresKind"));
         assertTrue(schema.contains("DIRECT_ROUTE"));
         assertTrue(schema.contains("minItems\":1"));
-        assertTrue(schema.contains("product-chain-role-schema-v13"));
+        assertTrue(schema.contains("product-chain-role-schema-v16"));
         assertTrue(schema.contains("inlineAnswerBody"));
         assertTrue(schema.contains(
                 "COMPLETE_USER_VISIBLE_ANSWER_FROM_THIS_PROVIDER_CALL"));
@@ -95,7 +95,7 @@ class ProductChainRoleSchemaSourceTest {
         assertTrue(schema.contains("deleteForbidsText"));
         assertTrue(schema.contains(
                 "targetFilesExactlyMatchChangePathsInOrder"));
-        assertTrue(schema.contains("product-chain-role-schema-v13"));
+        assertTrue(schema.contains("product-chain-role-schema-v16"));
         assertTrue(schema.contains(
                 "EXACT_DESCRIPTOR_ID_FROM_ONE_VISIBLE_COMPLETE_TOOL_SCHEMA"));
         assertTrue(schema.contains(
@@ -133,6 +133,69 @@ class ProductChainRoleSchemaSourceTest {
         assertTrue(schema.contains("priorActionRef"));
         assertTrue(schema.contains("changeFromPriorAction"));
         assertTrue(schema.contains("expectedProgress"));
+    }
+
+    @Test
+    void stepBlockedSchemaExplainsFailureBindingAndQuestionGroup() {
+        String schema = ProductChainRoleSchemaSource
+                .schema(ChainRole.EXECUTOR).canonicalJson();
+
+        assertTrue(schema.contains("EXACT_VISIBLE_FAILED_ACTION_RECEIPT_REF"));
+        assertTrue(schema.contains(
+                "THE_FAILURE_RECEIPT_REF_OF_THE_LATEST_UNRESOLVED_FAILED_ACTION_IN_THE_VISIBLE_ACTION_TABLE"));
+        assertTrue(schema.contains(
+                "EXACT_VISIBLE_FAILED_ACTION_AND_RECEIPT_REFS"));
+        assertTrue(schema.contains(
+                "THE_EXACT_FAILED_ACTION_REF_AND_ITS_EXACT_FAILURE_RECEIPT_REF"));
+        assertTrue(schema.contains("inventedRefsAllowed\":false"));
+        assertTrue(schema.contains(
+                "NONEMPTY_ONLY_WHEN_THE_BLOCKED_STEP_REQUIRES_USER_INPUT"));
+        assertTrue(schema.contains(
+                "JSON_NULL_WHEN_REMAINING_MISSING_FIELDS_IS_EMPTY_OTHERWISE_NONBLANK"));
+        assertTrue(schema.contains("STEP_BLOCKED_MISSING_FIELD_QUESTION"));
+        assertTrue(schema.contains(
+                "EMPTY_REMAINING_MISSING_FIELDS_REQUIRES_JSON_NULL_QUESTION_AND_FORMAT_NONEMPTY_REQUIRES_BOTH_NONBLANK"));
+        assertTrue(schema.contains("EXACT_FAILED_ACTION_BINDING"));
+        assertTrue(schema.contains("errorRefCopiedFrom"));
+        assertTrue(schema.contains("attemptedActionOrRepairRefsMustContain"));
+        assertTrue(schema.contains("neverInventOrParaphraseRefs"));
+        assertTrue(schema.contains("allOrNoneGroupMembers"));
+    }
+
+    @Test
+    void reflectorSchemaExplainsStepBlockReviewBindingAndMissingFields() {
+        String schema = ProductChainRoleSchemaSource
+                .schema(ChainRole.REFLECTOR).canonicalJson();
+
+        assertTrue(schema.contains("product-chain-role-schema-v16"));
+        assertTrue(schema.contains("EXACT_VISIBLE_REVIEWED_OBJECT_REFS"));
+        assertTrue(schema.contains("mustContainTheExactReviewSourceRef"));
+        assertTrue(schema.contains("EXACT_VISIBLE_DIRECT_FACT_REFS"));
+        assertTrue(schema.contains(
+                "stepBlockReviewMustAlsoContainTheExactFormalErrorRef"));
+        assertTrue(schema.contains("STEP_BLOCK_REVIEW_FACT_BINDING"));
+        assertTrue(schema.contains(
+                "REVIEWING_AN_ACCEPTED_EXECUTOR_STEP_BLOCK"));
+        assertTrue(schema.contains(
+                "THE_EXACT_ACCEPTED_PROPOSAL_STATE_EVENT_REF_AND_THE_EXACT_STEP_BLOCK_ERROR_REF"));
+        assertTrue(schema.contains("STEP_BLOCK_TASK_FAILED_BINDING"));
+        assertTrue(schema.contains("EXACT_VISIBLE_GAP_OR_ERROR_REFS"));
+        assertTrue(schema.contains("EXACT_VISIBLE_FAILURE_FACT_REFS"));
+        assertTrue(schema.contains("missingFields"));
+        assertTrue(schema.contains("emptyArrayAllowed\":false"));
+        assertTrue(schema.contains("minItems\":1"));
+    }
+
+    @Test
+    void answerSchemaExplainsPendingItemGapBinding() {
+        String schema = ProductChainRoleSchemaSource
+                .schema(ChainRole.ANSWER).canonicalJson();
+
+        assertTrue(schema.contains("product-chain-role-schema-v16"));
+        assertTrue(schema.contains(
+                "EXACT_VISIBLE_BOUND_PENDING_ITEM_GAP_REF"));
+        assertTrue(schema.contains("THE_FROZEN_BOUND_PENDING_ITEM_GAP_ID"));
+        assertTrue(schema.contains("inventedRefsAllowed\":false"));
     }
 
     @Test

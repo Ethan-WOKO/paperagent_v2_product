@@ -290,7 +290,21 @@ class ProductRuntimeRulesContextProjectorTest {
         assertTrue(executor.contains("deleteForbidsText"));
         assertTrue(executor.contains(
                 "targetFilesExactlyMatchChangePathsInOrder"));
-        assertEquals("product-chain-role-rules-v7",
+        assertTrue(executor.contains(
+                "inspectImportsBeforeFirstJavaOrPythonRun"));
+        assertTrue(executor.contains(
+                "declareEveryNonStandardDependencyOnTheFirstRun"));
+        assertTrue(executor.contains(
+                "yanban-runner java <source> --dependency=group:artifact:version"));
+        assertTrue(executor.contains(
+                "yanban-runner python <source> --dependency=package==version"));
+        assertTrue(executor.contains(
+                "bareCompileOrRunOnlyForDependencyFreeSources"));
+        assertTrue(executor.contains(
+                "WHEN_THE_LATEST_FAILED_RECEIPT_STDERR_REPORTS_A_MISSING_PACKAGE_OR_MODULE"));
+        assertTrue(executor.contains(
+                "doNotRunWithoutRequiredDependencies"));
+        assertEquals("product-chain-role-rules-v8",
                 ProductChainRuntimeRuleValues.RULES_VERSION);
         assertTrue(planner.contains(
                 "allBoundaryFlagsFalseRequiresDirectRoute"));

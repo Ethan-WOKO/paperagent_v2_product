@@ -15,7 +15,7 @@ import java.util.Objects;
 
 /** Pure role-field construction for the runtime-rules Context module. */
 final class ProductChainRuntimeRuleValues {
-    static final String RULES_VERSION = "product-chain-role-rules-v7";
+    static final String RULES_VERSION = "product-chain-role-rules-v8";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private ProductChainRuntimeRuleValues() {

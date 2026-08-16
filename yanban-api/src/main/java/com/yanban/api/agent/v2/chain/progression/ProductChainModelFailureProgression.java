@@ -1160,7 +1160,9 @@ public final class ProductChainModelFailureProgression {
         require(payload.kind() == ChainProposalKind.REFLECTOR_REPLAN_REQUIRED
                         || payload.kind()
                         == ChainProposalKind.REFLECTOR_TASK_FAILED,
-                "CHAIN_MODEL_FAILURE_REVIEW_KIND_INVALID");
+                "CHAIN_MODEL_FAILURE_REVIEW_KIND_INVALID; only "
+                        + "REPLAN_REQUIRED or TASK_FAILED may review a "
+                        + "model failure step block");
         requireFormalFailureReviewBinding(payload, source.sourceRef(),
                 source.directFactRefs());
         if (payload instanceof ReflectorPayload.TaskFailed failed) {
@@ -1168,7 +1170,10 @@ public final class ProductChainModelFailureProgression {
                             source.sourceRef())
                             && failed.failureCategory().equals(
                             source.failureCategory()),
-                    "CHAIN_MODEL_FAILURE_TASK_FAILED_BINDING_INVALID");
+                    "CHAIN_MODEL_FAILURE_TASK_FAILED_BINDING_INVALID; "
+                            + "expected failureFactRefs to contain sourceRef="
+                            + source.sourceRef() + " and failureCategory="
+                            + source.failureCategory());
         }
     }
 

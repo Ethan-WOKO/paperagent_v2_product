@@ -6,6 +6,7 @@ import io.paperagent.v2.chain.ChainProposalPayload;
 import io.paperagent.v2.chain.ChainRole;
 import io.paperagent.v2.chain.ExecutorPayload;
 import io.paperagent.v2.chain.PlannerPayload;
+import io.paperagent.v2.chain.ProposalFields;
 import io.paperagent.v2.chain.ProviderRoleOutput;
 import io.paperagent.v2.chain.ReflectorPayload;
 import io.paperagent.v2.chain.context.ChainContextValue;
@@ -23,7 +24,7 @@ import java.util.TreeMap;
 
 /** Role output schemas derived from the existing typed provider protocol. */
 public final class ProductChainRoleSchemaSource {
-    public static final String SCHEMA_VERSION = "product-chain-role-schema-v13";
+    public static final String SCHEMA_VERSION = "product-chain-role-schema-v16";
 
     private static final List<String> TOOL_ACTION_SELF_REPAIR_FIELDS = List.of(
             "priorErrorRef", "priorActionRef", "changeFromPriorAction",
@@ -240,6 +241,59 @@ public final class ProductChainRoleSchemaSource {
                     "emptyOnlyWhenActiveStepHasNoValidationRequirements",
                     ChainContextValue.bool(true)))));
         }
+        if (type == ProposalFields.ReviewCommon.class) {
+            return ChainContextValue.array(List.of(
+                    ChainContextValue.object(Map.ofEntries(
+                            Map.entry("rule", ChainContextValue.text(
+                                    "STEP_BLOCK_REVIEW_FACT_BINDING")),
+                            Map.entry("appliesWhen", ChainContextValue.text(
+                                    "REVIEWING_AN_ACCEPTED_EXECUTOR_STEP_BLOCK")),
+                            Map.entry("reviewedObjectRefsMustContain",
+                                    ChainContextValue.text(
+                                            "THE_EXACT_ACCEPTED_PROPOSAL_STATE_EVENT_REF")),
+                            Map.entry("directFactRefsMustContain",
+                                    ChainContextValue.text(
+                                            "THE_EXACT_ACCEPTED_PROPOSAL_STATE_EVENT_REF_AND_THE_EXACT_STEP_BLOCK_ERROR_REF")),
+                            Map.entry("neverInventOrParaphraseRefs",
+                                    ChainContextValue.bool(true))))));
+        }
+        if (type == ReflectorPayload.TaskFailed.class) {
+            return ChainContextValue.array(List.of(
+                    ChainContextValue.object(Map.ofEntries(
+                            Map.entry("rule", ChainContextValue.text(
+                                    "STEP_BLOCK_TASK_FAILED_BINDING")),
+                            Map.entry("appliesWhen", ChainContextValue.text(
+                                    "REVIEWING_AN_ACCEPTED_EXECUTOR_STEP_BLOCK")),
+                            Map.entry("failureFactRefsMustContain",
+                                    ChainContextValue.text(
+                                            "THE_EXACT_ACCEPTED_PROPOSAL_STATE_EVENT_REF_AND_THE_EXACT_STEP_BLOCK_ERROR_REF")),
+                            Map.entry("failureCategoryMustEqual",
+                                    ChainContextValue.text(
+                                            "THE_EXACT_STEP_BLOCK_FAILURE_CATEGORY"))))));
+        }
+        if (type == ExecutorPayload.StepBlocked.class) {
+            return ChainContextValue.array(List.of(
+                    ChainContextValue.object(Map.of(
+                            "rule", ChainContextValue.text("ALL_OR_NONE"),
+                            "group", ChainContextValue.text(
+                                    "STEP_BLOCKED_MISSING_FIELD_QUESTION"),
+                            "members", strings(List.of(
+                                    "remainingMissingFields", "exactQuestion",
+                                    "expectedFormat")),
+                            "activationCondition", ChainContextValue.text(
+                                    "EMPTY_REMAINING_MISSING_FIELDS_REQUIRES_JSON_NULL_QUESTION_AND_FORMAT_NONEMPTY_REQUIRES_BOTH_NONBLANK"))),
+                    ChainContextValue.object(Map.ofEntries(
+                            Map.entry("rule", ChainContextValue.text(
+                                    "EXACT_FAILED_ACTION_BINDING")),
+                            Map.entry("errorRefCopiedFrom",
+                                    ChainContextValue.text(
+                                            "THE_EXACT_FAILURE_RECEIPT_REF_OF_THE_LATEST_UNRESOLVED_FAILED_ACTION")),
+                            Map.entry("attemptedActionOrRepairRefsMustContain",
+                                    ChainContextValue.text(
+                                            "BOTH_THE_EXACT_FAILED_ACTION_REF_AND_ITS_EXACT_FAILURE_RECEIPT_REF")),
+                            Map.entry("neverInventOrParaphraseRefs",
+                                    ChainContextValue.bool(true))))));
+        }
         if (type != ExecutorPayload.ToolAction.class) {
             return ChainContextValue.array(List.of());
         }
@@ -265,6 +319,28 @@ public final class ProductChainRoleSchemaSource {
             return withProperties(
                     authorityRefs(typeSchema(component.getGenericType())),
                     Map.of("minItems", ChainContextValue.number(1)));
+        }
+        if (recordType == ReflectorPayload.ContinueStep.class
+                && component.getName().equals("gapOrErrorRefs")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "minItems", ChainContextValue.number(1),
+                    "emptyArrayAllowed", ChainContextValue.bool(false),
+                    "semanticType", ChainContextValue.text(
+                            "EXACT_VISIBLE_GAP_OR_ERROR_REFS"),
+                    "stepBlockReviewMustContainTheExactFormalErrorRef",
+                    ChainContextValue.bool(true),
+                    "inventedRefsAllowed", ChainContextValue.bool(false)));
+        }
+        if (recordType == ReflectorPayload.TaskFailed.class
+                && component.getName().equals("failureFactRefs")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "minItems", ChainContextValue.number(1),
+                    "emptyArrayAllowed", ChainContextValue.bool(false),
+                    "semanticType", ChainContextValue.text(
+                            "EXACT_VISIBLE_FAILURE_FACT_REFS"),
+                    "stepBlockReviewMustContainTheExactEventAndErrorRefs",
+                    ChainContextValue.bool(true),
+                    "inventedRefsAllowed", ChainContextValue.bool(false)));
         }
         if (nonEmptyListComponent(recordType, component.getName())) {
             return withProperties(typeSchema(component.getGenericType()),
@@ -374,6 +450,67 @@ public final class ProductChainRoleSchemaSource {
                     "protocol",
                     ProductChainGenericRoleRules.workspaceChangeProtocol()));
         }
+        if (recordType == ExecutorPayload.StepBlocked.class
+                && component.getName().equals("errorRef")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "semanticType", ChainContextValue.text(
+                            "EXACT_VISIBLE_FAILED_ACTION_RECEIPT_REF"),
+                    "copySource", ChainContextValue.text(
+                            "THE_FAILURE_RECEIPT_REF_OF_THE_LATEST_UNRESOLVED_FAILED_ACTION_IN_THE_VISIBLE_ACTION_TABLE"),
+                    "inventedRefsAllowed", ChainContextValue.bool(false)));
+        }
+        if (recordType == ExecutorPayload.StepBlocked.class
+                && component.getName().equals("attemptedActionOrRepairRefs")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "semanticType", ChainContextValue.text(
+                            "EXACT_VISIBLE_FAILED_ACTION_AND_RECEIPT_REFS"),
+                    "mustContain", ChainContextValue.text(
+                            "THE_EXACT_FAILED_ACTION_REF_AND_ITS_EXACT_FAILURE_RECEIPT_REF"),
+                    "inventedRefsAllowed", ChainContextValue.bool(false)));
+        }
+        if (recordType == ExecutorPayload.StepBlocked.class
+                && component.getName().equals("remainingMissingFields")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "semanticType", ChainContextValue.text(
+                            "NONEMPTY_ONLY_WHEN_THE_BLOCKED_STEP_REQUIRES_USER_INPUT"),
+                    "emptyArrayAllowed", ChainContextValue.bool(true)));
+        }
+        if (recordType == ExecutorPayload.StepBlocked.class
+                && (component.getName().equals("exactQuestion")
+                || component.getName().equals("expectedFormat"))) {
+            return nullableGroup(typeSchema(component.getGenericType()),
+                    "JSON_NULL_WHEN_REMAINING_MISSING_FIELDS_IS_EMPTY_OTHERWISE_NONBLANK",
+                    "STEP_BLOCKED_MISSING_FIELD_QUESTION",
+                    List.of("remainingMissingFields", "exactQuestion",
+                            "expectedFormat"));
+        }
+        if (recordType == ProposalFields.ReviewCommon.class
+                && component.getName().equals("reviewedObjectRefs")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "semanticType", ChainContextValue.text(
+                            "EXACT_VISIBLE_REVIEWED_OBJECT_REFS"),
+                    "mustContainTheExactReviewSourceRef",
+                    ChainContextValue.bool(true),
+                    "inventedRefsAllowed", ChainContextValue.bool(false)));
+        }
+        if (recordType == ProposalFields.ReviewCommon.class
+                && component.getName().equals("directFactRefs")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "semanticType", ChainContextValue.text(
+                            "EXACT_VISIBLE_DIRECT_FACT_REFS"),
+                    "stepBlockReviewMustAlsoContainTheExactFormalErrorRef",
+                    ChainContextValue.bool(true),
+                    "inventedRefsAllowed", ChainContextValue.bool(false)));
+        }
+        if (recordType == AnswerPayload.UserQuestion.class
+                && component.getName().equals("gapId")) {
+            return withProperties(typeSchema(component.getGenericType()), Map.of(
+                    "semanticType", ChainContextValue.text(
+                            "EXACT_VISIBLE_BOUND_PENDING_ITEM_GAP_REF"),
+                    "copySource", ChainContextValue.text(
+                            "THE_FROZEN_BOUND_PENDING_ITEM_GAP_ID"),
+                    "inventedRefsAllowed", ChainContextValue.bool(false)));
+        }
         return typeSchema(component.getGenericType());
     }
 
@@ -395,6 +532,26 @@ public final class ProductChainRoleSchemaSource {
         }
         if (recordType == PlannerPayload.NeedUserInput.class) {
             return Set.of("missingFields", "closingConditions")
+                    .contains(componentName);
+        }
+        if (recordType == ReflectorPayload.NeedUserInput.class) {
+            return Set.of("missingFields", "closingConditions")
+                    .contains(componentName);
+        }
+        if (recordType == ReflectorPayload.ContinueStep.class) {
+            return Set.of("unmetConditions", "gapOrErrorRefs")
+                    .contains(componentName);
+        }
+        if (recordType == ReflectorPayload.AcceptStep.class) {
+            return Set.of("conditionJudgements",
+                    "artifactReceiptCandidateValidationEvidenceRefs")
+                    .contains(componentName);
+        }
+        if (recordType == ReflectorPayload.ReplanRequired.class) {
+            return componentName.equals("constraintsToRepair");
+        }
+        if (recordType == ReflectorPayload.TaskFailed.class) {
+            return Set.of("failureFactRefs", "unfinishedOrSkippedItems")
                     .contains(componentName);
         }
         if (recordType == PlannerPayload.PlanningBlocked.class) {

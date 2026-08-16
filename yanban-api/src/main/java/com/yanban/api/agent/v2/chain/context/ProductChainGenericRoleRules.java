@@ -108,6 +108,21 @@ final class ProductChainGenericRoleRules {
                         "repairOnlyFromVisibleFormalFailure",
                         ChainContextValue.bool(true),
                         "stateHowTheNextAttemptChanges",
+                        ChainContextValue.bool(true))),
+                "dependencyRules", ChainContextValue.object(Map.of(
+                        "inspectImportsBeforeFirstJavaOrPythonRun",
+                        ChainContextValue.bool(true),
+                        "declareEveryNonStandardDependencyOnTheFirstRun",
+                        ChainContextValue.bool(true),
+                        "javaDeclarationSyntax", ChainContextValue.text(
+                                "yanban-runner java <source> --dependency=group:artifact:version"),
+                        "pythonDeclarationSyntax", ChainContextValue.text(
+                                "yanban-runner python <source> --dependency=package==version"),
+                        "bareCompileOrRunOnlyForDependencyFreeSources",
+                        ChainContextValue.bool(true),
+                        "missingDependencyRepair", ChainContextValue.text(
+                                "WHEN_THE_LATEST_FAILED_RECEIPT_STDERR_REPORTS_A_MISSING_PACKAGE_OR_MODULE_RETRY_WITH_THE_SAME_SOURCE_PATHS_PLUS_EXACT_DEPENDENCY_ARGUMENTS_AND_BIND_PRIOR_ACTION_AND_ERROR_REFERENCES"),
+                        "doNotRunWithoutRequiredDependencies",
                         ChainContextValue.bool(true)))));
     }
 

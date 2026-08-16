@@ -674,6 +674,271 @@ class ChainModelProtocolTest {
     }
 
     @Test
+    void executorStepBlockedQuestionRepairExplainsAllOrNoneGroup() {
+        Store store = new Store(completeContext(
+                ChainRole.EXECUTOR, ChainWorkState.EXECUTING,
+                "STEP_EXECUTION"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalArgumentException(
+                    "PAYLOAD_VALIDATION_FAILED at $.payload: "
+                            + "exactQuestion must not be blank");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.EXECUTOR,
+                        ChainWorkState.EXECUTING, "STEP_EXECUTION")));
+
+        assertTrue(repairFeedback.get().contains(
+                "remainingMissingFields, exactQuestion, and expectedFormat"));
+        assertTrue(repairFeedback.get().contains("all-or-none"));
+        assertTrue(repairFeedback.get().contains(
+                "do not invent a question only to satisfy the schema"));
+    }
+
+    @Test
+    void executorStepBlockedBindingRepairExplainsExactActionAndReceiptRefs() {
+        Store store = new Store(completeContext(
+                ChainRole.EXECUTOR, ChainWorkState.EXECUTING,
+                "STEP_EXECUTION"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalArgumentException(
+                    "a failed read-only validation action requires "
+                            + "STEP_BLOCKED bound to its exact Action "
+                            + "and Receipt; do not retry or modify the "
+                            + "Project");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.EXECUTOR,
+                        ChainWorkState.EXECUTING, "STEP_EXECUTION")));
+
+        assertTrue(repairFeedback.get().contains(
+                "action.currentStepAttemptTable"));
+        assertTrue(repairFeedback.get().contains(
+                "copy errorRef byte-for-byte from the exact failure "
+                        + "receiptRef"));
+        assertTrue(repairFeedback.get().contains(
+                "never invent, shorten, or paraphrase"));
+    }
+
+    @Test
+    void reflectorMissingFieldsRepairExplainsNonEmptyRequirement() {
+        Store store = new Store(completeContext(
+                ChainRole.REFLECTOR, ChainWorkState.AWAITING_REVIEW,
+                "STEP_BLOCKED_REVIEW"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalArgumentException(
+                    "PAYLOAD_VALIDATION_FAILED at $.payload: "
+                            + "missingFields must not be empty");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.REFLECTOR,
+                        ChainWorkState.AWAITING_REVIEW,
+                        "STEP_BLOCKED_REVIEW")));
+
+        assertTrue(repairFeedback.get().contains(
+                "missingFields must be a non-empty list"));
+        assertTrue(repairFeedback.get().contains(
+                "formalStepBlock.remainingMissingFields"));
+        assertTrue(repairFeedback.get().contains("Never use []"));
+    }
+
+    @Test
+    void reflectorStepBlockFactBindingRepairExplainsExactEventAndErrorRefs() {
+        Store store = new Store(completeContext(
+                ChainRole.REFLECTOR, ChainWorkState.AWAITING_REVIEW,
+                "STEP_BLOCKED_REVIEW"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalStateException(
+                    "CHAIN_STEP_BLOCK_REFLECTOR_FACT_REF_MISSING");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.REFLECTOR,
+                        ChainWorkState.AWAITING_REVIEW,
+                        "STEP_BLOCKED_REVIEW")));
+
+        assertTrue(repairFeedback.get().contains(
+                "model.reviewedCandidateProposal.executorProposal"));
+        assertTrue(repairFeedback.get().contains(
+                "formalStepBlock and"));
+        assertTrue(repairFeedback.get().contains("byte-for-byte"));
+        assertTrue(repairFeedback.get().contains(
+                "never invent, shorten, or"));
+    }
+
+    @Test
+    void executorStepResultSuccessBindingRepairExplainsExactReceiptRef() {
+        Store store = new Store(completeContext(
+                ChainRole.EXECUTOR, ChainWorkState.EXECUTING,
+                "STEP_EXECUTION"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalArgumentException(
+                    "a completed read-only validation action requires "
+                            + "STEP_RESULT bound to its exact successful "
+                            + "Receipt; expected receiptRef=receipt-1");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.EXECUTOR,
+                        ChainWorkState.EXECUTING, "STEP_EXECUTION")));
+
+        assertTrue(repairFeedback.get().contains(
+                "repair the STEP_RESULT binding"));
+        assertTrue(repairFeedback.get().contains(
+                "receiptRefs and in one validationSources entry"));
+        assertTrue(repairFeedback.get().contains(
+                "never invent or paraphrase it"));
+    }
+
+    @Test
+    void reflectorFinalizationFailureRepairExplainsExactSourceRef() {
+        Store store = new Store(completeContext(
+                ChainRole.REFLECTOR, ChainWorkState.AWAITING_REVIEW,
+                "FINALIZATION_FAILURE_REVIEW"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalStateException(
+                    "CHAIN_FINALIZATION_FAILURE_FACT_REF_MISSING; "
+                            + "expected reviewedObjectRefs and directFactRefs "
+                            + "to contain sourceRef=check-1");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.REFLECTOR,
+                        ChainWorkState.AWAITING_REVIEW,
+                        "FINALIZATION_FAILURE_REVIEW")));
+
+        assertTrue(repairFeedback.get().contains(
+                "reviewing a formal finalization failure"));
+        assertTrue(repairFeedback.get().contains(
+                "exact sourceRef shown in this diagnostic"));
+        assertTrue(repairFeedback.get().contains(
+                "copy failureCategory exactly"));
+    }
+
+    @Test
+    void reflectorModelFailureRepairExplainsAllowedKindsAndRefs() {
+        Store store = new Store(completeContext(
+                ChainRole.REFLECTOR, ChainWorkState.AWAITING_REVIEW,
+                "MODEL_CALL_FAILED_REVIEW"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalStateException(
+                    "CHAIN_MODEL_FAILURE_REVIEW_KIND_INVALID; only "
+                            + "REPLAN_REQUIRED or TASK_FAILED may review a "
+                            + "model failure step block");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.REFLECTOR,
+                        ChainWorkState.AWAITING_REVIEW,
+                        "MODEL_CALL_FAILED_REVIEW")));
+
+        assertTrue(repairFeedback.get().contains(
+                "reviewing a model-failure step block"));
+        assertTrue(repairFeedback.get().contains(
+                "only REPLAN_REQUIRED or TASK_FAILED"));
+        assertTrue(repairFeedback.get().contains(
+                "every exact authority ref named in this diagnostic"));
+    }
+
+    @Test
+    void answerPendingGapRepairExplainsExactGapId() {
+        Store store = new Store(completeContext(
+                ChainRole.ANSWER, ChainWorkState.WAITING_USER,
+                "PENDING_ITEM"), Set.of());
+        AtomicReference<String> repairFeedback = new AtomicReference<>();
+        ChainModelCallPort provider = request -> {
+            if (request.protocolRepair()) {
+                repairFeedback.set(request.repairFeedback());
+            }
+            return new ChainModelCallResult.Success(
+                    "transient", "STOP", 7, Map.of());
+        };
+        ChainRoleOutputDecoder decoder = (raw, role, workState, gap) -> {
+            throw new IllegalStateException(
+                    "CHAIN_PENDING_ANSWER_GAP_IDENTITY_INVALID; this call "
+                            + "requires ANSWER_USER_QUESTION with gapId=gap-1 "
+                            + "copied from the frozen bound PendingItem");
+        };
+
+        assertInstanceOf(ChainModelProtocolOutcome.ModelCallFailed.class,
+                new ChainModelProtocolService(store, store, store, store,
+                        provider, decoder).invoke(request(ChainRole.ANSWER,
+                        ChainWorkState.WAITING_USER, "PENDING_ITEM")));
+
+        assertTrue(repairFeedback.get().contains(
+                "must be ANSWER_USER_QUESTION with gapId"));
+        assertTrue(repairFeedback.get().contains(
+                "byte-for-byte from the gapId named in this diagnostic"));
+        assertTrue(repairFeedback.get().contains(
+                "do not answer another gap"));
+    }
+
+    @Test
     void plannerCandidateValidationRepairExplainsExactConditionBinding() {
         Store store = new Store(completeContext(
                 ChainRole.PLANNER, ChainWorkState.PLANNING,

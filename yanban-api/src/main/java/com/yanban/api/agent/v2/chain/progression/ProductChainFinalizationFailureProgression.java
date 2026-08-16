@@ -593,15 +593,22 @@ public final class ProductChainFinalizationFailureProgression {
                         == ChainProposalKind.REFLECTOR_NEED_PERMISSION
                         || payload.kind()
                         == ChainProposalKind.REFLECTOR_TASK_FAILED,
-                "CHAIN_FINALIZATION_FAILURE_REFLECTOR_KIND_INVALID");
+                "CHAIN_FINALIZATION_FAILURE_REFLECTOR_KIND_INVALID; only "
+                        + "REPLAN_REQUIRED, NEED_PERMISSION, or TASK_FAILED "
+                        + "may review a finalization failure");
         require(payload.review().reviewedObjectRefs().contains(source.ref())
                         && payload.review().directFactRefs().contains(source.ref()),
-                "CHAIN_FINALIZATION_FAILURE_FACT_REF_MISSING");
+                "CHAIN_FINALIZATION_FAILURE_FACT_REF_MISSING; expected "
+                        + "reviewedObjectRefs and directFactRefs to contain "
+                        + "sourceRef=" + source.ref());
         if (payload instanceof ReflectorPayload.TaskFailed failed) {
             require(failed.failureFactRefs().contains(source.ref())
                             && failed.failureCategory().equals(
                                     source.category()),
-                    "CHAIN_FINALIZATION_FAILURE_TASK_FAILED_BINDING_INVALID");
+                    "CHAIN_FINALIZATION_FAILURE_TASK_FAILED_BINDING_INVALID; "
+                            + "expected failureFactRefs to contain sourceRef="
+                            + source.ref() + " and failureCategory="
+                            + source.category());
         }
     }
 

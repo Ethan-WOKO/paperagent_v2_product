@@ -2589,7 +2589,10 @@ public final class ProductChainExecutorProgression {
                 source.receiptRef().equals(success.receiptRef()))) {
             throw new IllegalArgumentException(
                     "a completed read-only validation action requires "
-                            + "STEP_RESULT bound to its exact successful Receipt");
+                            + "STEP_RESULT bound to its exact successful "
+                            + "Receipt; expected receiptRefs and "
+                            + "validationSources to contain receiptRef="
+                            + success.receiptRef());
         }
     }
 
@@ -2612,7 +2615,11 @@ public final class ProductChainExecutorProgression {
             throw new IllegalArgumentException(
                     "a failed read-only validation action requires "
                             + "STEP_BLOCKED bound to its exact Action and Receipt; "
-                            + "do not retry or modify the Project");
+                            + "expected errorRef=" + failure.errorRef()
+                            + " and attemptedActionOrRepairRefs containing "
+                            + "actionRef=" + failure.actionId()
+                            + " and errorRef=" + failure.errorRef()
+                            + "; do not retry or modify the Project");
         }
     }
 

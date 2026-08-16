@@ -519,6 +519,67 @@ public final class ChainModelProtocolService {
                     + "paths must be nonblank and unique after case folding; changes[].path must exactly "
                     + "equal targetFiles in the same order; escape every quote, backslash, and newline in text";
         }
+        if (role == io.paperagent.v2.chain.ChainRole.EXECUTOR
+                && hint.contains("exactQuestion must not be blank")) {
+            return hint + "; STEP_BLOCKED remainingMissingFields, exactQuestion, and expectedFormat form "
+                    + "one all-or-none group. When remainingMissingFields is non-empty, exactQuestion and "
+                    + "expectedFormat must both be nonblank strings. When there is no question to ask the "
+                    + "user, keep remainingMissingFields empty and emit exactQuestion and expectedFormat as "
+                    + "JSON null or omit them; do not invent a question only to satisfy the schema";
+        }
+        if (role == io.paperagent.v2.chain.ChainRole.EXECUTOR
+                && hint.contains("requires STEP_BLOCKED bound to its exact Action and Receipt")) {
+            return hint + "; repair the STEP_BLOCKED binding from the visible action authority table "
+                    + "(action.currentStepAttemptTable and action.latestOrUnresolvedReceiptAndErrorExpansion): "
+                    + "copy errorRef byte-for-byte from the exact failure receiptRef of the latest unresolved "
+                    + "failed action, and include in attemptedActionOrRepairRefs both the exact actionRef and "
+                    + "the exact errorRef of that same failed action; never invent, shorten, or paraphrase "
+                    + "either identifier";
+        }
+        if (role == io.paperagent.v2.chain.ChainRole.EXECUTOR
+                && hint.contains("requires STEP_RESULT bound to its exact successful Receipt")) {
+            return hint + "; repair the STEP_RESULT binding: include the exact receiptRef named in this "
+                    + "diagnostic in receiptRefs and in one validationSources entry for each active Step "
+                    + "validation requirement, copying the receipt identifier byte-for-byte; never invent "
+                    + "or paraphrase it";
+        }
+        if (role == io.paperagent.v2.chain.ChainRole.REFLECTOR
+                && hint.contains("CHAIN_FINALIZATION_FAILURE_")) {
+            return hint + "; when reviewing a formal finalization failure, bind review.reviewedObjectRefs "
+                    + "and review.directFactRefs to the exact sourceRef shown in this diagnostic; TASK_FAILED "
+                    + "must also list that exact sourceRef in failureFactRefs and copy failureCategory "
+                    + "exactly. Copy the identifiers byte-for-byte; never invent or paraphrase them";
+        }
+        if (role == io.paperagent.v2.chain.ChainRole.REFLECTOR
+                && hint.contains("CHAIN_MODEL_FAILURE_")) {
+            return hint + "; when reviewing a model-failure step block, only REPLAN_REQUIRED or TASK_FAILED "
+                    + "are allowed, and review.reviewedObjectRefs plus review.directFactRefs must include "
+                    + "every exact authority ref named in this diagnostic; TASK_FAILED must also include the "
+                    + "exact sourceRef in failureFactRefs and copy failureCategory exactly";
+        }
+        if (role == io.paperagent.v2.chain.ChainRole.ANSWER
+                && hint.contains("CHAIN_PENDING_ANSWER_GAP_IDENTITY_INVALID")) {
+            return hint + "; this PendingItem answer must be ANSWER_USER_QUESTION with gapId copied "
+                    + "byte-for-byte from the gapId named in this diagnostic; do not answer another gap or "
+                    + "use another proposal kind";
+        }
+        if (role == io.paperagent.v2.chain.ChainRole.REFLECTOR
+                && hint.contains("missingFields must not be empty")) {
+            return hint + "; NEED_USER_INPUT.missingFields must be a non-empty list of the concrete missing "
+                    + "inputs that block progress. When reviewing an accepted STEP_BLOCKED, copy each item "
+                    + "from the blocked Step's formalStepBlock.remainingMissingFields; if the user is only "
+                    + "being asked to decide the next action, list that pending decision as the missing "
+                    + "input. Never use []";
+        }
+        if (role == io.paperagent.v2.chain.ChainRole.REFLECTOR
+                && hint.contains("CHAIN_STEP_BLOCK_REFLECTOR_FACT_REF_MISSING")) {
+            return hint + "; when reviewing an accepted Executor STEP_BLOCKED, bind review.reviewedObjectRefs "
+                    + "to the exact accepted proposal-state event ref and review.directFactRefs to that same "
+                    + "event ref plus the exact errorRef, both visible in "
+                    + "model.reviewedCandidateProposal.executorProposal.proposal.formalStepBlock and "
+                    + "stateEventRef. Copy both identifiers byte-for-byte; never invent, shorten, or "
+                    + "paraphrase them";
+        }
         if (role == io.paperagent.v2.chain.ChainRole.PLANNER
                 && hint.contains("PERSISTENT_ROUTE_WITHOUT_REQUIREMENT")) {
             return hint + "; the PERSISTENT_PLAN semantic kind is rejected. Reassess routing only from "

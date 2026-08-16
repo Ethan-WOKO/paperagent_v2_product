@@ -2,6 +2,7 @@ package com.yanban.api.agent.v2.chain.progression;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -52,9 +53,14 @@ class ProductChainStepBlockedProgressionTest {
                 review(List.of("accepted-event", "other-error")),
                 List.of("the formal error remains"),
                 List.of("other-error"), "retry the current active Step");
-        assertThrows(IllegalStateException.class, () ->
-                ProductChainStepBlockedProgression.validatePayload(
-                        drifted, source));
+        IllegalStateException rejected = assertThrows(
+                IllegalStateException.class, () ->
+                        ProductChainStepBlockedProgression.validatePayload(
+                                drifted, source));
+        assertTrue(rejected.getMessage().contains(
+                "CHAIN_STEP_BLOCK_REFLECTOR_FACT_REF_MISSING"));
+        assertTrue(rejected.getMessage().contains("event=accepted-event"));
+        assertTrue(rejected.getMessage().contains("errorRef=error-1"));
     }
 
     @Test
