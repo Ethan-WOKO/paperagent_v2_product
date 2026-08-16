@@ -65,6 +65,18 @@ describe("HttpGatewayClient", () => {
     await expect(client.list(taskId, grant, signal)).rejects.toMatchObject({ status: 500, problem: { code: "GATEWAY_REQUEST_FAILED", category: "tool", message: "Product tool gateway returned HTTP 500" } });
     await expect(client.list(taskId, grant, signal)).rejects.toMatchObject({ status: 502, problem: { code: "GATEWAY_RESPONSE_INVALID", category: "tool" } });
   });
+
+  it("preserves only a valid upstream code and category while redacting its message", async () => {
+    const server = createServer((_request, response) => {
+      response.statusCode = 401;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ contractVersion: "1.0", code: "TASK_GRANT_EXPIRED", category: "authorization", message: "secret path and token", retryable: true, sourceRef: "internal.secret" }));
+    });
+    servers.push(server); await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const client = new HttpGatewayClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    await expect(client.list(taskId, grant, new AbortController().signal)).rejects.toMatchObject({ status: 401, problem: { code: "TASK_GRANT_EXPIRED", category: "authorization", message: "Product tool gateway rejected the request", retryable: true } });
+    try { await client.list(taskId, grant, new AbortController().signal); } catch (error) { expect(JSON.stringify(error)).not.toContain("secret path and token"); expect(JSON.stringify(error)).not.toContain("internal.secret"); }
+  });
 });
 
 async function readBody(request: import("node:http").IncomingMessage): Promise<unknown> {

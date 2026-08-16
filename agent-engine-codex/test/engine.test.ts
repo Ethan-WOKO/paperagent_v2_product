@@ -6,7 +6,7 @@ import { AgentEngine } from "../src/engine.js";
 import type { GatewayClient, SandboxRequest } from "../src/gateway.js";
 import { TaskStore } from "../src/store.js";
 import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, PersistedTask, Receipt, SandboxView, TaskSubmission } from "../src/types.js";
-import { digestObject, sha256 } from "../src/util.js";
+import { digestObject, EngineProblem, problem, sha256 } from "../src/util.js";
 import { ContractValidator } from "../src/validation.js";
 
 const contractDirectory = resolve(process.cwd(), "../agent-engine-contract");
@@ -63,7 +63,7 @@ describe("AgentEngine", () => {
 
   it("freezes the first answer and resumes a question exactly once", async () => {
     const directory = await temporaryDirectory();
-    const provider = new ScriptedProvider([tool("ask_user", { question: "Which class should I validate?" }), { content: "Validated the selected class.", toolCalls: [] }]);
+    const provider = new ScriptedProvider([tool("ask_user", { question: "Which class should I validate?" }), sandboxTool(), { content: "Validated the selected class.", toolCalls: [] }]);
     const engine = await createEngine(provider, new FakeGateway(), directory);
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "waiting_user");
@@ -73,7 +73,7 @@ describe("AgentEngine", () => {
     await engine.answer(taskId, answer);
     await expect(engine.answer(taskId, { ...answer, clientRequestId: `answer.${"y".repeat(16)}`, answer: "Other.java", answerDigest: sha256("Other.java") })).rejects.toMatchObject({ status: 409, problem: { code: "QUESTION_ANSWER_CONFLICT" } });
     await waitFor(() => engine.get(taskId).state === "succeeded");
-    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests).toHaveLength(3);
     const restarted = await createEngine(new NeverProvider(), new FakeGateway(), directory);
     expect((await restarted.answer(taskId, answer)).state).toBe("succeeded");
     await expect(restarted.answer(taskId, { ...answer, clientRequestId: `answer.${"z".repeat(16)}`, answer: "Other.java", answerDigest: sha256("Other.java") })).rejects.toMatchObject({ status: 409, problem: { code: "QUESTION_ANSWER_CONFLICT" } });
@@ -88,19 +88,19 @@ describe("AgentEngine", () => {
     const answer = { clientRequestId: `answer.${"j".repeat(16)}`, questionId, answer: "Sort.java", answerDigest: sha256("Sort.java") };
     await new TaskStore(directory).appendAnswer(taskId, answer);
 
-    const recoveredProvider = new ScriptedProvider([{ content: "Recovered the accepted answer without asking again.", toolCalls: [] }]);
+    const recoveredProvider = new ScriptedProvider([sandboxTool(), { content: "Recovered the accepted answer without asking again.", toolCalls: [] }]);
     const recovered = await createEngine(recoveredProvider, new FakeGateway(), directory);
     expect(recovered.get(taskId)).toMatchObject({ state: "waiting_user", pendingQuestionId: null });
     expect((await recovered.submit(submission())).replayed).toBe(true);
     await waitFor(() => recovered.get(taskId).state === "succeeded");
-    expect(recoveredProvider.requests).toHaveLength(1);
+    expect(recoveredProvider.requests).toHaveLength(2);
     expect(recoveredProvider.requests[0]?.messages).toContainEqual(expect.objectContaining({ role: "tool", content: JSON.stringify({ answer: "Sort.java" }) }));
     expect((await recovered.answer(taskId, { contractVersion: "1.0", ...answer })).state).toBe("succeeded");
   });
 
   it("serializes competing answers and preserves exactly one question authority", async () => {
     const directory = await temporaryDirectory();
-    const provider = new ScriptedProvider([tool("ask_user", { question: "Choose one." }), { content: "Used the first accepted answer.", toolCalls: [] }]);
+    const provider = new ScriptedProvider([tool("ask_user", { question: "Choose one." }), sandboxTool(), { content: "Used the first accepted answer.", toolCalls: [] }]);
     const engine = await createEngine(provider, new FakeGateway(), directory);
     await engine.submit(submission()); await waitFor(() => engine.get(taskId).state === "waiting_user");
     const questionId = engine.get(taskId).pendingQuestionId!;
@@ -123,7 +123,7 @@ describe("AgentEngine", () => {
     await store.create(task);
     await store.appendEvent({ contractVersion: "1.0", taskId, sequence: 1, occurredAt: new Date().toISOString(), type: "question", questionId, text: "Which class?" });
 
-    const provider = new ScriptedProvider([{ content: "Accepted the recovered answer.", toolCalls: [] }]);
+    const provider = new ScriptedProvider([sandboxTool(), { content: "Accepted the recovered answer.", toolCalls: [] }]);
     const recovered = await createEngine(provider, new FakeGateway(), directory);
     expect(recovered.get(taskId)).toMatchObject({ state: "waiting_user", pendingQuestionId: questionId });
     expect(provider.requests).toHaveLength(0);
@@ -153,7 +153,7 @@ describe("AgentEngine", () => {
     const first = await createEngine(new NeverProvider(), new FakeGateway(), directory);
     await first.submit(submission());
     await waitFor(() => first.get(taskId).state === "running");
-    const secondProvider = new ScriptedProvider([{ content: "Recovered without recreating the task.", toolCalls: [] }]);
+    const secondProvider = new ScriptedProvider([sandboxTool(), { content: "Recovered without recreating the task.", toolCalls: [] }]);
     const second = await createEngine(secondProvider, new FakeGateway(), directory);
     expect(second.get(taskId).state).toBe("running");
     const replay = await second.submit(submission());
@@ -222,6 +222,88 @@ describe("AgentEngine", () => {
     expect(engine.get(taskId).error).toMatchObject({ code: "SANDBOX_SYSTEM_ERROR", category: "sandbox_system", sourceRef: "receipt.system" });
     expect((await engine.events(taskId)).some((event) => event.type === "delivery")).toBe(false);
   });
+
+  it("pauses on an expired gateway grant and resumes the same sandbox execution after exact replay", async () => {
+    const gateway = new RefreshingGrantGateway();
+    const engine = await createEngine(new ScriptedProvider([sandboxTool(), { content: "Recovered with a formal receipt.", toolCalls: [] }]), gateway);
+    const request = submission();
+    await engine.submit(request);
+    await waitFor(() => gateway.refreshRequested);
+    expect(engine.get(taskId)).toMatchObject({ state: "running", terminalSequence: null });
+    const refreshedGrant = "n".repeat(40);
+    expect((await engine.submit({ ...request, gateway: { taskGrant: refreshedGrant, expiresAt: new Date(Date.now() + 60_000).toISOString() } })).replayed).toBe(true);
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    expect(gateway.submitGrants).toEqual([grant, refreshedGrant]);
+    expect(gateway.executionGrants).toEqual([grant, refreshedGrant]);
+    expect((await engine.events(taskId)).filter((event) => event.type === "tool" && event.name === "sandbox.execute" && event.state === "requested")).toHaveLength(1);
+  });
+
+  it("does not let a late 401 from an old request erase a concurrently refreshed grant", async () => {
+    const gateway = new ConcurrentRefreshGateway();
+    const engine = await createEngine(new ScriptedProvider([sandboxTool(), { content: "Completed after concurrent refresh.", toolCalls: [] }]), gateway);
+    const request = submission();
+    await engine.submit(request);
+    await gateway.oldRequestEntered;
+    const refreshedGrant = "r".repeat(40);
+    await engine.submit({ ...request, gateway: { taskGrant: refreshedGrant, expiresAt: new Date(Date.now() + 60_000).toISOString() } });
+    gateway.releaseOldRequest();
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    expect(gateway.executionGrants).toEqual([grant, refreshedGrant]);
+  });
+
+  it("rejects gateway data that is not bound to the frozen task and request", async () => {
+    const gateway = new FakeGateway();
+    gateway.list = (taskIdValue: string) => Promise.resolve({ contractVersion: "1.0", taskId: taskIdValue, projectVersion: "c".repeat(64), files: [] });
+    const engine = await createEngine(new ScriptedProvider([tool("list_project_files", {})]), gateway);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+    expect(engine.get(taskId).error).toMatchObject({ code: "GATEWAY_RESPONSE_BINDING_INVALID", category: "tool" });
+  });
+
+  it("rejects a terminal receipt whose exact inputs do not match the sandbox submission", async () => {
+    const gateway = new FakeGateway();
+    gateway.receipt = () => Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "", truncated: false, originalBytes: 0 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Other.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
+    const engine = await createEngine(new ScriptedProvider([sandboxTool()]), gateway);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+    expect(engine.get(taskId).error).toMatchObject({ code: "GATEWAY_RESPONSE_BINDING_INVALID" });
+  });
+
+  it("does not perform an earlier side effect when ask_user is mixed with another tool call", async () => {
+    const gateway = new CountingGateway();
+    const engine = await createEngine(new ScriptedProvider([{ content: null, toolCalls: [
+      { id: "first", name: "list_project_files", arguments: "{}" },
+      { id: "second", name: "ask_user", arguments: JSON.stringify({ question: "Proceed?" }) }
+    ] }]), gateway);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+    expect(gateway.calls).toBe(0);
+    expect(engine.get(taskId).error).toMatchObject({ code: "MODEL_QUESTION_INVALID" });
+  });
+
+  it("fails closed when the model concludes P1 without a formal sandbox receipt", async () => {
+    const engine = await createEngine(new ScriptedProvider([{ content: "unverified conclusion", toolCalls: [] }]), new FakeGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+    expect(engine.get(taskId).error).toMatchObject({ code: "SANDBOX_RECEIPT_REQUIRED", category: "code_validation" });
+    expect((await engine.events(taskId)).some((event) => event.type === "delivery")).toBe(false);
+  });
+
+  it("keeps the accepted sandbox deadline across a process restart", async () => {
+    const directory = await temporaryDirectory();
+    const store = new TaskStore(directory); await store.initialize();
+    const task = persistedTask();
+    const callId = `call.${"d".repeat(40)}`;
+    task.pendingCalls = [{ id: callId, name: "execute_in_sandbox", arguments: JSON.stringify({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }), ordinal: 0, sandbox: { executionRef: "execution.expired", deadlineAt: new Date(Date.now() - 1).toISOString() } }];
+    await store.create(task);
+    const gateway = new ExpiredRecoveryGateway();
+    const engine = await createEngine(new NeverProvider(), gateway, directory);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+    expect(engine.get(taskId).error).toMatchObject({ code: "SANDBOX_STATUS_DEADLINE_EXCEEDED" });
+    expect(gateway.submits).toBe(1);
+    expect(gateway.polls).toBe(0);
+  });
 });
 
 class ScriptedProvider implements ModelProvider {
@@ -284,7 +366,57 @@ class SystemErrorGateway extends FakeGateway {
   }
 }
 
+class RefreshingGrantGateway extends FakeGateway {
+  refreshRequested = false;
+  readonly submitGrants: string[] = [];
+  readonly executionGrants: string[] = [];
+  override submit(_taskId: string, currentGrant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.submitGrants.push(currentGrant);
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.refresh", state: "RUNNING", receiptRef: null });
+  }
+  override execution(_taskId: string, currentGrant: string, clientRequestId: string): Promise<SandboxView> {
+    this.executionGrants.push(currentGrant);
+    if (!this.refreshRequested) {
+      this.refreshRequested = true;
+      throw new EngineProblem(401, problem("TASK_GRANT_EXPIRED", "authorization", "expired", true));
+    }
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId, requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }), executionRef: "execution.refresh", state: "SUCCEEDED", receiptRef: "receipt.refresh" });
+  }
+  override receipt(): Promise<Receipt> { return Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.refresh", executionRef: "execution.refresh", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class CountingGateway extends FakeGateway {
+  calls = 0;
+  override list(taskIdValue: string): Promise<FileList> { this.calls += 1; return super.list(taskIdValue); }
+}
+
+class ConcurrentRefreshGateway extends FakeGateway {
+  readonly executionGrants: string[] = [];
+  private resolveEntered!: () => void;
+  private resolveRelease!: () => void;
+  readonly oldRequestEntered = new Promise<void>((resolve) => { this.resolveEntered = resolve; });
+  private readonly oldRequestRelease = new Promise<void>((resolve) => { this.resolveRelease = resolve; });
+  releaseOldRequest(): void { this.resolveRelease(); }
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.concurrent", state: "RUNNING", receiptRef: null }); }
+  override async execution(_taskId: string, currentGrant: string, clientRequestId: string): Promise<SandboxView> {
+    this.executionGrants.push(currentGrant);
+    if (this.executionGrants.length === 1) {
+      this.resolveEntered(); await this.oldRequestRelease;
+      throw new EngineProblem(401, problem("TASK_GRANT_EXPIRED", "authorization", "expired", true));
+    }
+    return { contractVersion: "1.0", clientRequestId, requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }), executionRef: "execution.concurrent", state: "SUCCEEDED", receiptRef: "receipt.concurrent" };
+  }
+  override receipt(): Promise<Receipt> { return Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.concurrent", executionRef: "execution.concurrent", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class ExpiredRecoveryGateway extends FakeGateway {
+  submits = 0; polls = 0;
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { this.submits += 1; return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.expired", state: "RUNNING", receiptRef: null }); }
+  override execution(): Promise<SandboxView> { this.polls += 1; throw new Error("must not poll past the persisted deadline"); }
+}
+
 function tool(name: string, args: unknown): ModelResponse { return { content: null, toolCalls: [{ id: "provider-call", name, arguments: JSON.stringify(args) }] }; }
+function sandboxTool(timeoutMillis = 5000): ModelResponse { return tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis }); }
 
 function submission(): TaskSubmission {
   const authority = { runMode: "PERSISTENT_PLAN_EXECUTE" as const, sessionRef: "session.test", project: { projectId: "1", projectVersion }, instruction: "Compile and run Sort.java", permissions: { readProject: true as const, writeWorkspace: false as const, executeSandbox: true as const }, model: { provider: "test", model: "test-model" } };

@@ -69,7 +69,15 @@ export interface ModelRequest {
 }
 export interface ModelProvider { complete(request: ModelRequest): Promise<ModelResponse> }
 
-export interface PendingCall extends ModelToolCall { ordinal: number }
+export interface PendingCall extends ModelToolCall {
+  ordinal: number;
+  /** Durable sandbox acceptance identity. It prevents restart/re-grant from
+   * creating a new execution identity or resetting the fixed wait budget. */
+  sandbox?: {
+    executionRef?: string;
+    deadlineAt: string;
+  };
+}
 export interface AcceptedAnswer {
   clientRequestId: string;
   questionId: string;

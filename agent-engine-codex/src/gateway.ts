@@ -31,7 +31,9 @@ export class HttpGatewayClient implements GatewayClient {
       let candidate: unknown;
       try { candidate = await response.json(); } catch { /* sanitized fallback */ }
       const gatewayProblem = validProblem(candidate) ? candidate : null;
-      throw new EngineProblem(response.status, gatewayProblem ?? problem("GATEWAY_REQUEST_FAILED", "tool", `Product tool gateway returned HTTP ${response.status}`, response.status >= 500));
+      throw new EngineProblem(response.status, gatewayProblem
+        ? problem(gatewayProblem.code, gatewayProblem.category, "Product tool gateway rejected the request", gatewayProblem.retryable)
+        : problem("GATEWAY_REQUEST_FAILED", "tool", `Product tool gateway returned HTTP ${response.status}`, response.status >= 500));
     }
     try { return await response.json() as T; }
     catch { throw new EngineProblem(502, problem("GATEWAY_RESPONSE_INVALID", "tool", "Product tool gateway returned an invalid JSON response", true)); }

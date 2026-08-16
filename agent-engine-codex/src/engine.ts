@@ -190,10 +190,12 @@ export class AgentEngine {
         await this.options.store.save(task);
         this.checkCancelled(signal);
         const calls = response.toolCalls.map((call, ordinal) => ({ ...call, id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal), ordinal }));
+        validateCallSet(calls);
         task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ id, name, arguments: args }) => ({ id, name, arguments: args })) } : {}) });
         if (calls.length === 0) {
           const conclusion = bounded(response.content?.trim() ?? "", 16000);
           if (!conclusion) throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls"));
+          if (task.receiptRefs.length === 0) throw new EngineProblem(422, problem("SANDBOX_RECEIPT_REQUIRED", "code_validation", "P1 delivery requires at least one formal sandbox receipt"));
           const delivery = await this.emit(task, { type: "delivery", conclusion, receiptRefs: [...task.receiptRefs] });
           task.view.deliverySequence = delivery.sequence;
           await this.options.store.save(task);
@@ -206,6 +208,9 @@ export class AgentEngine {
     } catch (error) {
       if (terminal(task.view.state)) return;
       if (signal.aborted) { await this.status(task, "cancelled", null); return; }
+      if (isGrantRefresh(error)) {
+        return;
+      }
       const failure = error instanceof EngineProblem ? error.problem : problem("ENGINE_INTERNAL_FAILURE", "internal", "The agent engine encountered an internal failure", true);
       await this.status(task, "failed", failure);
     }
@@ -223,11 +228,11 @@ export class AgentEngine {
       await this.status(task, "waiting_user", null);
       return true;
     }
-    const grant = this.requireGrant(task.view.taskId);
     if (call.name === "list_project_files") {
       await this.tool(task, call.id, "project.list", "frozen workspace manifest", "requested", null, null);
-      const result = await this.options.gateway.list(task.view.taskId, grant, signal);
+      const result = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.list(task.view.taskId, grant, signal));
       this.options.validator.validate("gateway-fileList", result);
+      if (result.taskId !== task.view.taskId || result.projectVersion !== task.authority.project.projectVersion) throw gatewayBinding("Workspace manifest does not match the frozen task authority");
       await this.tool(task, call.id, "project.list", "frozen workspace manifest", "succeeded", `${result.files.length} files; projectVersion=${result.projectVersion}`, null);
       task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
       return false;
@@ -235,8 +240,9 @@ export class AgentEngine {
     if (call.name === "read_project_file") {
       const path = requireString(args.path, "path"); const expectedSha256 = requireString(args.expectedSha256, "expectedSha256");
       await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "requested", null, null);
-      const result = await this.options.gateway.read(task.view.taskId, grant, path, expectedSha256, signal);
+      const result = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.read(task.view.taskId, grant, path, expectedSha256, signal));
       this.options.validator.validate("gateway-fileRead", result);
+      if (result.path !== path || result.sha256 !== expectedSha256 || sha256(result.content) !== result.sha256 || Buffer.byteLength(result.content, "utf8") !== result.sizeBytes) throw gatewayBinding("Workspace read does not match the requested path, hash, and byte size");
       await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "succeeded", `read ${result.sizeBytes} bytes; sha256=${result.sha256}`, null);
       task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
       return false;
@@ -244,23 +250,43 @@ export class AgentEngine {
     if (call.name === "execute_in_sandbox") {
       const request = sandboxRequest(call.id, args);
       const summary = `argv=${JSON.stringify(request.argv).slice(0, 700)}; inputs=${request.inputs.map((input) => `${input.path}@${input.sha256}`).join(",").slice(0, 250)}; timeoutMillis=${request.timeoutMillis}`;
-      await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, null);
-      let view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
+      const recoveringSandboxRequest = call.sandbox !== undefined;
+      if (!recoveringSandboxRequest) {
+        await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, null);
+        // Persist the fail-closed recovery deadline before the external call.
+        // This includes submission latency, but prevents a crash in the
+        // submit-response/save window from resetting the total wait budget.
+        call.sandbox = { deadlineAt: new Date(Date.now() + request.timeoutMillis + 30000).toISOString() };
+        await this.options.store.save(task);
+      }
+      const sandboxState = call.sandbox;
+      if (!sandboxState) throw new EngineProblem(500, problem("SANDBOX_RECOVERY_STATE_INVALID", "internal", "Sandbox recovery state is missing"));
+      const durableDeadline = Date.parse(sandboxState.deadlineAt);
+      if (!Number.isFinite(durableDeadline)) throw new EngineProblem(500, problem("SANDBOX_RECOVERY_STATE_INVALID", "internal", "Sandbox recovery deadline is invalid"));
+      let view = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.submit(task.view.taskId, grant, request, signal));
       const acceptedAt = this.monotonicNow();
       this.options.validator.validate("gateway-sandboxView", view);
-      await this.tool(task, call.id, "sandbox.execute", summary, "running", `executionRef=${view.executionRef}; state=${view.state}`, view.receiptRef);
+      bindSandboxView(view, request, sandboxState.executionRef);
+      if (sandboxState.executionRef === undefined) {
+        sandboxState.executionRef = view.executionRef;
+        await this.options.store.save(task);
+      }
+      if (!recoveringSandboxRequest) await this.tool(task, call.id, "sandbox.execute", summary, "running", `executionRef=${view.executionRef}; state=${view.state}`, view.receiptRef);
       const delays = [1000, 2000, 4000]; let poll = 0;
       while (!TERMINAL_SANDBOX.has(view.state)) {
-        const remaining = request.timeoutMillis + 30000 - (this.monotonicNow() - acceptedAt);
+        const remaining = Math.min(request.timeoutMillis + 30000 - (this.monotonicNow() - acceptedAt), durableDeadline - Date.now());
         if (remaining <= 0) throw sandboxDeadline(view.executionRef);
         await this.sleep(Math.min(delays[poll] ?? 5000, remaining), signal); poll += 1;
-        if (this.monotonicNow() - acceptedAt >= request.timeoutMillis + 30000) throw sandboxDeadline(view.executionRef);
-        view = await this.options.gateway.execution(task.view.taskId, grant, request.clientRequestId, signal);
+        if (this.monotonicNow() - acceptedAt >= request.timeoutMillis + 30000 || Date.now() >= durableDeadline) throw sandboxDeadline(view.executionRef);
+        view = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.execution(task.view.taskId, grant, request.clientRequestId, signal));
         this.options.validator.validate("gateway-sandboxView", view);
+        bindSandboxView(view, request, sandboxState.executionRef);
       }
       if (!view.receiptRef) throw new EngineProblem(502, problem("SANDBOX_RECEIPT_MISSING", "sandbox_system", "Terminal sandbox execution has no receipt reference", true, view.executionRef));
-      const receipt = await this.options.gateway.receipt(task.view.taskId, grant, view.receiptRef, signal);
+      const receiptRef = view.receiptRef;
+      const receipt = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.receipt(task.view.taskId, grant, receiptRef, signal));
       this.options.validator.validate("receipt", receipt);
+      bindReceipt(receipt, view, request);
       if (!task.receiptRefs.includes(receipt.receiptRef)) task.receiptRefs.push(receipt.receiptRef);
       task.lastSandboxStatus = receipt.status;
       const succeeded = receipt.status === "SUCCEEDED";
@@ -273,10 +299,22 @@ export class AgentEngine {
     throw new EngineProblem(502, problem("MODEL_TOOL_UNKNOWN", "model", "Model requested an unsupported tool"));
   }
 
-  private requireGrant(taskId: string): string {
+  private async withGrant<T>(taskId: string, operation: (grant: string) => Promise<T>): Promise<T> {
+    const grant = this.requireGrant(taskId);
+    try { return await operation(grant.value); }
+    catch (error) {
+      if (isGrantRefresh(error) && this.grants.get(taskId) === grant) this.grants.delete(taskId);
+      throw error;
+    }
+  }
+
+  private requireGrant(taskId: string): { value: string; expiresAt: string } {
     const grant = this.grants.get(taskId);
-    if (!grant || Date.parse(grant.expiresAt) <= Date.now()) throw new EngineProblem(401, problem("TASK_GRANT_REFRESH_REQUIRED", "authorization", "A fresh task grant is required to continue", true));
-    return grant.value;
+    if (!grant || Date.parse(grant.expiresAt) <= Date.now()) {
+      this.grants.delete(taskId);
+      throw new EngineProblem(401, problem("TASK_GRANT_REFRESH_REQUIRED", "authorization", "A fresh task grant is required to continue", true));
+    }
+    return grant;
   }
 
   private requireTask(taskId: string): PersistedTask {
@@ -327,6 +365,38 @@ function receiptSummary(receipt: Receipt): string {
 
 function sandboxDeadline(executionRef: string): EngineProblem {
   return new EngineProblem(504, problem("SANDBOX_STATUS_DEADLINE_EXCEEDED", "sandbox_system", "Sandbox status did not become terminal before the fixed deadline", true, executionRef));
+}
+
+function gatewayBinding(message: string, sourceRef?: string): EngineProblem {
+  return new EngineProblem(502, problem("GATEWAY_RESPONSE_BINDING_INVALID", "tool", message, false, sourceRef));
+}
+
+function bindSandboxView(view: import("./types.js").SandboxView, request: SandboxRequest, expectedExecutionRef?: string): void {
+  if (view.clientRequestId !== request.clientRequestId || view.requestDigest !== request.requestDigest) throw gatewayBinding("Sandbox view does not match the submitted request", view.executionRef);
+  if (expectedExecutionRef !== undefined && view.executionRef !== expectedExecutionRef) throw gatewayBinding("Sandbox execution identity changed during replay or polling", view.executionRef);
+}
+
+function bindReceipt(receipt: Receipt, view: import("./types.js").SandboxView, request: SandboxRequest): void {
+  if (receipt.receiptRef !== view.receiptRef || receipt.executionRef !== view.executionRef || receipt.status !== view.state) throw gatewayBinding("Receipt does not match the terminal sandbox execution", receipt.receiptRef);
+  const requested = [...request.inputs].sort(compareInput).map(({ path, sha256 }) => ({ path, sha256 }));
+  const received = [...receipt.inputs].sort(compareInput).map(({ path, sha256 }) => ({ path, sha256 }));
+  if (JSON.stringify(received) !== JSON.stringify(requested)) throw gatewayBinding("Receipt inputs do not exactly match the submitted sandbox inputs", receipt.receiptRef);
+}
+
+function compareInput(left: { path: string; sha256: string }, right: { path: string; sha256: string }): number {
+  return left.path === right.path ? left.sha256.localeCompare(right.sha256) : left.path.localeCompare(right.path);
+}
+
+function validateCallSet(calls: PendingCall[]): void {
+  const supported = new Set(["list_project_files", "read_project_file", "execute_in_sandbox", "ask_user"]);
+  if (calls.some((call) => !supported.has(call.name))) throw new EngineProblem(502, problem("MODEL_TOOL_UNKNOWN", "model", "Model requested an unsupported tool"));
+  if (calls.some((call) => call.name === "ask_user") && calls.length !== 1) throw new EngineProblem(502, problem("MODEL_QUESTION_INVALID", "model", "ask_user must be the only tool call"));
+}
+
+function isGrantRefresh(error: unknown): boolean {
+  return error instanceof EngineProblem
+    && error.problem.category === "authorization"
+    && (error.problem.code === "TASK_GRANT_REFRESH_REQUIRED" || error.problem.code === "TASK_GRANT_EXPIRED");
 }
 
 function initialMessages(submission: TaskSubmission): ChatMessage[] {
