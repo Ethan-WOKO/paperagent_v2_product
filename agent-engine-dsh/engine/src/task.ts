@@ -92,6 +92,11 @@ export class TaskRuntime {
     this.store.writeMeta(this.meta);
   }
 
+  /** Persist mutable meta (e.g. modelCallsUsed) without a phase change. */
+  touch(): void {
+    this.store.writeMeta(this.meta);
+  }
+
   emit(type: TaskEventType, fields: Record<string, unknown>): number {
     if (this.isTerminal()) {
       // One terminal state only: late runner emissions after cancel/failure are ignored.

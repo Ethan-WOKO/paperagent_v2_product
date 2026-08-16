@@ -1,0 +1,189 @@
+import type { DshRuntime } from './runtime.ts';
+import { buildProductTools } from './tools.ts';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import type { GatewayClient } from '../gateway.ts';
+import type { Runner } from '../task.ts';
+import type { TaskRuntime } from '../task.ts';
+
+const MAX_MODEL_CALLS_PER_TASK = 20;
+
+function grantExpired(task: TaskRuntime): boolean {
+  return Date.parse(task.grant.expiresAt) < Date.now();
+}
+
+/** DSH ReactLoopAgent-backed runner: one agent per task, product tools over
+ * the gateway, hard model-call budget, durable recovery via transcript replay
+ * and gateway idempotency. */
+export class DshRunner implements Runner {
+  private readonly dsh: DshRuntime;
+  private readonly gatewayFactory: (task: TaskRuntime) => GatewayClient;
+  private readonly systemPromptText: string;
+
+  constructor(
+    dsh: DshRuntime,
+    gatewayFactory: (task: TaskRuntime) => GatewayClient,
+    systemPromptText: string,
+  ) {
+    this.dsh = dsh;
+    this.gatewayFactory = gatewayFactory;
+    this.systemPromptText = systemPromptText;
+  }
+
+  async run(task: TaskRuntime, isCancelled: () => boolean): Promise<void> {
+    if (task.isTerminal()) return;
+    if (grantExpired(task)) {
+      task.emit('status', {
+        state: 'failed',
+        error: {
+          contractVersion: '1.0',
+          code: 'TASK_GRANT_EXPIRED',
+          category: 'authorization',
+          message: 'task grant has expired; Java must resubmit with a fresh grant',
+          retryable: true,
+          sourceRef: task.meta.taskId,
+        },
+      });
+      return;
+    }
+
+    const gateway = this.gatewayFactory(task);
+    const taskId = task.meta.taskId;
+    const tools = buildProductTools(task, gateway);
+    const provider = task.authority.model && typeof (task.authority.model as { provider?: string }).provider === 'string'
+      ? (task.authority.model as { provider: string }).provider
+      : 'deepseek';
+    const model = (task.authority.model as { model: string }).model;
+    const providerRoute = provider === 'deepseek' ? 'deepseek-official' : provider;
+
+    let latestAssistantText = '';
+    let modelCalls = task.meta.modelCallsUsed ?? 0;
+    let budgetExhausted = false;
+    let agentId: string | null = null;
+
+    const offSession = this.dsh.onSessionEvent((sessionId, event) => {
+      if (sessionId !== taskId) return;
+      if ((event as { type: string }).type === 'assistant/message') {
+        const data = (event as { data: { message: { content: { type: string; text?: string }[] } } }).data;
+        const text = (data?.message?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+        if (text.trim().length > 0) {
+          latestAssistantText = text;
+          task.emit('message', { content: text.slice(0, 16000) });
+        }
+      }
+    });
+
+    const offRequest = this.dsh.onAgentRequest((sessionId, turn, step, next) => {
+      if (sessionId !== taskId) return next();
+      modelCalls++;
+      task.meta.modelCallsUsed = modelCalls;
+      task.touch();
+      if (modelCalls > MAX_MODEL_CALLS_PER_TASK) {
+        budgetExhausted = true;
+      }
+      return next();
+    });
+
+    const cancelWatcher = setInterval(() => {
+      if (isCancelled() && agentId) {
+        try {
+          const agent = this.dsh.agents.get(agentId as never);
+          if (agent) agent.cancel({ kind: 'user' });
+        } catch {
+          /* agent may be gone */
+        }
+      }
+    }, 250);
+
+    try {
+      const handle = await this.dsh.createAgent({
+        sessionId: taskId as never,
+        agentOptions: { provider: providerRoute, model, maxTokens: 4096 },
+        setup: (agentCtx) => {
+          agentCtx.tools.register(tools.listTool as never);
+          agentCtx.tools.register(tools.readTool as never);
+          agentCtx.tools.register(tools.sandboxTool as never);
+          const agentSystemPrompt = agentCtx.systemPrompt;
+          if (agentSystemPrompt && typeof agentSystemPrompt.section === 'function') {
+            agentSystemPrompt.section({ name: 'paperagent-product', order: 0, text: this.systemPromptText } as never);
+          }
+        },
+      });
+      const agent = handle.agent;
+      agentId = String(agent.id);
+
+      const resumed = task.meta.runnerPhase !== 'init';
+      const userText = (text: string) => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } } as never) as never;
+      let resolveRunning: () => void = () => {};
+      const sawRunning = new Promise<void>((resolve) => {
+        resolveRunning = resolve;
+      });
+      const offStatus = this.dsh.onAgentStatus((sid, status) => {
+        if (sid === taskId && status === 'running') resolveRunning();
+      });
+      if (resumed) {
+        const summary = `Continuation after engine restart. Prior assistant output:\n${latestAssistantText || '(none)'}\nContinue the task to completion; tool calls are idempotent.`;
+        agent.inject(userText(summary));
+        agent.followup(userText('Continue to completion.'));
+      } else {
+        const instruction = (task.authority.instruction as string) ?? '';
+        agent.followup(userText(instruction));
+      }
+      if (agent.status === 'running') resolveRunning();
+      // Wait until the driver actually claimed the turn, then until quiescence.
+      await Promise.race([sawRunning, new Promise((r) => setTimeout(r, 10000))]);
+      offStatus();
+      await agent.whenIdle();
+
+      if (task.isTerminal()) return;
+      if (isCancelled()) {
+        task.cancelFinalize();
+        return;
+      }
+      if (budgetExhausted) {
+        task.emit('status', {
+          state: 'failed',
+          error: {
+            contractVersion: '1.0',
+            code: 'MODEL_BUDGET_EXCEEDED',
+            category: 'model',
+            message: `task exceeded the frozen ${MAX_MODEL_CALLS_PER_TASK} model-call budget`,
+            retryable: false,
+            sourceRef: null,
+          },
+        });
+        return;
+      }
+      const receiptRefs = tools.collectReceiptRefs();
+      task.emit('delivery', {
+        conclusion: (latestAssistantText || 'task finished without a final model message').slice(0, 16000),
+        receiptRefs,
+      });
+      task.emit('status', { state: 'succeeded', error: null });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      task.emit('status', {
+        state: 'failed',
+        error: {
+          contractVersion: '1.0',
+          code: 'MODEL_LOOP_FAILED',
+          category: 'model',
+          message: message.slice(0, 1000),
+          retryable: false,
+          sourceRef: null,
+        },
+      });
+    } finally {
+      clearInterval(cancelWatcher);
+      offSession();
+      offRequest();
+      if (agentId) {
+        try {
+          const agent = this.dsh.agents.get(agentId as never);
+          if (agent) agent.cancel({ kind: 'disposed' });
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  }
+}

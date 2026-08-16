@@ -14,6 +14,7 @@ export interface TaskMeta {
   terminalSequence: number | null;
   error: unknown | null;
   runnerPhase: RunnerPhase;
+  modelCallsUsed: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -71,6 +72,7 @@ export class TaskStore {
       terminalSequence: null,
       error: null,
       runnerPhase: 'init',
+      modelCallsUsed: 0,
       createdAt,
       updatedAt: createdAt,
     };
