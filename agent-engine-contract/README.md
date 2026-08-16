@@ -1,9 +1,12 @@
 # PaperAgent Agent Engine Contract
 
-日期：2026-08-16  
-分类：当前架构合同  
-状态：Issue #150 冻结候选  
-适用范围：Java 产品与独立 Agent Engine 的 P1 边界  
+日期：2026-08-16
+
+分类：当前架构合同
+
+状态：Issue #150 冻结候选
+
+适用范围：Java 产品与独立 Agent Engine 的 P1 边界
 
 ## 1. 决策
 
