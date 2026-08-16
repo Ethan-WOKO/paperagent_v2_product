@@ -38,8 +38,15 @@ const server = createServer((req, res) => {
     });
 
   if (url.pathname.endsWith('/workspace/files')) {
-    if (corrupt === 'errorCode') {
-      return send(500, { contractVersion: '1.0', code: 'MYSTERY_ERROR', category: 'internal', message: 'boom', retryable: false });
+    const errorCodes = {
+      errorCode: 'MYSTERY_ERROR',
+      errorTASK: 'TASK_GRANT_WRONG_TASK',
+      errorWORKSPACE: 'WORKSPACE_FILE_NOT_FOUND',
+      errorSANDBOX: 'SANDBOX_COMMAND_DENIED',
+      errorLower: 'task_weird_code',
+    };
+    if (corrupt in errorCodes) {
+      return send(500, { contractVersion: '1.0', code: errorCodes[corrupt], category: 'internal', message: 'boom', retryable: false });
     }
     return send(200, {
       contractVersion: '1.0',
@@ -73,8 +80,8 @@ const server = createServer((req, res) => {
         clientRequestId: parsed.clientRequestId,
         requestDigest: corrupt === 'viewDigest' ? 'd'.repeat(64) : parsed.requestDigest,
         executionRef: 'exec-1',
-        state: 'SUCCEEDED',
-        receiptRef: 'receipt.1',
+        state: corrupt === 'submitStateReceipt' ? 'RUNNING' : 'SUCCEEDED',
+        receiptRef: corrupt === 'submitStateReceipt' ? 'receipt.1' : 'receipt.1',
       }),
     );
     return;
@@ -84,7 +91,7 @@ const server = createServer((req, res) => {
     return send(200, {
       contractVersion: '1.0',
       clientRequestId: execMatch[1],
-      requestDigest: 'a'.repeat(64),
+      requestDigest: corrupt === 'execDigest' ? 'd'.repeat(64) : 'a'.repeat(64),
       executionRef: corrupt === 'executionRef' ? 'exec-other' : 'exec-1',
       state: corrupt === 'viewStateReceipt' ? 'RUNNING' : 'SUCCEEDED',
       receiptRef: corrupt === 'viewStateReceipt' ? 'receipt.1' : 'receipt.1',
@@ -92,10 +99,11 @@ const server = createServer((req, res) => {
   }
   const receiptMatch = url.pathname.match(/\/receipts\/(.+)$/);
   if (receiptMatch) {
+    const decodedRef = decodeURIComponent(receiptMatch[1]);
     const goodInputs = [{ path: 'src/main/java/Sort.java', sha256: IN_SHA, sizeBytes: FIXTURE_SIZE }];
     return send(200, {
       contractVersion: '1.0',
-      receiptRef: receiptMatch[1],
+      receiptRef: decodedRef,
       executionRef: corrupt === 'receiptExecRef' ? 'exec-other' : 'exec-1',
       status: corrupt === 'receiptStatus' ? 'FAILED' : 'SUCCEEDED',
       exitCode: corrupt === 'receiptStatus' ? 1 : 0,
@@ -163,6 +171,41 @@ await expectReject('G9 receipt exact inputs mismatch rejected', 'RECEIPT_INPUTS_
 });
 await expectReject('G10 unknown gateway error code fails closed', 'GATEWAY_ERROR', async () => {
   corrupt = 'errorCode';
+  await makeClient().listWorkspaceFiles();
+});
+await expectReject('G12 poll requestDigest replaced rejected', 'SANDBOX_VIEW_BINDING_MISMATCH', async () => {
+  corrupt = 'execDigest';
+  await makeClient().getSandboxExecution('call.' + 'f'.repeat(20), 'exec-1', 'a'.repeat(64));
+});
+await expectReject('G13 submit non-terminal view carrying receiptRef rejected', 'SANDBOX_VIEW_STATE_BINDING_MISMATCH', async () => {
+  corrupt = 'submitStateReceipt';
+  await makeClient().submitSandbox({ clientRequestId: 'call.' + 'f'.repeat(20), requestDigest: 'a'.repeat(64), argv: ['javac', 'x.java'], inputs: [{ path: 'x.java', sha256: IN_SHA }], timeoutMillis: 120000 });
+});
+{
+  corrupt = 'none';
+  let roundtrip = null;
+  try {
+    const receipt = await makeClient().getSandboxReceipt('receipt/a b+c', { executionRef: 'exec-1', viewState: 'SUCCEEDED', inputs: [{ path: 'src/main/java/Sort.java', sha256: IN_SHA }] });
+    roundtrip = receipt.receiptRef;
+  } catch {
+    roundtrip = 'rejected';
+  }
+  check('G14 receiptRef path uses encodeURIComponent (roundtrip)', roundtrip === 'receipt/a b+c', `ref=${roundtrip}`);
+}
+await expectReject('G15 TASK_GRANT_WRONG_TASK passes the #151 allowlist', 'TASK_GRANT_WRONG_TASK', async () => {
+  corrupt = 'errorTASK';
+  await makeClient().listWorkspaceFiles();
+});
+await expectReject('G16 WORKSPACE_FILE_NOT_FOUND passes the #151 allowlist', 'WORKSPACE_FILE_NOT_FOUND', async () => {
+  corrupt = 'errorWORKSPACE';
+  await makeClient().listWorkspaceFiles();
+});
+await expectReject('G17 SANDBOX_COMMAND_DENIED passes the #151 allowlist', 'SANDBOX_COMMAND_DENIED', async () => {
+  corrupt = 'errorSANDBOX';
+  await makeClient().listWorkspaceFiles();
+});
+await expectReject('G18 lowercase/odd code still fails closed', 'GATEWAY_ERROR', async () => {
+  corrupt = 'errorLower';
   await makeClient().listWorkspaceFiles();
 });
 

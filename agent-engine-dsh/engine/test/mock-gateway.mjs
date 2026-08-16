@@ -39,7 +39,7 @@ function sandboxDigest(argv, inputs, timeoutMillis) {
   return sha256(canonicalJson({ argv, inputs, timeoutMillis }));
 }
 
-export function startMockGateway({ port, submissionLog, holdPolls = 0 }) {
+export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0 }) {
   const executions = new Map();
   const receipts = new Map();
   let receiptSeq = 0;
@@ -118,6 +118,7 @@ export function startMockGateway({ port, submissionLog, holdPolls = 0 }) {
     if (execMatch && req.method === 'GET') {
       const entry = executions.get(execMatch[1]);
       if (!entry) return send(404, { contractVersion: '1.0', code: 'EXECUTION_NOT_FOUND', category: 'request', message: 'missing', retryable: false });
+      if (statusLog) appendFileSync(statusLog, JSON.stringify({ at: Date.now(), clientRequestId: execMatch[1] }) + '\n');
       entry.pollCount++;
       if (!entry.done && entry.pollCount > holdPolls) {
         const receiptRef = 'receipt.mock.' + ++receiptSeq;

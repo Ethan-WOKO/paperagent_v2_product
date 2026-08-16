@@ -24,6 +24,7 @@ const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled']);
 export interface TaskStorePort {
   writeMeta(m: TaskMeta): void;
   appendEvent(taskId: string, event: Record<string, unknown>, sequence: number): void;
+  readEvents(taskId: string): { sequence: number; event: Record<string, unknown> }[];
   appendAnswer(taskId: string, record: AnswerRecord): void;
   readAnswers(taskId: string): AnswerRecord[];
   appendCancel(taskId: string, clientRequestId: string): void;
@@ -272,6 +273,67 @@ export class TaskRuntime {
 
   readToolLedger(): Record<string, unknown>[] {
     return this.store.readToolLedger(this.meta.taskId);
+  }
+
+  /** Completed, gateway-verified Receipt references from the persisted tool
+   * ledger, deduplicated in discovery order. These are authoritative recovery
+   * facts: the delivery set must re-adopt them without a new tool call. */
+  completedReceipts(): { receiptRef: string; status: string }[] {
+    const seen = new Set<string>();
+    const out: { receiptRef: string; status: string }[] = [];
+    for (const entry of this.readToolLedger()) {
+      if (entry.kind !== 'sandbox' || typeof entry.receiptRef !== 'string') continue;
+      const receiptRef = entry.receiptRef;
+      if (seen.has(receiptRef)) continue;
+      seen.add(receiptRef);
+      out.push({ receiptRef, status: typeof entry.status === 'string' ? entry.status : 'unknown' });
+    }
+    return out;
+  }
+
+  /** Recovery context for the model after an engine restart. The DSH session
+   * transcript is empty in the new process, so everything the model must not
+   * lose is reconstructed from PERSISTED facts: the frozen instruction and
+   * ProjectVersion, completed receipts, answered questions with their answer
+   * bodies, the latest persisted assistant message, and the no-resubmit rule. */
+  recoveryContext(): string {
+    const lines: string[] = [];
+    const instruction = this.authority.instruction;
+    lines.push(`Frozen task instruction: ${typeof instruction === 'string' ? instruction : '(none)'}`);
+    const project = this.authority.project as { projectVersion?: string } | undefined;
+    lines.push(`Frozen ProjectVersion: ${typeof project?.projectVersion === 'string' ? project.projectVersion : '(unknown)'}`);
+    const receipts = this.completedReceipts();
+    if (receipts.length > 0) {
+      lines.push(`Completed sandbox executions (verified receipts; do NOT re-submit any of these): ${receipts.map((r) => `${r.receiptRef} (${r.status})`).join(', ')}`);
+    } else {
+      lines.push('Completed sandbox executions: none yet.');
+    }
+    const answers = new Map<string, AnswerRecord>();
+    for (const record of this.store.readAnswers(this.meta.taskId)) {
+      answers.set(record.questionId, record);
+    }
+    const questionEvents = this.store
+      .readEvents(this.meta.taskId)
+      .map((stored) => stored.event)
+      .filter((event) => event.type === 'question');
+    for (const event of questionEvents) {
+      const questionId = event.questionId;
+      if (typeof questionId !== 'string') continue;
+      const record = answers.get(questionId);
+      if (!record) continue;
+      const questionText = typeof event.text === 'string' ? event.text.slice(0, 500) : '';
+      lines.push(`Answered question "${questionText}": the user answered "${record.answer.slice(0, 1000)}"`);
+    }
+    const messages = this.store
+      .readEvents(this.meta.taskId)
+      .map((stored) => stored.event)
+      .filter((event) => event.type === 'message' && typeof event.content === 'string');
+    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+    if (lastMessage) {
+      lines.push(`Prior assistant output (last persisted message): ${String(lastMessage.content).slice(0, 4000)}`);
+    }
+    lines.push('Rule: never re-submit a sandbox execution already recorded in the tool ledger; tool calls are idempotent.');
+    return lines.join('\n');
   }
 
   /** Atomic replay→live switch: subscribe first (publish checks lastAcked),

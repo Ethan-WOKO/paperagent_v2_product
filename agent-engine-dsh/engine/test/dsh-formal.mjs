@@ -9,10 +9,17 @@
 //    the SAME deadline, never re-dispatches.
 //  - F4: waiting_user restart → replay re-arms, the accepted answer BODY is
 //    injected into the model transcript and the loop resumes.
+//  - F5: recovery prompt carries the frozen instruction, ProjectVersion,
+//    completed receipts and the no-resubmit rule; the ledger re-adopts the
+//    completed receipt so a directly-concluding model still passes the gate.
+//  - F6: recovery with an already-expired persisted deadline fails with
+//    SANDBOX_STATUS_DEADLINE_EXCEEDED and ZERO status requests.
+//  - F7: the deadline is checked before every status request and sleeps never
+//    run past it — no status request is issued after the deadline.
 //  - Budget: 20 model calls allowed, the 21st is rejected before dispatch.
 //  - ask_user: formal question/answer gate (no stub finalizer).
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -150,7 +157,7 @@ async function main() {
     const replay = await post(base, '/v1/tasks', t);
     check('T4c exact replay re-arms', replay.status === 202 && replay.body?.replayed === true, `status=${replay.status}`);
     const view = await waitForState(base, t.taskId, ['succeeded', 'failed', 'cancelled']);
-    check('T4d terminal after replay', view?.state === 'succeeded', `state=${view?.state}`);
+    check('T4d terminal after replay', view?.state === 'succeeded', `state=${view?.state} code=${view?.error?.code}`);
     const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
     check('T4e contiguous sequences', events.map((e) => e.sequence).every((s, i) => s === i + 1), `count=${events.length}`);
     const delivery = events.find((e) => e.type === 'delivery');
@@ -416,11 +423,165 @@ async function main() {
       ? readFileSync(join(dir, 'fake-llm-calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
       : [];
     check('F4g delivered answer BODY reached the model transcript', calls.some((c) => (c.userTexts ?? []).join(' ').includes(answerBody)), `calls=${calls.length}`);
+    const resumedTexts = calls.map((c) => (c.userTexts ?? []).join(' ')).join(' | ');
+    check('F4k recovery prompt carries instruction + ProjectVersion + paired question/answer', resumedTexts.includes('Check whether') && resumedTexts.includes('Frozen ProjectVersion') && resumedTexts.includes('Answered question "Should I continue?"'), '');
     const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
     check('F4h exactly one question event (never re-asked)', events.filter((e) => e.type === 'question').length === 1, '');
     check('F4i loop resumed after answer (message event)', events.some((e) => e.type === 'message'), '');
     check('F4j contiguous sequences', events.map((e) => e.sequence).every((s, i) => s === i + 1), `count=${events.length}`);
     proc2.kill();
+    gw.close();
+  }
+
+  // ---- F5: ledger re-adopts receipts; recovery prompt carries frozen facts ----
+  {
+    const gatewayPort = 18324;
+    const gwLog = join(baseDir, 'gw-f5.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog });
+    const dir = join(baseDir, 'f5');
+    const base = 'http://127.0.0.1:18325';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_DELAY_MS: '5000',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18325',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '3'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    // Kill after the receipt-bearing tool event (completion ledger entry is
+    // persisted before that event).
+    let killed = false;
+    let lastSeen = 0;
+    for (let i = 0; i < 200 && !killed; i++) {
+      const next = await readSse(base, '/v1/tasks/' + t.taskId + '/events', lastSeen, 1);
+      if (next.length === 1) {
+        lastSeen = next[0].sequence;
+        if (next[0].type === 'tool' && next[0].receiptRef) {
+          proc.kill();
+          killed = true;
+        }
+      }
+    }
+    check('F5a killed after receipt event', killed, '');
+    await sleep(600);
+    // Restart with a model that concludes DIRECTLY (no tool call) — the
+    // completion gate must be satisfied by the ledger re-adopted receipt.
+    const env2 = { ...env, FAKE_MODE: 'recover-finalize', FAKE_DELAY_MS: '0' };
+    const proc2 = startEngine(env2);
+    await waitUp(base, proc2);
+    const replay = await post(base, '/v1/tasks', t);
+    check('F5b exact replay re-arms', replay.status === 202 && replay.body?.replayed === true, `status=${replay.status}`);
+    const view = await waitForState(base, t.taskId, ['succeeded', 'failed', 'cancelled']);
+    check('F5c terminal without any new tool call', view?.state === 'succeeded', `state=${view?.state}`);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    const delivery = events.find((e) => e.type === 'delivery');
+    check('F5d delivery carries the ledger re-adopted receipt', (delivery?.receiptRefs ?? []).includes('receipt.mock.1'), `receiptRefs=${(delivery?.receiptRefs ?? []).join(',')}`);
+    const gwLines = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F5e no re-dispatch across restart', gwLines === 1, `submissions=${gwLines}`);
+    const calls = existsSync(join(dir, 'fake-llm-calls.jsonl'))
+      ? readFileSync(join(dir, 'fake-llm-calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+    const resumedTexts = calls.map((c) => (c.userTexts ?? []).join(' ')).join(' | ');
+    check(
+      'F5f recovery prompt carries instruction + ProjectVersion + receipt + no-resubmit rule',
+      resumedTexts.includes('Check whether') && resumedTexts.includes('Frozen ProjectVersion') && resumedTexts.includes('receipt.mock.1') && resumedTexts.includes('do NOT re-submit'),
+      '',
+    );
+    proc2.kill();
+    gw.close();
+  }
+
+  // ---- F6: recovery with expired persisted deadline → 0 status requests ----
+  {
+    const gatewayPort = 18326;
+    const gwLog = join(baseDir, 'gw-f6.jsonl');
+    const statusLog = join(baseDir, 'gw-f6-status.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, statusLog, holdPolls: 2 });
+    const dir = join(baseDir, 'f6');
+    const base = 'http://127.0.0.1:18327';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_DELAY_MS: '5000',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18327',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '4'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const ledgerPath = join(dir, t.taskId, 'tool-ledger.jsonl');
+    let killed = false;
+    for (let i = 0; i < 100 && !killed; i++) {
+      if (existsSync(ledgerPath) && readFileSync(ledgerPath, 'utf8').includes('"receiptRef":null')) {
+        proc.kill();
+        killed = true;
+      }
+      await sleep(100);
+    }
+    check('F6a killed in the submit→receipt window', killed, '');
+    await sleep(600);
+    // Simulate wall-clock passage: the persisted deadline is already in the past.
+    const ledgerLines = readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const expiredAt = Date.now() - 5000;
+    for (const line of ledgerLines) line.deadlineAt = expiredAt;
+    writeFileSync(ledgerPath, ledgerLines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const proc2 = startEngine(env);
+    await waitUp(base, proc2);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['failed'], 200);
+    check('F6b terminal failure after expired deadline', view?.state === 'failed', `state=${view?.state}`);
+    check('F6c SANDBOX_STATUS_DEADLINE_EXCEEDED with sandbox_system category', view?.error?.code === 'SANDBOX_STATUS_DEADLINE_EXCEEDED' && view?.error?.category === 'sandbox_system', `code=${view?.error?.code} category=${view?.error?.category}`);
+    const statusGets = existsSync(statusLog) ? readFileSync(statusLog, 'utf8').split('\n').filter(Boolean).length : 0;
+    check('F6d zero status requests after expired-deadline recovery', statusGets === 0, `statusGets=${statusGets}`);
+    const gwLines = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F6e no re-dispatch across restart', gwLines === 1, `submissions=${gwLines}`);
+    proc2.kill();
+    gw.close();
+  }
+
+  // ---- F7: no status request is ever issued past the deadline ----
+  {
+    const gatewayPort = 18328;
+    const gwLog = join(baseDir, 'gw-f7.jsonl');
+    const statusLog = join(baseDir, 'gw-f7-status.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, statusLog, holdPolls: 1000 });
+    const dir = join(baseDir, 'f7');
+    const base = 'http://127.0.0.1:18329';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_TIMEOUT_MS: '1000',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18329',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '5'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    // timeoutMillis clamps to 1000 → deadline ≈ 31s; the mock never goes
+    // terminal, so the engine must fail at the deadline and never poll past it.
+    const view = await waitForState(base, t.taskId, ['failed'], 300);
+    check('F7a deadline failure with sandbox_system category', view?.error?.code === 'SANDBOX_STATUS_DEADLINE_EXCEEDED' && view?.error?.category === 'sandbox_system', `code=${view?.error?.code} category=${view?.error?.category}`);
+    const ledger = readFileSync(join(dir, t.taskId, 'tool-ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const provisional = ledger.find((entry) => entry.receiptRef === null);
+    const deadlineAt = Number(provisional?.deadlineAt);
+    const statusGets = existsSync(statusLog) ? readFileSync(statusLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+    check('F7b it polled before the deadline (deadline was actually enforced)', statusGets.length > 0, `statusGets=${statusGets.length}`);
+    check('F7c no status request past the deadline (sleep never crosses it)', statusGets.every((g) => g.at < deadlineAt), `last=${statusGets[statusGets.length - 1]?.at} deadline=${deadlineAt}`);
+    proc.kill();
     gw.close();
   }
 

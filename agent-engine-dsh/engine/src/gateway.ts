@@ -54,7 +54,7 @@ export interface GatewayClient {
   listWorkspaceFiles(): Promise<WorkspaceFileEntry[]>;
   readWorkspaceFile(path: string, expectedSha256: string): Promise<FileRead>;
   submitSandbox(request: SandboxSubmitRequest): Promise<SandboxView>;
-  getSandboxExecution(clientRequestId: string, expectedExecutionRef?: string | null): Promise<SandboxView>;
+  getSandboxExecution(clientRequestId: string, expectedExecutionRef?: string | null, expectedRequestDigest?: string | null): Promise<SandboxView>;
   getSandboxReceipt(
     receiptRef: string,
     expected?: { executionRef: string | null; viewState: SandboxView['state'] | null; inputs: { path: string; sha256: string }[] | null },
@@ -150,7 +150,7 @@ export class StubGateway implements GatewayClient {
     return this.viewOf(view);
   }
 
-  async getSandboxExecution(clientRequestId: string, _expectedExecutionRef?: string | null): Promise<SandboxView> {
+  async getSandboxExecution(clientRequestId: string, _expectedExecutionRef?: string | null, _expectedRequestDigest?: string | null): Promise<SandboxView> {
     const existing = this.submissions.get(clientRequestId);
     if (!existing) throw new Error('EXECUTION_NOT_FOUND');
     return this.viewOf(existing);

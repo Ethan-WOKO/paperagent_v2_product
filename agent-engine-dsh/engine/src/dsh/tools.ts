@@ -41,27 +41,59 @@ function sandboxDigest(argv: string[], inputs: { path: string; sha256: string }[
 
 const TERMINAL_VIEW_STATES = new Set(['SUCCEEDED', 'FAILED', 'TIMED_OUT', 'CANCELLED', 'SYSTEM_ERROR']);
 
-/** Serial polling until a terminal view or the FIXED deadline (contract §6:
- * acceptance time + timeoutMillis + 30s, persisted in the ledger so recovery
- * can never extend the deadline). */
+interface PollDeadline {
+  exceeded(): boolean;
+  remainingMs(): number;
+}
+
+/** Serial polling until a terminal view or the deadline (contract §6):
+ * acceptance + timeoutMillis + 30s. In an active process the deadline is
+ * measured with the local MONOTONIC clock; the persisted wall-clock deadline
+ * is only a fail-closed upper bound used after restart. The deadline is
+ * checked BEFORE the first status request and after every sleep, and sleeps
+ * never run past it, so no status request is ever issued beyond the deadline. */
 async function pollToTerminal(
   gateway: GatewayClient,
   task: TaskRuntime,
   clientRequestId: string,
   executionRef: string | null,
-  deadlineAt: number,
+  requestDigest: string | null,
+  deadline: PollDeadline,
   argv: string[],
+  initialView: SandboxView | null = null,
 ): Promise<SandboxView> {
+  const failDeadline = (): never => {
+    task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'failed', inputSummary: argv.join(' '), outputSummary: 'sandbox status deadline exceeded', receiptRef: null });
+    // Contract §6: the ENGINE produces the bounded deadline failure itself —
+    // the model must never keep polling past the deadline.
+    task.emit('status', {
+      state: 'failed',
+      error: {
+        contractVersion: '1.0',
+        code: 'SANDBOX_STATUS_DEADLINE_EXCEEDED',
+        category: 'sandbox_system',
+        message: 'sandbox execution did not reach a terminal state before the fixed deadline',
+        retryable: false,
+        sourceRef: null,
+      },
+    });
+    throw new Error('SANDBOX_STATUS_DEADLINE_EXCEEDED');
+  };
+
+  let view = initialView;
   let poll = 0;
-  let view = await gateway.getSandboxExecution(clientRequestId, executionRef);
+  if (view !== null && TERMINAL_VIEW_STATES.has(view.state)) return view;
+  if (deadline.exceeded()) failDeadline();
+  if (view === null) {
+    view = await gateway.getSandboxExecution(clientRequestId, executionRef, requestDigest);
+  }
   while (!TERMINAL_VIEW_STATES.has(view.state)) {
-    if (Date.now() >= deadlineAt) {
-      task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'failed', inputSummary: argv.join(' '), outputSummary: 'sandbox status deadline exceeded', receiptRef: null });
-      throw new Error('SANDBOX_STATUS_DEADLINE_EXCEEDED');
-    }
-    await new Promise((r) => setTimeout(r, pollDelayMs(poll)));
+    if (deadline.exceeded()) failDeadline();
+    // Never sleep past the deadline; wake up no later than the deadline.
+    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(pollDelayMs(poll), Math.ceil(deadline.remainingMs())))));
     poll++;
-    view = await gateway.getSandboxExecution(clientRequestId, executionRef);
+    if (deadline.exceeded()) failDeadline();
+    view = await gateway.getSandboxExecution(clientRequestId, executionRef, requestDigest);
   }
   return view;
 }
@@ -69,7 +101,10 @@ async function pollToTerminal(
 /** Tool bodies emit TaskEvents directly and return bounded canonical values.
  * Typed loosely at the dsh seam: the runtime validates canonical output. */
 export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): ProductTools {
-  const receiptRefs: string[] = [];
+  // Recovery re-adopts completed, gateway-verified Receipts from the persisted
+  // ledger so the completion gate never fails just because the model did not
+  // repeat a tool call after restart.
+  const receiptRefs: string[] = task.completedReceipts().map((entry) => entry.receiptRef);
 
   const listTool = defineTool({
     name: 'project_list',
@@ -177,7 +212,13 @@ export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): Pr
         }
         // Crash window between submit and receipt: resume polling the ORIGINAL
         // execution with the persisted fixed deadline (never a fresh one).
-        const view = await pollToTerminal(gateway, task, clientRequestId, executionRef, deadlineAt, argv);
+        // After restart there is no live acceptance time, so the persisted wall
+        // deadline is the fail-closed upper bound.
+        const wallDeadline = {
+          exceeded: (): boolean => Date.now() >= deadlineAt,
+          remainingMs: (): number => Math.max(0, deadlineAt - Date.now()),
+        };
+        const view = await pollToTerminal(gateway, task, clientRequestId, executionRef, digest, wallDeadline, argv);
         if (view.receiptRef) {
           const receipt = await gateway.getSandboxReceipt(view.receiptRef, { executionRef: view.executionRef, viewState: view.state, inputs });
           receiptRefs.push(receipt.receiptRef);
@@ -194,13 +235,20 @@ export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): Pr
       const submit = { clientRequestId, requestDigest: digest, argv, inputs, timeoutMillis };
       task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'requested', inputSummary: argv.join(' '), outputSummary: null, receiptRef: null });
       const view = await gateway.submitSandbox(submit);
-      // Fixed deadline from local acceptance of the 202 (contract §6); persisted
-      // BEFORE any receipt so a crash here can never re-dispatch or extend it.
+      // Fixed wall-clock deadline from local acceptance of the 202 (contract
+      // §6); persisted BEFORE any receipt so a crash here can never re-dispatch
+      // or extend it. In the active process the monotonic clock drives the
+      // polling deadline; the wall clock is only the fail-closed backstop.
+      const acceptanceMonotonic = performance.now();
       const deadlineAt = Date.now() + timeoutMillis + 30000;
       const executionRef = view.executionRef;
       task.appendToolLedger({ kind: 'sandbox', callSeq, clientRequestId, requestDigest: digest, argvDigest: digest, executionRef, deadlineAt, receiptRef: null, status: null });
       task.emit('tool', { callId: clientRequestId, name: 'sandbox.execute', state: 'running', inputSummary: argv.join(' '), outputSummary: null, receiptRef: null });
-      const terminalView = await pollToTerminal(gateway, task, clientRequestId, executionRef, deadlineAt, argv);
+      const liveDeadline = {
+        exceeded: (): boolean => performance.now() >= acceptanceMonotonic + timeoutMillis + 30000 || Date.now() >= deadlineAt,
+        remainingMs: (): number => Math.max(0, acceptanceMonotonic + timeoutMillis + 30000 - performance.now()),
+      };
+      const terminalView = await pollToTerminal(gateway, task, clientRequestId, executionRef, digest, liveDeadline, argv, view);
       if (terminalView.receiptRef) {
         const receipt = await gateway.getSandboxReceipt(terminalView.receiptRef, { executionRef: terminalView.executionRef, viewState: terminalView.state, inputs });
         receiptRefs.push(receipt.receiptRef);
@@ -226,5 +274,7 @@ export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): Pr
     },
   } as never) as ToolDefinition;
 
-  return { listTool, readTool, sandboxTool, askUserTool, collectReceiptRefs: () => [...receiptRefs] };
+  // The delivery schema requires uniqueItems: dedupe at collection time so the
+  // ledger-re-adopted receipt and a reused tool call can never double-list a ref.
+  return { listTool, readTool, sandboxTool, askUserTool, collectReceiptRefs: () => [...new Set(receiptRefs)] };
 }

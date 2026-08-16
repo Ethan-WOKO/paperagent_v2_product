@@ -180,13 +180,16 @@ export class DshRunner implements Runner {
         const questionText = task.meta.pendingQuestionText ?? '';
         agent.inject(
           userText(
-            `The user answered the pending question${questionText ? ` ("${questionText.slice(0, 500)}")` : ''}:\n${answerBody}\nContinue the task with this answer.`,
+            `Continuation after engine restart.\n${task.recoveryContext()}\nThe user answered the pending question${questionText ? ` ("${questionText.slice(0, 500)}")` : ''}: ${answerBody}\nContinue the task with this answer.`,
           ),
         );
         agent.followup(userText('Continue to completion.'));
       } else if (resumed) {
-        const summary = `Continuation after engine restart. Prior assistant output:\n${latestAssistantText || '(none)'}\nContinue the task to completion; tool calls are idempotent.`;
-        agent.inject(userText(summary));
+        // The DSH session transcript is empty after restart: the recovery
+        // context reconstructs the frozen instruction, ProjectVersion,
+        // completed receipts, accepted answers and the no-resubmit rule from
+        // persisted facts so the model never re-derives them from nothing.
+        agent.inject(userText(`Continuation after engine restart.\n${task.recoveryContext()}\nContinue the task to completion.`));
         agent.followup(userText('Continue to completion.'));
       } else {
         const instruction = (task.authority.instruction as string) ?? '';

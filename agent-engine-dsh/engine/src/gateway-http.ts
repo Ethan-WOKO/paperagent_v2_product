@@ -28,6 +28,17 @@ const ALLOWED_ERROR_CODES = new Set([
   'CANCELLED',
 ]);
 
+// The #151 gateway's real error vocabulary: TASK_GRANT_REQUIRED,
+// TASK_GRANT_WRONG_TASK, WORKSPACE_FILE_NOT_FOUND, SANDBOX_COMMAND_DENIED,
+// SANDBOX_EXECUTION_NOT_FOUND, SANDBOX_STATUS_UNAVAILABLE, ... The frozen
+// contract owns these prefixes; anything else still fails closed. The raw
+// message/sourceRef are never propagated — only the classified code.
+const ALLOWED_ERROR_PREFIX = /^(?:TASK|WORKSPACE|SANDBOX)_[A-Z0-9_]{1,95}$/;
+
+function isAllowedErrorCode(code: string): boolean {
+  return ALLOWED_ERROR_CODES.has(code) || ALLOWED_ERROR_PREFIX.test(code);
+}
+
 const NON_TERMINAL_STATES = new Set(['QUEUED', 'RUNNING']);
 
 /** Real HTTP client for the product tool gateway (contract §2/§5). The task
@@ -69,7 +80,7 @@ export class HttpGatewayClient implements GatewayClient {
         const parsed = JSON.parse(text) as unknown;
         validateProblem(parsed);
         const candidate = (parsed as { code: string }).code;
-        if (ALLOWED_ERROR_CODES.has(candidate)) code = candidate;
+        if (isAllowedErrorCode(candidate)) code = candidate;
       } catch {
         /* non-JSON or schema-violating error body: fail closed below */
       }
@@ -130,22 +141,32 @@ export class HttpGatewayClient implements GatewayClient {
       },
       (value) => {
         validateSandboxView(value);
-        const view = value as { clientRequestId: string; requestDigest: string };
+        const view = value as { clientRequestId: string; requestDigest: string; state: string; receiptRef: string | null };
         if (view.clientRequestId !== request.clientRequestId || view.requestDigest !== request.requestDigest) {
           throw new Error('SANDBOX_VIEW_BINDING_MISMATCH');
+        }
+        // The acceptance response must obey the same state/receipt invariant as
+        // every later poll: a non-terminal projection carries no receiptRef.
+        if (NON_TERMINAL_STATES.has(view.state) && view.receiptRef !== null) {
+          throw new Error('SANDBOX_VIEW_STATE_BINDING_MISMATCH');
         }
       },
     );
   }
 
-  async getSandboxExecution(clientRequestId: string, expectedExecutionRef: string | null = null): Promise<SandboxView> {
+  async getSandboxExecution(clientRequestId: string, expectedExecutionRef: string | null = null, expectedRequestDigest: string | null = null): Promise<SandboxView> {
     return this.request<SandboxView>(
       `/internal/v1/agent-engine/tasks/${this.taskId}/sandbox-executions/${clientRequestId}`,
       {},
       (value) => {
         validateSandboxView(value);
-        const view = value as { clientRequestId: string; executionRef: string; state: string; receiptRef: string | null };
+        const view = value as { clientRequestId: string; requestDigest: string; executionRef: string; state: string; receiptRef: string | null };
+        // The poll response must answer the exact original submission: same
+        // client identity, same digest, same execution identity.
         if (view.clientRequestId !== clientRequestId) throw new Error('SANDBOX_VIEW_BINDING_MISMATCH');
+        if (expectedRequestDigest !== null && view.requestDigest !== expectedRequestDigest) {
+          throw new Error('SANDBOX_VIEW_BINDING_MISMATCH');
+        }
         // One execution identity across the whole poll cycle, including recovery.
         if (expectedExecutionRef !== null && view.executionRef !== expectedExecutionRef) {
           throw new Error('SANDBOX_EXECUTION_REF_BINDING_MISMATCH');
@@ -167,7 +188,7 @@ export class HttpGatewayClient implements GatewayClient {
     },
   ): Promise<ReceiptProjection> {
     return this.request<ReceiptProjection>(
-      `/internal/v1/agent-engine/tasks/${this.taskId}/receipts/${receiptRef}`,
+      `/internal/v1/agent-engine/tasks/${this.taskId}/receipts/${encodeURIComponent(receiptRef)}`,
       {},
       (value) => {
         validateReceipt(value);

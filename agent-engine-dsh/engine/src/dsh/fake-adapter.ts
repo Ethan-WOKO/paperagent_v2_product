@@ -49,6 +49,7 @@ export class FakeAdapter extends LlmAdapter {
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.callCount++;
     const mode = process.env.FAKE_MODE ?? 'normal';
+    const sandboxArgs = () => JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: Number(process.env.FAKE_TIMEOUT_MS ?? 120000) });
     appendFileSync(
       this.callsLogPath,
       JSON.stringify({ at: new Date().toISOString(), call: this.callCount, userTexts: this.userTexts(options).map((t) => t.slice(0, 500)) }) + '\n',
@@ -66,12 +67,19 @@ export class FakeAdapter extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'stop' } };
     }
 
+    // recover-finalize: after a restart the model concludes directly WITHOUT
+    // re-running any tool, proving the ledger re-adopts completed receipts.
+    if (mode === 'recover-finalize') {
+      yield* finalize();
+      return;
+    }
+
     // ask mode: first call asks the user. A call whose transcript already
     // carries the runner-injected answer ("The user answered the pending
     // question…") finalizes immediately — that is the waiting_user recovery
     // path, where the ask_user tool never runs again.
     if (mode === 'ask') {
-      const sawInjectedAnswer = this.userTexts(options).some((t) => t.startsWith('The user answered the pending question'));
+      const sawInjectedAnswer = this.userTexts(options).some((t) => t.includes('The user answered the pending question'));
       if (this.callCount > 1 || sawInjectedAnswer) {
         yield* finalize();
         return;
@@ -89,15 +97,15 @@ export class FakeAdapter extends LlmAdapter {
     }
     if (mode === 'budget') {
       yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-      yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) };
-      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) } as never };
+      yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: sandboxArgs() };
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: sandboxArgs() } as never };
       yield { type: 'finish', reason: { kind: 'tool-calls' } };
       return;
     }
     // normal mode, first call: run the sandbox once.
     yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-    yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) };
-    yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 120000 }) } as never };
+    yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: sandboxArgs() };
+    yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: sandboxArgs() } as never };
     yield { type: 'finish', reason: { kind: 'tool-calls' } };
   }
 }
