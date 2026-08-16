@@ -53,12 +53,15 @@ export type ToolName = "project.list" | "project.read" | "sandbox.execute";
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
+  /** Provider-owned thinking transcript that some OpenAI-compatible models
+   * require to be echoed with the assistant tool call on the next request. */
+  reasoningContent?: string;
   toolCallId?: string;
   toolCalls?: ModelToolCall[];
 }
 
 export interface ModelToolCall { id: string; name: string; arguments: string }
-export interface ModelResponse { content: string | null; toolCalls: ModelToolCall[]; usage?: { promptTokens: number; completionTokens: number } }
+export interface ModelResponse { content: string | null; reasoningContent?: string; toolCalls: ModelToolCall[]; usage?: { promptTokens: number; completionTokens: number } }
 export interface ModelRequest {
   provider: string;
   model: string;

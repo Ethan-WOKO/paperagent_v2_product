@@ -11,7 +11,7 @@ const TERMINAL_SANDBOX = new Set(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the frozen ProjectVersion workspace manifest.", { type: "object", additionalProperties: false, properties: {} }),
   functionTool("read_project_file", "Read one complete workspace file using its manifest hash.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" } } }),
-  functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Use this to validate code before concluding.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
+  functionTool("execute_in_sandbox", "Compile or run exact workspace inputs. Allowed argv forms only: `yanban-runner java <source> [--dependency=group:artifact:version ...]`, `yanban-runner python <source> [--dependency=package==version ...]`, `javac <one or more .java files>`, or `mvn -o test`. Do not probe with `java -version`, `javac -version`, shell commands, or package-manager commands. When source imports a third-party library, use yanban-runner and declare every dependency on the first execution.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
   functionTool("ask_user", "Pause and ask one necessary, concrete question.", { type: "object", additionalProperties: false, required: ["question"], properties: { question: { type: "string", minLength: 1, maxLength: 4000 } } })
 ];
 
@@ -191,7 +191,12 @@ export class AgentEngine {
         this.checkCancelled(signal);
         const calls = response.toolCalls.map((call, ordinal) => ({ ...call, id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal), ordinal }));
         validateCallSet(calls);
-        task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ id, name, arguments: args }) => ({ id, name, arguments: args })) } : {}) });
+        task.messages.push({
+          role: "assistant",
+          content: response.content,
+          ...(response.reasoningContent !== undefined ? { reasoningContent: response.reasoningContent } : {}),
+          ...(calls.length ? { toolCalls: calls.map(({ id, name, arguments: args }) => ({ id, name, arguments: args })) } : {})
+        });
         if (calls.length === 0) {
           const conclusion = bounded(response.content?.trim() ?? "", 16000);
           if (!conclusion) throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls"));
@@ -263,7 +268,16 @@ export class AgentEngine {
       if (!sandboxState) throw new EngineProblem(500, problem("SANDBOX_RECOVERY_STATE_INVALID", "internal", "Sandbox recovery state is missing"));
       const durableDeadline = Date.parse(sandboxState.deadlineAt);
       if (!Number.isFinite(durableDeadline)) throw new EngineProblem(500, problem("SANDBOX_RECOVERY_STATE_INVALID", "internal", "Sandbox recovery deadline is invalid"));
-      let view = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.submit(task.view.taskId, grant, request, signal));
+      let view: import("./types.js").SandboxView;
+      try {
+        view = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.submit(task.view.taskId, grant, request, signal));
+      } catch (error) {
+        if (!isRepairableSandboxPolicy(error)) throw error;
+        const guidance = "Sandbox command rejected. Use exactly one documented argv form; for third-party Java imports use yanban-runner java <source> with --dependency=group:artifact:version.";
+        await this.tool(task, call.id, "sandbox.execute", summary, "failed", `${error.problem.code}: ${guidance}`, null);
+        task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({ code: error.problem.code, message: guidance, retryable: true }) });
+        return false;
+      }
       const acceptedAt = this.monotonicNow();
       this.options.validator.validate("gateway-sandboxView", view);
       bindSandboxView(view, request, sandboxState.executionRef);
@@ -348,6 +362,9 @@ export class AgentEngine {
 }
 
 function functionTool(name: string, description: string, parameters: unknown): unknown { return { type: "function", function: { name, description, parameters } }; }
+function isRepairableSandboxPolicy(error: unknown): error is EngineProblem {
+  return error instanceof EngineProblem && error.problem.code === "SANDBOX_COMMAND_DENIED";
+}
 function deterministicCallId(taskId: string, modelCall: number, ordinal: number): string { return `call.${sha256(`${taskId}:${modelCall}:${ordinal}`).slice(0, 40)}`; }
 function requireString(value: unknown, name: string): string { if (typeof value !== "string" || !value) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", `Tool argument ${name} must be a non-empty string`)); return value; }
 

@@ -200,6 +200,21 @@ describe("AgentEngine", () => {
     expect(events).toContainEqual(expect.objectContaining({ type: "delivery", receiptRefs: ["receipt.failed"] }));
   });
 
+  it("returns a denied argv as a bounded tool observation so the model can repair it", async () => {
+    const provider = new ScriptedProvider([
+      tool("execute_in_sandbox", { argv: ["javac", "-version"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }),
+      sandboxTool(),
+      { content: "Compiled after repairing the denied command.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new CommandDeniedOnceGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    const events = await engine.events(taskId);
+    expect(events).toContainEqual(expect.objectContaining({ type: "tool", name: "sandbox.execute", state: "failed", receiptRef: null }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "delivery", receiptRefs: ["receipt.1"] }));
+    expect(provider.requests[1]!.messages.at(-1)?.content).toContain("SANDBOX_COMMAND_DENIED");
+  });
+
   it("starts the sandbox deadline after acceptance and never polls beyond it", async () => {
     let clock = 0; const sleeps: number[] = [];
     const gateway = new NeverTerminalGateway(() => { clock = 30_000; });
@@ -342,6 +357,17 @@ class PollingFailedGateway extends FakeGateway {
     return Promise.resolve({ contractVersion: "1.0", clientRequestId, requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }), executionRef: "execution.failed", state: this.polls === 1 ? "RUNNING" : "FAILED", receiptRef: this.polls === 1 ? null : "receipt.failed" });
   }
   override receipt(): Promise<Receipt> { return Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.failed", executionRef: "execution.failed", status: "FAILED", exitCode: 1, stdout: { text: "", truncated: false, originalBytes: 0 }, stderr: { text: "compile error", truncated: false, originalBytes: 13 }, inputFingerprint: "e".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class CommandDeniedOnceGateway extends FakeGateway {
+  private denied = false;
+  override submit(taskIdValue: string, currentGrant: string, request: SandboxRequest): Promise<SandboxView> {
+    if (!this.denied) {
+      this.denied = true;
+      throw new EngineProblem(400, problem("SANDBOX_COMMAND_DENIED", "sandbox_system", "redacted upstream policy detail", false));
+    }
+    return super.submit(taskIdValue, currentGrant, request);
+  }
 }
 
 class NeverTerminalGateway extends FakeGateway {

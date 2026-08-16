@@ -31,16 +31,22 @@ export class OpenAiCompatibleProvider implements ModelProvider {
       throw new EngineProblem(502, problem("MODEL_TRANSPORT_FAILED", "model", "Model provider request failed", true));
     }
     if (!response.ok) throw new EngineProblem(502, problem("MODEL_PROVIDER_REJECTED", "model", `Model provider returned HTTP ${response.status}`, response.status >= 500));
-    const body = await response.json() as { choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    const body = await response.json() as { choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const message = body.choices?.[0]?.message;
     if (!message) throw new EngineProblem(502, problem("MODEL_RESPONSE_INVALID", "model", "Model provider returned no assistant message"));
     const toolCalls: ModelToolCall[] = (message.tool_calls ?? []).map((call, index) => ({ id: call.id ?? `provider-${index}`, name: call.function?.name ?? "", arguments: call.function?.arguments ?? "{}" }));
-    return { content: message.content ?? null, toolCalls, ...(body.usage ? { usage: { promptTokens: body.usage.prompt_tokens ?? 0, completionTokens: body.usage.completion_tokens ?? 0 } } : {}) };
+    return {
+      content: message.content ?? null,
+      ...(typeof message.reasoning_content === "string" ? { reasoningContent: message.reasoning_content } : {}),
+      toolCalls,
+      ...(body.usage ? { usage: { promptTokens: body.usage.prompt_tokens ?? 0, completionTokens: body.usage.completion_tokens ?? 0 } } : {})
+    };
   }
 }
 
 function toWireMessage(message: ChatMessage): Record<string, unknown> {
   const result: Record<string, unknown> = { role: message.role, content: message.content };
+  if (message.reasoningContent !== undefined) result.reasoning_content = message.reasoningContent;
   if (message.toolCallId) result.tool_call_id = message.toolCallId;
   if (message.toolCalls) result.tool_calls = message.toolCalls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }));
   return result;
