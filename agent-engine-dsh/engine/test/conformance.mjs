@@ -1,47 +1,48 @@
-// Engine-side conformance harness for agent-engine-contract 1.0 scenarios.
-// Spawns the engine with the stub runner and exercises the control plane:
-// submit replay/conflict, SSE resume, cancel idempotency, answer flow,
-// event redaction, restart-after-receipt, grant expiry.
+// Engine-side conformance harness for agent-engine-contract 1.0.
+// Consumes the shared positive fixtures directly from agent-engine-contract/
+// and exercises the control plane: submit replay/conflict, SSE resume,
+// cancel idempotency, answer idempotency (answerDigest), event redaction,
+// restart-after-receipt, non-terminal restart, grant expiry, auth, Unicode
+// canonical ordering.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const engineEntry = join(here, '..', 'src', 'index.ts');
+const contractDir = join(here, '..', '..', '..', 'agent-engine-contract');
 const TOKEN = 'conformance-token';
 
-// The frozen positive fixture values (agent-engine-contract fixtures/positive/task-submission.json).
-const GRANT = 'grant.test-only-0123456789abcdef0123456789abcdef';
-function submission(taskId, overrides = {}) {
-  return {
-    contractVersion: '1.0',
-    taskId,
-    requestDigest: '',
-    authority: {
-      runMode: 'PERSISTENT_PLAN_EXECUTE',
-      sessionRef: 'session.1',
-      project: { projectId: '95', projectVersion: 'a'.repeat(64) },
-      instruction: 'Check whether src/main/java/Sort.java compiles successfully. Do not modify files.',
-      permissions: { readProject: true, writeWorkspace: false, executeSandbox: true },
-      model: { provider: 'deepseek', model: 'deepseek-v4-pro' },
-      ...overrides,
-    },
-    gateway: { taskGrant: GRANT, expiresAt: '2030-01-01T00:00:00Z' },
-  };
-}
+const fixture = JSON.parse(readFileSync(join(contractDir, 'conformance', 'fixtures', 'positive', 'task-submission.json'), 'utf8'));
+const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('hex');
 
 function canonicalJson(value) {
+  const byCodePoint = (a, b) => {
+    const cp = (s) => [...s].map((ch) => ch.codePointAt(0));
+    const l = cp(a);
+    const r = cp(b);
+    for (let i = 0; i < Math.min(l.length, r.length); i++) if (l[i] !== r[i]) return l[i] - r[i];
+    return l.length - r.length;
+  };
   if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
   if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    const entries = Object.entries(value).sort((a, b) => byCodePoint(a[0], b[0]));
     return '{' + entries.map(([k, v]) => JSON.stringify(k) + ':' + canonicalJson(v)).join(',') + '}';
   }
   return JSON.stringify(value);
 }
-import { createHash } from 'node:crypto';
-const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('hex');
+
+function submission(taskId, authorityOverrides = {}, gatewayOverrides = {}) {
+  const body = structuredClone(fixture);
+  body.taskId = taskId;
+  body.authority = { ...body.authority, ...authorityOverrides };
+  body.gateway = { ...body.gateway, ...gatewayOverrides };
+  body.requestDigest = sha256(canonicalJson(body.authority));
+  return body;
+}
 
 let failures = 0;
 function check(name, ok, detail = '') {
@@ -75,7 +76,7 @@ function startEngine(env) {
   return proc;
 }
 
-async function waitUp(base, proc, attempts = 60) {
+async function waitUp(base, proc, attempts = 80) {
   for (let i = 0; i < attempts; i++) {
     if (proc.exitCode !== null) throw new Error('engine exited early');
     try {
@@ -119,8 +120,31 @@ async function readSse(base, path, lastEventId, stopAfter) {
   return events;
 }
 
+async function waitForState(base, taskId, states, attempts = 100) {
+  for (let i = 0; i < attempts; i++) {
+    const view = (await getJson(base, '/v1/tasks/' + taskId)).body;
+    if (states.includes(view?.state)) return view;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return null;
+}
+
+function answerBody(clientSuffix, questionId, answer) {
+  return {
+    contractVersion: '1.0',
+    clientRequestId: 'answer.' + clientSuffix,
+    questionId,
+    answer,
+    answerDigest: sha256(answer),
+  };
+}
+
 async function main() {
   const baseDir = mkdtempSync(join(tmpdir(), 'agent-engine-dsh-conformance-'));
+
+  // ---- U0: Unicode canonical ordering (unit level) ----
+  const unicodeCanonical = canonicalJson({ b: 1, a: 2, '😀': 3 });
+  check('U0 unicode code-point key order', unicodeCanonical === '{"a":2,"b":1,"😀":3}', unicodeCanonical);
 
   // ---- Instance A: gateway-backed runner, no question ----
   const dirA = join(baseDir, 'a');
@@ -134,9 +158,9 @@ async function main() {
   const baseA = 'http://127.0.0.1:18092';
   await waitUp(baseA, procA);
 
-  // S1 submit-exact-replay
+  // S1 submit-exact-replay (shared fixture digest)
   const t1 = submission('task.' + '1'.repeat(64));
-  t1.requestDigest = sha256(canonicalJson(t1.authority));
+  check('S1f fixture digest matches shared requestDigest', t1.requestDigest === fixture.requestDigest, t1.requestDigest);
   let r1 = await postJson(baseA, '/v1/tasks', t1);
   check('S1a submit accepted', r1.status === 202 && r1.body?.replayed === false, `status=${r1.status}`);
   let r2 = await postJson(baseA, '/v1/tasks', t1);
@@ -144,25 +168,17 @@ async function main() {
 
   // S2 submit-digest-conflict
   const t2 = submission(t1.taskId, { instruction: 'Different instruction text for conflict.' });
-  t2.requestDigest = sha256(canonicalJson(t2.authority));
   const r3 = await postJson(baseA, '/v1/tasks', t2);
   check('S2 digest conflict 409', r3.status === 409 && r3.body?.code === 'TASK_DIGEST_CONFLICT', `status=${r3.status} code=${r3.body?.code}`);
 
-  // wait terminal
-  let viewA = null;
-  for (let i = 0; i < 60; i++) {
-    viewA = (await getJson(baseA, '/v1/tasks/' + t1.taskId)).body;
-    if (['succeeded', 'failed', 'cancelled'].includes(viewA.state)) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  check('S3a terminal reached', viewA && viewA.state === 'succeeded', `state=${viewA?.state}`);
+  const viewA = await waitForState(baseA, t1.taskId, ['succeeded', 'failed', 'cancelled']);
+  check('S3a terminal reached', viewA?.state === 'succeeded', `state=${viewA?.state}`);
   const eventsA = await readSse(baseA, '/v1/tasks/' + t1.taskId + '/events', 0);
   const seqs = eventsA.map((e) => e.sequence);
   check('S3b contiguous sequences from 1', seqs.length >= 5 && seqs.every((s, i) => s === i + 1), `sequences=${seqs.join(',')}`);
   check('S3c terminal is last', eventsA[eventsA.length - 1]?.type === 'status' && ['succeeded', 'failed', 'cancelled'].includes(eventsA[eventsA.length - 1]?.state));
   const deliveryIdx = eventsA.findIndex((e) => e.type === 'delivery');
-  const terminalIdx = eventsA.length - 1;
-  check('S3d delivery before terminal', deliveryIdx > -1 && deliveryIdx < terminalIdx);
+  check('S3d delivery before terminal', deliveryIdx > -1 && deliveryIdx < eventsA.length - 1);
   check('S3e gateway tool events present', eventsA.some((e) => e.type === 'tool' && e.name === 'sandbox.execute'));
 
   // S4 sse-resume
@@ -173,7 +189,7 @@ async function main() {
 
   // S7 event-redaction
   const rawEvents = readFileSync(join(dirA, t1.taskId, 'events.jsonl'), 'utf8');
-  check('S7 no grant in events', !rawEvents.includes(GRANT));
+  check('S7 no grant in events', !rawEvents.includes(fixture.gateway.taskGrant));
   check('S7b no file body in events', !rawEvents.includes('public class Sort'));
 
   // S8 restart-after-receipt
@@ -191,83 +207,101 @@ async function main() {
   check('S8c no duplicate gateway dispatch', linesAfter === linesBefore, `before=${linesBefore} after=${linesAfter}`);
   procA2.kill();
 
-  // ---- Instance B: cancel ----
+  // ---- Instance B: non-terminal restart (no duplicated events) ----
   const dirB = join(baseDir, 'b');
-  const procB = startEngine({ ENGINE_PORT: '18093', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirB, STUB_STEP_DELAY_MS: '3000' });
+  const procB = startEngine({ ENGINE_PORT: '18093', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirB, STUB_STEP_DELAY_MS: '8000' });
   const baseB = 'http://127.0.0.1:18093';
   await waitUp(baseB, procB);
-  const t5 = submission('task.' + '5'.repeat(64));
-  t5.requestDigest = sha256(canonicalJson(t5.authority));
-  await postJson(baseB, '/v1/tasks', t5);
-  const cancelBody = { contractVersion: '1.0', clientRequestId: 'cancel.' + 'x'.repeat(20) };
-  const c1 = await postJson(baseB, `/v1/tasks/${t5.taskId}/cancel`, cancelBody);
-  const c2 = await postJson(baseB, `/v1/tasks/${t5.taskId}/cancel`, cancelBody);
-  check('S5a cancel accepted', c1.status === 202 && c1.body?.state === 'cancelled', `state=${c1.body?.state}`);
-  check('S5b cancel idempotent same terminal', c2.status === 202 && c2.body?.state === 'cancelled' && c2.body?.terminalSequence === c1.body?.terminalSequence);
-  const eventsB = await readSse(baseB, '/v1/tasks/' + t5.taskId + '/events', 0);
-  check('S5c exactly one cancelled terminal', eventsB.filter((e) => e.type === 'status' && e.state === 'cancelled').length === 1);
-  const c3 = await postJson(baseB, `/v1/tasks/${t5.taskId}/cancel`, cancelBody);
-  check('S5d cancel after terminal does not rewrite', c3.body?.terminalSequence === c1.body?.terminalSequence);
-  procB.kill();
+  const tN = submission('task.' + '9'.repeat(64));
+  await postJson(baseB, '/v1/tasks', tN);
+  // wait until the message event lands (phase messaged) then kill mid-run
+  let killedMidRun = false;
+  for (let i = 0; i < 100 && !killedMidRun; i++) {
+    const events = await readSse(baseB, '/v1/tasks/' + tN.taskId + '/events', 0);
+    if (events.some((e) => e.type === 'message')) {
+      procB.kill();
+      killedMidRun = true;
+    } else {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  check('S8d engine killed mid-run after message', killedMidRun);
+  await new Promise((r) => setTimeout(r, 500));
+  const procB2 = startEngine({ ENGINE_PORT: '18093', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirB, STUB_STEP_DELAY_MS: '100' });
+  await waitUp(baseB, procB2);
+  const viewN = await waitForState(baseB, tN.taskId, ['succeeded', 'failed', 'cancelled']);
+  check('S8e non-terminal task resumes to terminal after restart', viewN?.state === 'succeeded', `state=${viewN?.state}`);
+  const eventsN = await readSse(baseB, '/v1/tasks/' + tN.taskId + '/events', 0);
+  check('S8f no duplicated message after restart', eventsN.filter((e) => e.type === 'message').length === 1, `messages=${eventsN.filter((e) => e.type === 'message').length}`);
+  check('S8g sequences contiguous after restart', eventsN.map((e) => e.sequence).every((s, i) => s === i + 1));
+  procB2.kill();
 
-  // ---- Instance C: answer flow ----
+  // ---- Instance C: cancel ----
   const dirC = join(baseDir, 'c');
-  const procC = startEngine({ ENGINE_PORT: '18094', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirC, STUB_STEP_DELAY_MS: '100', STUB_QUESTION: '1' });
+  const procC = startEngine({ ENGINE_PORT: '18094', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirC, STUB_STEP_DELAY_MS: '3000' });
   const baseC = 'http://127.0.0.1:18094';
   await waitUp(baseC, procC);
-  const t6 = submission('task.' + '6'.repeat(64));
-  t6.requestDigest = sha256(canonicalJson(t6.authority));
-  await postJson(baseC, '/v1/tasks', t6);
-  let viewC = null;
-  for (let i = 0; i < 60; i++) {
-    viewC = (await getJson(baseC, '/v1/tasks/' + t6.taskId)).body;
-    if (viewC.state === 'waiting_user') break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  check('S6a waiting_user with pendingQuestionId', viewC?.state === 'waiting_user' && viewC.pendingQuestionId === 'q1', `state=${viewC?.state}`);
-  const wrong = await postJson(baseC, `/v1/tasks/${t6.taskId}/answer`, { contractVersion: '1.0', clientRequestId: 'answer.' + 'a'.repeat(20), questionId: 'other', answer: 'no' });
-  check('S6b wrong questionId 409', wrong.status === 409 && wrong.body?.code === 'QUESTION_MISMATCH', `status=${wrong.status}`);
-  const a1 = await postJson(baseC, `/v1/tasks/${t6.taskId}/answer`, { contractVersion: '1.0', clientRequestId: 'answer.' + 'a'.repeat(20), questionId: 'q1', answer: 'yes' });
-  check('S6c answer accepted', a1.status === 202);
-  let viewC2 = null;
-  for (let i = 0; i < 60; i++) {
-    viewC2 = (await getJson(baseC, '/v1/tasks/' + t6.taskId)).body;
-    if (viewC2.state === 'succeeded') break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  check('S6d succeeds after answer', viewC2?.state === 'succeeded', `state=${viewC2?.state}`);
-  const a2 = await postJson(baseC, `/v1/tasks/${t6.taskId}/answer`, { contractVersion: '1.0', clientRequestId: 'answer.' + 'a'.repeat(20), questionId: 'q1', answer: 'different' });
-  // After the first answer the question closes; a second different answer must 409 (ANSWER_CONFLICT or NO_PENDING_QUESTION).
-  check('S6e conflicting second answer 409', a2.status === 409, `status=${a2.status} code=${a2.body?.code}`);
+  const t5 = submission('task.' + '5'.repeat(64));
+  await postJson(baseC, '/v1/tasks', t5);
+  const cancelBody = { contractVersion: '1.0', clientRequestId: 'cancel.' + 'x'.repeat(20) };
+  const c1 = await postJson(baseC, `/v1/tasks/${t5.taskId}/cancel`, cancelBody);
+  const c2 = await postJson(baseC, `/v1/tasks/${t5.taskId}/cancel`, cancelBody);
+  check('S5a cancel accepted', c1.status === 202 && c1.body?.state === 'cancelled', `state=${c1.body?.state}`);
+  check('S5b cancel idempotent same terminal', c2.status === 202 && c2.body?.state === 'cancelled' && c2.body?.terminalSequence === c1.body?.terminalSequence);
+  const eventsC = await readSse(baseC, '/v1/tasks/' + t5.taskId + '/events', 0);
+  check('S5c exactly one cancelled terminal', eventsC.filter((e) => e.type === 'status' && e.state === 'cancelled').length === 1);
+  const c3 = await postJson(baseC, `/v1/tasks/${t5.taskId}/cancel`, cancelBody);
+  check('S5d cancel after terminal does not rewrite', c3.body?.terminalSequence === c1.body?.terminalSequence);
   procC.kill();
 
-  // ---- Instance D: expired grant ----
+  // ---- Instance D: answer flow with answerDigest ----
   const dirD = join(baseDir, 'd');
-  const procD = startEngine({ ENGINE_PORT: '18095', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirD, STUB_STEP_DELAY_MS: '100', STUB_USE_GATEWAY: '1' });
+  const procD = startEngine({ ENGINE_PORT: '18095', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirD, STUB_STEP_DELAY_MS: '100', STUB_QUESTION: '1', STUB_ANSWER_DELAY_MS: '1000' });
   const baseD = 'http://127.0.0.1:18095';
   await waitUp(baseD, procD);
-  const t7 = submission('task.' + '7'.repeat(64));
-  t7.gateway = { taskGrant: GRANT, expiresAt: '2020-01-01T00:00:00Z' };
-  t7.requestDigest = sha256(canonicalJson(t7.authority));
-  await postJson(baseD, '/v1/tasks', t7);
-  let viewD = null;
-  for (let i = 0; i < 60; i++) {
-    viewD = (await getJson(baseD, '/v1/tasks/' + t7.taskId)).body;
-    if (viewD.state === 'failed') break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  check('S9 expired grant fails with authorization category', viewD?.state === 'failed' && viewD?.error?.category === 'authorization', `state=${viewD?.state} category=${viewD?.error?.category}`);
-  check('S9b no gateway dispatch with expired grant', !existsSync(join(dirD, 'gateway-submissions.jsonl')));
+  const t6 = submission('task.' + '6'.repeat(64));
+  await postJson(baseD, '/v1/tasks', t6);
+  const viewD = await waitForState(baseD, t6.taskId, ['waiting_user']);
+  check('S6a waiting_user with pendingQuestionId', viewD?.pendingQuestionId === 'q1', `state=${viewD?.state}`);
+  const wrongQ = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, answerBody('b'.repeat(20), 'other', 'no'));
+  check('S6b wrong questionId 409 QUESTION_NOT_PENDING', wrongQ.status === 409 && wrongQ.body?.code === 'QUESTION_NOT_PENDING', `status=${wrongQ.status} code=${wrongQ.body?.code}`);
+  const badDigest = answerBody('c'.repeat(20), 'q1', 'yes');
+  badDigest.answerDigest = 'f'.repeat(64);
+  const d0 = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, badDigest);
+  check('S6c invalid answerDigest 400', d0.status === 400 && d0.body?.code === 'INVALID_ANSWER', `status=${d0.status}`);
+  const a1 = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, answerBody('c'.repeat(20), 'q1', 'yes'));
+  check('S6d answer accepted', a1.status === 202);
+  // while runner waits (STUB_ANSWER_DELAY_MS=1000), conflict checks are race-free
+  const a2 = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, answerBody('d'.repeat(20), 'q1', 'no'));
+  check('S6e different answerDigest 409 QUESTION_ANSWER_CONFLICT', a2.status === 409 && a2.body?.code === 'QUESTION_ANSWER_CONFLICT', `status=${a2.status} code=${a2.body?.code}`);
+  const a3 = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, answerBody('c'.repeat(20), 'q1', 'no'));
+  check('S6f reused clientRequestId different digest 409 ANSWER_REQUEST_CONFLICT', a3.status === 409 && a3.body?.code === 'ANSWER_REQUEST_CONFLICT', `status=${a3.status} code=${a3.body?.code}`);
+  const a4 = await postJson(baseD, `/v1/tasks/${t6.taskId}/answer`, answerBody('c'.repeat(20), 'q1', 'yes'));
+  check('S6g exact answer replay 202', a4.status === 202);
+  const viewD2 = await waitForState(baseD, t6.taskId, ['succeeded']);
+  check('S6h succeeds after answer', viewD2?.state === 'succeeded', `state=${viewD2?.state}`);
   procD.kill();
 
-  // ---- Instance E: auth ----
+  // ---- Instance E: expired grant ----
   const dirE = join(baseDir, 'e');
-  const procE = startEngine({ ENGINE_PORT: '18096', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirE });
+  const procE = startEngine({ ENGINE_PORT: '18096', ENGINE_SERVICE_TOKEN: TOKEN, ENGINE_DATA_DIR: dirE, STUB_STEP_DELAY_MS: '100', STUB_USE_GATEWAY: '1' });
   const baseE = 'http://127.0.0.1:18096';
   await waitUp(baseE, procE);
-  const noAuth = await getJson(baseE, '/v1/tasks', 'wrong-token');
-  check('S10 unauthenticated request rejected 401', noAuth.status === 401, `status=${noAuth.status}`);
+  const t7 = submission('task.' + '7'.repeat(64), {}, { expiresAt: '2020-01-01T00:00:00Z' });
+  await postJson(baseE, '/v1/tasks', t7);
+  const viewE = await waitForState(baseE, t7.taskId, ['failed']);
+  check('S9 expired grant fails with authorization category', viewE?.error?.category === 'authorization', `state=${viewE?.state} category=${viewE?.error?.category}`);
+  check('S9b no gateway dispatch with expired grant', !existsSync(join(dirE, 'gateway-submissions.jsonl')));
   procE.kill();
+
+  // ---- Instance F: auth fail-closed ----
+  const dirF = join(baseDir, 'f');
+  const procF = startEngine({ ENGINE_PORT: '18097', ENGINE_SERVICE_TOKEN: '', ENGINE_DATA_DIR: dirF });
+  const baseF = 'http://127.0.0.1:18097';
+  await waitUp(baseF, procF);
+  const noToken = await getJson(baseF, '/v1/tasks', TOKEN);
+  check('S10 unconfigured token fails closed', noToken.status === 401, `status=${noToken.status}`);
+  procF.kill();
 
   rmSync(baseDir, { recursive: true, force: true });
   console.log(failures === 0 ? '\nALL CONFORMANCE CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

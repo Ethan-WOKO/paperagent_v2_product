@@ -2,6 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renam
 import { join } from 'node:path';
 import { sha256Hex } from './canonical.ts';
 
+export type RunnerPhase = 'init' | 'messaged' | 'tool-requested' | 'tool-running' | 'tool-succeeded' | 'delivered' | 'questioned';
+
 export interface TaskMeta {
   taskId: string;
   requestDigest: string;
@@ -11,6 +13,7 @@ export interface TaskMeta {
   deliverySequence: number | null;
   terminalSequence: number | null;
   error: unknown | null;
+  runnerPhase: RunnerPhase;
   createdAt: string;
   updatedAt: string;
 }
@@ -20,7 +23,14 @@ export interface StoredEvent {
   event: Record<string, unknown>;
 }
 
-/** JSONL persistence: data/<taskId>/meta.json + events.jsonl. */
+export interface AnswerRecord {
+  questionId: string;
+  answerDigest: string;
+  clientRequestId: string;
+  acceptedAt: string;
+}
+
+/** JSONL persistence: data/<taskId>/meta.json + events.jsonl + answers.jsonl + cancels.jsonl. */
 export class TaskStore {
   private readonly dataDir: string;
 
@@ -41,6 +51,14 @@ export class TaskStore {
     return join(this.taskDir(taskId), 'events.jsonl');
   }
 
+  answersPath(taskId: string): string {
+    return join(this.taskDir(taskId), 'answers.jsonl');
+  }
+
+  cancelsPath(taskId: string): string {
+    return join(this.taskDir(taskId), 'cancels.jsonl');
+  }
+
   create(taskId: string, requestDigest: string, createdAt: string): TaskMeta {
     mkdirSync(this.taskDir(taskId), { recursive: true });
     const meta: TaskMeta = {
@@ -52,6 +70,7 @@ export class TaskStore {
       deliverySequence: null,
       terminalSequence: null,
       error: null,
+      runnerPhase: 'init',
       createdAt,
       updatedAt: createdAt,
     };
@@ -83,6 +102,32 @@ export class TaskStore {
       .split('\n')
       .filter((line) => line.trim().length > 0)
       .map((line) => JSON.parse(line) as StoredEvent);
+  }
+
+  appendAnswer(taskId: string, record: AnswerRecord): void {
+    appendFileSync(this.answersPath(taskId), JSON.stringify(record) + '\n', 'utf8');
+  }
+
+  readAnswers(taskId: string): AnswerRecord[] {
+    const path = this.answersPath(taskId);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as AnswerRecord);
+  }
+
+  appendCancel(taskId: string, clientRequestId: string): void {
+    appendFileSync(this.cancelsPath(taskId), JSON.stringify({ clientRequestId, acceptedAt: new Date().toISOString() }) + '\n', 'utf8');
+  }
+
+  readCancels(taskId: string): string[] {
+    const path = this.cancelsPath(taskId);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => (JSON.parse(line) as { clientRequestId: string }).clientRequestId);
   }
 
   listTaskIds(): string[] {

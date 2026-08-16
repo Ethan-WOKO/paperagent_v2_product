@@ -1,5 +1,6 @@
 import type { ServerResponse } from 'node:http';
-import type { TaskMeta } from './store.ts';
+import { validateEvent, validateView } from './schemas.ts';
+import type { AnswerRecord, RunnerPhase, TaskMeta } from './store.ts';
 
 export type TaskEventType = 'status' | 'message' | 'question' | 'tool' | 'delivery';
 
@@ -20,19 +21,29 @@ export interface SseSubscriber {
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled']);
 
+export interface TaskStorePort {
+  writeMeta(m: TaskMeta): void;
+  appendEvent(taskId: string, event: Record<string, unknown>, sequence: number): void;
+  appendAnswer(taskId: string, record: AnswerRecord): void;
+  readAnswers(taskId: string): AnswerRecord[];
+  appendCancel(taskId: string, clientRequestId: string): void;
+  readCancels(taskId: string): string[];
+}
+
 export class TaskRuntime {
   readonly meta: TaskMeta;
   private subscribers = new Set<SseSubscriber>();
   private aborted = false;
-  private answeredQuestions = new Map<string, string>();
-  private readonly store: { writeMeta(m: TaskMeta): void; appendEvent(taskId: string, event: Record<string, unknown>, sequence: number): void };
+  private answeredQuestions = new Map<string, AnswerRecord>();
+  private cancelRequests = new Set<string>();
+  private readonly store: TaskStorePort;
   private readonly runner: Runner;
   grant: { taskGrant: string; expiresAt: string };
   authority: Record<string, unknown>;
 
   constructor(
     meta: TaskMeta,
-    store: { writeMeta(m: TaskMeta): void; appendEvent(taskId: string, event: Record<string, unknown>, sequence: number): void },
+    store: TaskStorePort,
     authority: Record<string, unknown>,
     grant: { taskGrant: string; expiresAt: string },
     runner: Runner,
@@ -42,6 +53,12 @@ export class TaskRuntime {
     this.runner = runner;
     this.authority = authority;
     this.grant = grant;
+    for (const record of store.readAnswers(meta.taskId)) {
+      this.answeredQuestions.set(record.questionId, record);
+    }
+    for (const clientRequestId of store.readCancels(meta.taskId)) {
+      this.cancelRequests.add(clientRequestId);
+    }
   }
 
   get state(): TaskMeta['state'] {
@@ -53,7 +70,7 @@ export class TaskRuntime {
   }
 
   view(): Record<string, unknown> {
-    return {
+    const view = {
       contractVersion: '1.0',
       taskId: this.meta.taskId,
       requestDigest: this.meta.requestDigest,
@@ -66,6 +83,13 @@ export class TaskRuntime {
       createdAt: this.meta.createdAt,
       updatedAt: this.meta.updatedAt,
     };
+    validateView(view);
+    return view;
+  }
+
+  setRunnerPhase(phase: RunnerPhase): void {
+    this.meta.runnerPhase = phase;
+    this.store.writeMeta(this.meta);
   }
 
   emit(type: TaskEventType, fields: Record<string, unknown>): number {
@@ -85,6 +109,7 @@ export class TaskRuntime {
       type,
       ...fields,
     };
+    validateEvent(event);
     this.store.appendEvent(this.meta.taskId, event as Record<string, unknown>, sequence);
     this.meta.lastSequence = sequence;
     this.applyState(type, fields);
@@ -96,9 +121,6 @@ export class TaskRuntime {
   private applyState(type: TaskEventType, fields: Record<string, unknown>): void {
     if (type === 'status') {
       const state = fields.state as TaskMeta['state'];
-      if (this.meta.state !== 'queued' && state !== this.meta.state) {
-        // status transitions are monotonic; keep terminal guard
-      }
       this.meta.state = state;
       if (TERMINAL_STATES.has(state)) {
         this.meta.terminalSequence = this.meta.lastSequence;
@@ -125,11 +147,39 @@ export class TaskRuntime {
     if (this.meta.state === 'queued') {
       this.emit('status', { state: 'running', error: null });
     }
-    void this.runner.run(this, () => this.aborted);
+    this.armRunner();
+  }
+
+  /** Non-terminal recovery: resume the runner without re-emitting 'running'. */
+  resume(): void {
+    if (this.isTerminal() || this.meta.state === 'waiting_user') return;
+    this.armRunner();
+  }
+
+  /** At most one runner invocation is active per task; a replay submit while
+   * running only refreshes the grant and never spawns a second driver. */
+  private runnerActive = false;
+
+  private armRunner(): void {
+    if (this.runnerActive) return;
+    this.runnerActive = true;
+    void this.runner.run(this, () => this.aborted).finally(() => {
+      this.runnerActive = false;
+    });
   }
 
   requestCancel(): void {
     this.aborted = true;
+  }
+
+  hasCancelRequest(clientRequestId: string): boolean {
+    return this.cancelRequests.has(clientRequestId);
+  }
+
+  recordCancelRequest(clientRequestId: string): void {
+    if (this.cancelRequests.has(clientRequestId)) return;
+    this.cancelRequests.add(clientRequestId);
+    this.store.appendCancel(this.meta.taskId, clientRequestId);
   }
 
   cancelFinalize(): void {
@@ -138,22 +188,39 @@ export class TaskRuntime {
     }
   }
 
-  hasAnswer(questionId: string): string | null {
+  answerFor(questionId: string): AnswerRecord | null {
     return this.answeredQuestions.get(questionId) ?? null;
   }
 
-  recordAnswer(questionId: string, answer: string): void {
-    this.answeredQuestions.set(questionId, answer);
+  answerByRequestId(clientRequestId: string): AnswerRecord | null {
+    for (const record of this.answeredQuestions.values()) {
+      if (record.clientRequestId === clientRequestId) return record;
+    }
+    return null;
+  }
+
+  recordAnswer(questionId: string, answerDigest: string, clientRequestId: string): void {
+    const record: AnswerRecord = { questionId, answerDigest, clientRequestId, acceptedAt: new Date().toISOString() };
+    this.answeredQuestions.set(questionId, record);
+    this.store.appendAnswer(this.meta.taskId, record);
   }
 
   pendingQuestion(): string | null {
     return this.meta.pendingQuestionId;
   }
 
-  subscribe(res: ServerResponse): () => void {
+  /** Atomic replay→live switch: subscribe first (publish checks lastAcked),
+   * then walk persisted history, so no event can be missed or duplicated. */
+  replay(res: ServerResponse, lastEventId: number, events: { sequence: number; event: Record<string, unknown> }[]): void {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
     const subscriber: SseSubscriber = {
       res,
-      lastAcked: 0,
+      lastAcked: lastEventId,
       heartbeat: setInterval(() => {
         try {
           res.write(': hb\n\n');
@@ -167,10 +234,17 @@ export class TaskRuntime {
       clearInterval(subscriber.heartbeat);
       this.subscribers.delete(subscriber);
     });
-    return () => {
+    for (const stored of events) {
+      if (stored.sequence > subscriber.lastAcked) {
+        res.write(`id: ${stored.sequence}\ndata: ${JSON.stringify(stored.event)}\n\n`);
+        subscriber.lastAcked = stored.sequence;
+      }
+    }
+    if (this.isTerminal()) {
       clearInterval(subscriber.heartbeat);
       this.subscribers.delete(subscriber);
-    };
+      res.end();
+    }
   }
 
   publish(event: TaskEvent): void {
@@ -183,47 +257,11 @@ export class TaskRuntime {
     }
     if (TERMINAL_STATES.has(this.meta.state)) {
       for (const subscriber of this.subscribers) {
+        clearInterval(subscriber.heartbeat);
         subscriber.res.end();
       }
       this.subscribers.clear();
     }
-  }
-
-  /** Replay persisted events with sequence > lastEventId, then live. */
-  replay(res: ServerResponse, lastEventId: number, events: { sequence: number; event: Record<string, unknown> }[]): void {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    let lastSent = lastEventId;
-    for (const stored of events) {
-      if (stored.sequence > lastEventId) {
-        res.write(`id: ${stored.sequence}\ndata: ${JSON.stringify(stored.event)}\n\n`);
-        lastSent = stored.sequence;
-      }
-    }
-    if (this.isTerminal()) {
-      res.end();
-      return;
-    }
-    const subscriber: SseSubscriber = {
-      res,
-      lastAcked: lastSent,
-      heartbeat: setInterval(() => {
-        try {
-          res.write(': hb\n\n');
-        } catch {
-          /* connection gone */
-        }
-      }, 15000),
-    };
-    this.subscribers.add(subscriber);
-    res.on('close', () => {
-      clearInterval(subscriber.heartbeat);
-      this.subscribers.delete(subscriber);
-    });
   }
 }
 

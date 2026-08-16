@@ -1,10 +1,11 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { problem } from './problem.ts';
 import type { Problem } from './problem.ts';
+import { validateProblem } from './schemas.ts';
 import { parseAnswerBody, parseCancelBody, parseTaskSubmission } from './validate.ts';
-import { requestDigestOf } from './canonical.ts';
+import { requestDigestOf, answerDigestOf } from './canonical.ts';
 import { TaskRuntime } from './task.ts';
 import type { Runner } from './task.ts';
 import { TaskStore } from './store.ts';
@@ -19,6 +20,7 @@ interface EngineOptions {
 }
 
 function sendProblem(res: ServerResponse, status: number, p: Problem): void {
+  validateProblem(p);
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(p));
 }
@@ -50,8 +52,6 @@ function readBody(req: IncomingMessage, limitBytes = 1_048_576): Promise<unknown
 
 export class EngineServer {
   private readonly runtimes = new Map<string, TaskRuntime>();
-  private readonly submittedAuthorities = new Map<string, Record<string, unknown>>();
-  private readonly cancelRequestIds = new Map<string, Set<string>>();
   private readonly options: EngineOptions;
 
   constructor(options: EngineOptions) {
@@ -60,14 +60,17 @@ export class EngineServer {
       const meta = options.store.get(taskId);
       if (!meta) continue;
       const authority = this.restoreAuthority(taskId);
-      const runtime = new TaskRuntime(meta, options.store, authority, { taskGrant: '', expiresAt: '' }, options.runnerFactory(meta, authority));
+      const runtime = new TaskRuntime(meta, options.store, authority, { taskGrant: '', expiresAt: '1970-01-01T00:00:00Z' }, options.runnerFactory(meta, authority));
       this.runtimes.set(taskId, runtime);
-      this.submittedAuthorities.set(taskId, authority);
+      // Non-terminal recovery: queued tasks start, running tasks resume,
+      // waiting_user tasks stay parked until /answer.
+      if (!runtime.isTerminal()) {
+        if (runtime.state === 'queued') runtime.start();
+        else runtime.resume();
+      }
     }
   }
 
-  /** Authority is not persisted in plaintext-secret-free form; P1 keeps the
-   * raw authority beside the task dir (no secrets inside authority). */
   private restoreAuthority(taskId: string): Record<string, unknown> {
     try {
       const path = join(this.options.store.taskDir(taskId), 'authority.json');
@@ -81,8 +84,7 @@ export class EngineServer {
     const url = new URL(req.url ?? '/', 'http://engine.local');
     const path = url.pathname;
 
-    const authorized = this.authorized(req);
-    if (!authorized) {
+    if (!this.authorized(req)) {
       sendProblem(res, 401, problem('UNAUTHORIZED', 'authorization', 'missing or invalid service credential', false));
       return;
     }
@@ -90,7 +92,10 @@ export class EngineServer {
     void this.route(req, res, path);
   }
 
+  /** Fail-closed: without a configured service token every control-plane call
+   * is rejected. There is no open mode. */
   private authorized(req: IncomingMessage): boolean {
+    if (this.options.serviceToken.length === 0) return false;
     const header = req.headers.authorization;
     if (!header || !header.startsWith('Bearer ')) return false;
     return header.slice('Bearer '.length) === this.options.serviceToken;
@@ -129,8 +134,9 @@ export class EngineServer {
     let submission;
     try {
       submission = parseTaskSubmission(body);
-    } catch {
-      sendProblem(res, 400, problem('INVALID_SUBMISSION', 'request', 'task submission violates the frozen contract', false));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      sendProblem(res, 400, problem('INVALID_SUBMISSION', 'request', 'task submission violates the frozen contract: ' + message.slice(0, 600), false));
       return;
     }
     const computed = requestDigestOf(submission.authority);
@@ -146,8 +152,11 @@ export class EngineServer {
         return;
       }
       existing.grant = submission.gateway;
-      if (!existing.isTerminal() && existing.meta.state === 'queued') {
-        existing.start();
+      // Exact replay refreshes the short-lived task grant and re-arms a
+      // non-terminal task; events and side effects are never replayed.
+      if (!existing.isTerminal()) {
+        if (existing.state === 'queued') existing.start();
+        else if (existing.state === 'running') existing.resume();
       }
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ contractVersion: '1.0', replayed: true, task: existing.view() }));
@@ -156,11 +165,9 @@ export class EngineServer {
 
     const createdAt = new Date().toISOString();
     const meta = this.options.store.create(submission.taskId, submission.requestDigest, createdAt);
-    const { writeFileSync } = await import('node:fs');
     writeFileSync(join(this.options.store.taskDir(submission.taskId), 'authority.json'), JSON.stringify(submission.authority), 'utf8');
     const runtime = new TaskRuntime(meta, this.options.store, submission.authority as unknown as Record<string, unknown>, submission.gateway, this.options.runnerFactory(meta, submission.authority as unknown as Record<string, unknown>));
     this.runtimes.set(submission.taskId, runtime);
-    this.submittedAuthorities.set(submission.taskId, submission.authority as unknown as Record<string, unknown>);
     runtime.emit('status', { state: 'queued', error: null });
     runtime.start();
     res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -216,12 +223,7 @@ export class EngineServer {
       sendProblem(res, 400, problem('INVALID_CANCEL', 'request', 'cancel body violates the frozen contract', false));
       return;
     }
-    let ids = this.cancelRequestIds.get(taskId);
-    if (!ids) {
-      ids = new Set();
-      this.cancelRequestIds.set(taskId, ids);
-    }
-    ids.add(parsed.clientRequestId);
+    runtime.recordCancelRequest(parsed.clientRequestId);
     if (!runtime.isTerminal()) {
       runtime.requestCancel();
       runtime.cancelFinalize();
@@ -246,29 +248,42 @@ export class EngineServer {
     let parsed;
     try {
       parsed = parseAnswerBody(body);
-    } catch {
-      sendProblem(res, 400, problem('INVALID_ANSWER', 'request', 'answer body violates the frozen contract', false));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      sendProblem(res, 400, problem('INVALID_ANSWER', 'request', 'answer body violates the frozen contract: ' + message.slice(0, 600), false));
       return;
     }
-    if (runtime.state !== 'waiting_user') {
-      sendProblem(res, 409, problem('NO_PENDING_QUESTION', 'request', 'task has no pending question', false, taskId));
+
+    if (runtime.pendingQuestion() !== parsed.questionId || runtime.state !== 'waiting_user') {
+      sendProblem(res, 409, problem('QUESTION_NOT_PENDING', 'request', 'questionId is not the currently pending question', false, taskId));
       return;
     }
-    if (runtime.pendingQuestion() !== parsed.questionId) {
-      sendProblem(res, 409, problem('QUESTION_MISMATCH', 'request', 'questionId does not match the pending question', false, taskId));
-      return;
-    }
-    const previous = runtime.hasAnswer(parsed.questionId);
-    if (previous !== null) {
-      if (previous === parsed.answer) {
+
+    // Idempotency by clientRequestId first: the same request id must always
+    // name the same question and digest.
+    const byRequestId = runtime.answerByRequestId(parsed.clientRequestId);
+    if (byRequestId !== null) {
+      if (byRequestId.questionId === parsed.questionId && byRequestId.answerDigest === parsed.answerDigest) {
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(runtime.view()));
         return;
       }
-      sendProblem(res, 409, problem('ANSWER_CONFLICT', 'request', 'question already answered with different content', false, taskId));
+      sendProblem(res, 409, problem('ANSWER_REQUEST_CONFLICT', 'request', 'clientRequestId already used with a different questionId or answerDigest', false, taskId));
       return;
     }
-    runtime.recordAnswer(parsed.questionId, parsed.answer);
+
+    const byQuestion = runtime.answerFor(parsed.questionId);
+    if (byQuestion !== null) {
+      if (byQuestion.answerDigest === parsed.answerDigest) {
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(runtime.view()));
+        return;
+      }
+      sendProblem(res, 409, problem('QUESTION_ANSWER_CONFLICT', 'request', 'question already answered with a different answerDigest', false, taskId));
+      return;
+    }
+
+    runtime.recordAnswer(parsed.questionId, parsed.answerDigest, parsed.clientRequestId);
     this.options.onAnswer(runtime);
     res.writeHead(202, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(runtime.view()));

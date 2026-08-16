@@ -57,6 +57,7 @@ const engine = new EngineServer({
   onAnswer: (task: TaskRuntime) => {
     stubResumeAfterAnswer(task, {
       conclusion: process.env.STUB_CONCLUSION ?? 'stub conclusion after answer',
+      answerDelayMs: Number(process.env.STUB_ANSWER_DELAY_MS ?? 10),
     });
   },
 });

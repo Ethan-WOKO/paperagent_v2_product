@@ -71,6 +71,37 @@ export class StubGateway implements GatewayClient {
     this.files = files;
     this.contents = contents;
     this.submissionLogPath = submissionLogPath;
+    // Replay the persisted submission log so restart never re-dispatches.
+    for (const line of submissionLogPath ? loadSubmissionLog(submissionLogPath) : []) {
+      try {
+        const entry = JSON.parse(line) as { clientRequestId: string; requestDigest: string; argv: string[] };
+        this.submissions.set(entry.clientRequestId, this.rebuildView(entry));
+      } catch {
+        /* ignore malformed local log lines */
+      }
+    }
+  }
+
+  private rebuildView(entry: { clientRequestId: string; requestDigest: string; argv: string[] }): SandboxView & { receipt: ReceiptProjection | null } {
+    const executionRef = 'stub-exec.' + sha256Hex(entry.clientRequestId).slice(0, 16);
+    const receiptRef = 'receipt.stub.' + sha256Hex(entry.clientRequestId).slice(0, 12);
+    return {
+      clientRequestId: entry.clientRequestId,
+      requestDigest: entry.requestDigest,
+      executionRef,
+      state: 'SUCCEEDED',
+      receiptRef,
+      receipt: {
+        receiptRef,
+        executionRef,
+        status: 'SUCCEEDED',
+        exitCode: 0,
+        stdout: { text: '[1, 2, 3]\n', truncated: false, originalBytes: 8 },
+        stderr: { text: '', truncated: false, originalBytes: 0 },
+        inputFingerprint: sha256Hex(entry.argv.join('\0')),
+        inputs: [],
+      },
+    };
   }
 
   async listWorkspaceFiles(): Promise<WorkspaceFileEntry[]> {
@@ -105,34 +136,11 @@ export class StubGateway implements GatewayClient {
       }
       return this.viewOf(existing);
     }
-    const executionRef = 'stub-exec.' + sha256Hex(request.clientRequestId).slice(0, 16);
-    const view: SandboxView & { receipt: ReceiptProjection | null } = {
-      clientRequestId: request.clientRequestId,
-      requestDigest: request.requestDigest,
-      executionRef,
-      state: 'SUCCEEDED',
-      receiptRef: null,
-      receipt: null,
-    };
-    const receiptRef = 'receipt.stub.' + ++this.receiptSeq;
-    view.state = 'SUCCEEDED';
-    view.receiptRef = receiptRef;
-    view.receipt = {
-      receiptRef,
-      executionRef,
-      status: 'SUCCEEDED',
-      exitCode: 0,
-      stdout: { text: '[1, 2, 3]\n', truncated: false, originalBytes: 8 },
-      stderr: { text: '', truncated: false, originalBytes: 0 },
-      inputFingerprint: sha256Hex(request.argv.join('\0') + request.inputs.map((i) => i.path + i.sha256).join('\0')),
-      inputs: request.inputs.map((i) => {
-        const entry = this.files.find((f) => f.path === i.path);
-        return { path: i.path, sha256: i.sha256, sizeBytes: entry?.sizeBytes ?? 0 };
-      }),
-    };
+    const entry = { clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, argv: request.argv };
+    const view = this.rebuildView(entry);
     this.submissions.set(request.clientRequestId, view);
     if (this.submissionLogPath) {
-      appendFileSync(this.submissionLogPath, JSON.stringify({ clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, argv: request.argv }) + '\n', 'utf8');
+      appendFileSync(this.submissionLogPath, JSON.stringify(entry) + '\n', 'utf8');
     }
     return this.viewOf(view);
   }
