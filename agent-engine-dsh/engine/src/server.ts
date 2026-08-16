@@ -16,7 +16,7 @@ interface EngineOptions {
   serviceToken: string;
   store: TaskStore;
   runnerFactory: (meta: TaskMeta, authority: Record<string, unknown>) => Runner;
-  onAnswer: (task: TaskRuntime) => void;
+  onAnswer: (task: TaskRuntime, answer: { questionId: string; answer: string }) => void;
 }
 
 function sendProblem(res: ServerResponse, status: number, p: Problem): void {
@@ -281,7 +281,7 @@ export class EngineServer {
     }
 
     runtime.recordAnswer(parsed.questionId, parsed.answerDigest, parsed.clientRequestId);
-    this.options.onAnswer(runtime);
+    this.options.onAnswer(runtime, { questionId: parsed.questionId, answer: parsed.answer });
     res.writeHead(202, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(runtime.view()));
   }

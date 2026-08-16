@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renam
 import { join } from 'node:path';
 import { sha256Hex } from './canonical.ts';
 
-export type RunnerPhase = 'init' | 'messaged' | 'tool-requested' | 'tool-running' | 'tool-succeeded' | 'delivered' | 'questioned';
+export type RunnerPhase = 'init' | 'started' | 'messaged' | 'tool-requested' | 'tool-running' | 'tool-succeeded' | 'delivered' | 'questioned';
 
 export interface TaskMeta {
   taskId: string;
@@ -130,6 +130,23 @@ export class TaskStore {
       .split('\n')
       .filter((line) => line.trim().length > 0)
       .map((line) => (JSON.parse(line) as { clientRequestId: string }).clientRequestId);
+  }
+
+  toolLedgerPath(taskId: string): string {
+    return join(this.taskDir(taskId), 'tool-ledger.jsonl');
+  }
+
+  appendToolLedger(taskId: string, entry: Record<string, unknown>): void {
+    appendFileSync(this.toolLedgerPath(taskId), JSON.stringify(entry) + '\n', 'utf8');
+  }
+
+  readToolLedger(taskId: string): Record<string, unknown>[] {
+    const path = this.toolLedgerPath(taskId);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
   }
 
   listTaskIds(): string[] {

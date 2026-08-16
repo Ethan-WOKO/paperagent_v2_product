@@ -68,7 +68,7 @@ async function getJson(base, path, token = TOKEN) {
 
 function startEngine(env) {
   const proc = spawn(process.execPath, [engineEntry], {
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, ENGINE_RUNNER: env.ENGINE_RUNNER ?? 'stub' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout.on('data', () => {});

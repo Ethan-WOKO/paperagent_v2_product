@@ -18,15 +18,18 @@ export class DshRunner implements Runner {
   private readonly dsh: DshRuntime;
   private readonly gatewayFactory: (task: TaskRuntime) => GatewayClient;
   private readonly systemPromptText: string;
+  private readonly providerRouteOverride: string | null;
 
   constructor(
     dsh: DshRuntime,
     gatewayFactory: (task: TaskRuntime) => GatewayClient,
     systemPromptText: string,
+    providerRouteOverride: string | null = null,
   ) {
     this.dsh = dsh;
     this.gatewayFactory = gatewayFactory;
     this.systemPromptText = systemPromptText;
+    this.providerRouteOverride = providerRouteOverride;
   }
 
   async run(task: TaskRuntime, isCancelled: () => boolean): Promise<void> {
@@ -53,7 +56,7 @@ export class DshRunner implements Runner {
       ? (task.authority.model as { provider: string }).provider
       : 'deepseek';
     const model = (task.authority.model as { model: string }).model;
-    const providerRoute = provider === 'deepseek' ? 'deepseek-official' : provider;
+    const providerRoute = this.providerRouteOverride ?? (provider === 'deepseek' ? 'deepseek-official' : provider);
 
     let latestAssistantText = '';
     let modelCalls = task.meta.modelCallsUsed ?? 0;
@@ -74,12 +77,15 @@ export class DshRunner implements Runner {
 
     const offRequest = this.dsh.onAgentRequest((sessionId, turn, step, next) => {
       if (sessionId !== taskId) return next();
+      // Hard budget: the 21st request is rejected BEFORE dispatch — next() is
+      // never called, so no provider stream starts.
+      if (modelCalls + 1 > MAX_MODEL_CALLS_PER_TASK) {
+        budgetExhausted = true;
+        throw new Error('MODEL_BUDGET_EXCEEDED');
+      }
       modelCalls++;
       task.meta.modelCallsUsed = modelCalls;
       task.touch();
-      if (modelCalls > MAX_MODEL_CALLS_PER_TASK) {
-        budgetExhausted = true;
-      }
       return next();
     });
 
@@ -102,6 +108,7 @@ export class DshRunner implements Runner {
           agentCtx.tools.register(tools.listTool as never);
           agentCtx.tools.register(tools.readTool as never);
           agentCtx.tools.register(tools.sandboxTool as never);
+          agentCtx.tools.register(tools.askUserTool as never);
           const agentSystemPrompt = agentCtx.systemPrompt;
           if (agentSystemPrompt && typeof agentSystemPrompt.section === 'function') {
             agentSystemPrompt.section({ name: 'paperagent-product', order: 0, text: this.systemPromptText } as never);
@@ -110,6 +117,7 @@ export class DshRunner implements Runner {
       });
       const agent = handle.agent;
       agentId = String(agent.id);
+      task.setRunnerPhase('started');
 
       const resumed = task.meta.runnerPhase !== 'init';
       const userText = (text: string) => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } } as never) as never;
@@ -154,10 +162,27 @@ export class DshRunner implements Runner {
         return;
       }
       const receiptRefs = tools.collectReceiptRefs();
+      // P1 completion gate: acceptance tasks must carry at least one formal
+      // Receipt; a success without one is a program-enforced failure.
+      if (receiptRefs.length === 0) {
+        task.emit('status', {
+          state: 'failed',
+          error: {
+            contractVersion: '1.0',
+            code: 'RECEIPT_REQUIRED_NOT_SATISFIED',
+            category: 'tool',
+            message: 'success delivery requires at least one formal Receipt',
+            retryable: false,
+            sourceRef: null,
+          },
+        });
+        return;
+      }
       task.emit('delivery', {
         conclusion: (latestAssistantText || 'task finished without a final model message').slice(0, 16000),
         receiptRefs,
       });
+      task.setRunnerPhase('delivered');
       task.emit('status', { state: 'succeeded', error: null });
     } catch (e) {
       // Uniform sanitization: raw error text, paths, and configuration never

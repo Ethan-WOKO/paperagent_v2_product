@@ -28,6 +28,8 @@ export interface TaskStorePort {
   readAnswers(taskId: string): AnswerRecord[];
   appendCancel(taskId: string, clientRequestId: string): void;
   readCancels(taskId: string): string[];
+  appendToolLedger(taskId: string, entry: Record<string, unknown>): void;
+  readToolLedger(taskId: string): Record<string, unknown>[];
 }
 
 export class TaskRuntime {
@@ -212,6 +214,36 @@ export class TaskRuntime {
 
   pendingQuestion(): string | null {
     return this.meta.pendingQuestionId;
+  }
+
+  private answerGates = new Map<string, (answer: string) => void>();
+
+  /** Ask the user: emits the question event and returns the question id plus a
+   * promise resolving with the delivered answer. Used by the DSH ask_user tool. */
+  askUser(text: string): { questionId: string; answerPromise: Promise<string> } {
+    const questionId = 'q' + this.meta.lastSequence + '.' + Math.random().toString(36).slice(2, 10);
+    this.emit('question', { questionId, text: text.slice(0, 4000) });
+    const answerPromise = new Promise<string>((resolve) => {
+      this.answerGates.set(questionId, resolve);
+    });
+    return { questionId, answerPromise };
+  }
+
+  /** Resolve a pending ask_user gate. Returns false when no gate is waiting. */
+  deliverAnswer(questionId: string, answer: string): boolean {
+    const resolve = this.answerGates.get(questionId);
+    if (!resolve) return false;
+    this.answerGates.delete(questionId);
+    resolve(answer);
+    return true;
+  }
+
+  appendToolLedger(entry: Record<string, unknown>): void {
+    this.store.appendToolLedger(this.meta.taskId, entry);
+  }
+
+  readToolLedger(): Record<string, unknown>[] {
+    return this.store.readToolLedger(this.meta.taskId);
   }
 
   /** Atomic replay→live switch: subscribe first (publish checks lastAcked),
