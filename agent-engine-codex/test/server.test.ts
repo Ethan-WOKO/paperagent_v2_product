@@ -1,0 +1,62 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import type { AddressInfo } from "node:net";
+import { afterEach, describe, expect, it } from "vitest";
+import { AgentEngine } from "../src/engine.js";
+import type { GatewayClient, SandboxRequest } from "../src/gateway.js";
+import { createEngineServer } from "../src/server.js";
+import { TaskStore } from "../src/store.js";
+import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, Receipt, SandboxView, TaskSubmission } from "../src/types.js";
+import { digestObject } from "../src/util.js";
+import { ContractValidator } from "../src/validation.js";
+
+const token = "service-token-that-is-at-least-32-chars";
+const taskId = `task.${"1".repeat(64)}`;
+const servers: Array<ReturnType<typeof createEngineServer>> = [];
+afterEach(async () => { await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolveClose) => server.close(() => resolveClose())))); });
+
+describe("Engine HTTP control plane", () => {
+  it("requires the service bearer and replays SSE strictly after Last-Event-ID", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "paperagent-server-"));
+    const engine = new AgentEngine({ store: new TaskStore(directory), provider: new FinalProvider(), gateway: new FinalGateway(), validator: new ContractValidator(resolve(process.cwd(), "../agent-engine-contract")) });
+    await engine.initialize();
+    const server = createEngineServer(engine, token); servers.push(server);
+    await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    expect((await fetch(`${origin}/v1/tasks/${taskId}`)).status).toBe(401);
+    const submitted = await fetch(`${origin}/v1/tasks`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(submission()) });
+    expect(submitted.status).toBe(202);
+    await waitFor(async () => (await authenticatedJson(`${origin}/v1/tasks/${taskId}`) as { state: string }).state === "succeeded");
+    const controller = new AbortController();
+    const stream = await fetch(`${origin}/v1/tasks/${taskId}/events`, { headers: { authorization: `Bearer ${token}`, "Last-Event-ID": "1" }, signal: controller.signal });
+    const chunk = await stream.body!.getReader().read(); controller.abort();
+    const text = new TextDecoder().decode(chunk.value);
+    expect(text).toContain("id: 2"); expect(text).not.toContain("id: 1\n");
+  });
+});
+
+class FinalProvider implements ModelProvider {
+  private calls = 0;
+  complete(_request: ModelRequest): Promise<ModelResponse> {
+    this.calls += 1;
+    if (this.calls === 1) return Promise.resolve({ content: null, toolCalls: [{ id: "provider", name: "execute_in_sandbox", arguments: JSON.stringify({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: "2".repeat(64) }], timeoutMillis: 5000 }) }] });
+    return Promise.resolve({ content: "done", toolCalls: [] });
+  }
+}
+
+class FinalGateway implements GatewayClient {
+  list(): Promise<FileList> { throw new Error("unused"); }
+  read(): Promise<FileRead> { throw new Error("unused"); }
+  submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.server", state: "SUCCEEDED", receiptRef: "receipt.server" }); }
+  execution(): Promise<SandboxView> { throw new Error("unused"); }
+  receipt(): Promise<Receipt> { return Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.server", executionRef: "execution.server", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "3".repeat(64), inputs: [{ path: "Sort.java", sha256: "2".repeat(64), sizeBytes: 4 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+function submission(): TaskSubmission {
+  const authority = { runMode: "PERSISTENT_PLAN_EXECUTE" as const, sessionRef: "session.http", project: { projectId: "9", projectVersion: "2".repeat(64) }, instruction: "Report status", permissions: { readProject: true as const, writeWorkspace: false as const, executeSandbox: true as const }, model: { provider: "test", model: "test" } };
+  return { contractVersion: "1.0", taskId, requestDigest: digestObject(authority), authority, gateway: { taskGrant: "g".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+}
+
+async function authenticatedJson(url: string): Promise<unknown> { return await (await fetch(url, { headers: { authorization: `Bearer ${token}` } })).json(); }
+async function waitFor(predicate: () => Promise<boolean>): Promise<void> { for (let index = 0; index < 100; index += 1) { if (await predicate()) return; await new Promise((resolveWait) => setTimeout(resolveWait, 5)); } throw new Error("condition not reached"); }
