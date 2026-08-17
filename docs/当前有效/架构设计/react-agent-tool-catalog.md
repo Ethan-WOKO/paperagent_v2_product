@@ -1,7 +1,7 @@
 # ReAct Agent 工具目录边界
 
-状态：**CURRENT**  
-日期：2026-08-17  
+状态：**CURRENT**
+日期：2026-08-17
 适用范围：`agent-engine-reactplan` 与产品内部注册工具网关
 
 ## 决定
