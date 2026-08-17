@@ -98,8 +98,8 @@ describe("AgentEngine", () => {
     await engine.submit(request);
     await waitFor(() => engine.get(request.taskId).state === "succeeded");
 
-    expect(provider.requests).toHaveLength(5);
-    expect(provider.requests[2]!.messages.some((message) => message.role === "user"
+    expect(provider.requests).toHaveLength(6);
+    expect(provider.requests[3]!.messages.some((message) => message.role === "user"
       && message.content?.includes("isolated Workspace has unvalidated changes"))).toBe(true);
     expect(gateway.lastSandboxHash).toBe(replacementHash);
   });
@@ -197,10 +197,10 @@ describe("AgentEngine", () => {
 
     const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
     expect(delivery?.type === "delivery" ? delivery.conclusion : "").not.toContain("pom.xml");
-    expect(provider.requests).toHaveLength(3);
-    expect(provider.requests[2]!.messages.some((message) =>
+    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests[3]!.messages.some((message) =>
       message.role === "user" && message.content?.includes("unobserved Project files: pom.xml"))).toBe(true);
-    expect(provider.requests[2]!.messages.some((message) =>
+    expect(provider.requests[3]!.messages.some((message) =>
       message.role === "user" && message.content?.includes("remove it and do not inspect unrelated Project data"))).toBe(true);
   });
 
@@ -231,7 +231,7 @@ describe("AgentEngine", () => {
 
     const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
     expect(delivery?.type === "delivery" ? delivery.conclusion : "").toContain("仍需对修改后的文件重新编译确认");
-    expect(provider.requests[2]!.messages.some((message) => message.role === "user"
+    expect(provider.requests[3]!.messages.some((message) => message.role === "user"
       && message.content?.includes("hypothetical code change"))).toBe(true);
   });
 
@@ -306,6 +306,38 @@ describe("AgentEngine", () => {
       event.type === "tool" && event.state === "requested")).toHaveLength(1);
   });
 
+  it("rejects an unloaded tool call with actionable model feedback and executes only after loading", async () => {
+    const provider = new ScriptedProvider([
+      tool("project_search", { query: "order-service" }),
+      tool("load_tool", { name: "project_search" }),
+      tool("project_search", { query: "order-service" }),
+      { content: "Located the requested module.", toolCalls: [] }
+    ], false);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const rejection = provider.requests[1]!.messages.find((message) =>
+      message.role === "tool" && message.content?.includes("TOOL_SCHEMA_NOT_LOADED"));
+    expect(rejection?.content).toContain("Call load_tool with name=project_search");
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.state === "requested")).toHaveLength(1);
+  });
+
+  it("rejects a registered catalog that collides with a reserved Engine tool name", async () => {
+    const provider = new ScriptedProvider([{ content: "must not run", toolCalls: [] }]);
+    const engine = await createEngine(provider, new ConflictingToolGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+
+    expect(engine.get(taskId).error).toMatchObject({
+      code: "REGISTERED_TOOL_NAME_CONFLICT", category: "tool", retryable: false
+    });
+    expect(provider.requests).toHaveLength(0);
+  });
+
   it("accepts exact replay, refreshes the grant, and rejects a digest conflict", async () => {
     const engine = await createEngine(new ScriptedProvider([{ content: "done", toolCalls: [] }]), new FakeGateway());
     const request = submission();
@@ -335,7 +367,7 @@ describe("AgentEngine", () => {
     await engine.answer(taskId, answer);
     await expect(engine.answer(taskId, { ...answer, clientRequestId: `answer.${"y".repeat(16)}`, answer: "Other.java", answerDigest: sha256("Other.java") })).rejects.toMatchObject({ status: 409, problem: { code: "QUESTION_ANSWER_CONFLICT" } });
     await waitFor(() => engine.get(taskId).state === "succeeded");
-    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests).toHaveLength(3);
   });
 
   it("loads persisted events and resumes only after an exact replay supplies a fresh grant", async () => {
@@ -425,9 +457,27 @@ describe("AgentEngine", () => {
 
 class ScriptedProvider implements ModelProvider {
   readonly requests: ModelRequest[] = [];
-  constructor(private readonly responses: ModelResponse[]) {}
+  private preloadAttempted = false;
+  constructor(private readonly responses: ModelResponse[], private readonly autoLoad = true) {}
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
+    if (this.autoLoad && !this.preloadAttempted) {
+      this.preloadAttempted = true;
+      const firstCalls = this.responses[0]?.toolCalls ?? [];
+      if (!firstCalls.some((call) => call.name === "load_tool")) {
+        const names = [...new Set(this.responses.flatMap((response) =>
+          response.toolCalls.map((call) => call.name)).filter((name) => name !== "load_tool"))];
+        if (names.length > 0) {
+          return {
+            content: null,
+            toolCalls: names.map((name, index) => ({
+              id: `provider-load-${index}`, name: "load_tool",
+              arguments: JSON.stringify({ name })
+            }))
+          };
+        }
+      }
+    }
     const response = this.responses.shift();
     if (!response) throw new Error("No scripted response");
     return response;
@@ -456,6 +506,23 @@ class FakeGateway implements GatewayClient {
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
   receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class ConflictingToolGateway extends FakeGateway {
+  override tools(taskIdValue: string): Promise<RegisteredToolCatalog> {
+    return Promise.resolve({
+      contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      catalogDigest: "d".repeat(64),
+      tools: [{
+        type: "function",
+        function: {
+          name: "list_project_files",
+          description: "Conflicts with an Engine-owned tool.",
+          parameters: { type: "object", properties: {} }
+        }
+      }]
+    });
+  }
 }
 
 class PollingFailedGateway extends FakeGateway {
