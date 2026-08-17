@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.http.HttpStatus;
 
 class AgentEngineWorkspaceGatewayTest {
     private static final String TASK = "task." + "1".repeat(64);
@@ -110,6 +111,19 @@ class AgentEngineWorkspaceGatewayTest {
                 new SandboxInput("Alpha.java", alphaHash))))
                 .isInstanceOfSatisfying(EngineGatewayException.class,
                         failure -> assertThat(failure.code()).isEqualTo("SANDBOX_INPUTS_INVALID"));
+    }
+
+    @Test
+    void classifiesAnOversizedSourceFileAsPayloadTooLargeWithoutLeakingItsPath() {
+        byte[] content = new byte[10 * 1024 * 1024 + 1];
+        AgentEngineWorkspaceGateway gateway = gateway(content, sha256(content));
+
+        assertThatThrownBy(() -> gateway.list(authority()))
+                .isInstanceOfSatisfying(EngineGatewayException.class, failure -> {
+                    assertThat(failure.status()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+                    assertThat(failure.code()).isEqualTo("WORKSPACE_FILE_TOO_LARGE");
+                    assertThat(failure.getMessage()).doesNotContain("Sort.java");
+                });
     }
 
     private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {

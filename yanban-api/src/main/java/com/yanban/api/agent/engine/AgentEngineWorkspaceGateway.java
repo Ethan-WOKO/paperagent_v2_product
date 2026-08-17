@@ -18,6 +18,7 @@ import io.paperagent.v2.contracts.WorkspaceMaterializationSpec;
 import io.paperagent.v2.workspace.LocalWorkspaceProvider;
 import io.paperagent.v2.workspace.VerifiedWorkspaceMaterialization;
 import io.paperagent.v2.workspace.WorkspaceFileStat;
+import io.paperagent.v2.workspace.WorkspaceException;
 import io.paperagent.v2.workspace.WorkspacePort;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
@@ -172,9 +173,23 @@ final class AgentEngineWorkspaceGateway {
             return bound;
         } catch (EngineGatewayException failure) {
             throw failure;
+        } catch (WorkspaceException failure) {
+            throw materializationFailure(failure);
         } catch (RuntimeException failure) {
             throw EngineGatewayException.conflict("WORKSPACE_MATERIALIZATION_FAILED");
         }
+    }
+
+    private static EngineGatewayException materializationFailure(WorkspaceException failure) {
+        return switch (failure.code()) {
+            case FILE_LIMIT_EXCEEDED ->
+                    EngineGatewayException.tooLarge("WORKSPACE_FILE_TOO_LARGE");
+            case AGGREGATE_LIMIT_EXCEEDED ->
+                    EngineGatewayException.tooLarge("WORKSPACE_TOTAL_TOO_LARGE");
+            case FILE_COUNT_LIMIT_EXCEEDED ->
+                    EngineGatewayException.tooLarge("WORKSPACE_FILE_LIMIT_EXCEEDED");
+            default -> EngineGatewayException.conflict("WORKSPACE_MATERIALIZATION_FAILED");
+        };
     }
 
     private static List<WorkspaceFileStat> stats(BoundWorkspace bound) {
