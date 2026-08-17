@@ -80,6 +80,16 @@ P1 模型 provider/model 来自任务权威，但模型 API 密钥由 Engine 进
 凭证，不得改写 authority、清空事件或重新提交已经存在的沙箱执行。Engine 冷启动后，
 Java 用相同 taskId/digest 重新提交以恢复运行时凭证；凭证本身不属于持久恢复事实。
 
+任务提交可以携带独立的 `context.longTermMemory` 数据区。它不是 authority，不授予权限，
+也不参与 `requestDigest`。Java 产品只放入当前认证用户已确认且仍有效的 USER 记忆，以及
+与当前 Project 和冻结 ProjectVersion 精确匹配的 PROJECT 记忆。每条记录使用明确的
+`id`、`scope`、`memoryType`、`content` 和 `updatedAt` 字段。
+
+Engine 在首次接受 task 时冻结并持久化该结构；同一 task 的恢复继续使用首次快照，不能
+被重放请求中的新记忆静默替换。模型接收的是单独标记为 `long_term_memory` 的数据区：
+它可以指导相关偏好和背景理解，但不能覆盖当前任务、工具规则、权限或证据要求。记忆正文
+不得进入 task event、日志或安全摘要。新 turn 会重新读取用户此刻编辑后的有效记忆。
+
 ## 5. 事件和恢复
 
 - 每个任务的持久事件 `sequence` 从 1 开始严格连续递增。

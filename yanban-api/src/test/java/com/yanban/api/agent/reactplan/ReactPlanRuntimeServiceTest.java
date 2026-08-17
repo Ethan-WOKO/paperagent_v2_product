@@ -16,11 +16,14 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.memory.LongTermMemoryRetrievalService;
+import com.yanban.api.memory.LongTermMemorySnapshot;
 import com.yanban.core.agent.AgentRunIdentity;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistenceResult;
 import io.paperagent.v2.contracts.Capability;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +36,7 @@ class ReactPlanRuntimeServiceTest {
     private AuthenticatedReactPlanBootstrapComposer plans;
     private AgentEngineTaskGrantService grants;
     private ReactPlanEngineClient engine;
+    private LongTermMemoryRetrievalService longTermMemories;
     private ReactPlanRuntimeService runtime;
 
     @BeforeEach
@@ -41,18 +45,30 @@ class ReactPlanRuntimeServiceTest {
         plans = mock(AuthenticatedReactPlanBootstrapComposer.class);
         grants = mock(AgentEngineTaskGrantService.class);
         engine = mock(ReactPlanEngineClient.class);
+        longTermMemories = mock(LongTermMemoryRetrievalService.class);
         ReactPlanRuntimeProperties properties = new ReactPlanRuntimeProperties();
-        runtime = new ReactPlanRuntimeService(json, properties, contexts, plans, grants, engine);
+        runtime = new ReactPlanRuntimeService(
+                json, properties, contexts, plans, grants, engine, longTermMemories);
         when(contexts.resolve(7L, 42L)).thenReturn(projectContext());
         when(plans.bootstrap(any(Long.class), any(Long.class), any()))
                 .thenReturn(PersistenceResult.replayed(mock(PersistedPlanBootstrap.class)));
         when(grants.issue(any(), any(), any(Long.class), any(Long.class)))
                 .thenReturn(new EngineTaskGrant("g".repeat(32), Instant.parse("2099-01-01T00:00:00Z")));
         when(engine.submit(any())).thenReturn(json.createObjectNode().put("state", "queued"));
+        when(longTermMemories.retrieveAllGoverned(7L, 88L, "b".repeat(64)))
+                .thenReturn(LongTermMemorySnapshot.empty());
     }
 
     @Test
     void submitsStableAuthorityDigestAndKeepsGrantOutsideAuthority() {
+        when(longTermMemories.retrieveAllGoverned(7L, 88L, "b".repeat(64)))
+                .thenReturn(new LongTermMemorySnapshot(List.of(
+                        new LongTermMemorySnapshot.Entry(
+                                "11", "USER", "PREFERENCE", "Prefer concise Chinese answers.",
+                                "2026-08-17T10:00:00Z"),
+                        new LongTermMemorySnapshot.Entry(
+                                "12", "PROJECT", "FACT", "This Project targets Java 17.",
+                                "2026-08-17T11:00:00Z"))));
         runtime.submit(7L, 42L, new ReactPlanTaskRequest("Compile Sort.java", null, null));
 
         ArgumentCaptor<JsonNode> submission = ArgumentCaptor.forClass(JsonNode.class);
@@ -67,12 +83,33 @@ class ReactPlanRuntimeServiceTest {
         assertEquals("g".repeat(32), body.path("gateway").path("taskGrant").asText());
         assertTrue(body.path("authority").path("permissions").path("writeWorkspace").asBoolean());
         assertFalse(body.path("authority").toString().contains("taskGrant"));
+        assertFalse(body.path("authority").toString().contains("Prefer concise Chinese answers"));
+        JsonNode memory = body.path("context").path("longTermMemory");
+        assertEquals("long_term_memory", memory.path("type").asText());
+        assertTrue(memory.path("notAnInstruction").asBoolean());
+        assertEquals(2, memory.path("entries").size());
+        assertEquals("11", memory.path("entries").get(0).path("id").asText());
+        assertEquals("PROJECT", memory.path("entries").get(1).path("scope").asText());
+        verify(longTermMemories).retrieveAllGoverned(7L, 88L, "b".repeat(64));
 
         ArgumentCaptor<ReactPlanBootstrapCommand> command =
                 ArgumentCaptor.forClass(ReactPlanBootstrapCommand.class);
         verify(plans).bootstrap(any(Long.class), any(Long.class), command.capture());
         assertTrue(command.getValue().executionProfile().capabilities()
                 .contains(Capability.WRITE_WORKSPACE));
+    }
+
+    @Test
+    void degradesToAnEmptyMemoryEnvelopeWhenMemoryLoadingFails() {
+        when(longTermMemories.retrieveAllGoverned(7L, 88L, "b".repeat(64)))
+                .thenThrow(new IllegalStateException("database unavailable"));
+
+        runtime.submit(7L, 42L, new ReactPlanTaskRequest("Compile Sort.java", null, null));
+
+        ArgumentCaptor<JsonNode> submission = ArgumentCaptor.forClass(JsonNode.class);
+        verify(engine).submit(submission.capture());
+        assertTrue(submission.getValue().path("context").path("longTermMemory")
+                .path("entries").isEmpty());
     }
 
     @Test
