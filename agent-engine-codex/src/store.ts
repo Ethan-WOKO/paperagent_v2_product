@@ -98,6 +98,11 @@ function reconcile(task: PersistedTask, events: TaskEvent[], answers: JournaledA
     else if (event.type === "question") {
       task.view.pendingQuestionId = event.questionId;
       if (!isTerminal(task.view.state)) task.view.state = "waiting_user";
+    } else if (event.type === "tool" && event.name === "sandbox.execute" && event.receiptRef !== null
+        && !task.receiptRefs.includes(event.receiptRef)) {
+      // Backward-compatible recovery for an event written by an older build
+      // in the event/projection crash window.
+      task.receiptRefs.push(event.receiptRef);
     }
   }
   for (const answer of answers) reconcileAnswer(task, answer);

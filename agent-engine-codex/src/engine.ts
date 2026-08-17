@@ -301,10 +301,15 @@ export class AgentEngine {
       const receipt = await this.withGrant(task.view.taskId, (grant) => this.options.gateway.receipt(task.view.taskId, grant, receiptRef, signal));
       this.options.validator.validate("receipt", receipt);
       bindReceipt(receipt, view, request);
-      if (!task.receiptRefs.includes(receipt.receiptRef)) task.receiptRefs.push(receipt.receiptRef);
+      const receiptAlreadyRecorded = task.receiptRefs.includes(receipt.receiptRef);
+      if (!receiptAlreadyRecorded) task.receiptRefs.push(receipt.receiptRef);
       task.lastSandboxStatus = receipt.status;
+      // Make the formal Receipt authority durable before publishing an event
+      // that claims it exists. A crash after that event must never recover a
+      // task projection whose delivery gate has forgotten the Receipt.
+      await this.options.store.save(task);
       const succeeded = receipt.status === "SUCCEEDED";
-      await this.tool(task, call.id, "sandbox.execute", summary, succeeded ? "succeeded" : "failed", receiptSummary(receipt), receipt.receiptRef);
+      if (!receiptAlreadyRecorded) await this.tool(task, call.id, "sandbox.execute", summary, succeeded ? "succeeded" : "failed", receiptSummary(receipt), receipt.receiptRef);
       task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(receipt) });
       if (receipt.status === "SYSTEM_ERROR" || receipt.status === "TIMED_OUT") throw new EngineProblem(502, problem(receipt.status === "SYSTEM_ERROR" ? "SANDBOX_SYSTEM_ERROR" : "SANDBOX_TIMED_OUT", "sandbox_system", `Sandbox ended with ${receipt.status}`, true, receipt.receiptRef));
       if (receipt.status === "CANCELLED") throw new EngineProblem(409, problem("SANDBOX_CANCELLED", "cancelled", "Sandbox execution was cancelled", false, receipt.receiptRef));

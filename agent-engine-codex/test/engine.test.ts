@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentEngine } from "../src/engine.js";
 import type { GatewayClient, SandboxRequest } from "../src/gateway.js";
 import { TaskStore } from "../src/store.js";
-import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, PersistedTask, Receipt, SandboxView, TaskSubmission } from "../src/types.js";
+import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, PersistedTask, Receipt, SandboxView, TaskEvent, TaskSubmission } from "../src/types.js";
 import { digestObject, EngineProblem, problem, sha256 } from "../src/util.js";
 import { ContractValidator } from "../src/validation.js";
 
@@ -41,6 +41,32 @@ describe("AgentEngine", () => {
     expect(JSON.stringify(events)).not.toContain("SECRET_FILE_BODY");
     expect(gateway.maximumConcurrent).toBe(1);
     expect(provider.requests.every((request) => request.maxOutputTokens === 4096)).toBe(true);
+  });
+
+  it("persists a formal receipt before emitting its receipt-bearing tool event", async () => {
+    const directory = await temporaryDirectory();
+    const store = new ReceiptOrderingStore(directory);
+    const engine = new AgentEngine({
+      store,
+      provider: new ScriptedProvider([sandboxTool(), { content: "Receipt was durably recorded.", toolCalls: [] }]),
+      gateway: new FakeGateway(), validator: new ContractValidator(contractDirectory)
+    });
+    await engine.initialize(); await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    expect(store.receiptEventObservedAfterSave).toBe(true);
+  });
+
+  it("reconciles a legacy receipt-bearing event into the delivery authority", async () => {
+    const directory = await temporaryDirectory();
+    const store = new TaskStore(directory); await store.initialize();
+    await store.create(persistedTask());
+    await store.appendEvent({
+      contractVersion: "1.0", taskId, sequence: 1, occurredAt: new Date().toISOString(),
+      type: "tool", callId: `call.${"r".repeat(16)}`, name: "sandbox.execute",
+      state: "succeeded", inputSummary: "bounded", outputSummary: "bounded", receiptRef: "receipt.legacy"
+    });
+    const [recovered] = await store.loadAll();
+    expect(recovered?.receiptRefs).toEqual(["receipt.legacy"]);
   });
 
   it("accepts exact replay, refreshes the grant, and rejects a digest conflict", async () => {
@@ -357,6 +383,23 @@ class NeverProvider implements ModelProvider {
   complete(request: ModelRequest): Promise<ModelResponse> {
     if (request.signal.aborted) return Promise.reject(new DOMException("aborted", "AbortError"));
     return new Promise((_, reject) => request.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
+  }
+}
+
+class ReceiptOrderingStore extends TaskStore {
+  private receiptSaved = false;
+  receiptEventObservedAfterSave = false;
+
+  override async save(task: PersistedTask): Promise<void> {
+    if (task.receiptRefs.length > 0) this.receiptSaved = true;
+    await super.save(task);
+  }
+
+  override async appendEvent(event: TaskEvent): Promise<void> {
+    if (event.type === "tool" && event.name === "sandbox.execute" && event.receiptRef !== null) {
+      this.receiptEventObservedAfterSave = this.receiptSaved;
+    }
+    await super.appendEvent(event);
   }
 }
 
