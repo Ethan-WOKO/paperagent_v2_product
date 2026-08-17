@@ -338,6 +338,19 @@ export class AgentEngine {
       });
       return false;
     }
+    const available = availableToolSpecs(task).find((tool) => tool.function.name === call.name);
+    if (available && !(task.loadedToolNames ?? []).includes(call.name)) {
+      task.messages.push({
+        role: "tool", toolCallId: call.id,
+        content: JSON.stringify({
+          status: "REJECTED",
+          code: "TOOL_SCHEMA_NOT_LOADED",
+          toolName: call.name,
+          message: `The ${call.name} tool was not executed because its parameter schema is not loaded. Call load_tool with name=${call.name}, then retry the tool call using the loaded schema.`
+        })
+      });
+      return false;
+    }
     if (call.name === "ask_user") {
       if (task.pendingCalls.length !== 1 || typeof args.question !== "string" || !args.question.trim()) throw new EngineProblem(502, problem("MODEL_QUESTION_INVALID", "model", "ask_user must be the only call and contain one question"));
       const questionId = `question.${sha256(`${task.view.taskId}:${call.id}`).slice(0, 48)}`;
@@ -501,6 +514,7 @@ export class AgentEngine {
     const grant = this.requireGrant(task.view.taskId);
     const catalog = await this.options.gateway.tools(task.view.taskId, grant, signal);
     validateRegisteredToolCatalog(catalog, task);
+    validateRegisteredToolNameCollisions(catalog.tools);
     task.registeredTools = structuredClone(catalog.tools);
     task.registeredToolCatalogDigest = catalog.catalogDigest;
     await this.options.store.save(task);
@@ -598,6 +612,19 @@ function validateRegisteredToolCatalog(catalog: RegisteredToolCatalog, task: Per
       throw new EngineProblem(502, problem("REGISTERED_TOOL_CATALOG_INVALID", "tool", "Product tool catalog is invalid", true));
     }
     names.add(name);
+  }
+}
+
+function validateRegisteredToolNameCollisions(tools: RegisteredToolSpec[]): void {
+  const reserved = new Set([
+    "load_tool",
+    ...MODEL_TOOLS.map((tool) => tool.function.name),
+    ...WORKSPACE_MODEL_TOOLS.map((tool) => tool.function.name)
+  ]);
+  if (tools.some((tool) => reserved.has(tool.function.name))) {
+    throw new EngineProblem(502, problem(
+      "REGISTERED_TOOL_NAME_CONFLICT", "tool",
+      "Product tool catalog conflicts with a reserved Engine tool name", false));
   }
 }
 
