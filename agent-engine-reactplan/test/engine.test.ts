@@ -55,6 +55,7 @@ describe("AgentEngine", () => {
     const provider = new ScriptedProvider([
       tool("read_project_file", { path: "Sort.java", expectedSha256: fileHash }),
       tool("write_workspace_file", { operation: "MODIFY", path: "Sort.java", baseSha256: fileHash, content: replacement }),
+      tool("read_project_file", { path: "Sort.java", expectedSha256: replacementHash, startLine: 1, endLine: 1 }),
       tool("get_workspace_diff", {}),
       tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: replacementHash }], timeoutMillis: 5000 }),
       { content: "Sort.java was modified in the isolated Workspace and the exact Candidate compiled successfully.", toolCalls: [] }
@@ -67,12 +68,13 @@ describe("AgentEngine", () => {
 
     expect((await engine.events(request.taskId)).filter((event) => event.type === "tool" && event.state === "requested")
       .map((event) => event.type === "tool" ? event.name : ""))
-      .toEqual(["project.read", "workspace.write", "workspace.diff", "sandbox.execute", "project.publish"]);
+      .toEqual(["project.read", "workspace.write", "project.read", "workspace.diff", "sandbox.execute", "project.publish"]);
     expect((provider.requests[0]!.tools as Array<{ function: { name: string } }>).map((candidate) =>
       candidate.function.name)).toEqual(["load_tool"]);
     expect(JSON.stringify(provider.requests[0]!.messages)).toContain("write_workspace_file");
     expect(JSON.stringify(provider.requests[0]!.messages)).toContain("get_workspace_diff");
     expect(gateway.lastSandboxHash).toBe(replacementHash);
+    expect(JSON.stringify(provider.requests)).toContain(replacement.trim());
     expect(gateway.publishCalls).toBe(1);
     const delivery = (await engine.events(request.taskId)).find((event) => event.type === "delivery");
     expect(delivery?.type === "delivery" ? delivery.publication : null).toMatchObject({
@@ -80,6 +82,30 @@ describe("AgentEngine", () => {
       publishedProjectVersion: "e".repeat(64),
       publishedRevisionId: 22
     });
+  });
+
+  it("returns only the requested 1-based inclusive Workspace line range", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", {
+        path: "Sort.java", expectedSha256: fileHash, startLine: 2, endLine: 3
+      }),
+      { content: "Observed the requested lines from Sort.java.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new RangeReadGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(JSON.stringify(provider.requests[0]!.tools)).not.toContain("startLine");
+    expect(JSON.stringify(provider.requests[1]!.tools)).toContain("startLine");
+    const toolResult = provider.requests.at(-1)!.messages.find((message) =>
+      message.role === "tool" && message.content?.includes('"startLine":2'));
+    expect(JSON.parse(toolResult!.content!)).toMatchObject({
+      path: "Sort.java", sha256: fileHash, startLine: 2, endLine: 3,
+      content: "line two\nline three"
+    });
+    expect(toolResult!.content).not.toContain("line one");
+    expect(toolResult!.content).not.toContain("line four");
   });
 
   it("repairs a premature candidate conclusion until the current diff and exact Candidate are validated", async () => {
@@ -306,6 +332,21 @@ describe("AgentEngine", () => {
       event.type === "tool" && event.state === "requested")).toHaveLength(1);
   });
 
+  it("hides superseded manifest and file-read registrations from the ReAct catalog", async () => {
+    const provider = new ScriptedProvider([{ content: "No Project inspection was needed.", toolCalls: [] }]);
+    const engine = await createEngine(provider, new DuplicateReadToolGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const firstRequest = JSON.stringify(provider.requests[0]);
+    expect(firstRequest).toContain("list_project_files");
+    expect(firstRequest).toContain("read_project_file");
+    expect(firstRequest).toContain("project_search");
+    expect(firstRequest).not.toContain("project_manifest");
+    expect(firstRequest).not.toContain('"name":"project_read_file"');
+  });
+
   it("rejects an unloaded tool call with actionable model feedback and executes only after loading", async () => {
     const provider = new ScriptedProvider([
       tool("project_search", { query: "order-service" }),
@@ -499,13 +540,37 @@ class FakeGateway implements GatewayClient {
   tools(taskIdValue: string): Promise<RegisteredToolCatalog> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, catalogDigest: "c".repeat(64), tools: [{ type: "function", function: { name: "project_search", description: "Search the frozen Project.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } }] }); }
   invoke(_taskId: string, _grant: string, request: { callId: string; toolName: string; requestDigest: string }): Promise<RegisteredToolResult> { return this.operation({ contractVersion: "1.0", callId: request.callId, toolName: request.toolName, requestDigest: request.requestDigest, success: true, output: { projectVersion, hits: [{ path: "services/order-service/pom.xml", line: "PRIVATE_SEARCH_RESULT" }] }, errorCode: null, errorMessage: null, retryable: false, evidenceRefs: ["project:1:search"], version: projectVersion }); }
   list(taskIdValue: string): Promise<FileList> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, files: [{ path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java" }] }); }
-  read(): Promise<FileRead> { return this.operation({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java", encoding: "utf-8", content: "SECRET_FILE_BODY", truncated: false }); }
+  read(_taskId: string, _grant: string, _path: string, _expectedSha256: string): Promise<FileRead> { return this.operation({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java", encoding: "utf-8", content: "SECRET_FILE_BODY", truncated: false }); }
   write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, replayed: false, operation: request.operation, path: request.path, beforeSha256: request.baseSha256, afterSha256: sha256(request.content), sizeBytes: Buffer.byteLength(request.content) }); }
   diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
   publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
   receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class RangeReadGateway extends FakeGateway {
+  override read(_taskId: string, _grant: string, _path: string, _expectedSha256: string): Promise<FileRead> {
+    const content = "line one\r\nline two\nline three\rline four";
+    return Promise.resolve({ contractVersion: "1.0", path: "Sort.java",
+      sizeBytes: Buffer.byteLength(content), sha256: fileHash,
+      mediaType: "text/x-java", encoding: "utf-8", content, truncated: false });
+  }
+}
+
+class DuplicateReadToolGateway extends FakeGateway {
+  override tools(taskIdValue: string): Promise<RegisteredToolCatalog> {
+    const parameters = { type: "object", properties: {} };
+    return Promise.resolve({
+      contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      catalogDigest: "d".repeat(64),
+      tools: [
+        { type: "function", function: { name: "project_manifest", description: "Legacy manifest.", parameters } },
+        { type: "function", function: { name: "project_read_file", description: "Legacy file read.", parameters } },
+        { type: "function", function: { name: "project_search", description: "Search the frozen Project.", parameters } }
+      ]
+    });
+  }
 }
 
 class ConflictingToolGateway extends FakeGateway {
@@ -543,6 +608,15 @@ class CandidateGateway extends FakeGateway {
       requestDigest: request.requestDigest, replayed: false, operation: request.operation,
       path: request.path, beforeSha256: request.baseSha256,
       afterSha256: this.candidateHash, sizeBytes: Buffer.byteLength(request.content) });
+  }
+  override read(_taskId: string, _grant: string, _path: string, expectedSha256: string): Promise<FileRead> {
+    if (expectedSha256 === this.candidateHash) {
+      const content = "class Sort { int value; }\n";
+      return Promise.resolve({ contractVersion: "1.0", path: "Sort.java",
+        sizeBytes: Buffer.byteLength(content), sha256: this.candidateHash,
+        mediaType: "text/x-java", encoding: "utf-8", content, truncated: false });
+    }
+    return super.read(_taskId, _grant, _path, expectedSha256);
   }
   override diff(taskIdValue: string): Promise<WorkspaceDiffView> {
     return Promise.resolve({ contractVersion: "1.0", taskId: taskIdValue, projectVersion,
