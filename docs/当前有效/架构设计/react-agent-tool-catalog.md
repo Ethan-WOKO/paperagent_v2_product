@@ -43,9 +43,16 @@ ReAct 目录还复用现有的 `literature_search_start`、
 当前用户重新校验任务所有权。取消只作用于该用户拥有的文献任务，并保留原有
 幂等终态语义。
 
+## 论文任务读取工具
+
+`paper_polish_status` 与 `paper_polish_result` 可读取当前认证用户已有论文任务的
+状态、结果摘要和产物位置。任务所有权仍由现有 service 使用服务端用户身份校验。
+`paper_task_cancel` 暂不进入目录，因为它的现有描述符要求副作用确认，而当前
+ReAct 工具网关没有对应的确定性确认边界。
+
 ## 非目标
 
-- 不开放 paper task 状态、结果或取消；
+- 不开放 `paper_task_cancel`；
 - 不开放旧 Candidate proposal；
 - 不按任务类型或模型判断动态生成目录；
 - 不改变旧 Agent 链路的 ToolRegistry 注册或策略。

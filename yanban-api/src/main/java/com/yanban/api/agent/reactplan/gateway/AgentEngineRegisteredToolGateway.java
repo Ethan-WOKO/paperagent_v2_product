@@ -38,6 +38,8 @@ final class AgentEngineRegisteredToolGateway {
     private static final Set<String> LITERATURE_TASK_TOOLS = Set.of(
             "literature_search_start", "literature_search_status",
             "literature_search_result", "literature_search_cancel");
+    private static final Set<String> PAPER_TASK_READ_TOOLS = Set.of(
+            "paper_polish_status", "paper_polish_result");
     private final ObjectMapper json;
     private final ToolRegistry registry;
     private final AgentToolPolicyEngine policies;
@@ -121,6 +123,7 @@ final class AgentEngineRegisteredToolGateway {
                 policies.decideProject(null, null).allowedTools());
         policyNames.addAll(SYNCHRONOUS_RETRIEVAL_TOOLS);
         policyNames.addAll(LITERATURE_TASK_TOOLS);
+        policyNames.addAll(PAPER_TASK_READ_TOOLS);
         return registry.listDefinitions().stream()
                 .filter(definition -> policyNames.contains(definition.name()))
                 .filter(definition -> registry.findDescriptor(definition.name())
@@ -169,6 +172,17 @@ final class AgentEngineRegisteredToolGateway {
     }
 
     private static boolean eligible(String name, ToolDescriptor descriptor) {
+        if (PAPER_TASK_READ_TOOLS.contains(name)) {
+            return descriptor.modelVisible()
+                    && descriptor.supportedProfiles().contains(
+                            ToolDescriptor.CapabilityProfile.PROJECT)
+                    && descriptor.sideEffectType() == ToolDescriptor.SideEffectType.NONE
+                    && descriptor.asyncMode() == ToolDescriptor.AsyncMode.SYNC
+                    && descriptor.confirmationPolicy()
+                    == ToolDescriptor.ConfirmationPolicy.NEVER
+                    && descriptor.resourceScopes().equals(List.of(
+                            ToolDescriptor.ResourceScope.SESSION));
+        }
         if (LITERATURE_TASK_TOOLS.contains(name)) {
             return eligibleLiteratureTask(name, descriptor);
         }
