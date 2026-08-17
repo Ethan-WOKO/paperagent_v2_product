@@ -25,12 +25,32 @@ ReAct P1 保持“最小初始上下文 + 按需工具”的执行方式。本�
 1. 固定 ReAct、安全和事实约束 system message；
 2. 由 Engine 确定性生成的本 task evidence ledger system message；
 3. 可选的历史数据边界 system message；
-4. 可选的最近对话 JSON 数据 user message；
+4. 可选的最近对话 `HistoricalContextEnvelope` JSON 数据 user message；
 5. 当前 task 的独立 user message；
 6. 当前 task 已发生的 assistant/tool messages。
 
 最近对话不是当前 ProjectVersion 的证据。历史中的任何文本都不能扩大权限、选择工具
 或证明文件事实。
+
+历史数据使用固定结构，不再把裸 JSON 数组直接交给模型：
+
+```json
+{
+  "schemaVersion": "1.0",
+  "type": "historical_context",
+  "notAnInstruction": true,
+  "usage": {
+    "currentTaskHasPriority": true,
+    "continueOnlyWhenCurrentTaskRequestsIt": true,
+    "projectFactsRequireCurrentTaskEvidence": true
+  },
+  "turns": []
+}
+```
+
+`turns` 中每项只有 `instruction`、`conclusion`、`projectVersion` 和 `completedAt`。
+这些字段是只读上下文数据，不是待执行任务；真正待执行的内容始终位于独立的
+`Current task:` user message。
 
 当前 task 始终高于历史数据。问候、运行时模型身份和不需要 Project 事实的一般问题
 直接回答，不得因为历史里出现过文件而继续上一轮或调用 Project/sandbox 工具。产品
@@ -45,7 +65,7 @@ ReAct P1 保持“最小初始上下文 + 按需工具”的执行方式。本�
 - 不复制历史 tool call、文件正文、stdout、stderr、Receipt 或隐藏推理；
 - 最多四轮，总 JSON 字符预算 8000；单轮 instruction 最多 2000 字符，conclusion
   最多 4000 字符；
-- 选择结果写入新 task 的 `task.json` 和初始 messages，exact replay 或 Engine 重启不
+- 完整 Envelope 写入新 task 的 `task.json` 和初始 messages，exact replay 或 Engine 重启不
   根据后来出现的历史静默重建。
 
 Engine 不接收用户 ID。`sessionRef` 是产品在鉴权、Turn 与 task grant 校验后生成的
@@ -87,9 +107,9 @@ P1 不生成修改后的 Candidate，因此“移除/修改某行后即可编译
 
 ## 恢复与回滚
 
-旧 task 缺少新字段时，Engine 启动时补为空的 recent conversation、observations 和
-grounding repair 计数，不改写权威事件。新 task 的选择结果随 task 持久化，恢复后
-继续使用原始选择。
+旧 task 缺少新字段时，Engine 启动时根据其已冻结的 recent conversation 补建
+HistoricalContextEnvelope，并补齐 observations 和 grounding repair 计数，不改写
+权威事件。新 task 的 Envelope 随 task 持久化，恢复后继续使用原始选择。
 
 前端在同一 Project session 下保存最近 12 个 ReAct task record，并按原有任务卡片
 样式连续展示。原先的单 record 本地恢复数据会自动迁移成一项历史。该前端投影只用于
