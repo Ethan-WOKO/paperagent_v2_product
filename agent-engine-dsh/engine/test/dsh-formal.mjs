@@ -16,6 +16,11 @@
 //    SANDBOX_STATUS_DEADLINE_EXCEEDED and ZERO status requests.
 //  - F7: the deadline is checked before every status request and sleeps never
 //    run past it — no status request is issued after the deadline.
+//  - F8: duplicate sandbox input paths are rejected BEFORE any dispatch.
+//  - F9/F10: TIMED_OUT / SYSTEM_ERROR receipts fail the task with a
+//    sandbox_system code and NO delivery.
+//  - F11: a FAILED receipt (compile error) is a legitimate answer — the task
+//    succeeds with delivery (T2 semantics).
 //  - Budget: 20 model calls allowed, the 21st is rejected before dispatch.
 //  - ask_user: formal question/answer gate (no stub finalizer).
 import { spawn } from 'node:child_process';
@@ -581,6 +586,77 @@ async function main() {
     const statusGets = existsSync(statusLog) ? readFileSync(statusLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
     check('F7b it polled before the deadline (deadline was actually enforced)', statusGets.length > 0, `statusGets=${statusGets.length}`);
     check('F7c no status request past the deadline (sleep never crosses it)', statusGets.every((g) => g.at < deadlineAt), `last=${statusGets[statusGets.length - 1]?.at} deadline=${deadlineAt}`);
+    proc.kill();
+    gw.close();
+  }
+
+  // ---- F8: duplicate sandbox input paths rejected before dispatch ----
+  {
+    const gatewayPort = 18330;
+    const gwLog = join(baseDir, 'gw-f8.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog });
+    const dir = join(baseDir, 'f8');
+    const base = 'http://127.0.0.1:18331';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_MODE: 'dup-inputs',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18331',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '6'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['failed', 'succeeded'], 200);
+    check('F8a terminal after rejected duplicate inputs', view?.state === 'failed', `state=${view?.state}`);
+    const gwLines = existsSync(gwLog) ? readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length : 0;
+    check('F8b zero gateway dispatches (rejected pre-dispatch)', gwLines === 0, `submissions=${gwLines}`);
+    proc.kill();
+    gw.close();
+  }
+
+  // ---- F9/F10/F11: sandbox terminal receipt semantics ----
+  for (const scenario of [
+    { suffix: '9', port: 18332, enginePort: 18333, terminalState: 'TIMED_OUT', expectedCode: 'SANDBOX_TIMED_OUT', expectDelivery: false },
+    { suffix: 'a', port: 18334, enginePort: 18335, terminalState: 'SYSTEM_ERROR', expectedCode: 'SANDBOX_SYSTEM_ERROR', expectDelivery: false },
+    { suffix: 'b', port: 18336, enginePort: 18337, terminalState: 'FAILED', expectedCode: null, expectDelivery: true },
+  ]) {
+    const gatewayPort = scenario.port;
+    const gwLog = join(baseDir, `gw-f${scenario.suffix}.jsonl`);
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, terminalState: scenario.terminalState });
+    const dir = join(baseDir, `f${scenario.suffix}`);
+    const base = `http://127.0.0.1:${scenario.enginePort}`;
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: String(scenario.enginePort),
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + scenario.suffix.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['succeeded', 'failed'], 200);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    const hasDelivery = events.some((e) => e.type === 'delivery');
+    const toolReceipt = events.find((e) => e.type === 'tool' && e.receiptRef);
+    if (scenario.expectDelivery) {
+      check(`F${scenario.suffix}a FAILED receipt still delivers (compile failure is an answer)`, view?.state === 'succeeded' && hasDelivery, `state=${view?.state} delivery=${hasDelivery}`);
+      check(`F${scenario.suffix}b delivery carries the receipt`, (events.find((e) => e.type === 'delivery')?.receiptRefs ?? []).length > 0, '');
+    } else {
+      check(`F${scenario.suffix}a ${scenario.terminalState} receipt fails the task`, view?.state === 'failed', `state=${view?.state}`);
+      check(`F${scenario.suffix}b code and category`, view?.error?.code === scenario.expectedCode && view?.error?.category === 'sandbox_system', `code=${view?.error?.code} category=${view?.error?.category}`);
+      check(`F${scenario.suffix}c no delivery`, !hasDelivery, '');
+      check(`F${scenario.suffix}d receipt still surfaced in the tool event`, toolReceipt?.receiptRef != null, `receiptRef=${toolReceipt?.receiptRef ?? 'none'}`);
+      check(`F${scenario.suffix}e contiguous sequences`, events.map((e) => e.sequence).every((s, i) => s === i + 1), `count=${events.length}`);
+    }
     proc.kill();
     gw.close();
   }

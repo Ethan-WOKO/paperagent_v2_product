@@ -23,6 +23,7 @@ export interface ProductTools {
   sandboxTool: ToolDefinition;
   askUserTool: ToolDefinition;
   collectReceiptRefs(): string[];
+  collectReceipts(): { receiptRef: string; status: string }[];
 }
 
 /** Stable per-task tool identity: ledger-backed clientRequestId derivation and
@@ -180,6 +181,13 @@ export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): Pr
     async execute(args: { argv: unknown[]; inputs: { path: unknown; sha256: unknown }[]; timeoutMillis: unknown }) {
       const inputs = args.inputs.map((i) => ({ path: String(i.path), sha256: String(i.sha256) }));
       const argv = args.argv.map(String);
+      // Contract §4.1: sandbox input paths are a SET — duplicate paths are
+      // rejected BEFORE any dispatch (no gateway request is ever sent).
+      const seenPaths = new Set<string>();
+      for (const input of inputs) {
+        if (seenPaths.has(input.path)) throw new Error('SANDBOX_INPUTS_DUPLICATE_PATH');
+        seenPaths.add(input.path);
+      }
       const timeoutMillis = Math.min(Math.max(Number(args.timeoutMillis) || 120000, 1000), 300000);
       const digest = sandboxDigest(argv, inputs, timeoutMillis);
       const ledger = task.readToolLedger();
@@ -276,5 +284,25 @@ export function buildProductTools(task: TaskRuntime, gateway: GatewayClient): Pr
 
   // The delivery schema requires uniqueItems: dedupe at collection time so the
   // ledger-re-adopted receipt and a reused tool call can never double-list a ref.
-  return { listTool, readTool, sandboxTool, askUserTool, collectReceiptRefs: () => [...new Set(receiptRefs)] };
+  const collected = () => [...new Set(receiptRefs)];
+  return {
+    listTool,
+    readTool,
+    sandboxTool,
+    askUserTool,
+    collectReceiptRefs: collected,
+    collectReceipts: () => {
+      const refs = collected();
+      const byRef = new Map<string, string>();
+      for (const entry of task.readToolLedger()) {
+        if (entry.kind === 'sandbox' && typeof entry.receiptRef === 'string' && typeof entry.status === 'string') {
+          byRef.set(entry.receiptRef, entry.status);
+        }
+      }
+      for (const ref of refs) {
+        if (!byRef.has(ref)) byRef.set(ref, 'unknown');
+      }
+      return refs.map((receiptRef) => ({ receiptRef, status: byRef.get(receiptRef) ?? 'unknown' }));
+    },
+  };
 }

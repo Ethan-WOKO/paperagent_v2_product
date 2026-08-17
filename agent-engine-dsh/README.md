@@ -13,12 +13,14 @@
 - [x] 持久事件与重启恢复（JSONL，`data/<taskId>/events.jsonl` + `meta.json`）
 - [x] 任务状态机（queued/running/waiting_user/succeeded/failed/cancelled，单终态，delivery 先于 succeeded）
 - [x] 网关客户端接口 + StubGateway + 真实 HTTP 客户端（`gateway-http.ts`，接 #151 网关；每次请求动态读取 grant）
-- [x] 网关响应精确绑定（`gateway-http.ts` + `test/gateway-binding.mjs` 18 项失败测试）：
+- [x] 网关响应精确绑定（`gateway-http.ts` + `test/gateway-binding.mjs` 24 项失败测试）：
       fileList 绑定 taskId + 冻结 projectVersion；fileRead 重证正文 size/hash；sandbox 提交与轮询响应均绑定
       clientRequestId/requestDigest/executionRef（轮询全程一致，非终态不得携带 receiptRef）；receipt 绑定
-      receiptRef/executionRef/终态 status/精确 inputs（顺序+path+sha256），路径 encodeURIComponent；
-      错误响应过 Problem schema 后按显式集合 + 受控 `TASK_*`/`WORKSPACE_*`/`SANDBOX_*` 前缀（#151 正式错误码）
-      分类，其余 fail-closed 为 GATEWAY_ERROR（原始 message/sourceRef 一律不传播）
+      receiptRef/executionRef/终态 status/精确 inputs；Receipt inputs 按契约 §4.1 集合语义校验（先拒重复
+      path，再按 path+sha256 排序比较完整集合，排列不同不算 mismatch）；沙箱请求派发前拒绝重复 path；
+      receipt 路径 encodeURIComponent；错误响应过 Problem schema 后按显式集合 + 受控
+      `TASK_*`/`WORKSPACE_*`/`SANDBOX_*` 前缀（#151 正式错误码）分类，其余 fail-closed 为 GATEWAY_ERROR
+      （原始 message/sourceRef 一律不传播）
 - [x] 沙箱摘要 = canonical JSON{argv, inputs, timeoutMillis}（契约 §4 键排序，timeoutMillis 参与）
 - [x] conformance 自测：40 项全过（覆盖契约 9 个运行时场景中的引擎侧部分）
 - [x] DSH ReactLoopAgent 接入（`ENGINE_RUNNER=dsh`）：真实模型 + 产品工具（project_list/read、sandbox_execute、
@@ -39,6 +41,9 @@
       答案正文注入模型上下文并续跑（不再重复提问）
 - [x] ask_user 门：waiting_user → 正式回答 → 循环恢复；无 receipt 的纯提问流以
       RECEIPT_REQUIRED_NOT_SATISFIED 失败（无 stub finalizer）
+- [x] 沙箱终态语义：TIMED_OUT/SYSTEM_ERROR Receipt → 任务 failed（SANDBOX_TIMED_OUT /
+      SANDBOX_SYSTEM_ERROR，category sandbox_system），**无 delivery**；FAILED Receipt（编译失败等）
+      是合法答案 → succeeded + delivery（T2 语义）
 - [x] 真实模型 smoke（T1）：v4-pro 端到端通过，网关为受控 HTTP mock——**不是** #151/E2B 真实网关 T1 证据
 
 ## 目录
@@ -49,11 +54,12 @@
   - `gateway-http.ts` 真实网关客户端；`runner.ts` StubRunner；`dsh/` DSH 装配（runtime/tools/runner）
 - `engine/cordis.yml`：最小 DSH 组合（llm + llm-deepseek + session + system-prompt + tools + agent + agent-loop）
 - `engine/test/conformance.mjs`：契约 conformance 自测（40 项断言，stub 控制面）
-- `engine/test/dsh-formal.mjs`：正式路径测试（56 项：恢复账本/崩溃窗口/预算/ask_user 门/waiting_user 重启/
-      恢复 prompt 事实重建/ledger receipt 再收养/截止轮询边界/摘要规范，FakeAdapter + HTTP mock 网关，无需真实 API key）
+- `engine/test/dsh-formal.mjs`：正式路径测试（70 项：恢复账本/崩溃窗口/预算/ask_user 门/waiting_user 重启/
+      恢复 prompt 事实重建/ledger receipt 再收养/截止轮询边界/重复输入拒绝/沙箱终态语义/摘要规范，
+      FakeAdapter + HTTP mock 网关，无需真实 API key）
 - `engine/test/mock-gateway.mjs`：受控 HTTP 网关测试替身（独立重算 canonical 摘要、holdPolls 崩溃窗口、
-      statusLog 轮询计数、计数派发，供 formal/smoke 共用）
-- `engine/test/gateway-binding.mjs`：网关绑定失败测试（18 项，进程内直接测 HttpGatewayClient）
+      statusLog 轮询计数、terminalState 终态注入、计数派发，供 formal/smoke 共用）
+- `engine/test/gateway-binding.mjs`：网关绑定失败测试（24 项，进程内直接测 HttpGatewayClient）
 - `engine/test/dsh-smoke.mjs`：真实模型 smoke（T1 场景，v4-pro + 受控 HTTP mock 网关；
       只消费环境变量 `DEEPSEEK_API_KEY`，不读任何 .env 文件）
 - `spike/`：模型编排可行性 Spike（零依赖，已验证；仅作证据，不是产品代码）
@@ -79,8 +85,8 @@ node src/index.ts                            # 默认 127.0.0.1:8092
 ```powershell
 cd engine
 node test/conformance.mjs   # 控制面 conformance（40 项，全过）
-node test/dsh-formal.mjs    # 正式路径（56 项：恢复/预算/ask_user 门/崩溃窗口/截止轮询/摘要，无需真实 API）
-node test/gateway-binding.mjs  # 网关绑定失败测试（18 项）
+node test/dsh-formal.mjs    # 正式路径（70 项：恢复/预算/ask_user 门/崩溃窗口/截止轮询/终态语义/摘要，无需真实 API）
+node test/gateway-binding.mjs  # 网关绑定失败测试（24 项）
 npx tsc -p tsconfig.json    # 类型检查（erasable syntax only）
 # 可选（需环境变量 DEEPSEEK_API_KEY；文件不读任何 .env）：
 node test/dsh-smoke.mjs     # 真实模型 T1 smoke（v4-pro + 受控 HTTP mock 网关）

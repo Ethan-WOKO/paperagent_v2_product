@@ -202,12 +202,30 @@ export class HttpGatewayClient implements GatewayClient {
         if (expected.viewState !== null && receipt.status !== expected.viewState) {
           throw new Error('RECEIPT_STATUS_BINDING_MISMATCH');
         }
-        // Exact inputs binding: same length, same order, identical path+hash.
+        // Exact inputs binding (contract §4.1): the authoritative semantics of
+        // file inputs is the SET of unique path+sha256, not the model's array
+        // order — the gateway may canonically sort Receipt.inputs by path.
+        // Reject duplicate paths on either side first, then compare the full
+        // sorted sets; a mere permutation must never be a binding mismatch.
         if (expected.inputs !== null) {
           const receiptInputs = receipt.inputs;
+          const expectedSeen = new Set<string>();
+          for (const input of expected.inputs) {
+            if (expectedSeen.has(input.path)) throw new Error('SANDBOX_INPUTS_DUPLICATE_PATH');
+            expectedSeen.add(input.path);
+          }
+          const receiptSeen = new Set<string>();
+          for (const input of receiptInputs) {
+            if (receiptSeen.has(input.path)) throw new Error('RECEIPT_INPUTS_DUPLICATE_PATH');
+            receiptSeen.add(input.path);
+          }
           if (receiptInputs.length !== expected.inputs.length) throw new Error('RECEIPT_INPUTS_BINDING_MISMATCH');
-          for (let i = 0; i < expected.inputs.length; i++) {
-            if (receiptInputs[i].path !== expected.inputs[i].path || receiptInputs[i].sha256 !== expected.inputs[i].sha256) {
+          const byPathThenSha = (a: { path: string; sha256: string }, b: { path: string; sha256: string }): number =>
+            a.path < b.path ? -1 : a.path > b.path ? 1 : a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : 0;
+          const sortedReceipt = [...receiptInputs].sort(byPathThenSha);
+          const sortedExpected = [...expected.inputs].sort(byPathThenSha);
+          for (let i = 0; i < sortedExpected.length; i++) {
+            if (sortedReceipt[i].path !== sortedExpected[i].path || sortedReceipt[i].sha256 !== sortedExpected[i].sha256) {
               throw new Error('RECEIPT_INPUTS_BINDING_MISMATCH');
             }
           }

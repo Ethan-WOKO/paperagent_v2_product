@@ -39,7 +39,7 @@ function sandboxDigest(argv, inputs, timeoutMillis) {
   return sha256(canonicalJson({ argv, inputs, timeoutMillis }));
 }
 
-export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0 }) {
+export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0, terminalState = 'SUCCEEDED' }) {
   const executions = new Map();
   const receipts = new Map();
   let receiptSeq = 0;
@@ -105,7 +105,7 @@ export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0
             if (!this.done) {
               return { contractVersion: '1.0', clientRequestId: this.clientRequestId, requestDigest: this.requestDigest, executionRef: this.executionRef, state: 'RUNNING', receiptRef: null };
             }
-            return { contractVersion: '1.0', clientRequestId: this.clientRequestId, requestDigest: this.requestDigest, executionRef: this.executionRef, state: 'SUCCEEDED', receiptRef: this.receipt.receiptRef };
+            return { contractVersion: '1.0', clientRequestId: this.clientRequestId, requestDigest: this.requestDigest, executionRef: this.executionRef, state: terminalState, receiptRef: this.receipt.receiptRef };
           },
         };
         executions.set(parsed.clientRequestId, entry);
@@ -122,9 +122,10 @@ export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0
       entry.pollCount++;
       if (!entry.done && entry.pollCount > holdPolls) {
         const receiptRef = 'receipt.mock.' + ++receiptSeq;
+        const exitCode = terminalState === 'SUCCEEDED' ? 0 : terminalState === 'FAILED' ? 1 : null;
         entry.receipt = {
-          contractVersion: '1.0', receiptRef, executionRef: entry.executionRef, status: 'SUCCEEDED', exitCode: 0,
-          stdout: { text: '[1, 2, 3]\n', truncated: false, originalBytes: 8 },
+          contractVersion: '1.0', receiptRef, executionRef: entry.executionRef, status: terminalState, exitCode,
+          stdout: { text: terminalState === 'SUCCEEDED' ? '[1, 2, 3]\n' : '', truncated: false, originalBytes: 0 },
           stderr: { text: '', truncated: false, originalBytes: 0 },
           inputFingerprint: sha256(canonicalJson({ argv: entry.argv ?? ['javac'], inputs: entry.inputs ?? [] })),
           inputs: (entry.inputs ?? []).map((i) => ({ path: i.path, sha256: i.sha256, sizeBytes: i.path.endsWith('Sort.java') ? Buffer.byteLength(FIXTURE) : 0 })),

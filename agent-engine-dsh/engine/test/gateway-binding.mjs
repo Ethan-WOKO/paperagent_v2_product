@@ -23,6 +23,8 @@ const check = (name, ok, detail = '') => {
 
 // one mutable corruption slot; each case sets it, calls the client, resets it
 let corrupt = 'none';
+// full receipt-inputs override (contract §4.1 set semantics tests)
+let receiptInputsOverride = null;
 
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://gateway.local');
@@ -110,7 +112,7 @@ const server = createServer((req, res) => {
       stdout: { text: '[1, 2, 3]\n', truncated: false, originalBytes: 8 },
       stderr: { text: '', truncated: false, originalBytes: 0 },
       inputFingerprint: 'a'.repeat(64),
-      inputs: corrupt === 'receiptInputs' ? [{ path: 'other.java', sha256: IN_SHA, sizeBytes: 1 }] : goodInputs,
+      inputs: receiptInputsOverride ?? (corrupt === 'receiptInputs' ? [{ path: 'other.java', sha256: IN_SHA, sizeBytes: 1 }] : goodInputs),
       startedAt: '2026-08-16T00:00:00Z',
       finishedAt: '2026-08-16T00:00:01Z',
     });
@@ -208,6 +210,100 @@ await expectReject('G18 lowercase/odd code still fails closed', 'GATEWAY_ERROR',
   corrupt = 'errorLower';
   await makeClient().listWorkspaceFiles();
 });
+
+// ---- Contract §4.1: Receipt inputs are a SET of unique path+sha256 ----
+const ZETA = { path: 'src/main/java/Zeta.java', sha256: 'f'.repeat(64) };
+const ALPHA = { path: 'src/main/java/Alpha.java', sha256: 'a'.repeat(64) };
+const sortedReceipt = [
+  { path: ALPHA.path, sha256: ALPHA.sha256, sizeBytes: 4 },
+  { path: ZETA.path, sha256: ZETA.sha256, sizeBytes: 4 },
+];
+const submitReceipt = (name, ok, detail = '') => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
+  if (!ok) failures++;
+};
+
+// G19: unsorted request [Zeta, Alpha] vs path-sorted receipt [Alpha, Zeta] MUST bind.
+{
+  corrupt = 'none';
+  receiptInputsOverride = sortedReceipt;
+  let caught = null;
+  try {
+    await makeClient().getSandboxReceipt('receipt.1', { executionRef: 'exec-1', viewState: 'SUCCEEDED', inputs: [ZETA, ALPHA] });
+  } catch (e) {
+    caught = e instanceof Error ? e.message : String(e);
+  }
+  receiptInputsOverride = null;
+  submitReceipt('G19 permuted receipt input order binds as a set', caught === null, `caught=${caught}`);
+}
+// G20: duplicate path in the receipt inputs is rejected.
+{
+  corrupt = 'none';
+  receiptInputsOverride = [
+    { path: ALPHA.path, sha256: ALPHA.sha256, sizeBytes: 4 },
+    { path: ALPHA.path, sha256: ALPHA.sha256, sizeBytes: 4 },
+  ];
+  let caught = null;
+  try {
+    await makeClient().getSandboxReceipt('receipt.1', { executionRef: 'exec-1', viewState: 'SUCCEEDED', inputs: [ALPHA] });
+  } catch (e) {
+    caught = e instanceof Error ? e.message : String(e);
+  }
+  receiptInputsOverride = null;
+  submitReceipt('G20 duplicate receipt input path rejected', caught === 'RECEIPT_INPUTS_DUPLICATE_PATH', `caught=${caught}`);
+}
+// G21: same path, different sha256 → mismatch.
+{
+  corrupt = 'none';
+  receiptInputsOverride = [{ path: ALPHA.path, sha256: 'b'.repeat(64), sizeBytes: 4 }];
+  let caught = null;
+  try {
+    await makeClient().getSandboxReceipt('receipt.1', { executionRef: 'exec-1', viewState: 'SUCCEEDED', inputs: [ALPHA] });
+  } catch (e) {
+    caught = e instanceof Error ? e.message : String(e);
+  }
+  receiptInputsOverride = null;
+  submitReceipt('G21 same path different sha256 rejected', caught === 'RECEIPT_INPUTS_BINDING_MISMATCH', `caught=${caught}`);
+}
+// G22: missing input → mismatch.
+{
+  corrupt = 'none';
+  receiptInputsOverride = [{ path: ALPHA.path, sha256: ALPHA.sha256, sizeBytes: 4 }];
+  let caught = null;
+  try {
+    await makeClient().getSandboxReceipt('receipt.1', { executionRef: 'exec-1', viewState: 'SUCCEEDED', inputs: [ZETA, ALPHA] });
+  } catch (e) {
+    caught = e instanceof Error ? e.message : String(e);
+  }
+  receiptInputsOverride = null;
+  submitReceipt('G22 missing receipt input rejected', caught === 'RECEIPT_INPUTS_BINDING_MISMATCH', `caught=${caught}`);
+}
+// G23: extra input → mismatch.
+{
+  corrupt = 'none';
+  receiptInputsOverride = [...sortedReceipt, { path: 'src/main/java/Extra.java', sha256: 'e'.repeat(64), sizeBytes: 4 }];
+  let caught = null;
+  try {
+    await makeClient().getSandboxReceipt('receipt.1', { executionRef: 'exec-1', viewState: 'SUCCEEDED', inputs: [ZETA, ALPHA] });
+  } catch (e) {
+    caught = e instanceof Error ? e.message : String(e);
+  }
+  receiptInputsOverride = null;
+  submitReceipt('G23 extra receipt input rejected', caught === 'RECEIPT_INPUTS_BINDING_MISMATCH', `caught=${caught}`);
+}
+// G24: duplicate path in the REQUEST inputs is rejected before binding.
+{
+  corrupt = 'none';
+  receiptInputsOverride = sortedReceipt;
+  let caught = null;
+  try {
+    await makeClient().getSandboxReceipt('receipt.1', { executionRef: 'exec-1', viewState: 'SUCCEEDED', inputs: [ALPHA, ALPHA] });
+  } catch (e) {
+    caught = e instanceof Error ? e.message : String(e);
+  }
+  receiptInputsOverride = null;
+  submitReceipt('G24 duplicate request input path rejected', caught === 'SANDBOX_INPUTS_DUPLICATE_PATH', `caught=${caught}`);
+}
 
 // Positive control: a fully consistent gateway passes every binding check.
 {

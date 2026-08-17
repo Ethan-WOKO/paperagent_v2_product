@@ -220,10 +220,30 @@ export class DshRunner implements Runner {
         });
         return;
       }
-      const receiptRefs = tools.collectReceiptRefs();
+      const receipts = tools.collectReceipts();
+      // Sandbox system-terminal receipts can never be a successful delivery:
+      // a run that TIMED_OUT or hit SYSTEM_ERROR fails the task with a
+      // sandbox_system classification and produces NO delivery (T3 semantics).
+      // A FAILED receipt (compile error etc.) is a legitimate answer and still
+      // delivers — the model reports the compile failure.
+      const systemTerminal = receipts.find((r) => r.status === 'TIMED_OUT' || r.status === 'SYSTEM_ERROR');
+      if (systemTerminal) {
+        task.emit('status', {
+          state: 'failed',
+          error: {
+            contractVersion: '1.0',
+            code: systemTerminal.status === 'TIMED_OUT' ? 'SANDBOX_TIMED_OUT' : 'SANDBOX_SYSTEM_ERROR',
+            category: 'sandbox_system',
+            message: `sandbox execution ended in ${systemTerminal.status}; the task cannot deliver a result`,
+            retryable: false,
+            sourceRef: null,
+          },
+        });
+        return;
+      }
       // P1 completion gate: acceptance tasks must carry at least one formal
       // Receipt; a success without one is a program-enforced failure.
-      if (receiptRefs.length === 0) {
+      if (receipts.length === 0) {
         task.emit('status', {
           state: 'failed',
           error: {
@@ -239,7 +259,7 @@ export class DshRunner implements Runner {
       }
       task.emit('delivery', {
         conclusion: (latestAssistantText || 'task finished without a final model message').slice(0, 16000),
-        receiptRefs,
+        receiptRefs: receipts.map((r) => r.receiptRef),
       });
       task.setRunnerPhase('delivered');
       task.emit('status', { state: 'succeeded', error: null });

@@ -102,6 +102,28 @@ export class FakeAdapter extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'tool-calls' } };
       return;
     }
+    // dup-inputs: first call submits a sandbox request with DUPLICATE input
+    // paths; the engine must reject it before any dispatch. Subsequent calls
+    // finalize so the task reaches a terminal state for assertions.
+    if (mode === 'dup-inputs') {
+      if (sawToolResult) {
+        yield* finalize();
+        return;
+      }
+      const dupArgs = JSON.stringify({
+        argv: ['javac', 'src/main/java/Sort.java'],
+        inputs: [
+          { path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) },
+          { path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) },
+        ],
+        timeoutMillis: 120000,
+      });
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+      yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: dupArgs };
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: dupArgs } as never };
+      yield { type: 'finish', reason: { kind: 'tool-calls' } };
+      return;
+    }
     // normal mode, first call: run the sandbox once.
     yield { type: 'block-start', index: 0, blockType: 'tool-call' };
     yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: sandboxArgs() };
