@@ -14,7 +14,6 @@ import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ResourceLimits;
 import io.paperagent.v2.contracts.TaskFrame;
 import io.paperagent.v2.contracts.TaskFrameId;
-import io.paperagent.v2.contracts.TaskRequirements;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -62,7 +61,6 @@ class ReactPlanModelProjectionTest {
                 List.of("Sort.java"),
                 List.of("compile result"),
                 List.of("read only"),
-                TaskRequirements.legacyUnspecified(),
                 Optional.empty(),
                 profile,
                 Instant.parse("2026-08-16T01:00:00Z"));

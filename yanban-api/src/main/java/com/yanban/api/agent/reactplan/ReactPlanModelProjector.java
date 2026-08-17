@@ -35,7 +35,7 @@ public class ReactPlanModelProjector {
                         step.expectedOutcome(),
                         step.dependencies().stream().map(localKeys::get).toList(),
                         step.completionCriteria(),
-                        step.constraints(),
+                        taskFrame.constraints(),
                         step.executionHints()))
                 .toList();
         Set<String> capabilities = taskFrame.executionProfile().capabilities().stream()

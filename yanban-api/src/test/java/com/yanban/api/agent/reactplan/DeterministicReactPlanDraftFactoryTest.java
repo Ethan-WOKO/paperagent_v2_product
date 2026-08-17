@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DeterministicReactPlanDraftFactoryTest {
     private final DeterministicReactPlanDraftFactory factory =
@@ -24,7 +24,7 @@ class DeterministicReactPlanDraftFactoryTest {
         assertEquals(DeterministicReactPlanDraftFactory.COMPLETION_CRITERIA,
                 step.completionCriteria());
         assertEquals(2, step.executionHints().maxAttempts());
-        assertFalse(step.mayChangeCandidate());
+        assertTrue(step.dependencies().isEmpty());
     }
 
     @Test

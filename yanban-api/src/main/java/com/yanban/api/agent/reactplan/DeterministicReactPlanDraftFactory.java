@@ -34,8 +34,7 @@ public class DeterministicReactPlanDraftFactory {
                 goal.expectedOutcome(),
                 Set.of(),
                 goal.doneWhen(),
-                goal.executionHints(),
-                goal.constraints());
+                goal.executionHints());
         return new ProductPersistentPlanBootstrapCommand(
                 command.routingDecision(),
                 command.taskFrameDraft(),

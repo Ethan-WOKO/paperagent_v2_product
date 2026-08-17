@@ -8,15 +8,15 @@ describe('ProjectPreviewPage ReAct 接入', () => {
   );
 
   it('隐藏链路选择并始终默认使用 ReAct', () => {
-    expect(source).toContain("const projectAgentRoute = ref<ProjectAgentRoute>('react')");
-    expect(source).toContain("projectAgentRoute.value = 'react'");
+    expect(source).toContain("aria-label=\"ReAct project task\"");
+    expect(source).toContain('v-model:value="reactPlanInput"');
     expect(source).not.toContain("@click=\"setProjectAgentRoute('v2')\"");
     expect(source).not.toContain("@click=\"setProjectAgentRoute('react')\"");
     expect(source).not.toContain('class="project-agent-mode"');
     expect(source).not.toContain('ReAct <small>测试</small>');
     expect(source.match(/class="v2-conversation__composer"/g)).toHaveLength(1);
-    expect(source).toContain('v-if="projectAgentRoute === \'v2\'"');
-    expect(source).toContain('v-else class="v2-conversation__tasks"');
+    expect(source).not.toContain('projectAgentRoute');
+    expect(source).toContain(':aria-busy="reactPlanBusy"');
   });
 
   it('提交自然语言任务并消费带断点的认证 SSE，而不是固定工具流程', () => {

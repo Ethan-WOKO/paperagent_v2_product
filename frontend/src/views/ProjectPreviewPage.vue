@@ -7,7 +7,7 @@
           <NSpace :size="8" wrap>
             <NTag v-if="activeProject" size="small" type="success">{{ t('project.page.readOnly') }}</NTag>
             <NButton size="small" secondary :loading="loading.projects" @click="loadProjects">{{ t('project.page.refresh') }}</NButton>
-            <NButton v-if="activeProject" size="small" secondary type="error" :disabled="v2NaturalTurnBusy" @click="deleteModalOpen = true">{{ t('project.page.deleteProject') }}</NButton>
+            <NButton v-if="activeProject" size="small" secondary type="error" :disabled="reactPlanBusy" @click="deleteModalOpen = true">{{ t('project.page.deleteProject') }}</NButton>
             <NButton size="small" type="primary" @click="openCreateProjectModal">{{ t('project.page.newProject') }}</NButton>
           </NSpace>
           <button type="button" class="workspace-hero__collapse" :title="t('project.page.collapseHeader')" :aria-label="t('project.page.collapseHeader')" @click="setProjectHeaderCollapsed(true)">
@@ -154,7 +154,7 @@
               <button type="button" class="project-utility-chip project-utility-chip--secondary" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" :aria-pressed="inspectorOpen && inspectorTab === 'evidence'" aria-controls="project-inspector" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" :aria-pressed="inspectorOpen && inspectorTab === 'changes'" aria-controls="project-inspector" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
               <button type="button" class="project-utility-chip project-utility-chip--secondary" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" :aria-pressed="inspectorOpen && inspectorTab === 'versions'" aria-controls="project-inspector" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
-              <NButton class="project-new-conversation" size="tiny" quaternary :disabled="v2NaturalTurnBusy" @click="startNewConversation">新建会话</NButton>
+              <NButton class="project-new-conversation" size="tiny" quaternary :disabled="reactPlanBusy" @click="startNewConversation">新建会话</NButton>
               <NDropdown trigger="click" :options="projectUtilityMenuOptions" @select="handleProjectUtilityMenuSelect">
                 <button type="button" class="project-utility-chip project-utility-more" :aria-label="isEnglish ? 'More project tools' : '更多项目工具'">
                   {{ isEnglish ? 'More tools' : '更多工具' }}
@@ -411,121 +411,102 @@
           </section>
 
           <section class="v2-conversation">
-            <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="loading.v2History || v2NaturalTurnBusy">
-              <article v-for="task in v2TurnHistory" :key="task.clientRequestId" class="v2-task-card" :data-status="task.status">
+            <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="reactPlanBusy">
+              <article
+                v-for="item in reactPlanTimeline"
+                :key="item.record.taskId"
+                class="v2-task-card reactplan-task-card"
+                :data-task-state="item.record.view.state"
+              >
                 <header class="v2-task-card__question">
                   <div class="v2-task-card__question-copy">
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
-                    <p>{{ task.question }}</p>
+                    <p>{{ item.record.instruction }}</p>
                   </div>
-                  <NTag size="small" :type="v2TaskStatusType(task)">
-                    {{ v2TaskStatusLabel(task) }}
+                  <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
+                    {{ reactPlanStateLabel(item.record.view.state) }}
                   </NTag>
                 </header>
 
                 <details
+                  v-if="item.tools.length"
                   class="v2-conversation__process"
-                  :open="task.status === 'PLANNING' || task.status === 'RUNNING'"
+                  :open="item.record.view.state === 'running' || item.record.view.state === 'waiting_user'"
                 >
                   <summary>
-                    <span>{{ task.status === 'PLANNING' || task.status === 'RUNNING' ? '正在处理' : task.status === 'FAILED' ? '处理失败' : task.status === 'WAITING_CONFIRMATION' ? '等待确认' : '已处理' }}</span>
-                    <small>{{ task.steps.length ? `${task.steps.length} 个步骤` : '直接回答' }}</small>
+                    <span>执行过程</span>
+                    <small>{{ item.tools.length }} 条工具记录</small>
                   </summary>
-                  <ol v-if="task.steps.length">
-                    <li v-for="step in task.steps" :key="`${task.clientRequestId}:${step.index}:${step.title}`" :data-status="step.status">
-                      <span>{{ step.index }}</span>
+                  <ol>
+                    <li v-for="tool in item.tools" :key="`${tool.callId}:${tool.sequence}`" :data-status="tool.state">
+                      <span>{{ tool.sequence }}</span>
                       <div>
-                        <strong>{{ step.title }}</strong>
-                        <small v-if="step.detail">结果：{{ step.detail }}</small>
+                        <strong>{{ reactPlanToolLabel(tool) }}</strong>
+                        <small>{{ tool.outputSummary || tool.inputSummary }}</small>
+                        <code v-if="tool.receiptRef" class="reactplan-receipt">{{ tool.receiptRef }}</code>
                       </div>
-                      <NTag size="tiny" :type="v2StepTagType(step.status)">
-                        {{ v2NaturalLanguageStepStatusLabel(step.status) }}
+                      <NTag size="tiny" :type="tool.state === 'succeeded' ? 'success' : tool.state === 'failed' ? 'error' : 'default'">
+                        {{ reactPlanToolStateLabel(tool.state) }}
                       </NTag>
                     </li>
                   </ol>
-                  <p v-else class="v2-conversation__empty-process">
-                    {{ task.route === 'DIRECT'
-                      ? '此问题无需执行项目步骤，已直接回答。'
-                      : task.status === 'PLANNING'
-                        ? '正在制定执行步骤，请稍候。'
-                        : '没有可展示的执行步骤。' }}
-                  </p>
                 </details>
 
                 <section class="v2-task-card__result">
-                  <span class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">P</span>
+                  <span class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">R</span>
                   <div class="v2-task-card__result-copy">
-                    <NAlert v-if="v2TaskApplied(task)" type="success" :show-icon="false">
-                      修改 #{{ task.candidateArtifactId }} 已自动保存，已创建项目版本
-                      revision #{{ task.confirmationValidation?.appliedRevisionId }}
-                      <template v-if="task.confirmationValidation?.appliedProjectVersion">
-                        （{{ shortHash(task.confirmationValidation.appliedProjectVersion) }}）
-                      </template>。旧项目版本仍然保留。
+                    <MarkdownMessage v-if="item.delivery" :content="item.delivery.conclusion" variant="project" />
+                    <NAlert v-else-if="item.question" type="warning" :show-icon="false">{{ item.question.text }}</NAlert>
+                    <NAlert v-else-if="item.record.view.state === 'failed'" type="error" :show-icon="false">
+                      {{ item.record.view.error?.message || '任务执行失败。' }}
                     </NAlert>
-                    <MarkdownMessage
-                      v-if="task.status === 'SUCCEEDED' && task.finalText"
-                      :content="task.finalText"
-                      variant="project"
-                    />
-                    <NAlert v-else-if="task.status === 'FAILED'" type="error" :show-icon="false">
-                      执行没有成功。<template v-if="task.errorCode">错误代码：{{ task.errorCode }}</template>
-                    </NAlert>
-                    <NAlert v-else-if="task.status === 'WAITING_CONFIRMATION'" type="warning" :show-icon="false">
-                      候选修改已经生成，原项目尚未修改。请检查并验证后，再确认是否创建新版本。
-                    </NAlert>
-                    <p v-else-if="task.status === 'PLANNING'">正在制定持久化计划。</p>
-                    <p v-else-if="task.status === 'RUNNING'">任务正在执行，刷新页面后仍可继续查看。</p>
-                    <p v-else>任务已完成。</p>
+                    <NAlert v-else-if="item.record.view.state === 'cancelled'" type="warning" :show-icon="false">任务已取消。</NAlert>
+                    <p v-else>{{ reactPlanStateLabel(item.record.view.state) }}</p>
                   </div>
                 </section>
 
-                <div v-if="task.candidateArtifactId || task.outputPaths.length" class="v2-task-card__delivery">
-                  <div v-if="task.candidateArtifactId" class="v2-conversation__candidate">
-                    <span>候选修改 #{{ task.candidateArtifactId }}</span>
-                    <NButton type="primary" secondary @click="openV2CandidateReview(task.candidateArtifactId)">
-                      查看修改
-                    </NButton>
-                  </div>
-                  <div v-if="task.outputPaths.length" class="v2-conversation__outputs">
-                    <strong>生成内容位置</strong>
-                    <code v-for="path in task.outputPaths" :key="path" :title="path">{{ path }}</code>
-                  </div>
-                  <dl v-if="task.candidateArtifactId" class="v2-task-card__validation">
-                    <dt>最终沙箱运行</dt>
-                    <dd>{{ task.agentAutomaticValidation
-                      ? `已通过（${task.agentAutomaticValidation.provider}，退出码 ${task.agentAutomaticValidation.exitCode}）`
-                      : '尚无通过记录' }}</dd>
-                    <dt>项目版本状态</dt>
-                    <dd>{{ task.confirmationValidation
-                      ? candidateConfirmationLabel(task.confirmationValidation)
-                      : '尚未执行' }}</dd>
+                <div v-if="item.delivery?.receiptRefs.length" class="v2-task-card__delivery">
+                  <dl class="v2-task-card__validation">
+                    <dt>正式回执</dt>
+                    <dd><code v-for="receipt in item.delivery.receiptRefs" :key="receipt">{{ receipt }}</code></dd>
                   </dl>
                 </div>
 
+                <div class="v2-task-card__actions">
+                  <NButton
+                    v-if="item.record.taskId === reactPlanRecord?.taskId && !isReactPlanTerminal(item.record.view.state)"
+                    size="tiny"
+                    secondary
+                    type="error"
+                    :disabled="reactPlanCancelling"
+                    @click="cancelCurrentReactPlanTask"
+                  >取消任务</NButton>
+                </div>
               </article>
-              <NEmpty v-if="!loading.v2History && v2TurnHistory.length === 0" description="新版本产生的 V2 任务会显示在这里。" />
-              <NSpin v-if="loading.v2History" size="small" />
+              <NEmpty v-if="reactPlanTimeline.length === 0" description="发送任务后，ReAct 会自己查找文件、选择工具并展示正式执行结果。" />
+              <NSpin v-if="reactPlanBusy" size="small" />
             </div>
 
-            <NAlert v-if="v2TurnError" type="error" :show-icon="false">{{ v2TurnError }}</NAlert>
+            <NAlert v-if="reactPlanError" type="error" :show-icon="false">{{ reactPlanError }}</NAlert>
             <div class="v2-conversation__composer">
               <NInput
-                v-model:value="v2TurnInput"
-                aria-label="V2 project task"
+                v-model:value="reactPlanInput"
+                aria-label="ReAct project task"
                 type="textarea"
                 :maxlength="20000"
                 :autosize="{ minRows: 2, maxRows: 8 }"
-                placeholder="例如：读取项目中的 Sort.java，找出编译失败的原因，修复后在沙箱中运行"
-                @keydown="handleV2TurnKeydown"
+                :placeholder="reactPlanQuestion ? '输入对模型追问的回复' : '描述任务，ReAct 会自己查找文件并选择工具'"
+                :disabled="reactPlanBusy"
+                @keydown="handleReactPlanKeydown"
               />
               <NButton
                 class="project-send-button"
                 type="primary"
-                :loading="v2NaturalTurnBusy"
-                :disabled="!v2NaturalTurnAvailable || !activeProject || !v2TurnInput.trim() || v2NaturalTurnBusy"
-                @click="sendV2NaturalLanguageTurn"
+                :loading="reactPlanBusy"
+                :disabled="!activeProject || !reactPlanInput.trim() || reactPlanBusy"
+                @click="sendReactPlanTask"
               >
-                发送
+                {{ reactPlanQuestion ? '回复' : '发送' }}
               </NButton>
             </div>
           </section>
@@ -656,6 +637,7 @@ import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
+import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, startReactPlanTask, streamReactPlanEvents } from '@/api/reactPlan';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
@@ -673,6 +655,24 @@ import {
   v2NaturalLanguageStepStatusLabel,
   type V2NaturalLanguageRequestIdentity,
 } from '@/utils/v2NaturalLanguageTurn';
+import {
+  appendReactPlanEvent,
+  isReactPlanTerminal,
+  latestReactPlanQuestion,
+  newReactPlanCancelId,
+  newReactPlanRequestId,
+  parseReactPlanHistory,
+  reactPlanDelivery,
+  reactPlanStateLabel,
+  reactPlanStateTagType,
+  reactPlanToolEvents,
+  reactPlanToolLabel,
+  reactPlanToolStateLabel,
+  serializeReactPlanHistory,
+  upsertReactPlanRecord,
+  type ReactPlanTaskEvent,
+  type ReactPlanTaskRecord,
+} from '@/utils/reactPlanTask';
 
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
 
@@ -731,6 +731,8 @@ let projectEpoch = 0;
 let sessionFlight: Promise<number | null> | null = null;
 let candidateValidationPoll: number | null = null;
 const V2_NATURAL_LANGUAGE_STORAGE_KEY = 'yanban.v2NaturalLanguage.activeRequest.';
+const REACT_PLAN_STORAGE_KEY = 'yanban.reactPlan.activeTask.';
+const REACT_PLAN_RECONNECT_DELAY_MS = 1_500;
 const v2NaturalTurnAvailable = ref(false);
 const v2TurnInput = ref('');
 const v2TurnStarting = ref(false);
@@ -742,6 +744,31 @@ let v2TurnAbortController: AbortController | null = null;
 let v2TurnSequence = 0;
 let v2TurnClientRequestId: string | null = null;
 const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.value);
+const reactPlanInput = ref('');
+const reactPlanRecord = ref<ReactPlanTaskRecord | null>(null);
+const reactPlanRecords = ref<ReactPlanTaskRecord[]>([]);
+const reactPlanError = ref('');
+const reactPlanSubmitting = ref(false);
+const reactPlanStreaming = ref(false);
+const reactPlanCancelling = ref(false);
+const reactPlanAnswering = ref(false);
+let reactPlanAbortController: AbortController | null = null;
+let reactPlanReconnectTimer: number | null = null;
+const reactPlanQuestion = computed(() => latestReactPlanQuestion(
+  reactPlanRecord.value?.events ?? [],
+  reactPlanRecord.value?.view.pendingQuestionId,
+));
+const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => ({
+  record,
+  tools: reactPlanToolEvents(record.events),
+  delivery: reactPlanDelivery(record.events),
+  question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
+})));
+const reactPlanBusy = computed(() => (
+  reactPlanSubmitting.value || reactPlanCancelling.value || reactPlanAnswering.value
+    || reactPlanRecord.value?.view.state === 'queued'
+    || reactPlanRecord.value?.view.state === 'running'
+));
 
 const loading = reactive({
   projects: false,
@@ -1542,6 +1569,244 @@ function naturalLanguageStorageKey(projectId: number, sessionId: number) {
   return `${V2_NATURAL_LANGUAGE_STORAGE_KEY}${projectId}.${sessionId}`;
 }
 
+function reactPlanStorageKey(projectId: number, sessionId: number) {
+  return `${REACT_PLAN_STORAGE_KEY}${projectId}.${sessionId}`;
+}
+
+function storedReactPlanRecords(projectId: number, sessionId: number) {
+  const key = reactPlanStorageKey(projectId, sessionId);
+  const raw = window.localStorage.getItem(key);
+  const records = parseReactPlanHistory(raw, projectId, sessionId);
+  if (raw && records.length === 0) window.localStorage.removeItem(key);
+  return records;
+}
+
+function storeReactPlanRecords(records: ReactPlanTaskRecord[]) {
+  const value = serializeReactPlanHistory(records);
+  const latest = records[records.length - 1];
+  if (!value || !latest) return;
+  window.localStorage.setItem(reactPlanStorageKey(latest.projectId, latest.sessionId), value);
+}
+
+function invalidateReactPlanStream() {
+  reactPlanAbortController?.abort();
+  reactPlanAbortController = null;
+  if (reactPlanReconnectTimer != null) {
+    window.clearTimeout(reactPlanReconnectTimer);
+    reactPlanReconnectTimer = null;
+  }
+  reactPlanStreaming.value = false;
+}
+
+function resetReactPlanView() {
+  invalidateReactPlanStream();
+  reactPlanRecord.value = null;
+  reactPlanRecords.value = [];
+  reactPlanError.value = '';
+  reactPlanInput.value = '';
+  reactPlanSubmitting.value = false;
+  reactPlanCancelling.value = false;
+  reactPlanAnswering.value = false;
+}
+
+function isCurrentReactPlan(record: ReactPlanTaskRecord, epoch: number) {
+  return epoch === projectEpoch
+    && record.projectId === activeProjectId.value
+    && record.sessionId === activeSessionId.value
+    && record.taskId === reactPlanRecord.value?.taskId;
+}
+
+function updateReactPlanRecord(record: ReactPlanTaskRecord) {
+  reactPlanRecord.value = record;
+  reactPlanRecords.value = upsertReactPlanRecord(reactPlanRecords.value, record);
+  storeReactPlanRecords(reactPlanRecords.value);
+}
+
+function acceptReactPlanEvent(source: ReactPlanTaskRecord, event: ReactPlanTaskEvent, epoch: number) {
+  if (!isCurrentReactPlan(source, epoch)) return;
+  const current = reactPlanRecord.value;
+  if (!current) return;
+  const events = appendReactPlanEvent(current.events, event, current.taskId);
+  if (events === current.events) return;
+  const view = { ...current.view, lastSequence: event.sequence, updatedAt: event.occurredAt };
+  if (event.type === 'status') {
+    view.state = event.state;
+    view.error = event.error;
+    view.pendingQuestionId = event.state === 'waiting_user' ? view.pendingQuestionId : null;
+    if (isReactPlanTerminal(event.state)) view.terminalSequence = event.sequence;
+  } else if (event.type === 'question') {
+    view.pendingQuestionId = event.questionId;
+  } else if (event.type === 'delivery') {
+    view.deliverySequence = event.sequence;
+  }
+  updateReactPlanRecord({ ...current, view, events });
+}
+
+function scheduleReactPlanReconnect(record: ReactPlanTaskRecord, epoch: number) {
+  if (!isCurrentReactPlan(record, epoch)
+      || isReactPlanTerminal(reactPlanRecord.value!.view.state)
+      || reactPlanRecord.value!.view.state === 'waiting_user') return;
+  reactPlanReconnectTimer = window.setTimeout(() => {
+    reactPlanReconnectTimer = null;
+    connectReactPlanTask(reactPlanRecord.value!, epoch);
+  }, REACT_PLAN_RECONNECT_DELAY_MS);
+}
+
+async function connectReactPlanTask(record: ReactPlanTaskRecord, epoch = projectEpoch) {
+  invalidateReactPlanStream();
+  if (!isCurrentReactPlan(record, epoch)) return;
+  const controller = new AbortController();
+  reactPlanAbortController = controller;
+  reactPlanStreaming.value = true;
+  try {
+    const view = (await getReactPlanTask(record.turnId, record.taskId, controller.signal)).data;
+    if (!isCurrentReactPlan(record, epoch)) return;
+    updateReactPlanRecord({ ...reactPlanRecord.value!, view });
+    const currentEvents = reactPlanRecord.value?.events ?? [];
+    const afterSequence = currentEvents.length ? currentEvents[currentEvents.length - 1].sequence : 0;
+    if (afterSequence < view.lastSequence || !isReactPlanTerminal(view.state)) {
+      await streamReactPlanEvents(
+        record.turnId,
+        record.taskId,
+        afterSequence,
+        controller.signal,
+        (event) => acceptReactPlanEvent(record, event, epoch),
+      );
+    }
+    if (!isCurrentReactPlan(record, epoch)) return;
+    const finalView = (await getReactPlanTask(record.turnId, record.taskId, controller.signal)).data;
+    if (!isCurrentReactPlan(record, epoch)) return;
+    updateReactPlanRecord({ ...reactPlanRecord.value!, view: finalView });
+    reactPlanError.value = '';
+  } catch (cause) {
+    if (controller.signal.aborted || !isCurrentReactPlan(record, epoch)) return;
+    reactPlanError.value = apiError(cause);
+  } finally {
+    if (reactPlanAbortController === controller) reactPlanAbortController = null;
+    if (isCurrentReactPlan(record, epoch)) {
+      reactPlanStreaming.value = false;
+      scheduleReactPlanReconnect(record, epoch);
+    }
+  }
+}
+
+function loadReactPlanRecord(projectId: number, sessionId: number, epoch = projectEpoch) {
+  invalidateReactPlanStream();
+  const records = storedReactPlanRecords(projectId, sessionId);
+  reactPlanRecords.value = records;
+  const record = records[records.length - 1] ?? null;
+  reactPlanRecord.value = record;
+  reactPlanError.value = '';
+  if (record) connectReactPlanTask(record, epoch);
+}
+
+async function submitReactPlanTask() {
+  const projectId = activeProjectId.value;
+  const instruction = reactPlanInput.value.trim();
+  if (!projectId || !instruction || reactPlanBusy.value) return;
+  const epoch = projectEpoch;
+  reactPlanSubmitting.value = true;
+  reactPlanError.value = '';
+  invalidateReactPlanStream();
+  const controller = new AbortController();
+  reactPlanAbortController = controller;
+  try {
+    const sessionId = await ensureSession();
+    if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
+    const clientRequestId = newReactPlanRequestId();
+    const accepted = (await startReactPlanTask(sessionId, { clientRequestId, instruction }, controller.signal)).data;
+    if (epoch !== projectEpoch || sessionId !== activeSessionId.value) return;
+    const record: ReactPlanTaskRecord = {
+      version: 1,
+      projectId,
+      sessionId,
+      clientRequestId,
+      instruction,
+      turnId: accepted.turnId,
+      taskId: accepted.taskId,
+      view: accepted.task,
+      events: [],
+    };
+    reactPlanInput.value = '';
+    updateReactPlanRecord(record);
+    connectReactPlanTask(record, epoch);
+  } catch (cause) {
+    if (!controller.signal.aborted && epoch === projectEpoch) reactPlanError.value = apiError(cause);
+  } finally {
+    if (reactPlanAbortController === controller) reactPlanAbortController = null;
+    if (epoch === projectEpoch) reactPlanSubmitting.value = false;
+  }
+}
+
+async function answerCurrentReactPlanQuestion() {
+  const record = reactPlanRecord.value;
+  const question = reactPlanQuestion.value;
+  const answer = reactPlanInput.value.trim();
+  if (!record || !question || !answer || reactPlanAnswering.value) return;
+  const epoch = projectEpoch;
+  reactPlanAnswering.value = true;
+  reactPlanError.value = '';
+  invalidateReactPlanStream();
+  const controller = new AbortController();
+  reactPlanAbortController = controller;
+  try {
+    const view = (await answerReactPlanQuestion(
+      record.turnId,
+      record.taskId,
+      { questionId: question.questionId, answer },
+      controller.signal,
+    )).data;
+    if (!isCurrentReactPlan(record, epoch)) return;
+    reactPlanInput.value = '';
+    updateReactPlanRecord({ ...reactPlanRecord.value!, view });
+    connectReactPlanTask(reactPlanRecord.value!, epoch);
+  } catch (cause) {
+    if (!controller.signal.aborted && isCurrentReactPlan(record, epoch)) reactPlanError.value = apiError(cause);
+  } finally {
+    if (reactPlanAbortController === controller) reactPlanAbortController = null;
+    if (isCurrentReactPlan(record, epoch)) reactPlanAnswering.value = false;
+  }
+}
+
+async function cancelCurrentReactPlanTask() {
+  const record = reactPlanRecord.value;
+  if (!record || isReactPlanTerminal(record.view.state) || reactPlanCancelling.value) return;
+  if (!window.confirm('取消这个 ReAct 任务？已经产生的正式事件会保留。')) return;
+  const epoch = projectEpoch;
+  reactPlanCancelling.value = true;
+  reactPlanError.value = '';
+  invalidateReactPlanStream();
+  const controller = new AbortController();
+  reactPlanAbortController = controller;
+  try {
+    const view = (await cancelReactPlanTask(
+      record.turnId,
+      record.taskId,
+      newReactPlanCancelId(),
+      controller.signal,
+    )).data;
+    if (!isCurrentReactPlan(record, epoch)) return;
+    updateReactPlanRecord({ ...reactPlanRecord.value!, view });
+    connectReactPlanTask(reactPlanRecord.value!, epoch);
+  } catch (cause) {
+    if (!controller.signal.aborted && isCurrentReactPlan(record, epoch)) reactPlanError.value = apiError(cause);
+  } finally {
+    if (reactPlanAbortController === controller) reactPlanAbortController = null;
+    if (isCurrentReactPlan(record, epoch)) reactPlanCancelling.value = false;
+  }
+}
+
+function sendReactPlanTask() {
+  if (reactPlanQuestion.value) void answerCurrentReactPlanQuestion();
+  else void submitReactPlanTask();
+}
+
+function handleReactPlanKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
+  event.preventDefault();
+  sendReactPlanTask();
+}
+
 function storedV2NaturalLanguageRequest(projectId: number, sessionId: number) {
   try {
     const raw = window.localStorage.getItem(naturalLanguageStorageKey(projectId, sessionId));
@@ -1873,6 +2138,7 @@ function handleV2TurnKeydown(event: KeyboardEvent) {
 
 async function selectProject(projectId: number) {
   resetV2NaturalLanguageView();
+  resetReactPlanView();
   projectEpoch++;
   sessionFlight = null;
   if (candidateValidationPoll != null) {
@@ -1967,6 +2233,7 @@ async function loadConversation(epoch = projectEpoch) {
       loadV2TurnHistory(sessionId, epoch),
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
+      loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
       void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
@@ -2016,8 +2283,9 @@ async function refreshCandidates() {
 }
 
 async function selectConversation(sessionId: number) {
-  if (sessionId === activeSessionId.value || v2NaturalTurnBusy.value) return;
+  if (sessionId === activeSessionId.value || reactPlanBusy.value) return;
   resetV2NaturalLanguageView();
+  resetReactPlanView();
   projectEpoch++;
   sessionFlight = null;
   if (candidateValidationPoll != null) {
@@ -2038,6 +2306,7 @@ async function selectConversation(sessionId: number) {
       loadV2TurnHistory(sessionId, epoch),
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
+      loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
       void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
@@ -2047,8 +2316,9 @@ async function selectConversation(sessionId: number) {
 
 async function startNewConversation() {
   const project = activeProject.value;
-  if (!project || v2NaturalTurnBusy.value) return;
+  if (!project || reactPlanBusy.value) return;
   resetV2NaturalLanguageView();
+  resetReactPlanView();
   projectEpoch++;
   sessionFlight = null;
   evidence.value = [];
@@ -2105,7 +2375,7 @@ async function confirmRenameSession() {
 }
 
 async function deleteConversation(session: AgentSessionResponse) {
-  if (v2NaturalTurnBusy.value) {
+  if (reactPlanBusy.value) {
     error.value = 'Current Project Agent request is still running. Please wait before deleting a conversation.';
     return;
   }
@@ -2116,10 +2386,14 @@ async function deleteConversation(session: AgentSessionResponse) {
   const wasActive = activeSessionId.value === session.id;
   error.value = '';
   try {
+    if (activeProjectId.value) {
+      window.localStorage.removeItem(reactPlanStorageKey(activeProjectId.value, session.id));
+    }
     await deleteAgentSession(session.id);
     projectSessions.value = projectSessions.value.filter((item) => item.id !== session.id);
     if (!wasActive) return;
     resetV2NaturalLanguageView();
+    resetReactPlanView();
     projectEpoch++;
     sessionFlight = null;
     evidence.value = [];
@@ -2151,6 +2425,7 @@ async function removeActiveProject() {
   try {
     await deleteProject(projectId);
     resetV2NaturalLanguageView();
+    resetReactPlanView();
     projectEpoch++;
     sessionFlight = null;
     collapsedDirectoriesByProject.delete(projectId);
@@ -2242,6 +2517,7 @@ onMounted(() => {
 });
 onUnmounted(() => {
   stopV2NaturalLanguagePolling();
+  invalidateReactPlanStream();
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
   projectEpoch++;
 });
@@ -2380,6 +2656,9 @@ onUnmounted(() => {
 .v2-task-card__validation { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 10px; }
 .v2-task-card__validation dt { color: var(--yb-text-muted); }
 .v2-task-card__validation dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.v2-task-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.reactplan-task-card code { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
+.reactplan-receipt { display: block; margin-top: 3px; }
 .v2-conversation__question { align-self: flex-end; max-width: min(82%, 720px); padding: 10px 12px; border-radius: 12px 12px 2px 12px; background: var(--yb-bg-muted); }
 .v2-conversation__process, .v2-conversation__result { padding: 12px 0; border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__question small { color: var(--yb-text-muted); font-size: 9px; }
