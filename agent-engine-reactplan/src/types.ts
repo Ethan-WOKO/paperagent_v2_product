@@ -155,6 +155,7 @@ export interface PersistedTask {
   publication?: PublicationFact;
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;
+  loadedToolNames?: string[];
 }
 
 export interface FileEntry { path: string; sizeBytes: number; sha256: string; mediaType: string }

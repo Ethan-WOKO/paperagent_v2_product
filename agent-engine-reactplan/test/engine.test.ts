@@ -44,7 +44,9 @@ describe("AgentEngine", () => {
     expect(gateway.maximumConcurrent).toBe(1);
     expect(gateway.publishCalls).toBe(0);
     expect(provider.requests.every((request) => request.maxOutputTokens === 4096)).toBe(true);
-    expect(JSON.stringify(provider.requests[0]?.tools)).toContain("project_search");
+    expect((provider.requests[0]?.tools as Array<{ function: { name: string } }>).map((candidate) =>
+      candidate.function.name)).toEqual(["load_tool"]);
+    expect(JSON.stringify(provider.requests[0]?.messages)).toContain("project_search");
   });
 
   it("creates an isolated Workspace candidate and requires exact diff and sandbox validation", async () => {
@@ -66,10 +68,10 @@ describe("AgentEngine", () => {
     expect((await engine.events(request.taskId)).filter((event) => event.type === "tool" && event.state === "requested")
       .map((event) => event.type === "tool" ? event.name : ""))
       .toEqual(["project.read", "workspace.write", "workspace.diff", "sandbox.execute", "project.publish"]);
-    expect(provider.requests[0]!.tools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ function: expect.objectContaining({ name: "write_workspace_file" }) }),
-      expect.objectContaining({ function: expect.objectContaining({ name: "get_workspace_diff" }) })
-    ]));
+    expect((provider.requests[0]!.tools as Array<{ function: { name: string } }>).map((candidate) =>
+      candidate.function.name)).toEqual(["load_tool"]);
+    expect(JSON.stringify(provider.requests[0]!.messages)).toContain("write_workspace_file");
+    expect(JSON.stringify(provider.requests[0]!.messages)).toContain("get_workspace_diff");
     expect(gateway.lastSandboxHash).toBe(replacementHash);
     expect(gateway.publishCalls).toBe(1);
     const delivery = (await engine.events(request.taskId)).find((event) => event.type === "delivery");
@@ -176,10 +178,10 @@ describe("AgentEngine", () => {
     expect(request.messages[0]?.content).toContain("Do not call Project or sandbox tools for greetings");
     expect(request.messages.some((message) =>
       message.role === "user" && message.content === "Current task: 你好，你是什么模型？")).toBe(true);
-    expect(request.tools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ function: expect.objectContaining({ name: "write_workspace_file" }) }),
-      expect.objectContaining({ function: expect.objectContaining({ name: "get_workspace_diff" }) })
-    ]));
+    expect((request.tools as Array<{ function: { name: string } }>).map((candidate) =>
+      candidate.function.name)).toEqual(["load_tool"]);
+    expect(JSON.stringify(request.messages)).toContain("write_workspace_file");
+    expect(JSON.stringify(request.messages)).toContain("get_workspace_diff");
     expect((await engine.events(current.taskId)).filter((event) => event.type === "tool")).toHaveLength(0);
   });
 
@@ -243,9 +245,10 @@ describe("AgentEngine", () => {
     await waitFor(() => first.get(historyRequest.taskId).state === "succeeded");
 
     const current = submissionFor(71, "session.persisted", "continue the inspection");
-    const interrupted = await createEngine(new NeverProvider(), new FakeGateway(), directory);
+    const interruptedProvider = new NeverProvider();
+    const interrupted = await createEngine(interruptedProvider, new FakeGateway(), directory);
     await interrupted.submit(current);
-    await waitFor(() => interrupted.get(current.taskId).state === "running");
+    await waitFor(() => interruptedProvider.requests.length === 1);
 
     const resumedProvider = new ScriptedProvider([{ content: "continued from frozen context", toolCalls: [] }]);
     const resumed = await createEngine(resumedProvider, new FakeGateway(), directory);
@@ -270,6 +273,37 @@ describe("AgentEngine", () => {
       .map((event) => event.type === "tool" ? event.name : "")).toEqual(["project.read"]);
     expect(JSON.stringify(events)).not.toContain("PRIVATE_SEARCH_RESULT");
     expect(JSON.stringify(provider.requests)).toContain("PRIVATE_SEARCH_RESULT");
+  });
+
+  it("exposes only compact tool names and descriptions until one schema is loaded", async () => {
+    const provider = new ScriptedProvider([
+      tool("load_tool", { name: "project_search" }),
+      tool("project_search", { query: "order-service", maxResults: 20 }),
+      { content: "Located the requested module.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const first = provider.requests[0]!;
+    expect(first.tools).toEqual([
+      expect.objectContaining({ function: expect.objectContaining({ name: "load_tool" }) })
+    ]);
+    const catalog = first.messages.find((message) =>
+      message.role === "system" && message.content?.includes('"type":"compact_tool_catalog"'));
+    expect(catalog?.content).toContain('"name":"project_search"');
+    expect(catalog?.content).toContain('"description":"Search the frozen Project."');
+    expect(catalog?.content).not.toContain('"parameters"');
+    expect(catalog?.content).not.toContain('"query"');
+
+    const secondToolNames = (provider.requests[1]!.tools as Array<{
+      function: { name: string; parameters: unknown };
+    }>).map((candidate) => candidate.function.name);
+    expect(secondToolNames).toEqual(["load_tool", "project_search"]);
+    expect(JSON.stringify(provider.requests[1]!.tools)).toContain('"query"');
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.state === "requested")).toHaveLength(1);
   });
 
   it("accepts exact replay, refreshes the grant, and rejects a digest conflict", async () => {
@@ -306,9 +340,10 @@ describe("AgentEngine", () => {
 
   it("loads persisted events and resumes only after an exact replay supplies a fresh grant", async () => {
     const directory = await temporaryDirectory();
-    const first = await createEngine(new NeverProvider(), new FakeGateway(), directory);
+    const firstProvider = new NeverProvider();
+    const first = await createEngine(firstProvider, new FakeGateway(), directory);
     await first.submit(submission());
-    await waitFor(() => first.get(taskId).state === "running");
+    await waitFor(() => firstProvider.requests.length === 1);
     const secondProvider = new ScriptedProvider([{ content: "Recovered without recreating the task.", toolCalls: [] }]);
     const second = await createEngine(secondProvider, new FakeGateway(), directory);
     expect(second.get(taskId).state).toBe("running");
@@ -400,7 +435,9 @@ class ScriptedProvider implements ModelProvider {
 }
 
 class NeverProvider implements ModelProvider {
+  readonly requests: ModelRequest[] = [];
   complete(request: ModelRequest): Promise<ModelResponse> {
+    this.requests.push(request);
     if (request.signal.aborted) return Promise.reject(new DOMException("aborted", "AbortError"));
     return new Promise((_, reject) => request.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
   }

@@ -1,4 +1,4 @@
-import type { AcceptedAnswer, ChatMessage, HistoricalContextEnvelope, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RecentConversationTurn, RegisteredToolCatalog, RegisteredToolResult, TaskEvent, TaskObservations, TaskSubmission, TaskView, ToolName, WorkspaceWriteResult } from "./types.js";
+import type { AcceptedAnswer, ChatMessage, HistoricalContextEnvelope, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RecentConversationTurn, RegisteredToolCatalog, RegisteredToolResult, RegisteredToolSpec, TaskEvent, TaskObservations, TaskSubmission, TaskView, ToolName, WorkspaceWriteResult } from "./types.js";
 import type { GatewayClient, SandboxRequest, WorkspacePublishRequest, WorkspaceWriteRequest } from "./gateway.js";
 import { ContractValidator } from "./validation.js";
 import { TaskStore } from "./store.js";
@@ -23,6 +23,15 @@ const WORKSPACE_MODEL_TOOLS = [
   functionTool("write_workspace_file", "Create or fully replace one UTF-8 file in the isolated task Workspace. Use only when the current user explicitly asks to change the Project. MODIFY requires the exact current workspace hash; ADD requires baseSha256=null. This does not publish or alter the ProjectVersion.", { type: "object", additionalProperties: false, required: ["operation", "path", "baseSha256", "content"], properties: { operation: { enum: ["ADD", "MODIFY"] }, path: { type: "string" }, baseSha256: { type: ["string", "null"] }, content: { type: "string" } } }),
   functionTool("get_workspace_diff", "Inspect the authoritative ADD/MODIFY diff currently present in the isolated task Workspace. This never publishes changes.", { type: "object", additionalProperties: false, properties: {} })
 ];
+
+const LOAD_TOOL = functionTool(
+  "load_tool",
+  "Load the parameter schema for one available tool selected from the server-provided compact tool catalog. Call this before using a tool whose schema is not loaded yet.",
+  {
+    type: "object", additionalProperties: false, required: ["name"],
+    properties: { name: { type: "string", minLength: 1, maxLength: 64 } }
+  }
+);
 
 type Subscriber = (event: TaskEvent) => void;
 type Sleeper = (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -94,7 +103,7 @@ export class AgentEngine {
       metrics: { startedAt: now, promptTokens: 0, completionTokens: 0 },
       receiptRefs: [], pendingCalls: [], nextPendingCall: 0, acceptedAnswers: [],
       recentConversation, historicalContext, observations: emptyObservations(), groundingRepairs: 0,
-      candidateValidationRepairs: 0
+      candidateValidationRepairs: 0, loadedToolNames: []
     };
     await this.options.store.create(task);
     this.tasks.set(submission.taskId, task);
@@ -189,14 +198,15 @@ export class AgentEngine {
         task.modelCalls += 1;
         await this.options.store.save(task);
         const modelMessages = structuredClone(task.messages);
-        modelMessages.splice(1, 0, groundingMessage(task.observations));
+        const availableTools = availableToolSpecs(task);
+        modelMessages.splice(1, 0,
+          compactToolCatalogMessage(availableTools),
+          groundingMessage(task.observations));
         const response = await this.options.provider.complete({
           provider: task.authority.model.provider,
           model: task.authority.model.model,
           messages: modelMessages,
-          tools: [...MODEL_TOOLS,
-            ...(task.authority.permissions.writeWorkspace ? WORKSPACE_MODEL_TOOLS : []),
-            ...(task.registeredTools ?? [])],
+          tools: [LOAD_TOOL, ...loadedToolSpecs(availableTools, task.loadedToolNames ?? [])],
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           signal
         });
@@ -314,6 +324,20 @@ export class AgentEngine {
     let args: Record<string, unknown>;
     try { args = JSON.parse(call.arguments) as Record<string, unknown>; }
     catch { throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Model emitted invalid tool arguments")); }
+    if (call.name === "load_tool") {
+      const name = requireString(args.name, "name");
+      const available = availableToolSpecs(task).find((tool) => tool.function.name === name);
+      if (!available) {
+        throw new EngineProblem(502, problem(
+          "MODEL_TOOL_UNKNOWN", "model", "The requested tool is not present in the available tool catalog"));
+      }
+      task.loadedToolNames = stableUnique([...(task.loadedToolNames ?? []), name]);
+      task.messages.push({
+        role: "tool", toolCallId: call.id,
+        content: JSON.stringify({ loaded: name, instruction: `The ${name} parameter schema is now available. Call ${name} when needed.` })
+      });
+      return false;
+    }
     if (call.name === "ask_user") {
       if (task.pendingCalls.length !== 1 || typeof args.question !== "string" || !args.question.trim()) throw new EngineProblem(502, problem("MODEL_QUESTION_INVALID", "model", "ask_user must be the only call and contain one question"));
       const questionId = `question.${sha256(`${task.view.taskId}:${call.id}`).slice(0, 48)}`;
@@ -518,7 +542,7 @@ export class AgentEngine {
   private checkCancelled(signal: AbortSignal): void { if (signal.aborted) throw new DOMException("Cancelled", "AbortError"); }
 }
 
-function functionTool(name: string, description: string, parameters: unknown): unknown { return { type: "function", function: { name, description, parameters } }; }
+function functionTool(name: string, description: string, parameters: unknown): RegisteredToolSpec { return { type: "function", function: { name, description, parameters } }; }
 function deterministicCallId(taskId: string, modelCall: number, ordinal: number): string { return `call.${sha256(`${taskId}:${modelCall}:${ordinal}`).slice(0, 40)}`; }
 function requireString(value: unknown, name: string): string { if (typeof value !== "string" || !value) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", `Tool argument ${name} must be a non-empty string`)); return value; }
 
@@ -682,6 +706,36 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.observations.workspaceChanges ??= [];
   task.groundingRepairs ??= 0;
   task.candidateValidationRepairs ??= 0;
+  task.loadedToolNames ??= [];
+}
+
+function availableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
+  return [
+    ...MODEL_TOOLS,
+    ...(task.authority.permissions.writeWorkspace ? WORKSPACE_MODEL_TOOLS : []),
+    ...(task.registeredTools ?? [])
+  ];
+}
+
+function loadedToolSpecs(
+  available: RegisteredToolSpec[], loadedNames: string[]
+): RegisteredToolSpec[] {
+  const loaded = new Set(loadedNames);
+  return available.filter((tool) => loaded.has(tool.function.name));
+}
+
+function compactToolCatalogMessage(tools: RegisteredToolSpec[]): ChatMessage {
+  return {
+    role: "system",
+    content: `Available tool catalog. This catalog contains names and descriptions only; parameter schemas are intentionally omitted to keep context small. Before calling an unloaded tool, call load_tool with its exact name. Do not infer hidden parameters.\n${JSON.stringify({
+      schemaVersion: "1.0",
+      type: "compact_tool_catalog",
+      tools: tools.map((tool) => ({
+        name: tool.function.name,
+        description: bounded(tool.function.description, 1000)
+      }))
+    })}`
+  };
 }
 
 function groundingMessage(observations: TaskObservations): ChatMessage {
