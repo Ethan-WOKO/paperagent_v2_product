@@ -302,12 +302,13 @@ paths:
           content:
             application/json:
               schema: { $ref: './schemas/product-search.schema.json#/$defs/knowledgeSearchResponse' }
-        '400': { $ref: '#/components/responses/Problem' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-        '413': { $ref: '#/components/responses/Problem' }
-        '502': { $ref: '#/components/responses/Problem' }
+        '400': { $ref: '#/components/responses/ProductSearchProblem' }
+        '401': { $ref: '#/components/responses/ProductSearchProblem' }
+        '403': { $ref: '#/components/responses/ProductSearchProblem' }
+        '404': { $ref: '#/components/responses/ProductSearchProblem' }
+        '409': { $ref: '#/components/responses/ProductSearchProblem' }
+        '413': { $ref: '#/components/responses/ProductSearchProblem' }
+        '502': { $ref: '#/components/responses/ProductSearchProblem' }
   /internal/v1/agent-engine/tasks/{taskId}/literature-searches:
     parameters:
       - $ref: '#/components/parameters/TaskId'
@@ -333,12 +334,13 @@ paths:
           content:
             application/json:
               schema: { $ref: './schemas/product-search.schema.json#/$defs/literatureSearchResponse' }
-        '400': { $ref: '#/components/responses/Problem' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-        '413': { $ref: '#/components/responses/Problem' }
-        '502': { $ref: '#/components/responses/Problem' }
+        '400': { $ref: '#/components/responses/ProductSearchProblem' }
+        '401': { $ref: '#/components/responses/ProductSearchProblem' }
+        '403': { $ref: '#/components/responses/ProductSearchProblem' }
+        '404': { $ref: '#/components/responses/ProductSearchProblem' }
+        '409': { $ref: '#/components/responses/ProductSearchProblem' }
+        '413': { $ref: '#/components/responses/ProductSearchProblem' }
+        '502': { $ref: '#/components/responses/ProductSearchProblem' }
 components:
   securitySchemes:
     EngineServiceBearer:
@@ -389,3 +391,8 @@ components:
       content:
         application/json:
           schema: { $ref: ./schemas/problem.schema.json }
+    ProductSearchProblem:
+      description: Sanitized product-search failure from the closed 1.1 error vocabulary
+      content:
+        application/json:
+          schema: { $ref: ./schemas/product-search-problem.schema.json }

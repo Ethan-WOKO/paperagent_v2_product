@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/product-search-problem.schema.json",
+  "title": "ProductSearchProblem",
+  "allOf": [
+    { "$ref": "problem.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "SEARCH_REQUEST_INVALID",
+            "SEARCH_REQUEST_TOO_LARGE",
+            "TOOL_REQUEST_CONFLICT",
+            "TASK_GRANT_INVALID",
+            "TASK_GRANT_EXPIRED",
+            "TASK_GRANT_WRONG_TASK",
+            "TASK_GRANT_PERMISSION_DENIED",
+            "TASK_NOT_FOUND",
+            "TASK_AUTHORITY_CONFLICT",
+            "KNOWLEDGE_SEARCH_FAILED",
+            "LITERATURE_SEARCH_FAILED",
+            "SEARCH_RESPONSE_INVALID"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": { "enum": ["SEARCH_REQUEST_INVALID", "SEARCH_REQUEST_TOO_LARGE", "TOOL_REQUEST_CONFLICT", "TASK_NOT_FOUND"] }
+        },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "category": { "const": "request" },
+          "retryable": { "const": false }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": { "enum": ["TASK_GRANT_INVALID", "TASK_GRANT_WRONG_TASK", "TASK_GRANT_PERMISSION_DENIED", "TASK_AUTHORITY_CONFLICT"] }
+        },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "category": { "const": "authorization" },
+          "retryable": { "const": false }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "TASK_GRANT_EXPIRED" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "category": { "const": "authorization" },
+          "retryable": { "const": true }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": { "enum": ["KNOWLEDGE_SEARCH_FAILED", "LITERATURE_SEARCH_FAILED"] }
+        },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "category": { "const": "tool" },
+          "retryable": { "const": true }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "SEARCH_RESPONSE_INVALID" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "category": { "const": "internal" },
+          "retryable": { "const": false }
+        }
+      }
+    }
+  ]
+}

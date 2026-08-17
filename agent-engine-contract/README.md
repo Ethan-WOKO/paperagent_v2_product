@@ -199,9 +199,32 @@ query 必须至少包含一个非空白字符，并按请求中的精确 Unicode
 yearFrom，知识响应还回显冻结 ProjectVersion。Engine 必须逐项校验这些绑定和结果数量，
 不得只依赖 HTTP 成功。首次结果的稳定顺序随结果一起持久化，重放不得重新排序。
 
-工具事件只可包含有界 query/结果数摘要和不透明 `searchRef`。知识摘录、文献摘要、
+成功的搜索工具事件必须包含不透明 `searchRef`，请求中和失败前可为 null 或缺省；
+非搜索工具不得制造 searchRef。工具事件只可包含有界 query/结果数摘要。知识摘录、文献摘要、
 BibTeX、上游 warning 明细和 provider 错误不得写入事件。搜索结果本身不是 Sandbox
 Receipt；只读回答可以继续使用空 `delivery.receiptRefs`。
+
+搜索端点使用封闭的错误码词汇表；未知 code 必须由 Engine fail-closed 为
+`GATEWAY_ERROR`，不得依据 message 猜测：
+
+| HTTP | code | category | retryable |
+| --- | --- | --- | --- |
+| 400 | `SEARCH_REQUEST_INVALID` | `request` | false |
+| 413 | `SEARCH_REQUEST_TOO_LARGE` | `request` | false |
+| 409 | `TOOL_REQUEST_CONFLICT` | `request` | false |
+| 401 | `TASK_GRANT_INVALID` | `authorization` | false |
+| 401 | `TASK_GRANT_EXPIRED` | `authorization` | true（产品刷新 grant 后精确重放） |
+| 403 | `TASK_GRANT_WRONG_TASK` / `TASK_GRANT_PERMISSION_DENIED` | `authorization` | false |
+| 404 | `TASK_NOT_FOUND` | `request` | false |
+| 409 | `TASK_AUTHORITY_CONFLICT` | `authorization` | false |
+| 502 | `KNOWLEDGE_SEARCH_FAILED` / `LITERATURE_SEARCH_FAILED` | `tool` | true |
+| 502 | `SEARCH_RESPONSE_INVALID` | `internal` | false |
+
+文献部分成功 warning 也使用封闭集合：`LITERATURE_SOURCE_PARTIAL`、
+`LITERATURE_METADATA_TRUNCATED`、`LITERATURE_RESULTS_TRUNCATED`。warning 不得包含来源名称、
+异常 message 或 URL。Schema 排除非 HTTP(S) 与 user-info URL；公网解析、重定向后地址、
+loopback/link-local/RFC1918 和内部域名仍由 Java 产品在序列化前执行 URL policy，Engine
+只做 schema 与绑定复核。
 
 ## 10. 本地合同验证
 

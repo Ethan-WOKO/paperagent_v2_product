@@ -95,7 +95,7 @@
         "url": {
           "type": ["string", "null"],
           "maxLength": 2048,
-          "pattern": "^https?://[^\\s]+$"
+          "pattern": "^https?://(?:\\[[0-9A-Fa-f:.]+\\]|[^@/\\s:?#]+)(?::[0-9]{1,5})?(?:[/?#][^@\\s]*)?$"
         },
         "abstract": { "type": ["string", "null"], "maxLength": 2000 },
         "source": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -129,7 +129,13 @@
           "type": "array",
           "maxItems": 16,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,95}$" }
+          "items": {
+            "enum": [
+              "LITERATURE_SOURCE_PARTIAL",
+              "LITERATURE_METADATA_TRUNCATED",
+              "LITERATURE_RESULTS_TRUNCATED"
+            ]
+          }
         },
         "truncated": { "type": "boolean" }
       }

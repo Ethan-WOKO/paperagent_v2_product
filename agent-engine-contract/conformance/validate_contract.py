@@ -81,6 +81,19 @@ def validate_openapi() -> int:
     }
     assert required_paths == set(document["paths"]), "OpenAPI path set drifted"
 
+    search_paths = {
+        "/internal/v1/agent-engine/tasks/{taskId}/knowledge-searches",
+        "/internal/v1/agent-engine/tasks/{taskId}/literature-searches",
+    }
+    for path in search_paths:
+        responses = document["paths"][path]["post"]["responses"]
+        for status, response in responses.items():
+            if status == "200":
+                continue
+            assert response == {"$ref": "#/components/responses/ProductSearchProblem"}, (
+                f"{path} {status} escaped the closed search error vocabulary"
+            )
+
     operation_count = 0
     for path_item in document["paths"].values():
         for method, operation in path_item.items():

@@ -1,0 +1,14 @@
+{
+  "contractVersion": "1.0",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "sequence": 6,
+  "occurredAt": "2030-01-01T00:00:05Z",
+  "type": "tool",
+  "callId": "call.knowledge0123456789",
+  "name": "knowledge.search",
+  "state": "succeeded",
+  "inputSummary": "queryChars=17, maxResults=5",
+  "outputSummary": "results=1, truncated=false",
+  "receiptRef": null,
+  "searchRef": "search.1111111111111111111111111111111111111111111111111111111111111111"
+}

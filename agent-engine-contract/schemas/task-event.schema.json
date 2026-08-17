@@ -91,8 +91,43 @@
         "state": { "enum": ["requested", "running", "succeeded", "failed", "cancelled"] },
         "inputSummary": { "type": "string", "maxLength": 1000 },
         "outputSummary": { "type": ["string", "null"], "maxLength": 2000 },
-        "receiptRef": { "type": ["string", "null"], "maxLength": 256 }
-      }
+        "receiptRef": { "type": ["string", "null"], "maxLength": 256 },
+        "searchRef": {
+          "type": ["string", "null"],
+          "pattern": "^search\\.[a-f0-9]{64}$",
+          "description": "Opaque persisted product-search result reference; absent or null for non-search tools."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "name": { "enum": ["knowledge.search", "literature.search"] },
+              "state": { "const": "succeeded" }
+            },
+            "required": ["name", "state"]
+          },
+          "then": {
+            "required": ["searchRef"],
+            "properties": {
+              "searchRef": { "type": "string", "pattern": "^search\\.[a-f0-9]{64}$" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "name": { "enum": ["project.list", "project.read", "sandbox.execute"] }
+            },
+            "required": ["name"]
+          },
+          "then": {
+            "properties": {
+              "searchRef": { "type": "null" }
+            }
+          }
+        }
+      ]
     },
     "delivery": {
       "type": "object",

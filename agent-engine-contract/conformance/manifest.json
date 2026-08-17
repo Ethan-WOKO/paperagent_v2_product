@@ -11,6 +11,8 @@
     { "file": "fixtures/positive/gateway-knowledge-search-response.json", "schema": "product-search.schema.json", "definition": "knowledgeSearchResponse" },
     { "file": "fixtures/positive/gateway-literature-search-request.json", "schema": "product-search.schema.json", "definition": "literatureSearchRequest" },
     { "file": "fixtures/positive/gateway-literature-search-response.json", "schema": "product-search.schema.json", "definition": "literatureSearchResponse" },
+    { "file": "fixtures/positive/search-tool-event.json", "schema": "task-event.schema.json" },
+    { "file": "fixtures/positive/product-search-problem.json", "schema": "product-search-problem.schema.json" },
     { "file": "fixtures/positive/receipt.json", "schema": "receipt.schema.json" }
   ],
   "negative": [
@@ -22,6 +24,11 @@
     { "file": "fixtures/negative/knowledge-search-query-oversized.json", "schema": "product-search.schema.json", "definition": "knowledgeSearchRequest" },
     { "file": "fixtures/negative/knowledge-search-results-oversized.json", "schema": "product-search.schema.json", "definition": "knowledgeSearchResponse" },
     { "file": "fixtures/negative/literature-search-max-results.json", "schema": "product-search.schema.json", "definition": "literatureSearchRequest" },
-    { "file": "fixtures/negative/literature-search-internal-url.json", "schema": "product-search.schema.json", "definition": "literatureSearchResponse" }
+    { "file": "fixtures/negative/literature-search-internal-url.json", "schema": "product-search.schema.json", "definition": "literatureSearchResponse" },
+    { "file": "fixtures/negative/literature-search-user-info-url.json", "schema": "product-search.schema.json", "definition": "literatureSearchResponse" },
+    { "file": "fixtures/negative/search-tool-event-missing-ref.json", "schema": "task-event.schema.json" },
+    { "file": "fixtures/negative/non-search-tool-event-with-search-ref.json", "schema": "task-event.schema.json" },
+    { "file": "fixtures/negative/product-search-problem-unknown-code.json", "schema": "product-search-problem.schema.json" },
+    { "file": "fixtures/negative/product-search-problem-wrong-category.json", "schema": "product-search-problem.schema.json" }
   ]
 }

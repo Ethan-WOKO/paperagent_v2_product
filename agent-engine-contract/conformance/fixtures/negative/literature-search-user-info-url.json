@@ -1,0 +1,33 @@
+{
+  "contractVersion": "1.1",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "clientRequestId": "call.literatureuserinfo1",
+  "requestDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "searchRef": "search.5555555555555555555555555555555555555555555555555555555555555555",
+  "replayed": false,
+  "query": "agent reliability",
+  "maxResults": 5,
+  "yearFrom": null,
+  "results": [
+    {
+      "citationId": "unsafe-user-info",
+      "title": "Unsafe user-info URL",
+      "authors": [],
+      "year": null,
+      "venue": null,
+      "doi": null,
+      "arxivId": null,
+      "openAlexId": null,
+      "url": "https://user:password@example.org/paper",
+      "abstract": null,
+      "source": "external",
+      "score": 0,
+      "bibtex": null,
+      "metadataRiskLevel": "HIGH"
+    }
+  ],
+  "rawCandidateCount": 1,
+  "uniqueCandidateCount": 1,
+  "warnings": [],
+  "truncated": false
+}

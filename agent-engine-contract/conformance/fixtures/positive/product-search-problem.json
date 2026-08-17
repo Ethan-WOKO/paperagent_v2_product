@@ -1,0 +1,8 @@
+{
+  "contractVersion": "1.0",
+  "code": "TASK_GRANT_PERMISSION_DENIED",
+  "category": "authorization",
+  "message": "task grant does not allow this product search",
+  "retryable": false,
+  "sourceRef": null
+}

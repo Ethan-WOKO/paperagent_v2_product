@@ -1,0 +1,14 @@
+{
+  "contractVersion": "1.0",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "sequence": 6,
+  "occurredAt": "2030-01-01T00:00:05Z",
+  "type": "tool",
+  "callId": "call.sandbox01234567890",
+  "name": "sandbox.execute",
+  "state": "succeeded",
+  "inputSummary": "argvItems=3, inputs=1",
+  "outputSummary": "status=SUCCEEDED, exitCode=0",
+  "receiptRef": "receipt.0123456789abcdef",
+  "searchRef": "search.1111111111111111111111111111111111111111111111111111111111111111"
+}

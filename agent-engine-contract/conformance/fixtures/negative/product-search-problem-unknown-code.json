@@ -1,0 +1,8 @@
+{
+  "contractVersion": "1.0",
+  "code": "DATABASE_CONNECTION_FAILURE",
+  "category": "internal",
+  "message": "internal product search error",
+  "retryable": true,
+  "sourceRef": null
+}

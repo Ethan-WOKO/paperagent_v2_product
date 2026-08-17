@@ -127,6 +127,8 @@ Workspace diff、Candidate、不变版本发布和回滚测试，不能沿用 P1
 6. 上游部分失败只产生稳定 warning，整体失败产生脱敏 Problem；事件、日志和错误不含
    摘录、摘要、原始异常、credential 或内部 URL；
 7. Engine 重启后从持久 search result 恢复，不重复本地检索或外部文献请求。
+8. 成功搜索事件携带合法 searchRef，未知错误码 fail-closed，文献 URL 拒绝 user-info、
+   非 HTTP(S)、loopback、link-local、RFC1918、内部域名以及不安全重定向目标。
 
 契约 PR 只运行共享 validator 与 JavaScript/Java 摘要 fixture。Java 网关、DSH 和 Codex
 实现必须在各自独立 Issue 中增加行为测试与真实产品 smoke，不能用 schema 通过代替运行
