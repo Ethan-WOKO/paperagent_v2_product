@@ -117,6 +117,22 @@ describe("AgentEngine", () => {
     expect((await engine.events(taskId)).some((event) => event.type === "delivery")).toBe(false);
   });
 
+  it("requires a new validation run for a hypothetical compile fix", async () => {
+    const provider = new ScriptedProvider([
+      tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }),
+      { content: "移除这一行后，Sort.java 即可正常编译。", toolCalls: [] },
+      { content: "当前观察到 Sort.java 编译失败；移除该导入是预期修复，但仍需对修改后的文件重新编译确认。", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new PollingFailedGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
+    expect(delivery?.type === "delivery" ? delivery.conclusion : "").toContain("仍需对修改后的文件重新编译确认");
+    expect(provider.requests[2]!.messages.some((message) => message.role === "user"
+      && message.content?.includes("hypothetical code change"))).toBe(true);
+  });
+
   it("restores the frozen recent conversation instead of rebuilding it on replay", async () => {
     const directory = await temporaryDirectory();
     const historyRequest = submissionFor(70, "session.persisted", "inspect the source");

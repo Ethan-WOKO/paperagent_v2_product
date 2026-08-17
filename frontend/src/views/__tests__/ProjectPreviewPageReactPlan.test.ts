@@ -21,15 +21,23 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).toContain('streamReactPlanEvents(');
     expect(source).toContain('appendReactPlanEvent(current.events, event, current.taskId)');
     expect(source).toContain('connectReactPlanTask(record, epoch)');
-    expect(source).toContain('reactPlanToolEvents(reactPlanRecord.value?.events ?? [])');
+    expect(source).toContain('reactPlanToolEvents(record.events)');
     expect(source).not.toContain('reactPlanFixedTool');
+  });
+
+  it('在同一会话中按时间线保留并恢复多轮 ReAct 任务', () => {
+    expect(source).toContain('const reactPlanRecords = ref<ReactPlanTaskRecord[]>([])');
+    expect(source).toContain('v-for="item in reactPlanTimeline"');
+    expect(source).toContain('upsertReactPlanRecord(reactPlanRecords.value, record)');
+    expect(source).toContain('parseReactPlanHistory(raw, projectId, sessionId)');
+    expect(source).toContain('serializeReactPlanHistory(records)');
   });
 
   it('展示安全工具摘要、正式 Receipt、追问、取消和最终 delivery', () => {
     expect(source).toContain('tool.outputSummary || tool.inputSummary');
     expect(source).toContain('tool.receiptRef');
-    expect(source).toContain('reactPlanDeliveryEvent.conclusion');
-    expect(source).toContain('reactPlanQuestion.text');
+    expect(source).toContain('item.delivery.conclusion');
+    expect(source).toContain('item.question.text');
     expect(source).toContain('answerCurrentReactPlanQuestion');
     expect(source).toContain('@click="cancelCurrentReactPlanTask"');
     expect(source).not.toContain('tool.fileContent');

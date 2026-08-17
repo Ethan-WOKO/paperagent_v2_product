@@ -557,31 +557,32 @@
 
             <div v-else class="v2-conversation__tasks" aria-live="polite" :aria-busy="reactPlanBusy">
               <article
-                v-if="reactPlanRecord"
+                v-for="item in reactPlanTimeline"
+                :key="item.record.taskId"
                 class="v2-task-card reactplan-task-card"
-                :data-task-state="reactPlanRecord.view.state"
+                :data-task-state="item.record.view.state"
               >
                 <header class="v2-task-card__question">
                   <div class="v2-task-card__question-copy">
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
-                    <p>{{ reactPlanRecord.instruction }}</p>
+                    <p>{{ item.record.instruction }}</p>
                   </div>
-                  <NTag size="small" :type="reactPlanStateTagType(reactPlanRecord.view.state)">
-                    {{ reactPlanStateLabel(reactPlanRecord.view.state) }}
+                  <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
+                    {{ reactPlanStateLabel(item.record.view.state) }}
                   </NTag>
                 </header>
 
                 <details
-                  v-if="reactPlanTools.length"
+                  v-if="item.tools.length"
                   class="v2-conversation__process"
-                  :open="reactPlanRecord.view.state === 'running' || reactPlanRecord.view.state === 'waiting_user'"
+                  :open="item.record.view.state === 'running' || item.record.view.state === 'waiting_user'"
                 >
                   <summary>
                     <span>执行过程</span>
-                    <small>{{ reactPlanTools.length }} 条工具记录</small>
+                    <small>{{ item.tools.length }} 条工具记录</small>
                   </summary>
                   <ol>
-                    <li v-for="tool in reactPlanTools" :key="`${tool.callId}:${tool.sequence}`" :data-status="tool.state">
+                    <li v-for="tool in item.tools" :key="`${tool.callId}:${tool.sequence}`" :data-status="tool.state">
                       <span>{{ tool.sequence }}</span>
                       <div>
                         <strong>{{ reactPlanToolLabel(tool.name) }}</strong>
@@ -598,28 +599,28 @@
                 <section class="v2-task-card__result">
                   <span class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">R</span>
                   <div class="v2-task-card__result-copy">
-                    <MarkdownMessage v-if="reactPlanDeliveryEvent" :content="reactPlanDeliveryEvent.conclusion" variant="project" />
-                    <NAlert v-else-if="reactPlanQuestion" type="warning" :show-icon="false">
-                      {{ reactPlanQuestion.text }}
+                    <MarkdownMessage v-if="item.delivery" :content="item.delivery.conclusion" variant="project" />
+                    <NAlert v-else-if="item.question" type="warning" :show-icon="false">
+                      {{ item.question.text }}
                     </NAlert>
-                    <NAlert v-else-if="reactPlanRecord.view.state === 'failed'" type="error" :show-icon="false">
-                      {{ reactPlanRecord.view.error?.message || '任务执行失败。' }}
+                    <NAlert v-else-if="item.record.view.state === 'failed'" type="error" :show-icon="false">
+                      {{ item.record.view.error?.message || '任务执行失败。' }}
                     </NAlert>
-                    <NAlert v-else-if="reactPlanRecord.view.state === 'cancelled'" type="warning" :show-icon="false">任务已取消。</NAlert>
-                    <p v-else>{{ reactPlanStateLabel(reactPlanRecord.view.state) }}</p>
+                    <NAlert v-else-if="item.record.view.state === 'cancelled'" type="warning" :show-icon="false">任务已取消。</NAlert>
+                    <p v-else>{{ reactPlanStateLabel(item.record.view.state) }}</p>
                   </div>
                 </section>
 
-                <div v-if="reactPlanDeliveryEvent?.receiptRefs.length" class="v2-task-card__delivery">
+                <div v-if="item.delivery?.receiptRefs.length" class="v2-task-card__delivery">
                   <dl class="v2-task-card__validation">
                     <dt>正式回执</dt>
-                    <dd><code v-for="receipt in reactPlanDeliveryEvent.receiptRefs" :key="receipt">{{ receipt }}</code></dd>
+                    <dd><code v-for="receipt in item.delivery.receiptRefs" :key="receipt">{{ receipt }}</code></dd>
                   </dl>
                 </div>
 
                 <div class="v2-task-card__actions">
                   <NButton
-                    v-if="!isReactPlanTerminal(reactPlanRecord.view.state)"
+                    v-if="item.record.taskId === reactPlanRecord?.taskId && !isReactPlanTerminal(item.record.view.state)"
                     size="tiny"
                     secondary
                     type="error"
@@ -628,7 +629,7 @@
                   >取消任务</NButton>
                 </div>
               </article>
-              <NEmpty v-else description="发送任务后，ReAct 会自己查找文件、选择工具并展示正式执行结果。" />
+              <NEmpty v-if="reactPlanTimeline.length === 0" description="发送任务后，ReAct 会自己查找文件、选择工具并展示正式执行结果。" />
               <NSpin v-if="reactPlanBusy" size="small" />
             </div>
 
@@ -856,13 +857,15 @@ import {
   latestReactPlanQuestion,
   newReactPlanCancelId,
   newReactPlanRequestId,
-  parseReactPlanRecord,
+  parseReactPlanHistory,
   reactPlanDelivery,
   reactPlanStateLabel,
   reactPlanStateTagType,
   reactPlanToolEvents,
   reactPlanToolLabel,
   reactPlanToolStateLabel,
+  serializeReactPlanHistory,
+  upsertReactPlanRecord,
   type ReactPlanTaskEvent,
   type ReactPlanTaskRecord,
 } from '@/utils/reactPlanTask';
@@ -958,6 +961,7 @@ const v2NaturalTurnBusy = computed(() => (
 ));
 const reactPlanInput = ref('');
 const reactPlanRecord = ref<ReactPlanTaskRecord | null>(null);
+const reactPlanRecords = ref<ReactPlanTaskRecord[]>([]);
 const reactPlanError = ref('');
 const reactPlanSubmitting = ref(false);
 const reactPlanStreaming = ref(false);
@@ -965,12 +969,16 @@ const reactPlanCancelling = ref(false);
 const reactPlanAnswering = ref(false);
 let reactPlanAbortController: AbortController | null = null;
 let reactPlanReconnectTimer: number | null = null;
-const reactPlanTools = computed(() => reactPlanToolEvents(reactPlanRecord.value?.events ?? []));
-const reactPlanDeliveryEvent = computed(() => reactPlanDelivery(reactPlanRecord.value?.events ?? []));
 const reactPlanQuestion = computed(() => latestReactPlanQuestion(
   reactPlanRecord.value?.events ?? [],
   reactPlanRecord.value?.view.pendingQuestionId,
 ));
+const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => ({
+  record,
+  tools: reactPlanToolEvents(record.events),
+  delivery: reactPlanDelivery(record.events),
+  question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
+})));
 const reactPlanBusy = computed(() => (
   reactPlanSubmitting.value || reactPlanCancelling.value || reactPlanAnswering.value
     || reactPlanRecord.value?.view.state === 'queued'
@@ -1786,19 +1794,19 @@ function projectAgentRouteStorageKey(projectId: number, sessionId: number) {
   return `${PROJECT_AGENT_ROUTE_STORAGE_KEY}${projectId}.${sessionId}`;
 }
 
-function storedReactPlanRecord(projectId: number, sessionId: number) {
+function storedReactPlanRecords(projectId: number, sessionId: number) {
   const key = reactPlanStorageKey(projectId, sessionId);
   const raw = window.localStorage.getItem(key);
-  const record = parseReactPlanRecord(raw, projectId, sessionId);
-  if (raw && !record) window.localStorage.removeItem(key);
-  return record;
+  const records = parseReactPlanHistory(raw, projectId, sessionId);
+  if (raw && records.length === 0) window.localStorage.removeItem(key);
+  return records;
 }
 
-function storeReactPlanRecord(record: ReactPlanTaskRecord) {
-  window.localStorage.setItem(
-    reactPlanStorageKey(record.projectId, record.sessionId),
-    JSON.stringify(record),
-  );
+function storeReactPlanRecords(records: ReactPlanTaskRecord[]) {
+  const value = serializeReactPlanHistory(records);
+  const latest = records[records.length - 1];
+  if (!value || !latest) return;
+  window.localStorage.setItem(reactPlanStorageKey(latest.projectId, latest.sessionId), value);
 }
 
 function invalidateReactPlanStream() {
@@ -1814,6 +1822,7 @@ function invalidateReactPlanStream() {
 function resetReactPlanView() {
   invalidateReactPlanStream();
   reactPlanRecord.value = null;
+  reactPlanRecords.value = [];
   reactPlanError.value = '';
   reactPlanInput.value = '';
   reactPlanSubmitting.value = false;
@@ -1845,9 +1854,10 @@ function setProjectAgentRoute(route: ProjectAgentRoute) {
   const projectId = activeProjectId.value;
   const sessionId = activeSessionId.value;
   if (!projectId || !sessionId) return;
-  const stored = storedReactPlanRecord(projectId, sessionId);
-  reactPlanRecord.value = stored;
-  if (stored) connectReactPlanTask(stored, projectEpoch);
+  const stored = storedReactPlanRecords(projectId, sessionId);
+  reactPlanRecords.value = stored;
+  reactPlanRecord.value = stored[stored.length - 1] ?? null;
+  if (reactPlanRecord.value) connectReactPlanTask(reactPlanRecord.value, projectEpoch);
 }
 
 function setProjectAgentInput(value: string) {
@@ -1857,7 +1867,8 @@ function setProjectAgentInput(value: string) {
 
 function updateReactPlanRecord(record: ReactPlanTaskRecord) {
   reactPlanRecord.value = record;
-  storeReactPlanRecord(record);
+  reactPlanRecords.value = upsertReactPlanRecord(reactPlanRecords.value, record);
+  storeReactPlanRecords(reactPlanRecords.value);
 }
 
 function acceptReactPlanEvent(
@@ -1937,7 +1948,9 @@ function loadReactPlanRecord(projectId: number, sessionId: number, epoch = proje
   projectAgentRoute.value = window.localStorage.getItem(
     projectAgentRouteStorageKey(projectId, sessionId),
   ) === 'react' ? 'react' : 'v2';
-  const record = storedReactPlanRecord(projectId, sessionId);
+  const records = storedReactPlanRecords(projectId, sessionId);
+  reactPlanRecords.value = records;
+  const record = records[records.length - 1] ?? null;
   reactPlanRecord.value = record;
   reactPlanError.value = '';
   if (record && projectAgentRoute.value === 'react') connectReactPlanTask(record, epoch);

@@ -201,16 +201,23 @@ export class AgentEngine {
           const conclusion = bounded(response.content?.trim() ?? "", 16000);
           if (!conclusion) throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls"));
           const unobserved = unobservedFileReferences(conclusion, task.observations);
-          if (unobserved.length > 0) {
+          const untestedChangeOutcome = claimsUntestedChangeOutcome(conclusion);
+          if (unobserved.length > 0 || untestedChangeOutcome) {
             task.groundingRepairs += 1;
             if (task.groundingRepairs > MAX_GROUNDING_REPAIRS) {
               throw new EngineProblem(502, problem(
                 "MODEL_GROUNDING_FAILED", "model",
-                "Model repeatedly referred to Project files that were not observed", true));
+                "Model repeatedly produced conclusions that were not supported by observed evidence", true));
             }
+            const problems = [
+              ...(unobserved.length > 0
+                ? [`unobserved Project files: ${unobserved.join(", ")}`] : []),
+              ...(untestedChangeOutcome
+                ? ["a hypothetical code change was stated as a verified compile/run outcome"] : [])
+            ];
             task.messages.push({
               role: "user",
-              content: `Server validation feedback: the previous proposed conclusion was not accepted because it referred to unobserved Project files: ${unobserved.join(", ")}. Use tools to observe them or rewrite the conclusion using only the evidence ledger. Do not repeat the unsupported claim.`
+              content: `Server validation feedback: the previous proposed conclusion was not accepted because it contained ${problems.join("; ")}. Use tools to observe the fact or rewrite the conclusion using only the evidence ledger. An untested proposed change must be described as requiring a new validation run. Do not repeat the unsupported claim.`
             });
             await this.options.store.save(task);
             continue;
@@ -447,7 +454,7 @@ function initialMessages(
   recentConversation: RecentConversationTurn[]
 ): ChatMessage[] {
   const messages: ChatMessage[] = [
-    { role: "system", content: "You are PaperAgent's bounded ReAct executor. Inspect only through the provided project tools. Use exact manifest hashes. Sandbox commands start at the Project root, so argv must use exact Project-relative source paths; prefer yanban-runner for a single Java, Python, C, or C++ source. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise, evidence-grounded final conclusion when done." }
+    { role: "system", content: "You are PaperAgent's bounded ReAct executor. Inspect only through the provided project tools. Use exact manifest hashes. Sandbox commands start at the Project root, so argv must use exact Project-relative source paths; prefer yanban-runner for a single Java, Python, C, or C++ source. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise, evidence-grounded final conclusion when done." }
   ];
   if (recentConversation.length > 0) {
     messages.push({
@@ -559,6 +566,12 @@ function unobservedFileReferences(conclusion: string, observations: TaskObservat
   const allowed = new Set(observedPaths.flatMap((path) => [path.toLowerCase(), path.split("/").at(-1)!.toLowerCase()]));
   const references = conclusion.match(PROJECT_FILE_REFERENCE) ?? [];
   return stableUnique(references.filter((reference) => !allowed.has(reference.toLowerCase())));
+}
+
+function claimsUntestedChangeOutcome(conclusion: string): boolean {
+  const english = /\b(?:remove|removed|delete|deleted|change|changed|add|added|replace|replaced)\b[\s\S]{0,160}\b(?:will|would)\s+(?:now\s+)?(?:compile|run|pass)\b/i;
+  const chinese = /(?:移除|删除|修改|添加|替换)[\s\S]{0,160}(?:即可|就能|必然|一定会)[\s\S]{0,30}(?:编译|运行|通过)/;
+  return english.test(conclusion) || chinese.test(conclusion);
 }
 
 function stableUnique(values: string[]): string[] {

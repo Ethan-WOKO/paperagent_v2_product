@@ -5,7 +5,11 @@ import {
   consumeReactPlanSseChunk,
   newReactPlanCancelId,
   newReactPlanRequestId,
+  parseReactPlanHistory,
   parseReactPlanRecord,
+  serializeReactPlanHistory,
+  upsertReactPlanRecord,
+  type ReactPlanTaskRecord,
   type ReactPlanTaskEvent,
 } from '@/utils/reactPlanTask';
 
@@ -70,6 +74,21 @@ describe('ReAct task frontend state', () => {
     expect(parseReactPlanRecord(record, 1, 9)).toBeNull();
   });
 
+  it('migrates one legacy record and keeps a bounded ordered task history', () => {
+    const records = Array.from({ length: 13 }, (_, index) => taskRecord(index + 1));
+    const bounded = records.reduce(upsertReactPlanRecord, [] as ReactPlanTaskRecord[]);
+    expect(bounded).toHaveLength(12);
+    expect(bounded[0]?.turnId).toBe(2);
+    expect(bounded[bounded.length - 1]?.turnId).toBe(13);
+
+    const serialized = serializeReactPlanHistory(bounded);
+    expect(parseReactPlanHistory(serialized, 1, 2).map((record) => record.turnId))
+      .toEqual(Array.from({ length: 12 }, (_, index) => index + 2));
+    expect(parseReactPlanHistory(JSON.stringify(taskRecord(7)), 1, 2))
+      .toEqual([taskRecord(7)]);
+    expect(parseReactPlanHistory(serialized, 9, 2)).toEqual([]);
+  });
+
   it('streams with auth and Last-Event-ID and emits parsed events', async () => {
     const payload = `id: 1\ndata: ${JSON.stringify(status(1))}\n\n`;
     const chunks = [new TextEncoder().encode(payload)];
@@ -102,3 +121,26 @@ describe('ReAct task frontend state', () => {
     );
   });
 });
+
+function taskRecord(identity: number): ReactPlanTaskRecord {
+  const taskId = `task.${identity.toString(16).padStart(64, '0')}`;
+  return {
+    version: 1,
+    projectId: 1,
+    sessionId: 2,
+    clientRequestId: `request.${identity.toString(16).padStart(16, '0')}`,
+    instruction: `task ${identity}`,
+    turnId: identity,
+    taskId,
+    view: {
+      contractVersion: '1.0',
+      taskId,
+      requestDigest: 'a'.repeat(64),
+      state: 'succeeded',
+      lastSequence: 2,
+      createdAt: '2026-08-17T00:00:00Z',
+      updatedAt: '2026-08-17T00:00:01Z',
+    },
+    events: [],
+  };
+}

@@ -128,10 +128,17 @@ Issue #163 后，在同一个 Project session 连续新建两个 ReAct task：
 确认文件事实；历史结论不能替代当前 ProjectVersion 证据。切换 session 或 Project 后，
 不应看到第一轮内容。
 
+同一 session 的两轮任务卡片应同时显示，并在刷新后继续保留。前端最多保存最近 12 个
+ReAct task record；开始第 13 个后只移除最早的展示投影，不删除 Engine task、Receipt
+或产品数据。
+
 对只包含 `Sort.java` 的 Project，最终回答不得声称 `pom.xml`、`build.gradle` 等未在
 manifest 或其他 Project 工具结果中出现的文件声明了依赖。Engine 会拒绝这种候选
 回答并允许模型在同一 task 内修正；连续无法修正时以 `MODEL_GROUNDING_FAILED`
 失败闭合。
+
+若只验证了原始文件，回答也不得把“移除某行后即可编译”写成已证明结论；应明确写为
+预期修复，并说明需要对修改后的文件重新执行沙箱验证。
 
 ## 恢复验证
 
