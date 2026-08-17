@@ -31,9 +31,20 @@ PROJECT profile、同步模式、免确认策略、side-effect 类型和 resourc
 ProjectVersion 来自任务凭证及服务端认证上下文，既不出现在参数 Schema 中，
 也不能由模型覆盖。网关在目录读取及执行前后重新确认当前 ProjectVersion。
 
+## 异步文献任务工具
+
+ReAct 目录还复用现有的 `literature_search_start`、
+`literature_search_status`、`literature_search_result` 和
+`literature_search_cancel`。创建工具只向模型暴露查询、数量、年份和 BibTeX
+选项；幂等 `clientRequestId` 与当前 `projectId` 由网关确定性补入。模型尝试
+提交这两个服务端字段时请求失败闭合。
+
+状态、结果和取消只接受任务 ID 及取消原因。现有 task service 按服务端注入的
+当前用户重新校验任务所有权。取消只作用于该用户拥有的文献任务，并保留原有
+幂等终态语义。
+
 ## 非目标
 
-- 不开放异步 literature start/status/result/cancel；
 - 不开放 paper task 状态、结果或取消；
 - 不开放旧 Candidate proposal；
 - 不按任务类型或模型判断动态生成目录；

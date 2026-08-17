@@ -128,6 +128,66 @@ class AgentEngineRegisteredToolGatewayTest {
     }
 
     @Test
+    void exposesLiteratureTaskBundleAndOwnsStartIdentityArguments() {
+        ToolRegistry registry = new ToolRegistry()
+                .register(literatureTaskExecutor("literature_search_start",
+                        ToolDescriptor.SideEffectType.CREATE,
+                        ToolDescriptor.AsyncMode.EXTERNAL_TASK,
+                        ToolDescriptor.IdempotencyPolicy.REQUIRED_KEY,
+                        List.of(ToolDescriptor.ResourceScope.EXTERNAL,
+                                ToolDescriptor.ResourceScope.SESSION,
+                                ToolDescriptor.ResourceScope.PROJECT)))
+                .register(literatureTaskExecutor("literature_search_status",
+                        ToolDescriptor.SideEffectType.NONE, ToolDescriptor.AsyncMode.SYNC,
+                        ToolDescriptor.IdempotencyPolicy.NONE,
+                        List.of(ToolDescriptor.ResourceScope.SESSION)))
+                .register(literatureTaskExecutor("literature_search_result",
+                        ToolDescriptor.SideEffectType.NONE, ToolDescriptor.AsyncMode.SYNC,
+                        ToolDescriptor.IdempotencyPolicy.NONE,
+                        List.of(ToolDescriptor.ResourceScope.SESSION)))
+                .register(literatureTaskExecutor("literature_search_cancel",
+                        ToolDescriptor.SideEffectType.MODIFY, ToolDescriptor.AsyncMode.SYNC,
+                        ToolDescriptor.IdempotencyPolicy.NONE,
+                        List.of(ToolDescriptor.ResourceScope.SESSION)));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(
+                new AgentToolPolicyEngine.Decision(List.of(), 0, 1, "test"));
+        AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
+                json, registry, policies, contexts(VERSION));
+
+        var catalog = gateway.catalog(authority());
+        assertThat(catalog.tools()).extracting(tool -> tool.function().name())
+                .containsExactly("literature_search_cancel", "literature_search_result",
+                        "literature_search_start", "literature_search_status");
+        var start = catalog.tools().stream().filter(tool ->
+                tool.function().name().equals("literature_search_start")).findFirst().orElseThrow();
+        assertThat(start.function().parameters().toString())
+                .contains("query").doesNotContain("clientRequestId", "projectId");
+
+        ObjectNode arguments = json.createObjectNode().put("query", "agent systems");
+        String digest = ReactPlanCanonicalJson.digest(json,
+                Map.of("toolName", "literature_search_start", "arguments", arguments));
+        var result = gateway.invoke(authority(), new RegisteredToolCall(
+                "1.0", "call." + "d".repeat(40), "literature_search_start",
+                arguments, digest));
+        assertThat(result.output().path("arguments").path("projectId").asLong())
+                .isEqualTo(14L);
+        assertThat(result.output().path("arguments").path("clientRequestId").asText())
+                .isEqualTo("agent-engine-" + "d".repeat(40));
+
+        ObjectNode forbidden = json.createObjectNode().put("query", "agent systems")
+                .put("projectId", 999L);
+        String forbiddenDigest = ReactPlanCanonicalJson.digest(json,
+                Map.of("toolName", "literature_search_start", "arguments", forbidden));
+        assertThatThrownBy(() -> gateway.invoke(authority(), new RegisteredToolCall(
+                "1.0", "call." + "e".repeat(40), "literature_search_start",
+                forbidden, forbiddenDigest)))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo(
+                                "REGISTERED_TOOL_SERVER_ARGUMENT_FORBIDDEN"));
+    }
+
+    @Test
     void rejectsARegisteredToolResultFromAnotherProjectVersion() {
         ToolRegistry registry = new ToolRegistry().register(
                 executor("project_search", ToolDescriptor.SideEffectType.READ_ONLY));
@@ -206,6 +266,41 @@ class AgentEngineRegisteredToolGatewayTest {
                 ObjectNode output = json.createObjectNode();
                 output.put("observedUserId", ToolExecutionContext.getCurrentUserId());
                 output.put("observedProjectId", ToolExecutionContext.getCurrentProjectId());
+                return ToolResult.success(call.id(), name, output);
+            }
+        };
+    }
+
+    private ToolExecutor literatureTaskExecutor(
+            String name, ToolDescriptor.SideEffectType sideEffect,
+            ToolDescriptor.AsyncMode asyncMode,
+            ToolDescriptor.IdempotencyPolicy idempotency,
+            List<ToolDescriptor.ResourceScope> scopes) {
+        ObjectNode schema = json.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("query").put("type", "string");
+        properties.putObject("taskId").put("type", "integer");
+        properties.putObject("clientRequestId").put("type", "string");
+        properties.putObject("projectId").put("type", "integer");
+        return new ToolExecutor() {
+            @Override
+            public ToolDefinition definition() {
+                return new ToolDefinition(name, "test literature task " + name, schema);
+            }
+
+            @Override
+            public ToolDescriptor descriptor() {
+                return new ToolDescriptor(name, "v1", "literature-task",
+                        List.of(ToolDescriptor.CapabilityProfile.PROJECT), List.of(), scopes,
+                        sideEffect, ToolDescriptor.ConfirmationPolicy.NEVER, asyncMode,
+                        idempotency, ToolDescriptor.RepeatPolicy.DENY_SAME_INPUT, true);
+            }
+
+            @Override
+            public ToolResult execute(ToolCall call) {
+                ObjectNode output = json.createObjectNode();
+                output.set("arguments", call.arguments());
                 return ToolResult.success(call.id(), name, output);
             }
         };
