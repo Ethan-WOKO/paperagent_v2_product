@@ -20,6 +20,7 @@ import com.yanban.core.tool.ToolResult;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -31,6 +32,8 @@ import org.springframework.stereotype.Service;
 @ConditionalOnProperty(prefix = "yanban.agent.engine.gateway", name = "enabled", havingValue = "true")
 final class AgentEngineRegisteredToolGateway {
     private static final int MAX_RESULT_BYTES = 1_000_000;
+    private static final Set<String> SYNCHRONOUS_RETRIEVAL_TOOLS = Set.of(
+            "search_web", "search_knowledge", "recommend_literature");
     private final ObjectMapper json;
     private final ToolRegistry registry;
     private final AgentToolPolicyEngine policies;
@@ -111,12 +114,13 @@ final class AgentEngineRegisteredToolGateway {
     }
 
     private List<ToolDefinition> definitions(EngineTaskAuthority authority) {
-        Set<String> policyNames = Set.copyOf(
+        Set<String> policyNames = new LinkedHashSet<>(
                 policies.decideProject(null, null).allowedTools());
+        policyNames.addAll(SYNCHRONOUS_RETRIEVAL_TOOLS);
         return registry.listDefinitions().stream()
                 .filter(definition -> policyNames.contains(definition.name()))
                 .filter(definition -> registry.findDescriptor(definition.name())
-                        .map(AgentEngineRegisteredToolGateway::readOnly)
+                        .map(descriptor -> eligible(definition.name(), descriptor))
                         .orElse(false))
                 .sorted(Comparator.comparing(ToolDefinition::name))
                 .toList();
@@ -158,6 +162,36 @@ final class AgentEngineRegisteredToolGateway {
                 || descriptor.sideEffectType() == ToolDescriptor.SideEffectType.READ_ONLY)
                 && descriptor.confirmationPolicy()
                 == ToolDescriptor.ConfirmationPolicy.NEVER;
+    }
+
+    private static boolean eligible(String name, ToolDescriptor descriptor) {
+        if (!SYNCHRONOUS_RETRIEVAL_TOOLS.contains(name)) {
+            return readOnly(descriptor);
+        }
+        if (!descriptor.modelVisible()
+                || !descriptor.supportedProfiles().contains(
+                        ToolDescriptor.CapabilityProfile.PROJECT)
+                || descriptor.confirmationPolicy()
+                != ToolDescriptor.ConfirmationPolicy.NEVER
+                || descriptor.asyncMode() != ToolDescriptor.AsyncMode.SYNC) {
+            return false;
+        }
+        return switch (name) {
+            case "search_web" -> descriptor.sideEffectType()
+                    == ToolDescriptor.SideEffectType.EXTERNAL_READ
+                    && descriptor.resourceScopes().equals(List.of(
+                            ToolDescriptor.ResourceScope.EXTERNAL));
+            case "search_knowledge" -> descriptor.sideEffectType()
+                    == ToolDescriptor.SideEffectType.NONE
+                    && descriptor.resourceScopes().equals(List.of(
+                            ToolDescriptor.ResourceScope.USER_KNOWLEDGE));
+            case "recommend_literature" -> descriptor.sideEffectType()
+                    == ToolDescriptor.SideEffectType.CREATE
+                    && descriptor.resourceScopes().equals(List.of(
+                            ToolDescriptor.ResourceScope.EXTERNAL,
+                            ToolDescriptor.ResourceScope.SESSION));
+            default -> false;
+        };
     }
 
     private static String bounded(String value, int max) {

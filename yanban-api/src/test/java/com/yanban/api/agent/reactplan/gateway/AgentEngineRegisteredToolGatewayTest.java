@@ -67,6 +67,67 @@ class AgentEngineRegisteredToolGatewayTest {
     }
 
     @Test
+    void exposesSynchronousRetrievalBundleAndInjectsServerOwnedIdentity() {
+        ToolRegistry registry = new ToolRegistry()
+                .register(executor("project_search", ToolDescriptor.SideEffectType.READ_ONLY))
+                .register(retrievalExecutor("search_web",
+                        ToolDescriptor.SideEffectType.EXTERNAL_READ,
+                        List.of(ToolDescriptor.ResourceScope.EXTERNAL)))
+                .register(retrievalExecutor("search_knowledge",
+                        ToolDescriptor.SideEffectType.NONE,
+                        List.of(ToolDescriptor.ResourceScope.USER_KNOWLEDGE)))
+                .register(retrievalExecutor("recommend_literature",
+                        ToolDescriptor.SideEffectType.CREATE,
+                        List.of(ToolDescriptor.ResourceScope.EXTERNAL,
+                                ToolDescriptor.ResourceScope.SESSION)))
+                .register(retrievalExecutor("paper_polish_status",
+                        ToolDescriptor.SideEffectType.NONE,
+                        List.of(ToolDescriptor.ResourceScope.SESSION)));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(
+                new AgentToolPolicyEngine.Decision(
+                        List.of("project_search"), 12, 1, "test"));
+        AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
+                json, registry, policies, contexts(VERSION));
+
+        var catalog = gateway.catalog(authority());
+
+        assertThat(catalog.tools()).extracting(tool -> tool.function().name())
+                .containsExactly("project_search", "recommend_literature",
+                        "search_knowledge", "search_web");
+        assertThat(catalog.tools()).allSatisfy(tool -> {
+            assertThat(tool.function().parameters().toString()).contains("query");
+            assertThat(tool.function().parameters().toString())
+                    .doesNotContain("userId", "projectId", "taskId");
+        });
+
+        ObjectNode arguments = json.createObjectNode().put("query", "private evidence");
+        String digest = ReactPlanCanonicalJson.digest(json,
+                Map.of("toolName", "search_knowledge", "arguments", arguments));
+        var result = gateway.invoke(authority(), new RegisteredToolCall(
+                "1.0", "call." + "c".repeat(40), "search_knowledge", arguments, digest));
+
+        assertThat(result.output().path("observedUserId").asLong()).isEqualTo(11L);
+        assertThat(result.output().path("observedProjectId").asLong()).isEqualTo(14L);
+        assertThat(ToolExecutionContext.getCurrentUserId()).isNull();
+        assertThat(ToolExecutionContext.getCurrentProjectId()).isNull();
+    }
+
+    @Test
+    void rejectsRetrievalNamesWhenTheirDescriptorBoundaryDrifts() {
+        ToolRegistry registry = new ToolRegistry().register(retrievalExecutor(
+                "search_web", ToolDescriptor.SideEffectType.MODIFY,
+                List.of(ToolDescriptor.ResourceScope.EXTERNAL)));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(
+                new AgentToolPolicyEngine.Decision(List.of(), 0, 1, "test"));
+        AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
+                json, registry, policies, contexts(VERSION));
+
+        assertThat(gateway.catalog(authority()).tools()).isEmpty();
+    }
+
+    @Test
     void rejectsARegisteredToolResultFromAnotherProjectVersion() {
         ToolRegistry registry = new ToolRegistry().register(
                 executor("project_search", ToolDescriptor.SideEffectType.READ_ONLY));
@@ -113,6 +174,39 @@ class AgentEngineRegisteredToolGatewayTest {
                 return new ToolResult(call.id(), name, true, output,
                         null, null, false, List.of("project:14:search"),
                         List.of(), List.of(), VERSION);
+            }
+        };
+    }
+
+    private ToolExecutor retrievalExecutor(
+            String name, ToolDescriptor.SideEffectType sideEffect,
+            List<ToolDescriptor.ResourceScope> scopes) {
+        ObjectNode schema = json.createObjectNode();
+        schema.put("type", "object");
+        schema.putObject("properties").putObject("query").put("type", "string");
+        schema.putArray("required").add("query");
+        return new ToolExecutor() {
+            @Override
+            public ToolDefinition definition() {
+                return new ToolDefinition(name, "test retrieval " + name, schema);
+            }
+
+            @Override
+            public ToolDescriptor descriptor() {
+                return new ToolDescriptor(name, "v1", "retrieval",
+                        List.of(ToolDescriptor.CapabilityProfile.PROJECT), List.of(), scopes,
+                        sideEffect, ToolDescriptor.ConfirmationPolicy.NEVER,
+                        ToolDescriptor.AsyncMode.SYNC,
+                        ToolDescriptor.IdempotencyPolicy.NONE,
+                        ToolDescriptor.RepeatPolicy.DENY_SAME_INPUT, true);
+            }
+
+            @Override
+            public ToolResult execute(ToolCall call) {
+                ObjectNode output = json.createObjectNode();
+                output.put("observedUserId", ToolExecutionContext.getCurrentUserId());
+                output.put("observedProjectId", ToolExecutionContext.getCurrentProjectId());
+                return ToolResult.success(call.id(), name, output);
             }
         };
     }
