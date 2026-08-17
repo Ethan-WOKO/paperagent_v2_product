@@ -31,6 +31,12 @@ PROJECT profile、同步模式、免确认策略、side-effect 类型和 resourc
 ProjectVersion 来自任务凭证及服务端认证上下文，既不出现在参数 Schema 中，
 也不能由模型覆盖。网关在目录读取及执行前后重新确认当前 ProjectVersion。
 
+注册工具的 SSE 事件使用稳定类型 `registered.invoke`，并通过
+`registeredToolName` 暴露服务端批准的真实工具名称，前端不得再把检索工具显示为
+Project 文件读取。`search_web` 的每个有效 HTTP(S) 结果按规范化 URL 生成稳定的
+`web:<sha256>` evidence 引用；安全事件摘要仅包含 provider、resultCount、degraded、
+evidenceCount 和执行状态，不包含网页正文。
+
 ## 异步文献任务工具
 
 ReAct 目录还复用现有的 `literature_search_start`、

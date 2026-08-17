@@ -7,6 +7,7 @@ import {
   newReactPlanRequestId,
   parseReactPlanHistory,
   parseReactPlanRecord,
+  reactPlanToolLabel,
   serializeReactPlanHistory,
   upsertReactPlanRecord,
   type ReactPlanTaskRecord,
@@ -29,6 +30,24 @@ const status = (sequence: number): ReactPlanTaskEvent => ({
   type: 'status',
   state: 'running',
   error: null,
+});
+
+type ToolEvent = Extract<ReactPlanTaskEvent, { type: 'tool' }>;
+
+const toolEvent = (overrides: Partial<ToolEvent> = {}): ToolEvent => ({
+  contractVersion: '1.0',
+  taskId: `task.${'1'.repeat(64)}`,
+  sequence: 1,
+  occurredAt: '2026-08-17T00:00:00Z',
+  type: 'tool',
+  callId: `call.${'2'.repeat(40)}`,
+  name: 'registered.invoke',
+  registeredToolName: 'search_web',
+  state: 'succeeded',
+  inputSummary: 'registeredTool=search_web; requestDigest=test',
+  outputSummary: 'registeredTool=search_web; success=true; provider=tavily; resultCount=5; evidenceCount=5',
+  receiptRef: null,
+  ...overrides,
 });
 
 describe('ReAct task frontend state', () => {
@@ -119,6 +138,25 @@ describe('ReAct task frontend state', () => {
         }),
       }),
     );
+  });
+
+  it('shows the real registered tool name and product label', () => {
+    expect(reactPlanToolLabel(toolEvent())).toBe('联网搜索（search_web）');
+  });
+
+  it('recognizes historical registered-tool events from their safe summary', () => {
+    expect(reactPlanToolLabel(toolEvent({
+      name: 'project.read',
+      registeredToolName: undefined,
+    }))).toBe('联网搜索（search_web）');
+  });
+
+  it('keeps native event labels unchanged', () => {
+    expect(reactPlanToolLabel(toolEvent({
+      name: 'sandbox.execute',
+      registeredToolName: undefined,
+      inputSummary: 'argvDigest=test',
+    }))).toBe('沙箱执行');
   });
 });
 
