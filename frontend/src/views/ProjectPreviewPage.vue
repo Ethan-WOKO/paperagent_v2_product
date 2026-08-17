@@ -585,7 +585,7 @@
                     <li v-for="tool in item.tools" :key="`${tool.callId}:${tool.sequence}`" :data-status="tool.state">
                       <span>{{ tool.sequence }}</span>
                       <div>
-                        <strong>{{ reactPlanToolLabel(tool.name) }}</strong>
+                        <strong>{{ reactPlanToolLabel(tool) }}</strong>
                         <small>{{ tool.outputSummary || tool.inputSummary }}</small>
                         <code v-if="tool.receiptRef" class="reactplan-receipt">{{ tool.receiptRef }}</code>
                       </div>

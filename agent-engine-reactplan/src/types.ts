@@ -45,10 +45,10 @@ export type TaskEvent =
   | (EventBase & { type: "status"; state: TaskState; error: Problem | null })
   | (EventBase & { type: "message"; content: string })
   | (EventBase & { type: "question"; questionId: string; text: string })
-  | (EventBase & { type: "tool"; callId: string; name: ToolName; state: "requested" | "running" | "succeeded" | "failed" | "cancelled"; inputSummary: string; outputSummary: string | null; receiptRef: string | null })
+  | (EventBase & { type: "tool"; callId: string; name: ToolName; registeredToolName?: string; state: "requested" | "running" | "succeeded" | "failed" | "cancelled"; inputSummary: string; outputSummary: string | null; receiptRef: string | null })
   | (EventBase & { type: "delivery"; conclusion: string; receiptRefs: string[]; publication?: PublicationFact });
 
-export type ToolName = "project.list" | "project.read" | "workspace.write" | "workspace.diff" | "sandbox.execute" | "project.publish";
+export type ToolName = "project.list" | "project.read" | "workspace.write" | "workspace.diff" | "sandbox.execute" | "registered.invoke" | "project.publish";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";

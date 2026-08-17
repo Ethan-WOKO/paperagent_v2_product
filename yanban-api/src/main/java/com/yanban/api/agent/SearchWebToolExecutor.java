@@ -8,9 +8,14 @@ import com.yanban.core.tool.ToolDefinition;
 import com.yanban.core.tool.ToolExecutor;
 import com.yanban.core.tool.ToolResult;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -132,10 +137,12 @@ public class SearchWebToolExecutor implements ToolExecutor {
             return ToolResult.success(call.id(), definition.name(), degradedOutput(query.trim(), limit, client.unavailableReason()));
         }
         WebSearchResultEnvelope envelope = searchWithCache(client, query.trim(), limit);
-        return ToolResult.success(call.id(), definition.name(), toOutput(envelope));
+        RenderedSearch rendered = toOutput(envelope);
+        return new ToolResult(call.id(), definition.name(), true, rendered.output(),
+                null, null, false, rendered.evidenceRefs(), List.of(), List.of(), "v1");
     }
 
-    private ObjectNode toOutput(WebSearchResultEnvelope envelope) {
+    private RenderedSearch toOutput(WebSearchResultEnvelope envelope) {
         WebSearchResponse response = envelope.response();
         ObjectNode output = objectMapper.createObjectNode();
         output.put("query", response.query());
@@ -170,6 +177,7 @@ public class SearchWebToolExecutor implements ToolExecutor {
         }
         output.put("sourcePolicy", "official/high > primary_technical/medium-high > general_web/medium > secondary/low. If only low-authority sources are available, say confidence is limited and recommend checking official vendor pages.");
         ArrayNode items = output.putArray("items");
+        LinkedHashSet<String> evidenceRefs = new LinkedHashSet<>();
         List<WebSearchItem> results = response.items() == null ? List.of() : response.items();
         for (WebSearchItem result : rankBySourceCredibility(results)) {
             SourceCredibility credibility = sourceCredibility(result.url());
@@ -190,8 +198,32 @@ public class SearchWebToolExecutor implements ToolExecutor {
             if (StringUtils.hasText(result.source())) {
                 item.put("source", result.source());
             }
+            String evidenceRef = webEvidenceRef(result.url());
+            if (evidenceRef != null) {
+                item.put("evidenceRef", evidenceRef);
+                evidenceRefs.add(evidenceRef);
+            }
         }
-        return output;
+        return new RenderedSearch(output, List.copyOf(evidenceRefs));
+    }
+
+    private String webEvidenceRef(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        try {
+            URI uri = URI.create(value.trim()).normalize();
+            if (!("http".equalsIgnoreCase(uri.getScheme())
+                    || "https".equalsIgnoreCase(uri.getScheme()))
+                    || !StringUtils.hasText(uri.getHost())) {
+                return null;
+            }
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(uri.toASCIIString().getBytes(StandardCharsets.UTF_8));
+            return "web:" + HexFormat.of().formatHex(digest);
+        } catch (IllegalArgumentException invalidUrl) {
+            return null;
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
     }
 
     private List<WebSearchItem> rankBySourceCredibility(List<WebSearchItem> results) {
@@ -329,6 +361,9 @@ public class SearchWebToolExecutor implements ToolExecutor {
     }
 
     private record WebSearchResultEnvelope(WebSearchResponse response, boolean cacheHit, String fallbackReason) {
+    }
+
+    private record RenderedSearch(ObjectNode output, List<String> evidenceRefs) {
     }
 
     private record SourceCredibility(String authority, String type, double score, String reason) {

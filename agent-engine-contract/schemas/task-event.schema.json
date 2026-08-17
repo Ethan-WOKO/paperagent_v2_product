@@ -85,14 +85,28 @@
         "type": { "const": "tool" },
         "callId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "name": {
-          "enum": ["project.list", "project.read", "workspace.write", "workspace.diff", "sandbox.execute", "project.publish"],
+          "enum": ["project.list", "project.read", "workspace.write", "workspace.diff", "sandbox.execute", "registered.invoke", "project.publish"],
           "description": "Stable contract name, independent of the model-visible tool name."
+        },
+        "registeredToolName": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "description": "Server-approved product tool name when name is registered.invoke."
         },
         "state": { "enum": ["requested", "running", "succeeded", "failed", "cancelled"] },
         "inputSummary": { "type": "string", "maxLength": 1000 },
         "outputSummary": { "type": ["string", "null"], "maxLength": 2000 },
         "receiptRef": { "type": ["string", "null"], "maxLength": 256 }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "name": { "const": "registered.invoke" } }, "required": ["name"] },
+          "then": {
+            "required": ["registeredToolName"],
+            "properties": { "registeredToolName": true }
+          }
+        }
+      ]
     },
     "delivery": {
       "type": "object",

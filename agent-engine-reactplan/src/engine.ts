@@ -474,7 +474,7 @@ export class AgentEngine {
       if (args === null || Array.isArray(args) || typeof args !== "object") throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Registered tool arguments must be an object"));
       const requestDigest = digestObject({ toolName: call.name, arguments: args });
       const summary = `registeredTool=${call.name}; requestDigest=${requestDigest}`;
-      await this.tool(task, call.id, "project.read", summary, "requested", null, null);
+      await this.tool(task, call.id, "registered.invoke", summary, "requested", null, null, call.name);
       const result = await this.options.gateway.invoke(task.view.taskId, grant, {
         contractVersion: "1.0", callId: call.id, toolName: call.name,
         arguments: args, requestDigest
@@ -483,10 +483,10 @@ export class AgentEngine {
       task.observations.toolPaths = stableUnique([
         ...task.observations.toolPaths, ...pathsFromToolOutput(result.output)
       ]);
-      await this.tool(task, call.id, "project.read", summary,
+      await this.tool(task, call.id, "registered.invoke", summary,
         result.success ? "succeeded" : "failed",
-        `registeredTool=${call.name}; success=${result.success}; evidenceCount=${result.evidenceRefs.length}; retryable=${result.retryable}`,
-        null);
+        registeredToolResultSummary(call.name, result),
+        null, call.name);
       task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
         success: result.success, output: result.output, errorCode: result.errorCode,
         errorMessage: result.errorMessage, retryable: result.retryable,
@@ -528,8 +528,8 @@ export class AgentEngine {
     await this.options.store.save(task);
   }
 
-  private tool(task: PersistedTask, callId: string, name: ToolName, inputSummary: string, state: "requested" | "running" | "succeeded" | "failed" | "cancelled", outputSummary: string | null, receiptRef: string | null): Promise<TaskEvent> {
-    return this.emit(task, { type: "tool", callId, name, state, inputSummary: bounded(inputSummary, 1000), outputSummary: outputSummary === null ? null : bounded(outputSummary, 2000), receiptRef });
+  private tool(task: PersistedTask, callId: string, name: ToolName, inputSummary: string, state: "requested" | "running" | "succeeded" | "failed" | "cancelled", outputSummary: string | null, receiptRef: string | null, registeredToolName?: string): Promise<TaskEvent> {
+    return this.emit(task, { type: "tool", callId, name, ...(registeredToolName ? { registeredToolName } : {}), state, inputSummary: bounded(inputSummary, 1000), outputSummary: outputSummary === null ? null : bounded(outputSummary, 2000), receiptRef });
   }
 
   private async emit(task: PersistedTask, body: EventBody): Promise<TaskEvent> {
@@ -604,6 +604,27 @@ function workspaceWriteRequest(callId: string, args: Record<string, unknown>): W
 
 function receiptSummary(receipt: Receipt): string {
   return `status=${receipt.status}; exitCode=${receipt.exitCode ?? "null"}; stdoutBytes=${receipt.stdout.originalBytes}; stderrBytes=${receipt.stderr.originalBytes}; inputFingerprint=${receipt.inputFingerprint}`;
+}
+
+function registeredToolResultSummary(toolName: string, result: RegisteredToolResult): string {
+  const output = result.output !== null && typeof result.output === "object" && !Array.isArray(result.output)
+    ? result.output as Record<string, unknown>
+    : null;
+  const provider = typeof output?.provider === "string"
+    ? output.provider
+    : typeof output?.source === "string" ? output.source : null;
+  const resultCount = typeof output?.resultCount === "number" && Number.isSafeInteger(output.resultCount)
+    && output.resultCount >= 0 ? output.resultCount : null;
+  const degraded = typeof output?.degraded === "boolean" ? output.degraded : null;
+  return [
+    `registeredTool=${toolName}`,
+    `success=${result.success}`,
+    ...(provider ? [`provider=${provider}`] : []),
+    ...(resultCount !== null ? [`resultCount=${resultCount}`] : []),
+    ...(degraded !== null ? [`degraded=${degraded}`] : []),
+    `evidenceCount=${result.evidenceRefs.length}`,
+    `retryable=${result.retryable}`
+  ].join("; ");
 }
 
 function validateRegisteredToolCatalog(catalog: RegisteredToolCatalog, task: PersistedTask): void {

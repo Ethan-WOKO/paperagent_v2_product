@@ -275,10 +275,28 @@ describe("AgentEngine", () => {
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
     const events = await engine.events(taskId);
-    expect(events.filter((event) => event.type === "tool" && event.state === "requested")
-      .map((event) => event.type === "tool" ? event.name : "")).toEqual(["project.read"]);
+    const requested = events.find((event) => event.type === "tool" && event.state === "requested");
+    expect(requested).toMatchObject({ name: "registered.invoke", registeredToolName: "project_search" });
     expect(JSON.stringify(events)).not.toContain("PRIVATE_SEARCH_RESULT");
     expect(JSON.stringify(provider.requests)).toContain("PRIVATE_SEARCH_RESULT");
+  });
+
+  it("summarizes registered web results with provider, result count, and evidence count", async () => {
+    const provider = new ScriptedProvider([
+      tool("search_web", { query: "Java 17 source-file mode" }),
+      { content: "The web results were summarized.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new WebSearchGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const completed = (await engine.events(taskId)).find((event) =>
+      event.type === "tool" && event.state === "succeeded");
+    expect(completed).toMatchObject({
+      name: "registered.invoke",
+      registeredToolName: "search_web",
+      outputSummary: "registeredTool=search_web; success=true; provider=tavily; resultCount=2; degraded=false; evidenceCount=2; retryable=false"
+    });
   });
 
   it("exposes only compact tool names and descriptions until one schema is loaded", async () => {
@@ -549,6 +567,33 @@ class DuplicateReadToolGateway extends FakeGateway {
         { type: "function", function: { name: "project_read_file", description: "Legacy file read.", parameters } },
         { type: "function", function: { name: "project_search", description: "Search the frozen Project.", parameters } }
       ]
+    });
+  }
+}
+
+class WebSearchGateway extends FakeGateway {
+  override tools(taskIdValue: string): Promise<RegisteredToolCatalog> {
+    return Promise.resolve({
+      contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      catalogDigest: "e".repeat(64),
+      tools: [{
+        type: "function",
+        function: {
+          name: "search_web",
+          description: "Search the public web.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }
+        }
+      }]
+    });
+  }
+
+  override invoke(_taskId: string, _grant: string, request: { callId: string; toolName: string; requestDigest: string }): Promise<RegisteredToolResult> {
+    return Promise.resolve({
+      contractVersion: "1.0", callId: request.callId, toolName: request.toolName,
+      requestDigest: request.requestDigest, success: true,
+      output: { provider: "tavily", resultCount: 2, degraded: false },
+      errorCode: null, errorMessage: null, retryable: false,
+      evidenceRefs: [`web:${"1".repeat(64)}`, `web:${"2".repeat(64)}`], version: "v1"
     });
   }
 }

@@ -106,10 +106,11 @@ Java 用相同 taskId/digest 重新提交以恢复运行时凭证；凭证本身
 
 ### 5.2 工具事件命名
 
-`tool.name` 是合同稳定名，只允许 `project.list`、`project.read` 和
-`sandbox.execute` 和确定性终结器 `project.publish`。`project.publish` 不属于模型
-可见工具。稳定事件名与模型函数名无关；Engine 负责在内部映射，SSE 消费方不得
-看到框架或 provider 私有工具名。
+`tool.name` 是合同稳定名，只允许 `project.list`、`project.read`、
+`workspace.write`、`workspace.diff`、`sandbox.execute`、`registered.invoke` 和
+确定性终结器 `project.publish`。`project.publish` 不属于模型可见工具。产品注册工具
+统一使用 `registered.invoke`，并在 `registeredToolName` 中携带服务端批准且已经冻结的
+真实目录名称，例如 `search_web`；不得携带框架或 provider 私有工具名。
 
 ## 6. P1 固定执行预算
 

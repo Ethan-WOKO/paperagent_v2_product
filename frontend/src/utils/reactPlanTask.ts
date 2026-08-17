@@ -14,7 +14,9 @@ export type ReactPlanTaskEvent =
   | (ReactPlanEventBase & {
       type: 'tool';
       callId: string;
-      name: 'project.list' | 'project.read' | 'sandbox.execute';
+      name: 'project.list' | 'project.read' | 'workspace.write' | 'workspace.diff'
+        | 'sandbox.execute' | 'registered.invoke' | 'project.publish';
+      registeredToolName?: string;
       state: 'requested' | 'running' | 'succeeded' | 'failed' | 'cancelled';
       inputSummary: string;
       outputSummary: string | null;
@@ -107,12 +109,36 @@ export function reactPlanStateTagType(state: ReactPlanTaskState) {
   return 'default' as const;
 }
 
-export function reactPlanToolLabel(name: Extract<ReactPlanTaskEvent, { type: 'tool' }>['name']) {
+export function reactPlanToolLabel(tool: Extract<ReactPlanTaskEvent, { type: 'tool' }>) {
+  const registeredToolName = tool.registeredToolName ?? registeredToolNameFromSummary(tool.inputSummary);
+  if (registeredToolName) {
+    const labels: Record<string, string> = {
+      search_web: '联网搜索',
+      search_knowledge: '检索知识库',
+      recommend_literature: '推荐文献',
+      literature_search_start: '发起文献检索',
+      literature_search_status: '查询文献检索状态',
+      literature_search_result: '读取文献检索结果',
+      literature_search_cancel: '取消文献检索',
+      paper_polish_status: '查询论文任务状态',
+      paper_polish_result: '读取论文任务结果',
+    };
+    const label = labels[registeredToolName];
+    return `${label ?? '调用工具'}（${registeredToolName}）`;
+  }
   return {
     'project.list': '查看项目文件',
     'project.read': '读取项目信息',
+    'workspace.write': '修改隔离工作区',
+    'workspace.diff': '查看工作区变更',
     'sandbox.execute': '沙箱执行',
-  }[name];
+    'registered.invoke': '调用注册工具',
+    'project.publish': '发布项目版本',
+  }[tool.name];
+}
+
+function registeredToolNameFromSummary(summary: string) {
+  return summary.match(/(?:^|;\s*)registeredTool=([a-z][a-z0-9_]{0,63})(?:;|$)/)?.[1];
 }
 
 export function reactPlanToolStateLabel(state: Extract<ReactPlanTaskEvent, { type: 'tool' }>['state']) {
