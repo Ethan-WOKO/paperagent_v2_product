@@ -70,6 +70,10 @@ system rule 要求文件存在、文件内容、依赖声明和执行结果只�
 发现未观察文件名时不交付该回答，而是向同一个模型返回一次受控修正提示。最多允许
 两次修正；连续失败后 task 以 `MODEL_GROUNDING_FAILED` 结束，不发布未经支持的结论。
 
+P1 不生成修改后的 Candidate，因此“移除/修改某行后即可编译或运行”也不是已验证
+事实。若模型把假设修改表述为确定的编译、运行或测试结果，Engine 同样拒绝该候选
+回答；允许的表达必须说明这是预期修复，并且仍需对修改后的精确内容重新执行验证。
+
 该检查不是通用语义证明。它能直接拦截类似“单文件 Project 中凭空声称 pom.xml 声明
 了依赖”的错误；更宽泛、没有文件名的语义幻觉仍需通过 prompt、工具证据和后续真实
 评测持续收紧。
@@ -79,6 +83,10 @@ system rule 要求文件存在、文件内容、依赖声明和执行结果只�
 旧 task 缺少新字段时，Engine 启动时补为空的 recent conversation、observations 和
 grounding repair 计数，不改写权威事件。新 task 的选择结果随 task 持久化，恢复后
 继续使用原始选择。
+
+前端在同一 Project session 下保存最近 12 个 ReAct task record，并按原有任务卡片
+样式连续展示。原先的单 record 本地恢复数据会自动迁移成一项历史。该前端投影只用于
+展示与断线恢复，不是 Engine 上下文或任务成功事实的权威来源。
 
 回滚只需回退 Issue #163 的 Engine 变更。共享 Engine HTTP/gateway 合同、Java 产品
 边界、Project 数据和 `codex/react-agent-product` 不改变。

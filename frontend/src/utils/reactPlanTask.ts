@@ -34,6 +34,15 @@ export interface ReactPlanTaskRecord {
   events: ReactPlanTaskEvent[];
 }
 
+export interface ReactPlanTaskHistory {
+  version: 2;
+  projectId: number;
+  sessionId: number;
+  records: ReactPlanTaskRecord[];
+}
+
+export const MAX_REACT_PLAN_HISTORY = 12;
+
 export function newReactPlanRequestId(randomUuid: () => string = () => crypto.randomUUID()) {
   return `request.${randomUuid()}`;
 }
@@ -135,12 +144,57 @@ export function consumeReactPlanSseChunk(value: string) {
 export function parseReactPlanRecord(value: string | null, projectId: number, sessionId: number) {
   if (!value) return null;
   try {
-    const record = JSON.parse(value) as ReactPlanTaskRecord;
-    if (record.version !== 1 || record.projectId !== projectId || record.sessionId !== sessionId) return null;
-    if (!record.clientRequestId?.startsWith('request.') || !record.taskId?.startsWith('task.')) return null;
-    if (!Number.isSafeInteger(record.turnId) || record.turnId < 1 || !record.view) return null;
-    return { ...record, events: Array.isArray(record.events) ? record.events.slice(-200) : [] };
+    return validReactPlanRecord(JSON.parse(value), projectId, sessionId);
   } catch {
     return null;
   }
+}
+
+export function parseReactPlanHistory(value: string | null, projectId: number, sessionId: number) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as ReactPlanTaskHistory | ReactPlanTaskRecord;
+    if ((parsed as ReactPlanTaskRecord).version === 1) {
+      const migrated = validReactPlanRecord(parsed, projectId, sessionId);
+      return migrated ? [migrated] : [];
+    }
+    const history = parsed as ReactPlanTaskHistory;
+    if (history.version !== 2 || history.projectId !== projectId
+        || history.sessionId !== sessionId || !Array.isArray(history.records)) return [];
+    return history.records.reduce<ReactPlanTaskRecord[]>((records, candidate) => {
+      const record = validReactPlanRecord(candidate, projectId, sessionId);
+      return record ? upsertReactPlanRecord(records, record) : records;
+    }, []).slice(-MAX_REACT_PLAN_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+export function upsertReactPlanRecord(
+  records: ReactPlanTaskRecord[],
+  record: ReactPlanTaskRecord,
+) {
+  return [...records.filter((candidate) => candidate.taskId !== record.taskId), record]
+    .slice(-MAX_REACT_PLAN_HISTORY);
+}
+
+export function serializeReactPlanHistory(records: ReactPlanTaskRecord[]) {
+  const latest = records[records.length - 1];
+  if (!latest) return null;
+  const history: ReactPlanTaskHistory = {
+    version: 2,
+    projectId: latest.projectId,
+    sessionId: latest.sessionId,
+    records: records.slice(-MAX_REACT_PLAN_HISTORY),
+  };
+  return JSON.stringify(history);
+}
+
+function validReactPlanRecord(value: unknown, projectId: number, sessionId: number) {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as ReactPlanTaskRecord;
+  if (record.version !== 1 || record.projectId !== projectId || record.sessionId !== sessionId) return null;
+  if (!record.clientRequestId?.startsWith('request.') || !record.taskId?.startsWith('task.')) return null;
+  if (!Number.isSafeInteger(record.turnId) || record.turnId < 1 || !record.view) return null;
+  return { ...record, events: Array.isArray(record.events) ? record.events.slice(-200) : [] };
 }
