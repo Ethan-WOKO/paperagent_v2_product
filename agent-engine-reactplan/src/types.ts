@@ -14,7 +14,7 @@ export interface Authority {
   sessionRef: string;
   project: { projectId: string; projectVersion: string };
   instruction: string;
-  permissions: { readProject: true; writeWorkspace: false; executeSandbox: true };
+  permissions: { readProject: true; writeWorkspace: boolean; executeSandbox: true };
   model: { provider: string; model: string };
 }
 
@@ -48,7 +48,7 @@ export type TaskEvent =
   | (EventBase & { type: "tool"; callId: string; name: ToolName; state: "requested" | "running" | "succeeded" | "failed" | "cancelled"; inputSummary: string; outputSummary: string | null; receiptRef: string | null })
   | (EventBase & { type: "delivery"; conclusion: string; receiptRefs: string[] });
 
-export type ToolName = "project.list" | "project.read" | "sandbox.execute";
+export type ToolName = "project.list" | "project.read" | "workspace.write" | "workspace.diff" | "sandbox.execute";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -123,6 +123,15 @@ export interface TaskObservations {
     argv: string[];
     status: Receipt["status"];
     inputs: Array<{ path: string; sha256: string }>;
+    workspaceRevision: number;
+  }>;
+  workspaceRevision: number;
+  workspaceDiffObservedRevision: number;
+  workspaceChanges: Array<{
+    operation: "ADD" | "MODIFY";
+    path: string;
+    beforeSha256: string | null;
+    afterSha256: string;
   }>;
 }
 
@@ -141,6 +150,7 @@ export interface PersistedTask {
   historicalContext: HistoricalContextEnvelope;
   observations: TaskObservations;
   groundingRepairs: number;
+  candidateValidationRepairs: number;
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;
 }
@@ -148,5 +158,28 @@ export interface PersistedTask {
 export interface FileEntry { path: string; sizeBytes: number; sha256: string; mediaType: string }
 export interface FileList { contractVersion: "1.0"; taskId: string; projectVersion: string; files: FileEntry[] }
 export interface FileRead extends FileEntry { contractVersion: "1.0"; encoding: "utf-8"; content: string; truncated: false }
+export interface WorkspaceWriteResult {
+  contractVersion: "1.0";
+  clientRequestId: string;
+  requestDigest: string;
+  replayed: boolean;
+  operation: "ADD" | "MODIFY";
+  path: string;
+  beforeSha256: string | null;
+  afterSha256: string;
+  sizeBytes: number;
+}
+export interface WorkspaceDiffView {
+  contractVersion: "1.0";
+  taskId: string;
+  projectVersion: string;
+  changed: boolean;
+  entries: Array<{
+    operation: "ADD" | "MODIFY";
+    path: string;
+    beforeSha256: string | null;
+    afterSha256: string;
+  }>;
+}
 export interface SandboxView { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; executionRef: string; state: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "TIMED_OUT" | "CANCELLED" | "SYSTEM_ERROR"; receiptRef: string | null }
 export interface Receipt { contractVersion: "1.0"; receiptRef: string; executionRef: string; status: "SUCCEEDED" | "FAILED" | "TIMED_OUT" | "CANCELLED" | "SYSTEM_ERROR"; exitCode: number | null; stdout: { text: string; truncated: boolean; originalBytes: number }; stderr: { text: string; truncated: boolean; originalBytes: number }; inputFingerprint: string; inputs: Array<{ path: string; sha256: string; sizeBytes: number }>; startedAt: string; finishedAt: string }

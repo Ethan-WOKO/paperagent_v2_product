@@ -1,0 +1,14 @@
+{
+  "contractVersion": "1.0",
+  "taskId": "task.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "projectVersion": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "changed": true,
+  "entries": [
+    {
+      "operation": "MODIFY",
+      "path": "src/main/java/Sort.java",
+      "beforeSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "afterSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ]
+}

@@ -158,7 +158,7 @@ final class AgentEngineSandboxGateway {
         SandboxSubmit submit = stored.submit();
         String idempotency = "engine." + sha256(
                 stored.authorityRequestDigest() + "\0" + submit.clientRequestId());
-        String policyDigest = sha256("agent-engine-p1\0read-project\0execute-sandbox");
+        String policyDigest = sha256("agent-engine-p2\0isolated-workspace\0execute-sandbox");
         SandboxDispatch unsigned = new SandboxDispatch(
                 idempotency, "", stored.userId(), stored.projectId(), stored.sessionId(),
                 stableLong("plan\0" + stored.authorityRequestDigest()),

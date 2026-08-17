@@ -12,7 +12,7 @@
     "instruction": "Modify Sort.java.",
     "permissions": {
       "readProject": true,
-      "writeWorkspace": true,
+      "writeWorkspace": "yes",
       "executeSandbox": true
     },
     "model": { "provider": "deepseek", "model": "deepseek-v4-pro" }

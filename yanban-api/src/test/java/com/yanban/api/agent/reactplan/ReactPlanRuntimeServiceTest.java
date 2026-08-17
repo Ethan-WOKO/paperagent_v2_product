@@ -2,6 +2,7 @@ package com.yanban.api.agent.reactplan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -18,6 +19,7 @@ import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.core.agent.AgentRunIdentity;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistenceResult;
+import io.paperagent.v2.contracts.Capability;
 import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,7 +65,14 @@ class ReactPlanRuntimeServiceTest {
         assertEquals("b".repeat(64),
                 body.path("authority").path("project").path("projectVersion").asText());
         assertEquals("g".repeat(32), body.path("gateway").path("taskGrant").asText());
+        assertTrue(body.path("authority").path("permissions").path("writeWorkspace").asBoolean());
         assertFalse(body.path("authority").toString().contains("taskGrant"));
+
+        ArgumentCaptor<ReactPlanBootstrapCommand> command =
+                ArgumentCaptor.forClass(ReactPlanBootstrapCommand.class);
+        verify(plans).bootstrap(any(Long.class), any(Long.class), command.capture());
+        assertTrue(command.getValue().executionProfile().capabilities()
+                .contains(Capability.WRITE_WORKSPACE));
     }
 
     @Test

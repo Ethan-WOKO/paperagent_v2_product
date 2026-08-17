@@ -1,12 +1,15 @@
-import type { FileList, FileRead, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView } from "./types.js";
+import type { FileList, FileRead, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, WorkspaceDiffView, WorkspaceWriteResult } from "./types.js";
 import { EngineProblem, problem } from "./util.js";
 
 export interface SandboxRequest { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; argv: string[]; inputs: Array<{ path: string; sha256: string }>; timeoutMillis: number }
+export interface WorkspaceWriteRequest { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; operation: "ADD" | "MODIFY"; path: string; baseSha256: string | null; content: string }
 export interface GatewayClient {
   tools(taskId: string, grant: string, signal: AbortSignal): Promise<RegisteredToolCatalog>;
   invoke(taskId: string, grant: string, request: { contractVersion: "1.0"; callId: string; toolName: string; arguments: Record<string, unknown>; requestDigest: string }, signal: AbortSignal): Promise<RegisteredToolResult>;
   list(taskId: string, grant: string, signal: AbortSignal): Promise<FileList>;
   read(taskId: string, grant: string, path: string, expectedSha256: string, signal: AbortSignal): Promise<FileRead>;
+  write(taskId: string, grant: string, request: WorkspaceWriteRequest, signal: AbortSignal): Promise<WorkspaceWriteResult>;
+  diff(taskId: string, grant: string, signal: AbortSignal): Promise<WorkspaceDiffView>;
   submit(taskId: string, grant: string, request: SandboxRequest, signal: AbortSignal): Promise<SandboxView>;
   execution(taskId: string, grant: string, clientRequestId: string, signal: AbortSignal): Promise<SandboxView>;
   receipt(taskId: string, grant: string, receiptRef: string, signal: AbortSignal): Promise<Receipt>;
@@ -19,6 +22,8 @@ export class HttpGatewayClient implements GatewayClient {
   invoke(taskId: string, grant: string, request: { contractVersion: "1.0"; callId: string; toolName: string; arguments: Record<string, unknown>; requestDigest: string }, signal: AbortSignal): Promise<RegisteredToolResult> { return this.call(`${this.base(taskId)}/tool-calls`, grant, signal, request); }
   list(taskId: string, grant: string, signal: AbortSignal): Promise<FileList> { return this.call(`${this.base(taskId)}/workspace/files`, grant, signal); }
   read(taskId: string, grant: string, path: string, expectedSha256: string, signal: AbortSignal): Promise<FileRead> { return this.call(`${this.base(taskId)}/workspace/read`, grant, signal, { contractVersion: "1.0", path, expectedSha256 }); }
+  write(taskId: string, grant: string, request: WorkspaceWriteRequest, signal: AbortSignal): Promise<WorkspaceWriteResult> { return this.call(`${this.base(taskId)}/workspace/write`, grant, signal, request); }
+  diff(taskId: string, grant: string, signal: AbortSignal): Promise<WorkspaceDiffView> { return this.call(`${this.base(taskId)}/workspace/diff`, grant, signal); }
   submit(taskId: string, grant: string, request: SandboxRequest, signal: AbortSignal): Promise<SandboxView> { return this.call(`${this.base(taskId)}/sandbox-executions`, grant, signal, request); }
   execution(taskId: string, grant: string, clientRequestId: string, signal: AbortSignal): Promise<SandboxView> { return this.call(`${this.base(taskId)}/sandbox-executions/${encodeURIComponent(clientRequestId)}`, grant, signal); }
   receipt(taskId: string, grant: string, receiptRef: string, signal: AbortSignal): Promise<Receipt> { return this.call(`${this.base(taskId)}/receipts/${encodeURIComponent(receiptRef)}`, grant, signal); }

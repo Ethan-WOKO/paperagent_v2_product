@@ -11,6 +11,7 @@ public record EngineTaskAuthority(
         long projectId,
         String projectVersion,
         boolean readProject,
+        boolean writeWorkspace,
         boolean executeSandbox,
         Instant expiresAt) {
 
@@ -22,5 +23,12 @@ public record EngineTaskAuthority(
                 || !readProject || !executeSandbox || expiresAt == null) {
             throw new IllegalArgumentException("engine task authority is invalid");
         }
+    }
+
+    public EngineTaskAuthority(String taskId, String requestDigest, long userId, long turnId,
+                               long sessionId, long projectId, String projectVersion,
+                               boolean readProject, boolean executeSandbox, Instant expiresAt) {
+        this(taskId, requestDigest, userId, turnId, sessionId, projectId, projectVersion,
+                readProject, false, executeSandbox, expiresAt);
     }
 }

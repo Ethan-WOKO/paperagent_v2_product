@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentEngine } from "../src/engine.js";
-import type { GatewayClient, SandboxRequest } from "../src/gateway.js";
+import type { GatewayClient, SandboxRequest, WorkspaceWriteRequest } from "../src/gateway.js";
 import { TaskStore } from "../src/store.js";
-import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, TaskSubmission } from "../src/types.js";
+import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, TaskSubmission, WorkspaceDiffView, WorkspaceWriteResult } from "../src/types.js";
 import { digestObject, EngineProblem, problem, sha256 } from "../src/util.js";
 import { ContractValidator } from "../src/validation.js";
 
@@ -44,6 +44,54 @@ describe("AgentEngine", () => {
     expect(gateway.maximumConcurrent).toBe(1);
     expect(provider.requests.every((request) => request.maxOutputTokens === 4096)).toBe(true);
     expect(JSON.stringify(provider.requests[0]?.tools)).toContain("project_search");
+  });
+
+  it("creates an isolated Workspace candidate and requires exact diff and sandbox validation", async () => {
+    const replacement = "class Sort { int value; }\n";
+    const replacementHash = sha256(replacement);
+    const provider = new ScriptedProvider([
+      tool("read_project_file", { path: "Sort.java", expectedSha256: fileHash }),
+      tool("write_workspace_file", { operation: "MODIFY", path: "Sort.java", baseSha256: fileHash, content: replacement }),
+      tool("get_workspace_diff", {}),
+      tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: replacementHash }], timeoutMillis: 5000 }),
+      { content: "Sort.java was modified in the isolated Workspace and the exact Candidate compiled successfully; the ProjectVersion was not published.", toolCalls: [] }
+    ]);
+    const gateway = new CandidateGateway(replacementHash);
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("d", "session.write", "修改 Sort.java 并验证", "1", true);
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    expect((await engine.events(request.taskId)).filter((event) => event.type === "tool" && event.state === "requested")
+      .map((event) => event.type === "tool" ? event.name : ""))
+      .toEqual(["project.read", "workspace.write", "workspace.diff", "sandbox.execute"]);
+    expect(provider.requests[0]!.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ function: expect.objectContaining({ name: "write_workspace_file" }) }),
+      expect.objectContaining({ function: expect.objectContaining({ name: "get_workspace_diff" }) })
+    ]));
+    expect(gateway.lastSandboxHash).toBe(replacementHash);
+  });
+
+  it("repairs a premature candidate conclusion until the current diff and exact Candidate are validated", async () => {
+    const replacement = "class Sort { int value; }\n";
+    const replacementHash = sha256(replacement);
+    const provider = new ScriptedProvider([
+      tool("write_workspace_file", { operation: "MODIFY", path: "Sort.java", baseSha256: fileHash, content: replacement }),
+      { content: "修改完成。", toolCalls: [] },
+      tool("get_workspace_diff", {}),
+      tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: replacementHash }], timeoutMillis: 5000 }),
+      { content: "隔离 Workspace 中的 Candidate 已通过精确输入验证；ProjectVersion 未发布。", toolCalls: [] }
+    ]);
+    const gateway = new CandidateGateway(replacementHash);
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("e", "session.repair", "修改 Sort.java 并验证", "1", true);
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    expect(provider.requests).toHaveLength(5);
+    expect(provider.requests[2]!.messages.some((message) => message.role === "user"
+      && message.content?.includes("isolated Workspace has unvalidated changes"))).toBe(true);
+    expect(gateway.lastSandboxHash).toBe(replacementHash);
   });
 
   it("injects only four bounded completed turns from the same Project session", async () => {
@@ -111,7 +159,7 @@ describe("AgentEngine", () => {
     const history = submissionFor(60, "session.identity", "检查 Sort.java");
     await engine.submit(history);
     await waitFor(() => engine.get(history.taskId).state === "succeeded");
-    const current = submissionFor(61, "session.identity", "你好，你是什么模型？");
+    const current = submissionFor(61, "session.identity", "你好，你是什么模型？", "1", true);
     await engine.submit(current);
     await waitFor(() => engine.get(current.taskId).state === "succeeded");
 
@@ -120,6 +168,10 @@ describe("AgentEngine", () => {
     expect(request.messages[0]?.content).toContain("Do not call Project or sandbox tools for greetings");
     expect(request.messages.some((message) =>
       message.role === "user" && message.content === "Current task: 你好，你是什么模型？")).toBe(true);
+    expect(request.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ function: expect.objectContaining({ name: "write_workspace_file" }) }),
+      expect.objectContaining({ function: expect.objectContaining({ name: "get_workspace_diff" }) })
+    ]));
     expect((await engine.events(current.taskId)).filter((event) => event.type === "tool")).toHaveLength(0);
   });
 
@@ -353,6 +405,8 @@ class FakeGateway implements GatewayClient {
   invoke(_taskId: string, _grant: string, request: { callId: string; toolName: string; requestDigest: string }): Promise<RegisteredToolResult> { return this.operation({ contractVersion: "1.0", callId: request.callId, toolName: request.toolName, requestDigest: request.requestDigest, success: true, output: { projectVersion, hits: [{ path: "services/order-service/pom.xml", line: "PRIVATE_SEARCH_RESULT" }] }, errorCode: null, errorMessage: null, retryable: false, evidenceRefs: ["project:1:search"], version: projectVersion }); }
   list(taskIdValue: string): Promise<FileList> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, files: [{ path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java" }] }); }
   read(): Promise<FileRead> { return this.operation({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java", encoding: "utf-8", content: "SECRET_FILE_BODY", truncated: false }); }
+  write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, replayed: false, operation: request.operation, path: request.path, beforeSha256: request.baseSha256, afterSha256: sha256(request.content), sizeBytes: Buffer.byteLength(request.content) }); }
+  diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
   receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
@@ -366,6 +420,37 @@ class PollingFailedGateway extends FakeGateway {
     return Promise.resolve({ contractVersion: "1.0", clientRequestId, requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }), executionRef: "execution.failed", state: this.polls === 1 ? "RUNNING" : "FAILED", receiptRef: this.polls === 1 ? null : "receipt.failed" });
   }
   override receipt(): Promise<Receipt> { return Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.failed", executionRef: "execution.failed", status: "FAILED", exitCode: 1, stdout: { text: "", truncated: false, originalBytes: 0 }, stderr: { text: "compile error", truncated: false, originalBytes: 13 }, inputFingerprint: "e".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class CandidateGateway extends FakeGateway {
+  lastSandboxHash: string | null = null;
+  constructor(private readonly candidateHash: string) { super(); }
+  override write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> {
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, replayed: false, operation: request.operation,
+      path: request.path, beforeSha256: request.baseSha256,
+      afterSha256: this.candidateHash, sizeBytes: Buffer.byteLength(request.content) });
+  }
+  override diff(taskIdValue: string): Promise<WorkspaceDiffView> {
+    return Promise.resolve({ contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      changed: true, entries: [{ operation: "MODIFY", path: "Sort.java",
+        beforeSha256: fileHash, afterSha256: this.candidateHash }] });
+  }
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.lastSandboxHash = request.inputs[0]?.sha256 ?? null;
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, executionRef: "execution.candidate",
+      state: "SUCCEEDED", receiptRef: "receipt.candidate" });
+  }
+  override receipt(): Promise<Receipt> {
+    return Promise.resolve({ contractVersion: "1.0", receiptRef: "receipt.candidate",
+      executionRef: "execution.candidate", status: "SUCCEEDED", exitCode: 0,
+      stdout: { text: "ok", truncated: false, originalBytes: 2 },
+      stderr: { text: "", truncated: false, originalBytes: 0 },
+      inputFingerprint: "f".repeat(64),
+      inputs: [{ path: "Sort.java", sha256: this.candidateHash, sizeBytes: 28 }],
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
+  }
 }
 
 class NeverTerminalGateway extends FakeGateway {
@@ -399,9 +484,9 @@ function submission(): TaskSubmission {
   return submissionFor("a", "session.test", "Compile and run Sort.java");
 }
 
-function submissionFor(identity: number | string, sessionRef: string, instruction: string, projectId = "1"): TaskSubmission {
+function submissionFor(identity: number | string, sessionRef: string, instruction: string, projectId = "1", writeWorkspace = false): TaskSubmission {
   const suffix = String(identity).repeat(64).slice(0, 64);
-  const authority = { runMode: "PERSISTENT_PLAN_EXECUTE" as const, sessionRef, project: { projectId, projectVersion }, instruction, permissions: { readProject: true as const, writeWorkspace: false as const, executeSandbox: true as const }, model: { provider: "test", model: "test-model" } };
+  const authority = { runMode: "PERSISTENT_PLAN_EXECUTE" as const, sessionRef, project: { projectId, projectVersion }, instruction, permissions: { readProject: true as const, writeWorkspace, executeSandbox: true as const }, model: { provider: "test", model: "test-model" } };
   return { contractVersion: "1.0", taskId: `task.${suffix}`, requestDigest: digestObject(authority), authority, gateway: { taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
 }
 

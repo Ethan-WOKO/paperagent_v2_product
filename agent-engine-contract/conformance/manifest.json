@@ -6,6 +6,8 @@
     { "file": "fixtures/positive/delivery-no-receipt.json", "schema": "task-event.schema.json" },
     { "file": "fixtures/positive/gateway-file-list.json", "schema": "gateway.schema.json", "definition": "fileList" },
     { "file": "fixtures/positive/gateway-file-read-request.json", "schema": "gateway.schema.json", "definition": "fileReadRequest" },
+    { "file": "fixtures/positive/gateway-workspace-write.json", "schema": "gateway.schema.json", "definition": "workspaceWriteRequest" },
+    { "file": "fixtures/positive/gateway-workspace-diff.json", "schema": "gateway.schema.json", "definition": "workspaceDiff" },
     { "file": "fixtures/positive/gateway-sandbox-submit.json", "schema": "gateway.schema.json", "definition": "sandboxSubmit" },
     { "file": "fixtures/positive/receipt.json", "schema": "receipt.schema.json" }
   ],

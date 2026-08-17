@@ -28,6 +28,6 @@ npm start
 - 同一 `taskId` + 相同 authority 摘要是幂等重放；不同内容返回冲突。
 - 事件 sequence 单调递增，SSE 支持 `Last-Event-ID` 续传。
 - 服务重启后从任务 JSON 和 append-only 事件恢复未完成任务。
-- 模型最多调用 20 次；除按 hash 读取和白名单沙箱外，还会冻结并复用产品注册表中当前任务获准的只读 Project 工具；写入类工具不会暴露。
+- 模型最多调用 20 次；除按 hash 读取和白名单沙箱外，还会冻结并复用产品注册表中当前任务获准的只读 Project 工具。带 `writeWorkspace` 权限的任务额外获得隔离 Workspace 的 ADD/MODIFY 与 diff 工具；它们不会发布 ProjectVersion。
 - session 级入口由产品确定性创建 Turn；相同 `clientRequestId` 与内容精确重放，不会创建第二个 Turn。
 - 编译失败仍可形成可信交付；broker、超时等系统故障不会伪装成任务结论。

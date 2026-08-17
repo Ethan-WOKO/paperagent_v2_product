@@ -6,6 +6,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
+import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnProjectVersionSourceFactory;
@@ -22,6 +25,7 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -69,6 +73,34 @@ class AgentEngineWorkspaceGatewayTest {
                         failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_PATH_INVALID"));
     }
 
+    @Test
+    void replacesAndAddsOnlyWithExactHashesAndReportsWorkspaceDiff() {
+        byte[] content = "class Sort {}\n".getBytes(StandardCharsets.UTF_8);
+        String hash = sha256(content);
+        AgentEngineWorkspaceGateway gateway = gateway(content, hash);
+        ObjectMapper json = new ObjectMapper();
+
+        String replacement = "class Sort { int value; }\n";
+        WorkspaceWriteRequest modify = writeRequest(json, "call." + "a".repeat(40),
+                "MODIFY", "Sort.java", hash, replacement);
+        var changed = gateway.write(writableAuthority(), modify);
+        assertThat(changed.replayed()).isFalse();
+        assertThat(changed.afterSha256()).isEqualTo(sha256(replacement.getBytes(StandardCharsets.UTF_8)));
+        assertThat(gateway.write(writableAuthority(), modify).replayed()).isTrue();
+
+        WorkspaceWriteRequest add = writeRequest(json, "call." + "b".repeat(40),
+                "ADD", "Added.java", null, "class Added {}\n");
+        gateway.write(writableAuthority(), add);
+        assertThat(gateway.diff(writableAuthority()).entries())
+                .extracting(value -> value.operation() + ":" + value.path())
+                .containsExactly("ADD:Added.java", "MODIFY:Sort.java");
+
+        assertThatThrownBy(() -> gateway.write(writableAuthority(), writeRequest(json,
+                "call." + "c".repeat(40), "MODIFY", "Sort.java", hash, "class Wrong {}")))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_FILE_HASH_CONFLICT"));
+    }
+
     private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {
         AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
         AuthenticatedAgentTurnProjectVersionSourceFactory sources =
@@ -86,13 +118,32 @@ class AgentEngineWorkspaceGatewayTest {
         EngineGatewayProperties properties = new EngineGatewayProperties();
         properties.setWorkspaceRoot(temporary.toString());
         return new AgentEngineWorkspaceGateway(
-                contexts, sources, new ProjectStorageProperties(), properties);
+                contexts, sources, new ProjectStorageProperties(), properties, new ObjectMapper());
     }
 
     private static EngineTaskAuthority authority() {
         return new EngineTaskAuthority(TASK, "2".repeat(64),
                 11, 12, 13, 14, VERSION, true, true,
                 Instant.parse("2026-08-16T11:00:00Z"));
+    }
+
+    private static EngineTaskAuthority writableAuthority() {
+        return new EngineTaskAuthority(TASK, "2".repeat(64),
+                11, 12, 13, 14, VERSION, true, true, true,
+                Instant.parse("2026-08-16T11:00:00Z"));
+    }
+
+    private static WorkspaceWriteRequest writeRequest(
+            ObjectMapper json, String callId, String operation, String path,
+            String baseSha256, String content) {
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("operation", operation);
+        semantics.put("path", path);
+        semantics.put("baseSha256", baseSha256);
+        semantics.put("content", content);
+        return new WorkspaceWriteRequest("1.0", callId,
+                ReactPlanCanonicalJson.digest(json, semantics), operation, path,
+                baseSha256, content);
     }
 
     private static String sha256(byte[] value) {

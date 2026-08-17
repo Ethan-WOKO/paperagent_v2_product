@@ -85,7 +85,7 @@
         "type": { "const": "tool" },
         "callId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "name": {
-          "enum": ["project.list", "project.read", "sandbox.execute"],
+          "enum": ["project.list", "project.read", "workspace.write", "workspace.diff", "sandbox.execute"],
           "description": "Stable contract name, independent of the model-visible tool name."
         },
         "state": { "enum": ["requested", "running", "succeeded", "failed", "cancelled"] },

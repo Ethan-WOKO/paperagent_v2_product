@@ -44,7 +44,7 @@
           "required": ["readProject", "writeWorkspace", "executeSandbox"],
           "properties": {
             "readProject": { "const": true },
-            "writeWorkspace": { "const": false },
+            "writeWorkspace": { "type": "boolean" },
             "executeSandbox": { "const": true }
           }
         },

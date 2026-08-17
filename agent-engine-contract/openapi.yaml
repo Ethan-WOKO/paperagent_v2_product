@@ -200,6 +200,55 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '413': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/workspace/write:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Product tool gateway]
+      operationId: writeWorkspaceFile
+      summary: Idempotently create or replace one UTF-8 file in the isolated Workspace
+      description: >-
+        Requires a task grant carrying writeWorkspace authority. ADD requires
+        an absent path and null baseSha256. MODIFY requires the exact current
+        Workspace hash. This endpoint never changes the frozen ProjectVersion.
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './schemas/gateway.schema.json#/$defs/workspaceWriteRequest' }
+      responses:
+        '200':
+          description: Applied and re-attested isolated Workspace change, or exact replay
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/workspaceWriteResult' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/workspace/diff:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Product tool gateway]
+      operationId: getWorkspaceDiff
+      summary: Read the authoritative ADD/MODIFY diff for the isolated Workspace
+      description: The ProjectVersion is unchanged and publication is outside this contract.
+      security:
+        - TaskGrantBearer: []
+      responses:
+        '200':
+          description: Canonically ordered Workspace diff
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/workspaceDiff' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
   /internal/v1/agent-engine/tasks/{taskId}/sandbox-executions:
     parameters:
       - $ref: '#/components/parameters/TaskId'
