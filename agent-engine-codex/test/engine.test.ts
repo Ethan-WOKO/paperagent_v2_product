@@ -284,6 +284,27 @@ describe("AgentEngine", () => {
     expect(engine.get(taskId).error).toMatchObject({ code: "GATEWAY_RESPONSE_BINDING_INVALID" });
   });
 
+  it("binds receipt inputs as an unordered exact set", async () => {
+    const alphaHash = "a".repeat(64);
+    const zetaHash = "f".repeat(64);
+    const provider = new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["javac", "Alpha.java", "Zeta.java"],
+        inputs: [
+          { path: "Zeta.java", sha256: zetaHash },
+          { path: "Alpha.java", sha256: alphaHash }
+        ],
+        timeoutMillis: 5000
+      }),
+      { content: "Validated both inputs.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new CanonicallyOrderedReceiptGateway(alphaHash, zetaHash));
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
+    expect(delivery?.type === "delivery" ? delivery.receiptRefs : []).toEqual(["receipt.1"]);
+  });
+
   it("does not perform an earlier side effect when ask_user is mixed with another tool call", async () => {
     const gateway = new CountingGateway();
     const engine = await createEngine(new ScriptedProvider([{ content: null, toolCalls: [
@@ -347,6 +368,28 @@ class FakeGateway implements GatewayClient {
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
   receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class CanonicallyOrderedReceiptGateway extends FakeGateway {
+  constructor(private readonly alphaHash: string, private readonly zetaHash: string) { super(); }
+  override receipt(): Promise<Receipt> {
+    return Promise.resolve({
+      contractVersion: "1.0",
+      receiptRef: "receipt.1",
+      executionRef: "execution.1",
+      status: "SUCCEEDED",
+      exitCode: 0,
+      stdout: { text: "ok", truncated: false, originalBytes: 2 },
+      stderr: { text: "", truncated: false, originalBytes: 0 },
+      inputFingerprint: "d".repeat(64),
+      inputs: [
+        { path: "Alpha.java", sha256: this.alphaHash, sizeBytes: 16 },
+        { path: "Zeta.java", sha256: this.zetaHash, sizeBytes: 16 }
+      ],
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString()
+    });
+  }
 }
 
 class PollingFailedGateway extends FakeGateway {
