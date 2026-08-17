@@ -1,0 +1,184 @@
+package com.yanban.api.agent.reactplan.gateway;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDiffEntry;
+import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
+import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnProjectVersionSourceFactory;
+import com.yanban.api.project.ProjectStorageProperties;
+import com.yanban.core.agent.AgentRunIdentity;
+import io.paperagent.v2.contracts.ContentHash;
+import io.paperagent.v2.contracts.ProjectPath;
+import io.paperagent.v2.contracts.ProjectVersionRef;
+import io.paperagent.v2.workspace.ProjectFileSnapshot;
+import io.paperagent.v2.workspace.ProjectVersionSnapshot;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.time.Instant;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class AgentEngineWorkspaceGatewayTest {
+    private static final String TASK = "task." + "1".repeat(64);
+    private static final String VERSION = "3".repeat(64);
+
+    @TempDir
+    Path temporary;
+
+    @Test
+    void listsAndReadsExactFrozenUtf8BytesWithHashAttestation() {
+        byte[] content = "class Sort {}\n".getBytes(StandardCharsets.UTF_8);
+        String hash = sha256(content);
+        AgentEngineWorkspaceGateway gateway = gateway(content, hash);
+        EngineTaskAuthority authority = authority();
+
+        var list = gateway.list(authority);
+        assertThat(list.projectVersion()).isEqualTo(VERSION);
+        assertThat(list.files()).singleElement().satisfies(file -> {
+            assertThat(file.path()).isEqualTo("Sort.java");
+            assertThat(file.sha256()).isEqualTo(hash);
+            assertThat(file.mediaType()).isEqualTo("text/x-java-source");
+        });
+        var read = gateway.read(authority, new FileReadRequest("1.0", "Sort.java", hash));
+        assertThat(read.content()).isEqualTo("class Sort {}\n");
+        assertThat(read.truncated()).isFalse();
+
+        assertThatThrownBy(() -> gateway.read(authority,
+                new FileReadRequest("1.0", "Sort.java", "9".repeat(64))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_FILE_HASH_CONFLICT"));
+    }
+
+    @Test
+    void rejectsTraversalBeforeReadingWorkspace() {
+        byte[] content = "safe".getBytes(StandardCharsets.UTF_8);
+        AgentEngineWorkspaceGateway gateway = gateway(content, sha256(content));
+
+        assertThatThrownBy(() -> gateway.read(authority(),
+                new FileReadRequest("1.0", "../secret", "9".repeat(64))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_PATH_INVALID"));
+    }
+
+    @Test
+    void replacesAndAddsOnlyWithExactHashesAndReportsWorkspaceDiff() {
+        byte[] content = "class Sort {}\n".getBytes(StandardCharsets.UTF_8);
+        String hash = sha256(content);
+        AgentEngineWorkspaceGateway gateway = gateway(content, hash);
+        ObjectMapper json = new ObjectMapper();
+
+        String replacement = "class Sort { int value; }\n";
+        WorkspaceWriteRequest modify = writeRequest(json, "call." + "a".repeat(40),
+                "MODIFY", "Sort.java", hash, replacement);
+        var changed = gateway.write(writableAuthority(), modify);
+        assertThat(changed.replayed()).isFalse();
+        assertThat(changed.afterSha256()).isEqualTo(sha256(replacement.getBytes(StandardCharsets.UTF_8)));
+        assertThat(gateway.write(writableAuthority(), modify).replayed()).isTrue();
+
+        WorkspaceWriteRequest add = writeRequest(json, "call." + "b".repeat(40),
+                "ADD", "Added.java", null, "class Added {}\n");
+        gateway.write(writableAuthority(), add);
+        assertThat(gateway.diff(writableAuthority()).entries())
+                .extracting(value -> value.operation() + ":" + value.path())
+                .containsExactly("ADD:Added.java", "MODIFY:Sort.java");
+
+        assertThatThrownBy(() -> gateway.write(writableAuthority(), writeRequest(json,
+                "call." + "c".repeat(40), "MODIFY", "Sort.java", hash, "class Wrong {}")))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_FILE_HASH_CONFLICT"));
+    }
+
+    @Test
+    void reattestsExactWorkspaceBytesForPublication() {
+        byte[] content = "class Sort {}\n".getBytes(StandardCharsets.UTF_8);
+        String hash = sha256(content);
+        AgentEngineWorkspaceGateway gateway = gateway(content, hash);
+        String replacement = "class Sort { int value; }\n";
+        gateway.write(writableAuthority(), writeRequest(new ObjectMapper(),
+                "call." + "a".repeat(40), "MODIFY", "Sort.java", hash, replacement));
+
+        var diff = gateway.diff(writableAuthority());
+        var changes = gateway.publicationChanges(writableAuthority(), diff.entries());
+
+        assertThat(changes).singleElement().satisfies(change -> {
+            assertThat(change.operation()).isEqualTo("MODIFY");
+            assertThat(change.path()).isEqualTo("Sort.java");
+            assertThat(change.beforeSha256()).isEqualTo(hash);
+            assertThat(change.afterSha256()).isEqualTo(
+                    sha256(replacement.getBytes(StandardCharsets.UTF_8)));
+            assertThat(change.content()).isEqualTo(replacement);
+        });
+        assertThatThrownBy(() -> gateway.publicationChanges(writableAuthority(), List.of(
+                new WorkspaceDiffEntry("MODIFY", "Sort.java", hash, "9".repeat(64)))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("WORKSPACE_PUBLICATION_DIFF_CONFLICT"));
+    }
+
+    private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {
+        AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
+        AuthenticatedAgentTurnProjectVersionSourceFactory sources =
+                mock(AuthenticatedAgentTurnProjectVersionSourceFactory.class);
+        VerifiedAgentTurnProductContext context = new VerifiedAgentTurnProductContext(
+                new AgentRunIdentity("AGENT_TURN", "12", 11L, 13L, 14L),
+                Optional.of(VERSION));
+        when(contexts.resolve(11L, 12L)).thenReturn(context);
+        when(sources.create(11L, 12L)).thenReturn(version -> {
+            assertThat(version).isEqualTo(new ProjectVersionRef("14", VERSION));
+            return new ProjectVersionSnapshot(version, List.of(new ProjectFileSnapshot(
+                    new ProjectPath("Sort.java"), content,
+                    new ContentHash("sha256", hash), Map.of())), Map.of());
+        });
+        EngineGatewayProperties properties = new EngineGatewayProperties();
+        properties.setWorkspaceRoot(temporary.toString());
+        return new AgentEngineWorkspaceGateway(
+                contexts, sources, new ProjectStorageProperties(), properties, new ObjectMapper());
+    }
+
+    private static EngineTaskAuthority authority() {
+        return new EngineTaskAuthority(TASK, "2".repeat(64),
+                11, 12, 13, 14, VERSION, true, true,
+                Instant.parse("2026-08-16T11:00:00Z"));
+    }
+
+    private static EngineTaskAuthority writableAuthority() {
+        return new EngineTaskAuthority(TASK, "2".repeat(64),
+                11, 12, 13, 14, VERSION, true, true, true,
+                Instant.parse("2026-08-16T11:00:00Z"));
+    }
+
+    private static WorkspaceWriteRequest writeRequest(
+            ObjectMapper json, String callId, String operation, String path,
+            String baseSha256, String content) {
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("operation", operation);
+        semantics.put("path", path);
+        semantics.put("baseSha256", baseSha256);
+        semantics.put("content", content);
+        return new WorkspaceWriteRequest("1.0", callId,
+                ReactPlanCanonicalJson.digest(json, semantics), operation, path,
+                baseSha256, content);
+    }
+
+    private static String sha256(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+        } catch (Exception impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+}

@@ -57,6 +57,8 @@ class SearchWebToolExecutorTest {
         assertThat(item.path("url").asText()).isEqualTo("https://example.com/rag");
         assertThat(item.path("snippet").asText()).contains("Retrieval augmented");
         assertThat(item.path("sourceAuthority").asText()).isEqualTo("general_web");
+        assertThat(item.path("evidenceRef").asText()).matches("web:[a-f0-9]{64}");
+        assertThat(result.evidenceRefs()).containsExactly(item.path("evidenceRef").asText());
     }
 
     @Test
@@ -72,6 +74,7 @@ class SearchWebToolExecutorTest {
         assertThat(result.success()).isTrue();
         assertThat(result.output().path("degraded").asBoolean()).isTrue();
         assertThat(result.output().path("items")).isEmpty();
+        assertThat(result.evidenceRefs()).isEmpty();
         assertThat(result.output().path("guidance").asText())
                 .contains("do not present model-memory claims as latest facts");
     }
@@ -139,8 +142,12 @@ class SearchWebToolExecutorTest {
         assertThat(first.output().path("items").get(0).path("sourceAuthority").asText()).isEqualTo("official");
         assertThat(first.output().path("items").get(1).path("sourceAuthority").asText()).isEqualTo("secondary");
         assertThat(first.output().path("sourcePolicy").asText()).contains("official/high");
+        assertThat(first.evidenceRefs()).hasSize(2).allMatch(ref -> ref.matches("web:[a-f0-9]{64}"));
+        assertThat(first.output().path("items").get(0).path("evidenceRef").asText())
+                .isEqualTo(first.evidenceRefs().get(0));
         assertThat(second.output().path("cacheHit").asBoolean()).isTrue();
         assertThat(second.output().path("estimatedCreditsCharged").asInt()).isEqualTo(0);
+        assertThat(second.evidenceRefs()).containsExactlyElementsOf(first.evidenceRefs());
     }
 
     private SearchWebToolExecutor executor() {

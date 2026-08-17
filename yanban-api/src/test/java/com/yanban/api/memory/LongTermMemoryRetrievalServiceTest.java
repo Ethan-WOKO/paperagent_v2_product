@@ -414,6 +414,45 @@ class LongTermMemoryRetrievalServiceTest {
                 .doesNotContain("Old project", "Other project", "Other user");
     }
 
+    @Test
+    void snapshotsAllGovernedUserAndCurrentProjectMemoriesWithoutQueryRelevanceFiltering() {
+        String currentVersion = "a".repeat(64);
+        AgentLongTermMemory language = identified(memory(
+                "PREFERENCE", "Prefer concise Chinese answers.", "[]", "0.90"),
+                11L, Instant.parse("2026-08-17T10:00:00Z"));
+        AgentLongTermMemory unrelated = identified(memory(
+                "FACT", "The user studies radar signal processing.", "[]", "0.80"),
+                12L, Instant.parse("2026-08-17T09:00:00Z"));
+        AgentLongTermMemory project = identified(governedProjectMemory(
+                USER_ID, 7L, currentVersion, "This Project targets Java 17."),
+                13L, Instant.parse("2026-08-17T11:00:00Z"));
+        AgentLongTermMemory oldProject = identified(governedProjectMemory(
+                USER_ID, 7L, "b".repeat(64), "An old revision used Java 8."),
+                14L, Instant.parse("2026-08-17T12:00:00Z"));
+        when(memories.findGovernedUserCandidates(eq(USER_ID), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(language, unrelated));
+        when(memories.findGovernedProjectCandidates(eq(USER_ID), eq(7L), eq(currentVersion),
+                any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(project, oldProject));
+
+        LongTermMemorySnapshot snapshot = service.retrieveAllGoverned(USER_ID, 7L, currentVersion);
+
+        assertThat(snapshot.entries()).extracting(LongTermMemorySnapshot.Entry::id)
+                .containsExactly("11", "12", "13");
+        assertThat(snapshot.entries()).extracting(LongTermMemorySnapshot.Entry::content)
+                .containsExactly(
+                        "Prefer concise Chinese answers.",
+                        "The user studies radar signal processing.",
+                        "This Project targets Java 17.");
+        assertThat(snapshot.entries()).extracting(LongTermMemorySnapshot.Entry::scope)
+                .containsExactly("USER", "USER", "PROJECT");
+        assertThat(snapshot.entries()).extracting(LongTermMemorySnapshot.Entry::updatedAt)
+                .containsExactly(
+                        "2026-08-17T10:00:00Z",
+                        "2026-08-17T09:00:00Z",
+                        "2026-08-17T11:00:00Z");
+    }
+
     private AgentLongTermMemory memory(String type, String content, String tagsJson, String confidence) {
         return govern(new AgentLongTermMemory(
                 USER_ID,
@@ -453,6 +492,12 @@ class LongTermMemoryRetrievalServiceTest {
         ReflectionTestUtils.setField(memory, "provenanceType", AgentLongTermMemory.PROVENANCE_USER_MESSAGE);
         ReflectionTestUtils.setField(memory, "provenanceRef", "session:1:message:1");
         ReflectionTestUtils.setField(memory, "projectVersion", projectVersion);
+        return memory;
+    }
+
+    private AgentLongTermMemory identified(AgentLongTermMemory memory, Long id, Instant updatedAt) {
+        ReflectionTestUtils.setField(memory, "id", id);
+        ReflectionTestUtils.setField(memory, "updatedAt", updatedAt);
         return memory;
     }
 

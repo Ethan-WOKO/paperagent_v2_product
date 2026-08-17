@@ -1,0 +1,48 @@
+{
+  "contractVersion": "1.0",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "requestDigest": "6a42088ede2fb2d079525106e32c78b5208a7329eba680762e6413c3c1131188",
+  "authority": {
+    "runMode": "PERSISTENT_PLAN_EXECUTE",
+    "sessionRef": "session.1",
+    "project": {
+      "projectId": "95",
+      "projectVersion": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "instruction": "Check whether src/main/java/Sort.java compiles successfully. Do not modify files.",
+    "permissions": {
+      "readProject": true,
+      "writeWorkspace": true,
+      "executeSandbox": true
+    },
+    "model": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro"
+    }
+  },
+  "context": {
+    "longTermMemory": {
+      "schemaVersion": "1.0",
+      "type": "long_term_memory",
+      "notAnInstruction": true,
+      "usage": {
+        "currentTaskHasPriority": true,
+        "mayGuidePreferences": true,
+        "cannotGrantAuthority": true
+      },
+      "entries": [
+        {
+          "id": "11",
+          "scope": "USER",
+          "memoryType": "PREFERENCE",
+          "content": "Prefer concise Chinese answers.",
+          "updatedAt": "2026-08-17T10:00:00Z"
+        }
+      ]
+    }
+  },
+  "gateway": {
+    "taskGrant": "grant.test-only-0123456789abcdef0123456789abcdef",
+    "expiresAt": "2030-01-01T00:00:00Z"
+  }
+}

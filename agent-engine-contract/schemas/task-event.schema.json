@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/task-event.schema.json",
+  "title": "TaskEvent",
+  "oneOf": [
+    { "$ref": "#/$defs/status" },
+    { "$ref": "#/$defs/message" },
+    { "$ref": "#/$defs/question" },
+    { "$ref": "#/$defs/tool" },
+    { "$ref": "#/$defs/delivery" }
+  ],
+  "$defs": {
+    "baseProperties": {
+      "contractVersion": { "const": "1.0" },
+      "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+      "sequence": { "type": "integer", "minimum": 1 },
+      "occurredAt": { "type": "string", "format": "date-time" }
+    },
+    "problemOrNull": {
+      "oneOf": [
+        { "$ref": "problem.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "sequence", "occurredAt", "type", "state", "error"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "type": { "const": "status" },
+        "state": { "enum": ["queued", "running", "waiting_user", "succeeded", "failed", "cancelled"] },
+        "error": { "$ref": "#/$defs/problemOrNull" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "failed" } }, "required": ["state"] },
+          "then": { "properties": { "error": { "$ref": "problem.schema.json" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "succeeded" } }, "required": ["state"] },
+          "then": { "properties": { "error": { "type": "null" } } }
+        }
+      ]
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "sequence", "occurredAt", "type", "content"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "type": { "const": "message" },
+        "content": { "type": "string", "minLength": 1, "maxLength": 16000 }
+      }
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "sequence", "occurredAt", "type", "questionId", "text"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "type": { "const": "question" },
+        "questionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "sequence", "occurredAt", "type", "callId", "name", "state", "inputSummary", "outputSummary", "receiptRef"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "type": { "const": "tool" },
+        "callId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": {
+          "enum": ["project.list", "project.read", "workspace.write", "workspace.diff", "sandbox.execute", "registered.invoke", "project.publish"],
+          "description": "Stable contract name, independent of the model-visible tool name."
+        },
+        "registeredToolName": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "description": "Server-approved product tool name when name is registered.invoke."
+        },
+        "state": { "enum": ["requested", "running", "succeeded", "failed", "cancelled"] },
+        "inputSummary": { "type": "string", "maxLength": 1000 },
+        "outputSummary": { "type": ["string", "null"], "maxLength": 2000 },
+        "receiptRef": { "type": ["string", "null"], "maxLength": 256 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "name": { "const": "registered.invoke" } }, "required": ["name"] },
+          "then": {
+            "required": ["registeredToolName"],
+            "properties": { "registeredToolName": true }
+          }
+        }
+      ]
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "sequence", "occurredAt", "type", "conclusion", "receiptRefs"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "type": { "const": "delivery" },
+        "conclusion": { "type": "string", "minLength": 1, "maxLength": 16000 },
+        "receiptRefs": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "publication": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operationId", "baseProjectVersion", "publishedProjectVersion", "publishedRevisionId", "receiptRef"],
+          "properties": {
+            "operationId": { "type": "integer", "minimum": 1 },
+            "baseProjectVersion": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "publishedProjectVersion": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "publishedRevisionId": { "type": "integer", "minimum": 1 },
+            "receiptRef": { "type": "string", "minLength": 1, "maxLength": 256 }
+          }
+        }
+      }
+    }
+  }
+}

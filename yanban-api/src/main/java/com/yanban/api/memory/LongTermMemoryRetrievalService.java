@@ -70,6 +70,45 @@ public class LongTermMemoryRetrievalService {
         return retrieveFromCandidates(query, candidates, now);
     }
 
+    public LongTermMemorySnapshot retrieveAllGoverned(Long userId,
+                                                       Long projectId,
+                                                       String currentProjectVersion) {
+        if (userId == null) {
+            return LongTermMemorySnapshot.empty();
+        }
+        Instant now = Instant.now();
+        List<GovernedCandidate> selected = new ArrayList<>(scanGovernedCandidates(
+                userId,
+                null,
+                null,
+                AgentLongTermMemory.SCOPE_USER,
+                now,
+                page -> memories.findGovernedUserCandidates(userId, now, page)));
+        if (projectId != null && isProjectVersion(currentProjectVersion)) {
+            selected.addAll(scanGovernedCandidates(
+                    userId,
+                    projectId,
+                    currentProjectVersion,
+                    AgentLongTermMemory.SCOPE_PROJECT,
+                    now,
+                    page -> memories.findGovernedProjectCandidates(
+                            userId, projectId, currentProjectVersion, now, page)));
+        }
+        List<LongTermMemorySnapshot.Entry> entries = selected.stream()
+                .sorted(Comparator
+                        .comparing((GovernedCandidate item) -> scopeOrder(item.memory().getScope()))
+                        .thenComparing(item -> safeUpdatedAt(item.memory()), Comparator.reverseOrder())
+                        .thenComparing(item -> stableId(item.memory())))
+                .map(item -> new LongTermMemorySnapshot.Entry(
+                        idText(item.memory()),
+                        item.memory().getScope(),
+                        item.memory().getMemoryType(),
+                        item.memory().getContent(),
+                        safeUpdatedAt(item.memory()).toString()))
+                .toList();
+        return new LongTermMemorySnapshot(entries);
+    }
+
     /**
      * This entry point is intentionally not wired into the current Agent call chain. A caller must first resolve
      * both Project ownership and the current manifest version on the server.
@@ -422,6 +461,10 @@ public class LongTermMemoryRetrievalService {
 
     private long stableId(AgentLongTermMemory memory) {
         return memory.getId() == null ? Long.MAX_VALUE : memory.getId();
+    }
+
+    private int scopeOrder(String scope) {
+        return AgentLongTermMemory.SCOPE_USER.equals(scope) ? 0 : 1;
     }
 
     private String normalizeForDedup(String content) {

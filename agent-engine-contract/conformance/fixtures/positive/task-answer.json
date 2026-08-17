@@ -1,0 +1,7 @@
+{
+  "contractVersion": "1.0",
+  "clientRequestId": "answer.0123456789abcdef",
+  "questionId": "question.java-version",
+  "answer": "Use Java 17.",
+  "answerDigest": "dbb64d85e3f3987fda3a7a7b8755c0b9816143125ccc9b99e9be18e0f748d0c5"
+}

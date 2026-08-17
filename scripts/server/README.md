@@ -17,7 +17,30 @@ FOLLOW=1 bash /opt/paperagent/scripts/server/logs.sh api
 management scripts changed, rebuilds the Docker images, starts the updated
 services, and waits for the API and enabled infrastructure to become ready. It
 deliberately does not run `docker compose down -v`, so persistent data volumes
-are retained.
+are retained. The checkout must already be on the branch named by `BRANCH`
+(`main` by default); the script fails instead of updating a different branch.
+
+## ReAct Engine deployment
+
+The production stack runs `agent-engine-reactplan` only on the private Compose
+network. The API reaches it at `http://agent-engine-reactplan:8092`; no Engine
+port is published on the host. Add two independent random secrets to `.env`:
+
+```dotenv
+YANBAN_AGENT_REACTPLAN_ENABLED=true
+YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN=<at-least-32-random-characters>
+YANBAN_AGENT_ENGINE_GATEWAY_ENABLED=true
+YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_SECRET=<different-at-least-32-random-characters>
+DEEPSEEK_API_KEY=<server-side-model-key>
+COMPOSE_PROFILES=sandbox,reactplan
+```
+
+Engine task and event state is retained in the
+`agent_engine_reactplan_data` named volume. `status.sh` checks the private
+Engine with its service bearer. Do not publish port 8092 or copy either secret
+into frontend configuration. Use
+`FOLLOW=1 bash /opt/paperagent/scripts/server/logs.sh agent-engine-reactplan`
+to follow Engine logs.
 
 ## E2B sandbox deployment
 
@@ -64,5 +87,5 @@ bash /opt/paperagent/scripts/server/update.sh
 ```
 
 Use `bash /opt/paperagent/scripts/server/status.sh` to verify the application
-and the private Broker, and `SERVICE=sandbox-broker FOLLOW=1 bash
-/opt/paperagent/scripts/server/logs.sh` for Broker logs.
+and the private Broker, and `FOLLOW=1 bash
+/opt/paperagent/scripts/server/logs.sh sandbox-broker` for Broker logs.

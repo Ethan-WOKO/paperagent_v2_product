@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/gateway.schema.json",
+  "title": "ProductToolGatewayTypes",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\\\]+$"
+    },
+    "fileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sizeBytes", "sha256", "mediaType"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 10485760 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Display metadata only; an Engine must not infer parser, permission or execution semantics from it."
+        }
+      }
+    },
+    "fileList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "projectVersion", "files"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "projectVersion": { "$ref": "#/$defs/sha256" },
+        "files": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/fileEntry" }
+        }
+      }
+    },
+    "fileReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "path", "expectedSha256"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "expectedSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "fileRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "path", "sizeBytes", "sha256", "mediaType", "encoding", "content", "truncated"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 10485760 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Display metadata only; an Engine must not infer parser, permission or execution semantics from it."
+        },
+        "encoding": { "enum": ["utf-8"] },
+        "content": { "type": "string", "maxLength": 10485760 },
+        "truncated": { "const": false }
+      }
+    },
+    "workspaceWriteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "operation", "path", "baseSha256", "content"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "operation": { "enum": ["ADD", "MODIFY"] },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "baseSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "content": { "type": "string", "maxLength": 10485760 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "ADD" } }, "required": ["operation"] },
+          "then": { "properties": { "baseSha256": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "MODIFY" } }, "required": ["operation"] },
+          "then": { "properties": { "baseSha256": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
+    },
+    "workspaceWriteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "replayed", "operation", "path", "beforeSha256", "afterSha256", "sizeBytes"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "replayed": { "type": "boolean" },
+        "operation": { "enum": ["ADD", "MODIFY"] },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "beforeSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "afterSha256": { "$ref": "#/$defs/sha256" },
+        "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 10485760 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "ADD" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "MODIFY" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
+    },
+    "workspaceDiffEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "path", "beforeSha256", "afterSha256"],
+      "properties": {
+        "operation": { "enum": ["ADD", "MODIFY"] },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "beforeSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "afterSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "ADD" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "MODIFY" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
+    },
+    "workspaceDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "projectVersion", "changed", "entries"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "projectVersion": { "$ref": "#/$defs/sha256" },
+        "changed": { "type": "boolean" },
+        "entries": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/workspaceDiffEntry" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "changed": { "const": false } }, "required": ["changed"] },
+          "then": { "properties": { "entries": { "type": "array", "maxItems": 0 } } }
+        },
+        {
+          "if": { "properties": { "changed": { "const": true } }, "required": ["changed"] },
+          "then": { "properties": { "entries": { "type": "array", "minItems": 1 } } }
+        }
+      ]
+    },
+    "workspacePublishRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "receiptRef", "entries"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "receiptRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/workspaceDiffEntry" }
+        }
+      }
+    },
+    "workspacePublishResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "operationId", "baseProjectVersion", "publishedProjectVersion", "publishedRevisionId", "receiptRef"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "operationId": { "type": "integer", "minimum": 1 },
+        "baseProjectVersion": { "$ref": "#/$defs/sha256" },
+        "publishedProjectVersion": { "$ref": "#/$defs/sha256" },
+        "publishedRevisionId": { "type": "integer", "minimum": 1 },
+        "receiptRef": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "sandboxInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sandboxSubmit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "argv", "inputs", "timeoutMillis"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "argv": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/sandboxInput" }
+        },
+        "timeoutMillis": { "type": "integer", "minimum": 1000, "maximum": 300000 }
+      }
+    },
+    "sandboxView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "executionRef", "state", "receiptRef"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "executionRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "state": { "enum": ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"] },
+        "receiptRef": { "type": ["string", "null"], "maxLength": 256 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "enum": ["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"] } }, "required": ["state"] },
+          "then": { "properties": { "receiptRef": { "type": "string", "minLength": 1 } }, "required": ["receiptRef"] }
+        }
+      ]
+    }
+  }
+}

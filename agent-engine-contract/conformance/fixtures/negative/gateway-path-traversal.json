@@ -1,0 +1,5 @@
+{
+  "contractVersion": "1.0",
+  "path": "../private/secret.txt",
+  "expectedSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
