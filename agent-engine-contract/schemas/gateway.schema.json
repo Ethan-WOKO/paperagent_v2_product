@@ -160,11 +160,11 @@
       "allOf": [
         {
           "if": { "properties": { "changed": { "const": false } }, "required": ["changed"] },
-          "then": { "properties": { "entries": { "maxItems": 0 } } }
+          "then": { "properties": { "entries": { "type": "array", "maxItems": 0 } } }
         },
         {
           "if": { "properties": { "changed": { "const": true } }, "required": ["changed"] },
-          "then": { "properties": { "entries": { "minItems": 1 } } }
+          "then": { "properties": { "entries": { "type": "array", "minItems": 1 } } }
         }
       ]
     },
