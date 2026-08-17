@@ -10,11 +10,12 @@ const MAX_RECENT_TURNS = 4;
 const MAX_RECENT_CONTEXT_CHARACTERS = 8_000;
 const MAX_GROUNDING_REPAIRS = 2;
 const TERMINAL_SANDBOX = new Set(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"]);
+const SUPERSEDED_REGISTERED_TOOLS = new Set(["project_manifest", "project_read_file"]);
 const PROJECT_FILE_REFERENCE = /(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:java|kt|kts|groovy|scala|xml|gradle|properties|yaml|yml|json|toml|ini|cfg|conf|md|txt|py|js|jsx|ts|tsx|c|cc|cpp|cxx|h|hpp|cs|go|rs|rb|php|swift|sql|sh|ps1|bat|cmd)\b/gi;
 
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the current isolated Workspace manifest. It initially equals the frozen ProjectVersion and reflects later isolated Candidate writes without publishing them.", { type: "object", additionalProperties: false, properties: {} }),
-  functionTool("read_project_file", "Read one complete file from the current isolated Workspace using its current manifest hash. This can observe Candidate bytes after an isolated write.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" } } }),
+  functionTool("read_project_file", "Read all or a 1-based inclusive line range from one file in the current isolated Workspace using its current manifest hash. This can observe Candidate bytes after an isolated write.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" }, startLine: { type: "integer", minimum: 1, description: "Optional 1-based inclusive first line; defaults to 1." }, endLine: { type: "integer", minimum: 1, description: "Optional 1-based inclusive last line; defaults to the end of the file and must be >= startLine." } } }),
   functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Commands start at the Project root; every source path in argv must use its exact Project-relative input path. For a Java source in any subdirectory, prefer ['yanban-runner','java','path/to/File.java']. Use this to validate code before concluding.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
   functionTool("ask_user", "Pause and ask one necessary, concrete question.", { type: "object", additionalProperties: false, required: ["question"], properties: { question: { type: "string", minLength: 1, maxLength: 4000 } } })
 ];
@@ -371,14 +372,24 @@ export class AgentEngine {
     }
     if (call.name === "read_project_file") {
       const path = requireString(args.path, "path"); const expectedSha256 = requireString(args.expectedSha256, "expectedSha256");
+      const requestedRange = requestedLineRange(args);
       await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "requested", null, null);
       const result = await this.options.gateway.read(task.view.taskId, grant, path, expectedSha256, signal);
       this.options.validator.validate("gateway-fileRead", result);
+      const selected = selectLineRange(result.content, requestedRange);
+      if (!selected) {
+        await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "failed", "requested line range is outside the file", null);
+        task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+          status: "REJECTED", code: "PROJECT_FILE_LINE_RANGE_INVALID",
+          message: "The requested line range is invalid. Use 1-based lines, require endLine >= startLine, and choose a startLine that exists in the file."
+        }) });
+        return false;
+      }
       upsertRead(task.observations, result.path, result.sha256);
-      await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "succeeded", `read ${result.sizeBytes} bytes; sha256=${result.sha256}`, null);
+      await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "succeeded", `read lines ${selected.startLine}-${selected.endLine} from ${result.sizeBytes} bytes; sha256=${result.sha256}`, null);
       task.messages.push({
         role: "tool", toolCallId: call.id,
-        content: JSON.stringify({ path: result.path, sizeBytes: result.sizeBytes, sha256: result.sha256, mediaType: result.mediaType, encoding: result.encoding, content: result.content, truncated: result.truncated })
+        content: JSON.stringify({ path: result.path, sizeBytes: result.sizeBytes, sha256: result.sha256, mediaType: result.mediaType, encoding: result.encoding, startLine: selected.startLine, endLine: selected.endLine, content: selected.content, truncated: result.truncated })
       });
       return false;
     }
@@ -482,7 +493,7 @@ export class AgentEngine {
       if (receipt.status === "CANCELLED") throw new EngineProblem(409, problem("SANDBOX_CANCELLED", "cancelled", "Sandbox execution was cancelled", false, receipt.receiptRef));
       return false;
     }
-    if ((task.registeredTools ?? []).some((tool) => tool.function.name === call.name)) {
+    if (availableRegisteredToolSpecs(task).some((tool) => tool.function.name === call.name)) {
       if (args === null || Array.isArray(args) || typeof args !== "object") throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Registered tool arguments must be an object"));
       const requestDigest = digestObject({ toolName: call.name, arguments: args });
       const summary = `registeredTool=${call.name}; requestDigest=${requestDigest}`;
@@ -559,6 +570,30 @@ export class AgentEngine {
 function functionTool(name: string, description: string, parameters: unknown): RegisteredToolSpec { return { type: "function", function: { name, description, parameters } }; }
 function deterministicCallId(taskId: string, modelCall: number, ordinal: number): string { return `call.${sha256(`${taskId}:${modelCall}:${ordinal}`).slice(0, 40)}`; }
 function requireString(value: unknown, name: string): string { if (typeof value !== "string" || !value) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", `Tool argument ${name} must be a non-empty string`)); return value; }
+
+function requestedLineRange(args: Record<string, unknown>): { startLine?: number; endLine?: number } {
+  const startLine = args.startLine;
+  const endLine = args.endLine;
+  if ((startLine !== undefined && (!Number.isInteger(startLine) || (startLine as number) < 1))
+      || (endLine !== undefined && (!Number.isInteger(endLine) || (endLine as number) < 1))) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "File line ranges must be positive integers"));
+  }
+  return {
+    ...(startLine === undefined ? {} : { startLine: startLine as number }),
+    ...(endLine === undefined ? {} : { endLine: endLine as number })
+  };
+}
+
+function selectLineRange(
+  content: string, requested: { startLine?: number; endLine?: number }
+): { startLine: number; endLine: number; content: string } | undefined {
+  const lines = content.split(/\r\n|[\n\r\u2028\u2029]/);
+  const startLine = requested.startLine ?? 1;
+  const requestedEnd = requested.endLine ?? lines.length;
+  if (requestedEnd < startLine || startLine > lines.length) return undefined;
+  const endLine = Math.min(requestedEnd, lines.length);
+  return { startLine, endLine, content: lines.slice(startLine - 1, endLine).join("\n") };
+}
 
 function sandboxRequest(callId: string, args: Record<string, unknown>): SandboxRequest {
   const argv = args.argv; const inputs = args.inputs; const timeoutMillis = args.timeoutMillis;
@@ -740,8 +775,13 @@ function availableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
   return [
     ...MODEL_TOOLS,
     ...(task.authority.permissions.writeWorkspace ? WORKSPACE_MODEL_TOOLS : []),
-    ...(task.registeredTools ?? [])
+    ...availableRegisteredToolSpecs(task)
   ];
+}
+
+function availableRegisteredToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
+  return (task.registeredTools ?? []).filter((tool) =>
+    !SUPERSEDED_REGISTERED_TOOLS.has(tool.function.name));
 }
 
 function loadedToolSpecs(
