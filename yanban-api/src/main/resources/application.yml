@@ -31,6 +31,16 @@ logging:
 
 yanban:
   agent:
+    engine:
+      product:
+        mode: ${YANBAN_AGENT_ENGINE_MODE:legacy}
+        dsh-base-url: ${YANBAN_AGENT_ENGINE_DSH_BASE_URL:http://127.0.0.1:8095}
+        codex-base-url: ${YANBAN_AGENT_ENGINE_CODEX_BASE_URL:http://127.0.0.1:8094}
+        service-token: ${YANBAN_AGENT_ENGINE_SERVICE_TOKEN:}
+        connect-timeout: ${YANBAN_AGENT_ENGINE_CONNECT_TIMEOUT:3s}
+        request-timeout: ${YANBAN_AGENT_ENGINE_REQUEST_TIMEOUT:10s}
+        max-context-characters: ${YANBAN_AGENT_ENGINE_MAX_CONTEXT_CHARACTERS:12000}
+        max-recent-messages: ${YANBAN_AGENT_ENGINE_MAX_RECENT_MESSAGES:24}
     v2:
       workspace:
         root: ${YANBAN_AGENT_V2_WORKSPACE_ROOT:data/agent-v2-workspaces}
