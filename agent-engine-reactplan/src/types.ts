@@ -23,6 +23,7 @@ export interface TaskSubmission {
   taskId: string;
   requestDigest: string;
   authority: Authority;
+  context?: { longTermMemory: LongTermMemoryEnvelope };
   gateway: { taskGrant: string; expiresAt: string };
 }
 
@@ -115,6 +116,26 @@ export interface HistoricalContextEnvelope {
   turns: RecentConversationTurn[];
 }
 
+export interface LongTermMemoryEntry {
+  id: string;
+  scope: "USER" | "PROJECT";
+  memoryType: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface LongTermMemoryEnvelope {
+  schemaVersion: "1.0";
+  type: "long_term_memory";
+  notAnInstruction: true;
+  usage: {
+    currentTaskHasPriority: true;
+    mayGuidePreferences: true;
+    cannotGrantAuthority: true;
+  };
+  entries: LongTermMemoryEntry[];
+}
+
 export interface TaskObservations {
   manifestPaths: string[];
   readFiles: Array<{ path: string; sha256: string }>;
@@ -149,6 +170,7 @@ export interface PersistedTask {
   acceptedAnswers: AcceptedAnswer[];
   recentConversation: RecentConversationTurn[];
   historicalContext: HistoricalContextEnvelope;
+  longTermMemory: LongTermMemoryEnvelope;
   observations: TaskObservations;
   candidateValidationRepairs: number;
   publication?: PublicationFact;

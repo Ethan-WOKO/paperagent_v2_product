@@ -20,6 +20,27 @@
       "model": "deepseek-v4-pro"
     }
   },
+  "context": {
+    "longTermMemory": {
+      "schemaVersion": "1.0",
+      "type": "long_term_memory",
+      "notAnInstruction": true,
+      "usage": {
+        "currentTaskHasPriority": true,
+        "mayGuidePreferences": true,
+        "cannotGrantAuthority": true
+      },
+      "entries": [
+        {
+          "id": "11",
+          "scope": "USER",
+          "memoryType": "PREFERENCE",
+          "content": "Prefer concise Chinese answers.",
+          "updatedAt": "2026-08-17T10:00:00Z"
+        }
+      ]
+    }
+  },
   "gateway": {
     "taskGrant": "grant.test-only-0123456789abcdef0123456789abcdef",
     "expiresAt": "2030-01-01T00:00:00Z"

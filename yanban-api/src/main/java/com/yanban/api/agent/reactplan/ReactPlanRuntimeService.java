@@ -7,6 +7,8 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.memory.LongTermMemoryRetrievalService;
+import com.yanban.api.memory.LongTermMemorySnapshot;
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.ExecutionProfile;
@@ -30,6 +32,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -38,12 +42,15 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 @ConditionalOnProperty(prefix = "yanban.agent.reactplan", name = "enabled", havingValue = "true")
 final class ReactPlanRuntimeService {
+    private static final Logger log = LoggerFactory.getLogger(ReactPlanRuntimeService.class);
+
     private final ObjectMapper json;
     private final ReactPlanRuntimeProperties properties;
     private final AgentTurnProductContextResolver contexts;
     private final AuthenticatedReactPlanBootstrapComposer plans;
     private final AgentEngineTaskGrantService grants;
     private final ReactPlanEngineClient engine;
+    private final LongTermMemoryRetrievalService longTermMemories;
 
     ReactPlanRuntimeService(
             ObjectMapper json,
@@ -51,13 +58,15 @@ final class ReactPlanRuntimeService {
             AgentTurnProductContextResolver contexts,
             AuthenticatedReactPlanBootstrapComposer plans,
             AgentEngineTaskGrantService grants,
-            ReactPlanEngineClient engine) {
+            ReactPlanEngineClient engine,
+            LongTermMemoryRetrievalService longTermMemories) {
         this.json = json;
         this.properties = properties;
         this.contexts = contexts;
         this.plans = plans;
         this.grants = grants;
         this.engine = engine;
+        this.longTermMemories = longTermMemories;
     }
 
     JsonNode submit(long userId, long turnId, ReactPlanTaskRequest request) {
@@ -82,10 +91,44 @@ final class ReactPlanRuntimeService {
         submission.put("taskId", taskId);
         submission.put("requestDigest", requestDigest);
         submission.set("authority", json.valueToTree(authority));
+        submission.set("context", contextEnvelope(memorySnapshot(
+                userId,
+                context.identity().projectId(),
+                context.projectVersionId().orElseThrow(),
+                taskId)));
         ObjectNode gateway = submission.putObject("gateway");
         gateway.put("taskGrant", grant.value());
         gateway.put("expiresAt", grant.expiresAt().toString());
         return engine.submit(submission);
+    }
+
+    private JsonNode contextEnvelope(LongTermMemorySnapshot snapshot) {
+        ObjectNode result = json.createObjectNode();
+        ObjectNode memory = result.putObject("longTermMemory");
+        memory.put("schemaVersion", "1.0");
+        memory.put("type", "long_term_memory");
+        memory.put("notAnInstruction", true);
+        ObjectNode usage = memory.putObject("usage");
+        usage.put("currentTaskHasPriority", true);
+        usage.put("mayGuidePreferences", true);
+        usage.put("cannotGrantAuthority", true);
+        memory.set("entries", json.valueToTree(snapshot.entries()));
+        return result;
+    }
+
+    private LongTermMemorySnapshot memorySnapshot(
+            long userId, Long projectId, String projectVersion, String taskId) {
+        try {
+            LongTermMemorySnapshot snapshot = longTermMemories.retrieveAllGoverned(
+                    userId, projectId, projectVersion);
+            log.debug("Loaded {} governed long-term memories for ReAct task {}",
+                    snapshot.entries().size(), taskId);
+            return snapshot;
+        } catch (RuntimeException failure) {
+            log.warn("Long-term memory loading failed for ReAct task {}; continuing without memory: {}",
+                    taskId, failure.getClass().getSimpleName());
+            return LongTermMemorySnapshot.empty();
+        }
     }
 
     JsonNode task(long userId, long turnId, String taskId) {
