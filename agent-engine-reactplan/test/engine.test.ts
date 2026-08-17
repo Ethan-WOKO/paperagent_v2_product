@@ -211,54 +211,34 @@ describe("AgentEngine", () => {
     expect((await engine.events(current.taskId)).filter((event) => event.type === "tool")).toHaveLength(0);
   });
 
-  it("rejects an unobserved Project filename and lets the model repair its conclusion", async () => {
+  it("delivers filename examples without heuristic Project-grounding repair", async () => {
     const provider = new ScriptedProvider([
       tool("list_project_files", {}),
-      { content: "The pom.xml declares a missing dependency.", toolCalls: [] },
-      { content: "Only Sort.java was observed in the Project manifest; dependency configuration was not inspected.", toolCalls: [] }
+      { content: "Oracle dev.java documentation shows the example command java Hello.java.", toolCalls: [] }
     ]);
     const engine = await createEngine(provider, new FakeGateway());
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
     const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
-    expect(delivery?.type === "delivery" ? delivery.conclusion : "").not.toContain("pom.xml");
-    expect(provider.requests).toHaveLength(4);
-    expect(provider.requests[3]!.messages.some((message) =>
-      message.role === "user" && message.content?.includes("unobserved Project files: pom.xml"))).toBe(true);
-    expect(provider.requests[3]!.messages.some((message) =>
-      message.role === "user" && message.content?.includes("remove it and do not inspect unrelated Project data"))).toBe(true);
+    expect(delivery?.type === "delivery" ? delivery.conclusion : "")
+      .toBe("Oracle dev.java documentation shows the example command java Hello.java.");
+    expect(provider.requests).toHaveLength(3);
   });
 
-  it("fails closed after two grounding repairs instead of publishing unsupported files", async () => {
-    const provider = new ScriptedProvider([
-      tool("list_project_files", {}),
-      { content: "pom.xml proves the dependency is present.", toolCalls: [] },
-      { content: "build.gradle proves the dependency is present.", toolCalls: [] },
-      { content: "settings.xml proves the dependency is present.", toolCalls: [] }
-    ]);
-    const engine = await createEngine(provider, new FakeGateway());
-    await engine.submit(submission());
-    await waitFor(() => engine.get(taskId).state === "failed");
-
-    expect(engine.get(taskId).error).toMatchObject({ code: "MODEL_GROUNDING_FAILED", category: "model" });
-    expect((await engine.events(taskId)).some((event) => event.type === "delivery")).toBe(false);
-  });
-
-  it("requires a new validation run for a hypothetical compile fix", async () => {
+  it("does not block a final answer through textual compile-outcome heuristics", async () => {
     const provider = new ScriptedProvider([
       tool("execute_in_sandbox", { argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }),
-      { content: "移除这一行后，Sort.java 即可正常编译。", toolCalls: [] },
-      { content: "当前观察到 Sort.java 编译失败；移除该导入是预期修复，但仍需对修改后的文件重新编译确认。", toolCalls: [] }
+      { content: "移除这一行后，Sort.java 即可正常编译。", toolCalls: [] }
     ]);
     const engine = await createEngine(provider, new PollingFailedGateway());
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
     const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
-    expect(delivery?.type === "delivery" ? delivery.conclusion : "").toContain("仍需对修改后的文件重新编译确认");
-    expect(provider.requests[3]!.messages.some((message) => message.role === "user"
-      && message.content?.includes("hypothetical code change"))).toBe(true);
+    expect(delivery?.type === "delivery" ? delivery.conclusion : "")
+      .toBe("移除这一行后，Sort.java 即可正常编译。");
+    expect(provider.requests).toHaveLength(3);
   });
 
   it("restores the frozen recent conversation instead of rebuilding it on replay", async () => {
