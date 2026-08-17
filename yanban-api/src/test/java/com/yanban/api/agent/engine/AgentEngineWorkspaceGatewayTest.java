@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.yanban.api.agent.engine.AgentEngineGatewayDtos.FileReadRequest;
+import com.yanban.api.agent.engine.AgentEngineGatewayDtos.SandboxInput;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnProjectVersionSourceFactory;
@@ -83,7 +84,39 @@ class AgentEngineWorkspaceGatewayTest {
                         failure -> assertThat(failure.code()).isEqualTo("TASK_AUTHORITY_CONFLICT"));
     }
 
+    @Test
+    void canonicalizesReceiptInputsAsASetAndRejectsDuplicatePaths() {
+        byte[] alpha = "class Alpha {}\n".getBytes(StandardCharsets.UTF_8);
+        byte[] zeta = "class Zeta {}\n".getBytes(StandardCharsets.UTF_8);
+        String alphaHash = sha256(alpha);
+        String zetaHash = sha256(zeta);
+        AgentEngineWorkspaceGateway gateway = gateway(List.of(
+                snapshot("Zeta.java", zeta, zetaHash),
+                snapshot("Alpha.java", alpha, alphaHash)));
+
+        var reversed = gateway.resolveInputs(authority(), List.of(
+                new SandboxInput("Zeta.java", zetaHash),
+                new SandboxInput("Alpha.java", alphaHash)));
+        var canonical = gateway.resolveInputs(authority(), List.of(
+                new SandboxInput("Alpha.java", alphaHash),
+                new SandboxInput("Zeta.java", zetaHash)));
+
+        assertThat(reversed.inputs()).extracting(AgentEngineGatewayDtos.ReceiptInput::path)
+                .containsExactly("Alpha.java", "Zeta.java");
+        assertThat(reversed.inputs()).isEqualTo(canonical.inputs());
+        assertThat(reversed.inputFingerprint()).isEqualTo(canonical.inputFingerprint());
+        assertThatThrownBy(() -> gateway.resolveInputs(authority(), List.of(
+                new SandboxInput("Alpha.java", alphaHash),
+                new SandboxInput("Alpha.java", alphaHash))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo("SANDBOX_INPUTS_INVALID"));
+    }
+
     private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {
+        return gateway(List.of(snapshot("Sort.java", content, hash)));
+    }
+
+    private AgentEngineWorkspaceGateway gateway(List<ProjectFileSnapshot> snapshots) {
         AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
         AuthenticatedAgentTurnProjectVersionSourceFactory sources =
                 mock(AuthenticatedAgentTurnProjectVersionSourceFactory.class);
@@ -93,14 +126,17 @@ class AgentEngineWorkspaceGatewayTest {
         when(contexts.resolve(11L, 12L)).thenReturn(context);
         when(sources.create(11L, 12L)).thenReturn(version -> {
             assertThat(version).isEqualTo(new ProjectVersionRef("14", VERSION));
-            return new ProjectVersionSnapshot(version, List.of(new ProjectFileSnapshot(
-                    new ProjectPath("Sort.java"), content,
-                    new ContentHash("sha256", hash), Map.of())), Map.of());
+            return new ProjectVersionSnapshot(version, snapshots, Map.of());
         });
         EngineGatewayProperties properties = new EngineGatewayProperties();
         properties.setWorkspaceRoot(temporary.toString());
         return new AgentEngineWorkspaceGateway(
                 contexts, sources, new ProjectStorageProperties(), properties);
+    }
+
+    private static ProjectFileSnapshot snapshot(String path, byte[] content, String hash) {
+        return new ProjectFileSnapshot(new ProjectPath(path), content,
+                new ContentHash("sha256", hash), Map.of());
     }
 
     private static EngineTaskAuthority authority() {
