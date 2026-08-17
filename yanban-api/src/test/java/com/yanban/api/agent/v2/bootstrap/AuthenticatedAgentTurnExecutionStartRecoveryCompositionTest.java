@@ -1,10 +1,8 @@
 package com.yanban.api.agent.v2.bootstrap;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolutionCode;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolutionException;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
-import com.yanban.api.agent.v2.persistence.ProductPlanBootstrapRepositoryAdapter;
 import io.paperagent.v2.persistence.ExecutionStartRecoveryRepository;
 import io.paperagent.v2.persistence.ExecutionStartRepository;
 import io.paperagent.v2.persistence.LeaseRepository;
@@ -19,11 +17,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.ApplicationContext;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
@@ -51,23 +46,12 @@ import static org.mockito.Mockito.when;
                 + "MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000"
 })
 @Import({
-        AgentV2PlanBootstrapConfiguration.class,
         AuthenticatedAgentTurnPlanBootstrapComposer.class,
         AuthenticatedAgentTurnExecutionStartRecoveryComposer.class,
-        AuthenticatedAgentTurnExecutionStartRecoveryCompositionTest
-                .PersistenceSlice.class
+        AuthenticatedBootstrapCompositionTestSlice.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AuthenticatedAgentTurnExecutionStartRecoveryCompositionTest {
-    @TestConfiguration
-    @ComponentScan(basePackageClasses = ProductPlanBootstrapRepositoryAdapter.class)
-    static class PersistenceSlice {
-        @Bean
-        ObjectMapper objectMapper() {
-            return new ObjectMapper();
-        }
-    }
-
     @MockBean
     private AgentTurnProductContextResolver contexts;
 
