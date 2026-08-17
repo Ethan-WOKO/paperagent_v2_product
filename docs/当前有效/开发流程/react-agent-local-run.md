@@ -117,6 +117,22 @@ $env:PAPERAGENT_ACCESS_TOKEN = "paste-your-product-access-token"
 .\agent-engine-reactplan\scripts\submit-sort-task.ps1 -SessionId 123
 ```
 
+## 有限对话与事实约束验证
+
+Issue #163 后，在同一个 Project session 连续新建两个 ReAct task：
+
+1. 第一轮：`检查 Sort.java，看看其能否正常编译。`
+2. 第二轮：`继续刚才的检查，只告诉我最终原因和依据。`
+
+第二轮应能使用第一轮的用户任务和最终结论，但仍须重新通过当前 task 的 Project 工具
+确认文件事实；历史结论不能替代当前 ProjectVersion 证据。切换 session 或 Project 后，
+不应看到第一轮内容。
+
+对只包含 `Sort.java` 的 Project，最终回答不得声称 `pom.xml`、`build.gradle` 等未在
+manifest 或其他 Project 工具结果中出现的文件声明了依赖。Engine 会拒绝这种候选
+回答并允许模型在同一 task 内修正；连续无法修正时以 `MODEL_GROUNDING_FAILED`
+失败闭合。
+
 ## 恢复验证
 
 任务运行中停止 Engine，再用完全相同的 `AGENT_ENGINE_DATA_DIR` 和环境变量启动。然后用完全相同的 session、`clientRequestId` 和请求内容再次提交：Java 会重用同一个 Turn 和 Plan，并签发新的短期 grant；Engine 会识别同一 task/digest、恢复执行而不新建任务。同一个 `clientRequestId` 改变内容会返回 409。重新请求状态或 SSE 时 sequence 不会倒退或重复。短期 grant 不写入磁盘，因此恢复必须经过这次认证重放，不能绕过产品权限。

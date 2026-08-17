@@ -96,6 +96,24 @@ export interface ModelProvider { complete(request: ModelRequest): Promise<ModelR
 export interface PendingCall extends ModelToolCall { ordinal: number }
 export interface AcceptedAnswer { clientRequestId: string; questionId: string; answerDigest: string }
 
+export interface RecentConversationTurn {
+  instruction: string;
+  conclusion: string;
+  projectVersion: string;
+  completedAt: string;
+}
+
+export interface TaskObservations {
+  manifestPaths: string[];
+  readFiles: Array<{ path: string; sha256: string }>;
+  toolPaths: string[];
+  sandboxRuns: Array<{
+    argv: string[];
+    status: Receipt["status"];
+    inputs: Array<{ path: string; sha256: string }>;
+  }>;
+}
+
 export interface PersistedTask {
   authority: Authority;
   view: TaskView;
@@ -107,6 +125,9 @@ export interface PersistedTask {
   pendingCalls: PendingCall[];
   nextPendingCall: number;
   acceptedAnswers: AcceptedAnswer[];
+  recentConversation: RecentConversationTurn[];
+  observations: TaskObservations;
+  groundingRepairs: number;
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;
 }
