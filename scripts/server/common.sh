@@ -34,6 +34,12 @@ sandbox_enabled() {
   is_true "$(env_value YANBAN_SANDBOX_ENABLED)"
 }
 
+reactplan_enabled() {
+  local value
+  value="$(env_value YANBAN_AGENT_REACTPLAN_ENABLED)"
+  is_true "${value:-true}"
+}
+
 require_env_value() {
   local key="$1"
   local value
@@ -42,7 +48,26 @@ require_env_value() {
   [[ "$value" != replace-* && "$value" != your_* ]] || fail "$key still contains an example value"
 }
 
+require_secret_min_length() {
+  local key="$1"
+  local minimum="$2"
+  local value
+  value="$(env_value "$key")"
+  [[ -n "$value" && "$value" != replace-* && "$value" != your_* ]] ||
+    fail "$key must be replaced with a deployment secret"
+  [[ ${#value} -ge $minimum ]] || fail "$key must contain at least $minimum characters"
+}
+
 validate_deployment_env() {
+  if reactplan_enabled; then
+    is_true "$(env_value YANBAN_AGENT_ENGINE_GATEWAY_ENABLED)" ||
+      fail "YANBAN_AGENT_ENGINE_GATEWAY_ENABLED must be true when ReAct is enabled"
+    require_secret_min_length YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN 32
+    require_secret_min_length YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_SECRET 32
+    require_env_value DEEPSEEK_API_KEY
+    sandbox_enabled || fail "YANBAN_SANDBOX_ENABLED must be true for the production ReAct stack"
+  fi
+
   if ! sandbox_enabled; then
     return
   fi
@@ -74,7 +99,10 @@ validate_deployment_env() {
 compose() {
   local profile_args=()
   if sandbox_enabled; then
-    profile_args=(--profile sandbox)
+    profile_args+=(--profile sandbox)
+  fi
+  if reactplan_enabled; then
+    profile_args+=(--profile reactplan)
   fi
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "${profile_args[@]}" "$@"
 }
@@ -135,7 +163,13 @@ wait_for_api_health() {
 
 wait_for_stack() {
   local service
-  for service in mysql redis elasticsearch kafka minio api frontend; do
+  for service in mysql redis elasticsearch kafka minio; do
+    wait_for_service "$service" 240
+  done
+  if reactplan_enabled; then
+    wait_for_service agent-engine-reactplan 240
+  fi
+  for service in api frontend; do
     wait_for_service "$service" 240
   done
   if sandbox_enabled; then

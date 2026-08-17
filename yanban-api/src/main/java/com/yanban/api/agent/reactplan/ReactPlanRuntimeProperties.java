@@ -21,12 +21,22 @@ public class ReactPlanRuntimeProperties {
         return !enabled || engineServiceToken != null && engineServiceToken.length() >= 32;
     }
 
-    @AssertTrue(message = "ReAct Engine origin must use loopback HTTP(S)")
+    @AssertTrue(message = "ReAct Engine origin must use loopback HTTP(S) or the fixed Compose service")
     public boolean isEngineOriginSafe() {
         if (engineOrigin == null || engineOrigin.getHost() == null) return false;
         String host = engineOrigin.getHost();
-        return ("http".equals(engineOrigin.getScheme()) || "https".equals(engineOrigin.getScheme()))
-                && ("127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host) || "::1".equals(host));
+        boolean loopback = "127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host) || "::1".equals(host);
+        boolean compose = "agent-engine-reactplan".equalsIgnoreCase(host);
+        boolean safeScheme = loopback
+                ? "http".equals(engineOrigin.getScheme()) || "https".equals(engineOrigin.getScheme())
+                : compose && "http".equals(engineOrigin.getScheme());
+        String path = engineOrigin.getPath();
+        return safeScheme
+                && engineOrigin.getPort() == 8092
+                && engineOrigin.getUserInfo() == null
+                && engineOrigin.getQuery() == null
+                && engineOrigin.getFragment() == null
+                && (path == null || path.isEmpty() || "/".equals(path));
     }
 
     public boolean isEnabled() { return enabled; }

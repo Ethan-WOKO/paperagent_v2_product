@@ -28,6 +28,10 @@ describe("Engine HTTP control plane", () => {
     const server = createEngineServer(engine, token); servers.push(server);
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
     const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    expect((await fetch(`${origin}/health`)).status).toBe(401);
+    const health = await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${token}` } });
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ status: "UP" });
     expect((await fetch(`${origin}/v1/tasks/${taskId}`)).status).toBe(401);
     const submitted = await fetch(`${origin}/v1/tasks`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(submission()) });
     expect(submitted.status).toBe(202);
