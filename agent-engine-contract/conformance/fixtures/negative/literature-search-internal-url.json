@@ -1,0 +1,33 @@
+{
+  "contractVersion": "1.1",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "clientRequestId": "call.literatureoversize2",
+  "requestDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "searchRef": "search.4444444444444444444444444444444444444444444444444444444444444444",
+  "replayed": false,
+  "query": "agent reliability",
+  "maxResults": 5,
+  "yearFrom": null,
+  "results": [
+    {
+      "citationId": "unsafe",
+      "title": "Unsafe internal URL",
+      "authors": [],
+      "year": null,
+      "venue": null,
+      "doi": null,
+      "arxivId": null,
+      "openAlexId": null,
+      "url": "file:///etc/passwd",
+      "abstract": null,
+      "source": "internal",
+      "score": 0,
+      "bibtex": null,
+      "metadataRiskLevel": "HIGH"
+    }
+  ],
+  "rawCandidateCount": 1,
+  "uniqueCandidateCount": 1,
+  "warnings": [],
+  "truncated": false
+}

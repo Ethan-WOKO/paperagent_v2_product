@@ -1,0 +1,25 @@
+{
+  "contractVersion": "1.1",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "clientRequestId": "call.knowledge0123456789",
+  "requestDigest": "6046d33755ecf29c595fc484d26a7094a9dde273edfeb0e418452168e88465b8",
+  "searchRef": "search.1111111111111111111111111111111111111111111111111111111111111111",
+  "replayed": false,
+  "query": "可恢复 Agent 的幂等执行",
+  "maxResults": 5,
+  "projectVersion": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "results": [
+    {
+      "citationId": "agent-notes.md#chunk-3",
+      "documentRef": "knowledge.doc_42",
+      "filename": "agent-notes.md",
+      "chunkIndex": 3,
+      "excerpt": "恢复时复用已持久化的工具结果，不重复产生外部副作用。",
+      "score": 1.72,
+      "scoreBand": "high",
+      "scope": "PROJECT",
+      "sourceType": "USER_UPLOAD"
+    }
+  ],
+  "truncated": false
+}

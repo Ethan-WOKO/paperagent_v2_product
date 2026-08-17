@@ -1,0 +1,33 @@
+{
+  "contractVersion": "1.1",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "clientRequestId": "call.literature01234567",
+  "requestDigest": "3b11ca8a2c0583f293734a7cfc4a1c2ab879967279c203d7d072cfed8c2df42b",
+  "searchRef": "search.2222222222222222222222222222222222222222222222222222222222222222",
+  "replayed": false,
+  "query": "reliable tool-using language model agents",
+  "maxResults": 8,
+  "yearFrom": 2022,
+  "results": [
+    {
+      "citationId": "doi:10.0000/example.2024.1",
+      "title": "Reliable Tool-Using Language Model Agents",
+      "authors": ["Alice Example", "Bob Example"],
+      "year": 2024,
+      "venue": "Example Conference",
+      "doi": "10.0000/example.2024.1",
+      "arxivId": null,
+      "openAlexId": "W1234567890",
+      "url": "https://doi.org/10.0000/example.2024.1",
+      "abstract": "A bounded example abstract for contract validation.",
+      "source": "openalex",
+      "score": 0.91,
+      "bibtex": "@article{Example2024Reliable, title={Reliable Tool-Using Language Model Agents}, year={2024}}",
+      "metadataRiskLevel": "LOW"
+    }
+  ],
+  "rawCandidateCount": 12,
+  "uniqueCandidateCount": 9,
+  "warnings": ["LITERATURE_SOURCE_PARTIAL"],
+  "truncated": true
+}

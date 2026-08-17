@@ -7,6 +7,10 @@
     { "file": "fixtures/positive/gateway-file-list.json", "schema": "gateway.schema.json", "definition": "fileList" },
     { "file": "fixtures/positive/gateway-file-read-request.json", "schema": "gateway.schema.json", "definition": "fileReadRequest" },
     { "file": "fixtures/positive/gateway-sandbox-submit.json", "schema": "gateway.schema.json", "definition": "sandboxSubmit" },
+    { "file": "fixtures/positive/gateway-knowledge-search-request.json", "schema": "product-search.schema.json", "definition": "knowledgeSearchRequest" },
+    { "file": "fixtures/positive/gateway-knowledge-search-response.json", "schema": "product-search.schema.json", "definition": "knowledgeSearchResponse" },
+    { "file": "fixtures/positive/gateway-literature-search-request.json", "schema": "product-search.schema.json", "definition": "literatureSearchRequest" },
+    { "file": "fixtures/positive/gateway-literature-search-response.json", "schema": "product-search.schema.json", "definition": "literatureSearchResponse" },
     { "file": "fixtures/positive/receipt.json", "schema": "receipt.schema.json" }
   ],
   "negative": [
@@ -14,6 +18,10 @@
     { "file": "fixtures/negative/task-answer-invalid-digest.json", "schema": "task-answer.schema.json" },
     { "file": "fixtures/negative/gateway-path-traversal.json", "schema": "gateway.schema.json", "definition": "fileReadRequest" },
     { "file": "fixtures/negative/tool-event-raw-input.json", "schema": "task-event.schema.json" },
-    { "file": "fixtures/negative/receipt-absolute-path.json", "schema": "receipt.schema.json" }
+    { "file": "fixtures/negative/receipt-absolute-path.json", "schema": "receipt.schema.json" },
+    { "file": "fixtures/negative/knowledge-search-query-oversized.json", "schema": "product-search.schema.json", "definition": "knowledgeSearchRequest" },
+    { "file": "fixtures/negative/knowledge-search-results-oversized.json", "schema": "product-search.schema.json", "definition": "knowledgeSearchResponse" },
+    { "file": "fixtures/negative/literature-search-max-results.json", "schema": "product-search.schema.json", "definition": "literatureSearchRequest" },
+    { "file": "fixtures/negative/literature-search-internal-url.json", "schema": "product-search.schema.json", "definition": "literatureSearchResponse" }
   ]
 }

@@ -1,0 +1,8 @@
+{
+  "contractVersion": "1.1",
+  "clientRequestId": "call.literature01234567",
+  "requestDigest": "3b11ca8a2c0583f293734a7cfc4a1c2ab879967279c203d7d072cfed8c2df42b",
+  "query": "reliable tool-using language model agents",
+  "maxResults": 8,
+  "yearFrom": 2022
+}

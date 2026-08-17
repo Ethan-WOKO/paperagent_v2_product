@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/product-search.schema.json",
+  "title": "ProductSearchGatewayTypes",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+    "callId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+    "query": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+    "maxResults": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "knowledgeSearchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "query", "maxResults"],
+      "properties": {
+        "contractVersion": { "const": "1.1" },
+        "clientRequestId": { "$ref": "#/$defs/callId" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "query": { "$ref": "#/$defs/query" },
+        "maxResults": { "$ref": "#/$defs/maxResults" }
+      }
+    },
+    "literatureSearchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "query", "maxResults", "yearFrom"],
+      "properties": {
+        "contractVersion": { "const": "1.1" },
+        "clientRequestId": { "$ref": "#/$defs/callId" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "query": { "$ref": "#/$defs/query" },
+        "maxResults": { "$ref": "#/$defs/maxResults" },
+        "yearFrom": {
+          "type": ["integer", "null"],
+          "minimum": 1000,
+          "maximum": 3000
+        }
+      }
+    },
+    "knowledgeItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["citationId", "documentRef", "filename", "chunkIndex", "excerpt", "score", "scoreBand", "scope", "sourceType"],
+      "properties": {
+        "citationId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "documentRef": { "type": "string", "pattern": "^knowledge\\.[A-Za-z0-9_-]{1,120}$" },
+        "filename": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "chunkIndex": { "type": "integer", "minimum": 0, "maximum": 10000000 },
+        "excerpt": { "type": "string", "maxLength": 4000 },
+        "score": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+        "scoreBand": { "enum": ["high", "medium", "low", "unknown"] },
+        "scope": { "enum": ["PUBLIC", "USER", "PROJECT"] },
+        "sourceType": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "knowledgeSearchResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "clientRequestId", "requestDigest", "searchRef", "replayed", "query", "maxResults", "projectVersion", "results", "truncated"],
+      "properties": {
+        "contractVersion": { "const": "1.1" },
+        "taskId": { "$ref": "#/$defs/taskId" },
+        "clientRequestId": { "$ref": "#/$defs/callId" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "searchRef": { "type": "string", "pattern": "^search\\.[a-f0-9]{64}$" },
+        "replayed": { "type": "boolean" },
+        "query": { "$ref": "#/$defs/query" },
+        "maxResults": { "$ref": "#/$defs/maxResults" },
+        "projectVersion": { "$ref": "#/$defs/sha256" },
+        "results": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/knowledgeItem" }
+        },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "literatureItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["citationId", "title", "authors", "year", "venue", "doi", "arxivId", "openAlexId", "url", "abstract", "source", "score", "bibtex", "metadataRiskLevel"],
+      "properties": {
+        "citationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "authors": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "year": { "type": ["integer", "null"], "minimum": 1000, "maximum": 3000 },
+        "venue": { "type": ["string", "null"], "maxLength": 512 },
+        "doi": { "type": ["string", "null"], "maxLength": 256 },
+        "arxivId": { "type": ["string", "null"], "maxLength": 128 },
+        "openAlexId": { "type": ["string", "null"], "maxLength": 128 },
+        "url": {
+          "type": ["string", "null"],
+          "maxLength": 2048,
+          "pattern": "^https?://[^\\s]+$"
+        },
+        "abstract": { "type": ["string", "null"], "maxLength": 2000 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bibtex": { "type": ["string", "null"], "maxLength": 4000 },
+        "metadataRiskLevel": { "enum": ["LOW", "MEDIUM", "HIGH", "UNKNOWN"] }
+      }
+    },
+    "literatureSearchResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "clientRequestId", "requestDigest", "searchRef", "replayed", "query", "maxResults", "yearFrom", "results", "rawCandidateCount", "uniqueCandidateCount", "warnings", "truncated"],
+      "properties": {
+        "contractVersion": { "const": "1.1" },
+        "taskId": { "$ref": "#/$defs/taskId" },
+        "clientRequestId": { "$ref": "#/$defs/callId" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "searchRef": { "type": "string", "pattern": "^search\\.[a-f0-9]{64}$" },
+        "replayed": { "type": "boolean" },
+        "query": { "$ref": "#/$defs/query" },
+        "maxResults": { "$ref": "#/$defs/maxResults" },
+        "yearFrom": { "type": ["integer", "null"], "minimum": 1000, "maximum": 3000 },
+        "results": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/literatureItem" }
+        },
+        "rawCandidateCount": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "uniqueCandidateCount": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "warnings": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,95}$" }
+        },
+        "truncated": { "type": "boolean" }
+      }
+    }
+  }
+}

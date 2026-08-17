@@ -1,0 +1,8 @@
+{
+  "contractVersion": "1.1",
+  "clientRequestId": "call.literatureoversize1",
+  "requestDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "query": "agent reliability",
+  "maxResults": 11,
+  "yearFrom": null
+}

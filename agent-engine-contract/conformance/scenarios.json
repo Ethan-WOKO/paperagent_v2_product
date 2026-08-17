@@ -56,6 +56,38 @@
     {
       "id": "event-redaction",
       "expectation": "Events contain bounded summaries and refs but no source body, task grant, service credential, host path or unbounded process output."
+    },
+    {
+      "id": "knowledge-search-scope",
+      "expectation": "Knowledge search derives the authenticated user and frozen Project from task authority, includes only active public/user/project-authorized knowledge, and never accepts identity or scope from the Engine."
+    },
+    {
+      "id": "product-search-exact-replay",
+      "expectation": "The same taskId, operation, clientRequestId and requestDigest returns the persisted normalized result with replayed=true and performs no second retrieval."
+    },
+    {
+      "id": "product-search-digest-conflict",
+      "expectation": "The same taskId, operation and clientRequestId with changed canonical request content returns 409 TOOL_REQUEST_CONFLICT and preserves the first result."
+    },
+    {
+      "id": "product-search-grant-boundary",
+      "expectation": "Expired, wrong-task or missing knowledge.search/literature.search permission is rejected before any local or upstream retrieval."
+    },
+    {
+      "id": "product-search-cross-user-denied",
+      "expectation": "An Engine cannot select a user or Project; a grant and persisted task authority mismatch fails closed before knowledge or literature access."
+    },
+    {
+      "id": "product-search-bounds",
+      "expectation": "Queries, result counts, excerpts, abstracts, authors, metadata arrays and warnings are rejected or deterministically truncated to the schema limits before persistence."
+    },
+    {
+      "id": "literature-upstream-redaction",
+      "expectation": "Literature provider errors become stable warning or Problem codes and never expose raw exception text, credentials, provider request URLs or internal endpoints."
+    },
+    {
+      "id": "product-search-event-redaction",
+      "expectation": "knowledge.search and literature.search events contain only bounded query/result-count summaries and an opaque searchRef; no excerpt, abstract, provider error or credential is persisted in task events."
     }
   ]
 }

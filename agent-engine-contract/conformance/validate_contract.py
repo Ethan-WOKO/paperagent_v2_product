@@ -64,6 +64,7 @@ def validator_for(
 def validate_openapi() -> int:
     document = yaml.safe_load((ROOT / "openapi.yaml").read_text(encoding="utf-8"))
     assert document["openapi"].startswith("3.1."), "OpenAPI 3.1 is required"
+    assert document["info"]["version"] == "1.1", "OpenAPI search extension version drifted"
     required_paths = {
         "/v1/tasks",
         "/v1/tasks/{taskId}",
@@ -75,6 +76,8 @@ def validate_openapi() -> int:
         "/internal/v1/agent-engine/tasks/{taskId}/sandbox-executions",
         "/internal/v1/agent-engine/tasks/{taskId}/sandbox-executions/{clientRequestId}",
         "/internal/v1/agent-engine/tasks/{taskId}/receipts/{receiptRef}",
+        "/internal/v1/agent-engine/tasks/{taskId}/knowledge-searches",
+        "/internal/v1/agent-engine/tasks/{taskId}/literature-searches",
     }
     assert required_paths == set(document["paths"]), "OpenAPI path set drifted"
 
@@ -136,6 +139,47 @@ def validate_answer_digest() -> None:
     assert actual == answer["answerDigest"], "answer digest mismatch"
 
 
+def validate_product_search_digests() -> int:
+    cases = [
+        (
+            "knowledge-search",
+            "gateway-knowledge-search-request.json",
+            "gateway-knowledge-search-response.json",
+            ("query", "maxResults"),
+        ),
+        (
+            "literature-search",
+            "gateway-literature-search-request.json",
+            "gateway-literature-search-response.json",
+            ("query", "maxResults", "yearFrom"),
+        ),
+    ]
+    for case_name, request_name, response_name, digest_fields in cases:
+        request = load_json(CONFORMANCE / "fixtures/positive" / request_name)
+        response = load_json(CONFORMANCE / "fixtures/positive" / response_name)
+        authority = {field: request[field] for field in digest_fields}
+        canonical = canonical_json(authority)
+        actual = hashlib.sha256(canonical).hexdigest()
+        assert actual == request["requestDigest"], f"{case_name} request digest mismatch"
+        assert actual == response["requestDigest"], f"{case_name} response digest mismatch"
+        assert request["clientRequestId"] == response["clientRequestId"], f"{case_name} client request binding mismatch"
+        assert request["query"] == response["query"], f"{case_name} query binding mismatch"
+        assert request["maxResults"] == response["maxResults"], f"{case_name} result-limit binding mismatch"
+        assert len(response["results"]) <= request["maxResults"], f"{case_name} returned too many results"
+        if "yearFrom" in request:
+            assert request["yearFrom"] == response["yearFrom"], f"{case_name} year binding mismatch"
+        assert response["replayed"] is False, f"{case_name} first response must not claim replay"
+        canonical_fixture = (CONFORMANCE / "canonical" / f"{case_name}.canonical.json").read_bytes().rstrip(b"\r\n")
+        expected_fixture_digest = (CONFORMANCE / "canonical" / f"{case_name}.sha256").read_text(encoding="ascii").strip()
+        assert canonical == canonical_fixture, f"{case_name} canonical fixture mismatch"
+        assert actual == expected_fixture_digest, f"{case_name} cross-language digest fixture mismatch"
+        serialized = json.dumps(response, ensure_ascii=False)
+        forbidden = ["taskGrant", "Authorization", "api_key", "apiKey", "file://", "127.0.0.1", "localhost", "sourceFailures", "Exception"]
+        for fragment in forbidden:
+            assert fragment not in serialized, f"{case_name} response leaked forbidden fragment: {fragment}"
+    return len(cases)
+
+
 def validate_scenarios() -> int:
     scenarios = load_json(CONFORMANCE / "scenarios.json")
     ids = [row["id"] for row in scenarios["requiredScenarios"]]
@@ -154,6 +198,14 @@ def validate_scenarios() -> int:
         "fixed-sse-heartbeat",
         "task-grant-boundary",
         "event-redaction",
+        "knowledge-search-scope",
+        "product-search-exact-replay",
+        "product-search-digest-conflict",
+        "product-search-grant-boundary",
+        "product-search-cross-user-denied",
+        "product-search-bounds",
+        "literature-upstream-redaction",
+        "product-search-event-redaction",
     }
     assert len(ids) == len(set(ids)), "duplicate conformance scenario id"
     assert set(ids) == required, "required conformance scenario set drifted"
@@ -194,13 +246,15 @@ def main() -> int:
     event_count = validate_event_sequence(schemas, registry)
     validate_digest()
     validate_answer_digest()
+    digest_case_count = validate_product_search_digests()
     scenario_count = validate_scenarios()
 
     print(
         "contract validation passed: "
         f"{len(schemas)} schemas, {operation_count} operations, "
         f"{positive_count} positive fixtures, {negative_count} negative fixtures, "
-        f"{event_count} ordered events, {scenario_count} runtime scenarios"
+        f"{event_count} ordered events, {digest_case_count} product-search digests, "
+        f"{scenario_count} runtime scenarios"
     )
     return 0
 

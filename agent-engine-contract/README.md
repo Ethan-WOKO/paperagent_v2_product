@@ -1,10 +1,10 @@
 # PaperAgent Agent Engine Contract
 
-日期：2026-08-16
+日期：2026-08-17
 
 分类：当前架构合同
 
-状态：Issue #150 冻结候选
+状态：Issue #150 基础合同 + Issue #171 只读产品搜索扩展候选
 
 适用范围：Java 产品与独立 Agent Engine 的 P1 边界
 
@@ -35,8 +35,11 @@ Engine 只拥有：
 - `conformance/`：双方必须运行的正反 fixture 和验证器。
 - `ACCEPTANCE.md`：P1 任务、指标和通过标准。
 
-合同版本为 `1.0`。不兼容变更必须升级 major；新增可选字段可以升级 minor。双方不得
-根据未知字段猜测语义。所有 schema 默认 `additionalProperties: false`。
+基础控制面、Workspace、Sandbox 与 Receipt 合同版本保持 `1.0`。Issue #171 新增的
+`knowledge.search` 与 `literature.search` 请求/响应使用 `1.1`，OpenAPI 文档版本也为
+`1.1`；这不会改变任何既有 `1.0` wire shape。共享 Problem 仍使用基础 `1.0` 错误信封。
+不兼容变更必须升级 major；新增独立能力升级 minor。双方不得根据未知字段猜测语义。
+所有 schema 默认 `additionalProperties: false`。
 
 ## 3. 两条调用边界
 
@@ -106,9 +109,9 @@ Java 用相同 taskId/digest 重新提交以恢复运行时凭证；凭证本身
 
 ### 5.2 工具事件命名
 
-`tool.name` 是合同稳定名，只允许 `project.list`、`project.read` 和
-`sandbox.execute`。它与模型可见函数名无关；Engine 负责在内部映射，SSE 消费方不得
-看到框架或 provider 私有工具名。
+`tool.name` 是合同稳定名，只允许 `project.list`、`project.read`、
+`sandbox.execute`、`knowledge.search` 和 `literature.search`。它与模型可见函数名
+无关；Engine 负责在内部映射，SSE 消费方不得看到框架或 provider 私有工具名。
 
 ## 6. P1 固定执行预算
 
@@ -157,10 +160,55 @@ P2 才增加 Workspace 写入和自动发布。`publish` 永远不是模型工�
 证明最终 Candidate 内容与最后一次成功沙箱的全部输入 hash 完全一致，才可创建新的
 不可变 ProjectVersion，并保留前一版本回滚入口。
 
-## 9. 本地合同验证
+## 9. 只读产品搜索扩展（1.1）
+
+Issue #171 在 P1 之后增加两个同步、只读、任务级幂等的产品工具：
+
+- `knowledge.search` → `POST /internal/v1/agent-engine/tasks/{taskId}/knowledge-searches`；
+- `literature.search` → `POST /internal/v1/agent-engine/tasks/{taskId}/literature-searches`。
+
+Engine 只能提供 `clientRequestId`、`requestDigest`、有界 `query`、`maxResults`，文献检索
+还可提供 `yearFrom`。Engine 不得提供 userId、projectId、ProjectVersion、知识版本策略、
+文献 provider、provider URL 或 credential。Java 产品必须从持久任务权威重新绑定认证
+用户和冻结 ProjectVersion，并要求 task grant 分别具有 `knowledge.search` 或
+`literature.search` 能力。`readProject` 不是这两个能力的替代品。
+
+知识检索固定使用 active-only 版本策略。允许结果只有：公开 active 知识、当前用户的
+私有 active 知识，以及与冻结 Project 匹配的 active 知识；另一个用户的私有知识、
+另一个 Project 的知识和 superseded 版本必须在构造响应前过滤。响应最多 10 条，每条
+摘录最多 4000 字符，数据库主键只能映射成不透明 `documentRef`。
+
+文献检索复用产品配置的来源、去重和引用规范化。响应最多 10 条，每条摘要最多 2000
+字符；作者、BibTeX、标识符和 warning 均有显式上限。URL 只允许无 user-info 的公开
+HTTP(S) 地址；loopback、link-local、RFC1918、内部域名和非 HTTP(S) URL 不得返回。
+原始 source failure、异常文本、请求 URL、API key 和内部端点必须映射为稳定 warning
+或 Problem code。
+
+摘要计算只覆盖以下精确对象，并遵循第 4 节 canonical JSON 规则：
+
+- knowledge：`{"maxResults":…,"query":…}`；
+- literature：`{"maxResults":…,"query":…,"yearFrom":…}`，其中未限定年份必须显式为
+  `null`。
+
+query 必须至少包含一个非空白字符，并按请求中的精确 Unicode 字符参与摘要，不做 trim、
+大小写或 Unicode normalization；
+数组保持顺序。相同 taskId、operation、clientRequestId 与 digest 返回持久化结果并设置
+`replayed=true`，不得再次检索。相同幂等键的不同内容返回 409
+`TOOL_REQUEST_CONFLICT` 并保留首个结果。不同 operation 的幂等命名空间相互隔离。
+响应必须回显 taskId、clientRequestId、requestDigest、query 和 maxResults；文献响应还回显
+yearFrom，知识响应还回显冻结 ProjectVersion。Engine 必须逐项校验这些绑定和结果数量，
+不得只依赖 HTTP 成功。首次结果的稳定顺序随结果一起持久化，重放不得重新排序。
+
+工具事件只可包含有界 query/结果数摘要和不透明 `searchRef`。知识摘录、文献摘要、
+BibTeX、上游 warning 明细和 provider 错误不得写入事件。搜索结果本身不是 Sandbox
+Receipt；只读回答可以继续使用空 `delivery.receiptRefs`。
+
+## 10. 本地合同验证
 
 ```powershell
 python agent-engine-contract/conformance/validate_contract.py
+node agent-engine-contract/conformance/validate_digests.mjs
+java agent-engine-contract/conformance/CanonicalDigestCheck.java
 git diff --check
 ```
 

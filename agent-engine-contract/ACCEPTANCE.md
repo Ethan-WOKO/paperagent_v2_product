@@ -111,3 +111,23 @@ Project 中的 Java 文件引用非 JDK 依赖。Agent 必须先读取文件/imp
 
 只有双方至少一条实现达到 P1 可用，才启动写入/发布 P2。P2 必须新增精确输入绑定、
 Workspace diff、Candidate、不变版本发布和回滚测试，不能沿用 P1 成功推断发布安全。
+
+## 7. 1.1 只读产品搜索扩展门禁
+
+本节不改变 T1–T6 的 P1 胜负样本，也不要求重新刷已经完成的 Sandbox 槽位。产品网关
+和两条 Engine 线接入 `knowledge.search`、`literature.search` 时分别验证：
+
+1. 同一 Unicode query 的 JavaScript 与 Java canonical digest 与 fixture 完全一致；
+2. 精确重放只调用底层检索一次，不同摘要返回 409 并保留首个持久结果；
+3. 过期 grant、错 task、缺少对应搜索权限、跨用户和跨 Project 请求均在检索前失败；
+4. knowledge 只返回 active 且属于公开/当前用户/冻结 Project 的结果，摘录不超过 4000
+   字符，总数不超过 10；
+5. literature 结果不超过 10，摘要不超过 2000 字符，引用字段与 URL 经过 allowlist 和
+   大小限制；
+6. 上游部分失败只产生稳定 warning，整体失败产生脱敏 Problem；事件、日志和错误不含
+   摘录、摘要、原始异常、credential 或内部 URL；
+7. Engine 重启后从持久 search result 恢复，不重复本地检索或外部文献请求。
+
+契约 PR 只运行共享 validator 与 JavaScript/Java 摘要 fixture。Java 网关、DSH 和 Codex
+实现必须在各自独立 Issue 中增加行为测试与真实产品 smoke，不能用 schema 通过代替运行
+证据。

@@ -1,14 +1,16 @@
 openapi: 3.1.0
 info:
   title: PaperAgent Agent Engine and Product Tool Gateway
-  version: '1.0'
+  version: '1.1'
   license:
     name: MIT
     identifier: MIT
   description: >-
     Frozen P1 boundary for interchangeable ReAct engines. Engine paths are
     called by the Java product with EngineServiceBearer. Gateway paths are
-    called by an Engine with a short-lived task-bound TaskGrantBearer.
+    called by an Engine with a short-lived task-bound TaskGrantBearer. Version
+    1.1 adds bounded read-only product knowledge and literature search without
+    changing the existing 1.0 control, Workspace, Sandbox or Receipt shapes.
 servers:
   - url: http://127.0.0.1:8092
     description: Example Engine service
@@ -16,7 +18,7 @@ tags:
   - name: Engine control plane
     description: Authenticated Java product control over one selected Engine.
   - name: Product tool gateway
-    description: Task-scoped Engine access to product-owned Workspace and Sandbox facts.
+    description: Task-scoped Engine access to product-owned Workspace, Sandbox and bounded read-only search facts.
 paths:
   /v1/tasks:
     post:
@@ -275,6 +277,68 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/knowledge-searches:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Product tool gateway]
+      operationId: searchKnowledge
+      summary: Idempotently search bounded active product knowledge
+      description: >-
+        The product derives user and frozen Project scope from task authority.
+        The Engine cannot supply userId, projectId, version policy, database
+        identity or provider credentials. Exact replay returns the persisted
+        normalized result and performs no second retrieval.
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './schemas/product-search.schema.json#/$defs/knowledgeSearchRequest' }
+      responses:
+        '200':
+          description: Bounded normalized knowledge excerpts
+          content:
+            application/json:
+              schema: { $ref: './schemas/product-search.schema.json#/$defs/knowledgeSearchResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '502': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/literature-searches:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Product tool gateway]
+      operationId: searchLiterature
+      summary: Idempotently search normalized product literature sources
+      description: >-
+        The product owns source selection, provider credentials, deduplication
+        and citation normalization. Exact replay returns the persisted result.
+        Raw upstream failures, provider keys and internal URLs are never
+        returned to the Engine.
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './schemas/product-search.schema.json#/$defs/literatureSearchRequest' }
+      responses:
+        '200':
+          description: Bounded normalized citation metadata
+          content:
+            application/json:
+              schema: { $ref: './schemas/product-search.schema.json#/$defs/literatureSearchResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '502': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     EngineServiceBearer:

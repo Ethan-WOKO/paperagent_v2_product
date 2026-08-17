@@ -1,0 +1,7 @@
+{
+  "contractVersion": "1.1",
+  "clientRequestId": "call.knowledge0123456789",
+  "requestDigest": "6046d33755ecf29c595fc484d26a7094a9dde273edfeb0e418452168e88465b8",
+  "query": "可恢复 Agent 的幂等执行",
+  "maxResults": 5
+}
