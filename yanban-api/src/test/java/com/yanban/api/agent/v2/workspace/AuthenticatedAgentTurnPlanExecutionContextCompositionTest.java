@@ -2,9 +2,11 @@ package com.yanban.api.agent.v2.workspace;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
+import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapRequestAdapter;
+import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
+import com.yanban.agent.v2.adapter.bootstrap.ProductWorkspaceIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
-import com.yanban.api.agent.v2.bootstrap.AgentV2PlanBootstrapConfiguration;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnExecutionStartRecoveryCommand;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnExecutionStartRecoveryComposer;
 import com.yanban.api.agent.v2.bootstrap.AuthenticatedAgentTurnPlanBootstrapComposer;
@@ -33,19 +35,35 @@ import io.paperagent.v2.contracts.PlanStep;
 import io.paperagent.v2.contracts.PlanStepId;
 import io.paperagent.v2.contracts.ResourceLimits;
 import io.paperagent.v2.contracts.Route;
+import io.paperagent.v2.persistence.ExecutionStartRecoveryRepository;
+import io.paperagent.v2.persistence.ExecutionStartRepository;
+import io.paperagent.v2.persistence.LeaseRepository;
+import io.paperagent.v2.persistence.PlanBootstrapRepository;
 import io.paperagent.v2.persistence.PersistenceOutcome;
+import io.paperagent.v2.runtime.bootstrap.DefaultPersistentPlanBootstrapper;
+import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapper;
+import io.paperagent.v2.runtime.checkpoint.DeterministicInitialCheckpointFreezer;
+import io.paperagent.v2.runtime.execution.DeterministicExecutionStartMaterializer;
+import io.paperagent.v2.runtime.execution.DeterministicFreshExecutionGate;
 import io.paperagent.v2.runtime.execution.ExecutionStartEventDraft;
 import io.paperagent.v2.runtime.execution.context.composition.PlanExecutionContextCompositionResolution;
 import io.paperagent.v2.runtime.execution.context.composition.PlanExecutionContextLeaseAttempt;
 import io.paperagent.v2.runtime.execution.context.composition.PlanExecutionContextReady;
+import io.paperagent.v2.runtime.execution.recovery.composition.DefaultExecutionStartRecoverer;
+import io.paperagent.v2.runtime.execution.recovery.composition.ExecutionStartRecoverer;
 import io.paperagent.v2.runtime.execution.recovery.composition.ExecutionStartRecoveryResolution;
 import io.paperagent.v2.runtime.execution.recovery.composition.RecoveredExecutionStart;
+import io.paperagent.v2.runtime.execution.recovery.materialization.DeterministicRecoveryReadyExecutionStartMaterializer;
+import io.paperagent.v2.runtime.execution.start.DefaultFreshExecutionStarter;
 import io.paperagent.v2.runtime.execution.start.FreshExecutionStartAttempt;
+import io.paperagent.v2.runtime.execution.start.FreshExecutionStarter;
+import io.paperagent.v2.runtime.planning.DeterministicInitialPlanFreezer;
 import io.paperagent.v2.runtime.planning.InitialPlanDraft;
 import io.paperagent.v2.runtime.routing.RoutingDecision;
 import io.paperagent.v2.runtime.routing.RoutingDecisionReason;
 import io.paperagent.v2.runtime.routing.RoutingRequestId;
 import io.paperagent.v2.runtime.routing.RoutingRequirement;
+import io.paperagent.v2.runtime.taskframe.DeterministicTaskFrameFreezer;
 import io.paperagent.v2.runtime.taskframe.TaskFrameDraft;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,6 +73,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -89,7 +108,6 @@ import static org.mockito.Mockito.when;
                 + "MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000"
 })
 @Import({
-        AgentV2PlanBootstrapConfiguration.class,
         AuthenticatedAgentTurnPlanBootstrapComposer.class,
         AuthenticatedAgentTurnExecutionStartRecoveryComposer.class,
         AuthenticatedAgentTurnProjectVersionSourceFactory.class,
@@ -108,11 +126,73 @@ class AuthenticatedAgentTurnPlanExecutionContextCompositionTest {
     private static final Path WORKSPACE_ROOT = temporaryRoot();
 
     @TestConfiguration
-    @ComponentScan(basePackageClasses = ProductPlanBootstrapRepositoryAdapter.class)
+    @ComponentScan(
+            basePackageClasses = ProductPlanBootstrapRepositoryAdapter.class,
+            useDefaultFilters = false,
+            includeFilters = @ComponentScan.Filter(
+                    type = FilterType.REGEX,
+                    pattern = "com\\.yanban\\.api\\.agent\\.v2\\.persistence\\."
+                            + "(ProductPlanBootstrap(RepositoryAdapter|Transactions|Codec)"
+                            + "|ProductLease(RepositoryAdapter|Transactions)"
+                            + "|SystemProductLeaseTimeSource"
+                            + "|ProductExecutionStart(RepositoryAdapter|Transactions|"
+                            + "RecoveryRepositoryAdapter|RecoveryTransactions|Codec)"
+                            + "|SystemProductExecutionStartTimeSource"
+                            + "|ProductPlanExecutionContext(RepositoryAdapter|Transactions|Codec))"))
     static class PersistenceSlice {
         @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper();
+        }
+
+        @Bean
+        ProductPlanIdDerivation productPlanIdDerivation() {
+            return new ProductPlanIdDerivation();
+        }
+
+        @Bean
+        ProductWorkspaceIdDerivation productWorkspaceIdDerivation() {
+            return new ProductWorkspaceIdDerivation();
+        }
+
+        @Bean
+        ProductPersistentPlanBootstrapRequestAdapter
+                productPersistentPlanBootstrapRequestAdapter(
+                        ProductPlanIdDerivation planIds) {
+            return new ProductPersistentPlanBootstrapRequestAdapter(planIds);
+        }
+
+        @Bean
+        PersistentPlanBootstrapper persistentPlanBootstrapper(
+                PlanBootstrapRepository repository) {
+            return new DefaultPersistentPlanBootstrapper(
+                    new DeterministicTaskFrameFreezer(),
+                    new DeterministicInitialPlanFreezer(),
+                    new DeterministicInitialCheckpointFreezer(),
+                    repository);
+        }
+
+        @Bean
+        FreshExecutionStarter freshExecutionStarter(
+                LeaseRepository leases,
+                ExecutionStartRepository starts) {
+            return new DefaultFreshExecutionStarter(
+                    new DeterministicFreshExecutionGate(),
+                    new DeterministicExecutionStartMaterializer(),
+                    leases,
+                    starts);
+        }
+
+        @Bean
+        ExecutionStartRecoverer executionStartRecoverer(
+                ExecutionStartRecoveryRepository recovery,
+                LeaseRepository leases,
+                ExecutionStartRepository starts) {
+            return new DefaultExecutionStartRecoverer(
+                    recovery,
+                    new DeterministicRecoveryReadyExecutionStartMaterializer(),
+                    leases,
+                    starts);
         }
 
         @Bean
