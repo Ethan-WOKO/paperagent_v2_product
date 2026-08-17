@@ -1,0 +1,19 @@
+{
+  "contractVersion": "1.0",
+  "receiptRef": "receipt.test.1",
+  "executionRef": "execution.test.1",
+  "status": "SUCCEEDED",
+  "exitCode": 0,
+  "stdout": { "text": "", "truncated": false, "originalBytes": 0 },
+  "stderr": { "text": "", "truncated": false, "originalBytes": 0 },
+  "inputFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "inputs": [
+    {
+      "path": "C:/java_file/private/Sort.java",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sizeBytes": 512
+    }
+  ],
+  "startedAt": "2026-08-16T10:00:02Z",
+  "finishedAt": "2026-08-16T10:00:05Z"
+}

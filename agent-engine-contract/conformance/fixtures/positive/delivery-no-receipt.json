@@ -1,0 +1,9 @@
+{
+  "contractVersion": "1.0",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "sequence": 1,
+  "occurredAt": "2026-08-16T10:00:01Z",
+  "type": "delivery",
+  "conclusion": "A future non-tool answer may have no formal Receipt.",
+  "receiptRefs": []
+}

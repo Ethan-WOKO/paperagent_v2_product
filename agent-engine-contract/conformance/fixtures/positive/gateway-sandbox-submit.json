@@ -1,0 +1,18 @@
+{
+  "contractVersion": "1.0",
+  "clientRequestId": "call.0123456789abcdef",
+  "requestDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "argv": [
+    "yanban-runner",
+    "java",
+    "src/main/java/Sort.java",
+    "--dependency=ch.qos.logback:logback-core:1.2.13"
+  ],
+  "inputs": [
+    {
+      "path": "src/main/java/Sort.java",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "timeoutMillis": 300000
+}

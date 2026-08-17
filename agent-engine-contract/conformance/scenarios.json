@@ -1,0 +1,61 @@
+{
+  "contractVersion": "1.0",
+  "requiredScenarios": [
+    {
+      "id": "submit-exact-replay",
+      "expectation": "A second submit with the same taskId and requestDigest returns 202 with replayed=true and creates no second task."
+    },
+    {
+      "id": "submit-digest-conflict",
+      "expectation": "A second submit with the same taskId and a different requestDigest returns 409 TASK_DIGEST_CONFLICT."
+    },
+    {
+      "id": "sse-resume",
+      "expectation": "Last-Event-ID N returns only persisted events with sequence greater than N, in contiguous order."
+    },
+    {
+      "id": "sandbox-exact-replay",
+      "expectation": "The same clientRequestId and requestDigest returns the existing execution and never dispatches a second broker effect."
+    },
+    {
+      "id": "sandbox-digest-conflict",
+      "expectation": "The same clientRequestId with a different requestDigest returns 409 and preserves the first execution."
+    },
+    {
+      "id": "restart-after-receipt",
+      "expectation": "After Engine restart, the persisted Receipt is reused and the task reaches one terminal state without another sandbox dispatch."
+    },
+    {
+      "id": "cancel-idempotent",
+      "expectation": "Repeated cancellation converges on one cancelled terminal event; cancellation after another terminal state does not rewrite it."
+    },
+    {
+      "id": "answer-exact-replay",
+      "expectation": "The same questionId and answerDigest is accepted as a replay and consumes the pending question exactly once."
+    },
+    {
+      "id": "answer-content-conflict",
+      "expectation": "The same questionId with a different answerDigest returns 409 QUESTION_ANSWER_CONFLICT and preserves the first answer."
+    },
+    {
+      "id": "fixed-model-budget",
+      "expectation": "Every provider request consumes one of 20 model-call slots, maxOutputTokens is 4096, tools are serial, and recovery never resets the budget."
+    },
+    {
+      "id": "fixed-sandbox-polling",
+      "expectation": "Sandbox status polls use 1, 2, 4, 5, 5... second delays without jitter and stop at timeoutMillis plus 30000 ms."
+    },
+    {
+      "id": "fixed-sse-heartbeat",
+      "expectation": "An idle live SSE stream emits a non-persisted comment heartbeat every 15000 ms without consuming a sequence."
+    },
+    {
+      "id": "task-grant-boundary",
+      "expectation": "Expired, wrong-task, wrong-permission and malformed task grants are rejected before Workspace or Sandbox access."
+    },
+    {
+      "id": "event-redaction",
+      "expectation": "Events contain bounded summaries and refs but no source body, task grant, service credential, host path or unbounded process output."
+    }
+  ]
+}

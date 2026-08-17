@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/gateway.schema.json",
+  "title": "ProductToolGatewayTypes",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\\\]+$"
+    },
+    "fileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sizeBytes", "sha256", "mediaType"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 10485760 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Display metadata only; an Engine must not infer parser, permission or execution semantics from it."
+        }
+      }
+    },
+    "fileList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "projectVersion", "files"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "projectVersion": { "$ref": "#/$defs/sha256" },
+        "files": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/fileEntry" }
+        }
+      }
+    },
+    "fileReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "path", "expectedSha256"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "expectedSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "fileRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "path", "sizeBytes", "sha256", "mediaType", "encoding", "content", "truncated"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 10485760 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Display metadata only; an Engine must not infer parser, permission or execution semantics from it."
+        },
+        "encoding": { "enum": ["utf-8"] },
+        "content": { "type": "string", "maxLength": 10485760 },
+        "truncated": { "const": false }
+      }
+    },
+    "sandboxInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sandboxSubmit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "argv", "inputs", "timeoutMillis"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "argv": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/sandboxInput" }
+        },
+        "timeoutMillis": { "type": "integer", "minimum": 1000, "maximum": 300000 }
+      }
+    },
+    "sandboxView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "executionRef", "state", "receiptRef"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "executionRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "state": { "enum": ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"] },
+        "receiptRef": { "type": ["string", "null"], "maxLength": 256 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "enum": ["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"] } }, "required": ["state"] },
+          "then": { "properties": { "receiptRef": { "type": "string", "minLength": 1 } }, "required": ["receiptRef"] }
+        }
+      ]
+    }
+  }
+}

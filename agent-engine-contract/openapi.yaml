@@ -1,0 +1,327 @@
+openapi: 3.1.0
+info:
+  title: PaperAgent Agent Engine and Product Tool Gateway
+  version: '1.0'
+  license:
+    name: MIT
+    identifier: MIT
+  description: >-
+    Frozen P1 boundary for interchangeable ReAct engines. Engine paths are
+    called by the Java product with EngineServiceBearer. Gateway paths are
+    called by an Engine with a short-lived task-bound TaskGrantBearer.
+servers:
+  - url: http://127.0.0.1:8092
+    description: Example Engine service
+tags:
+  - name: Engine control plane
+    description: Authenticated Java product control over one selected Engine.
+  - name: Product tool gateway
+    description: Task-scoped Engine access to product-owned Workspace and Sandbox facts.
+paths:
+  /v1/tasks:
+    post:
+      tags: [Engine control plane]
+      operationId: submitTask
+      summary: Idempotently submit or resume one persistent task
+      security:
+        - EngineServiceBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas/task-submission.schema.json
+      responses:
+        '202':
+          description: Accepted. replayed is true for an exact taskId/digest replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskAccepted'
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Same taskId already exists with another request digest.
+          content:
+            application/json:
+              schema: { $ref: ./schemas/problem.schema.json }
+  /v1/tasks/{taskId}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Engine control plane]
+      operationId: getTask
+      summary: Read the current task projection without advancing it
+      security:
+        - EngineServiceBearer: []
+      responses:
+        '200':
+          description: Current task projection
+          content:
+            application/json:
+              schema: { $ref: ./schemas/task-view.schema.json }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/tasks/{taskId}/events:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Engine control plane]
+      operationId: streamTaskEvents
+      summary: Replay persisted events, then follow new events through SSE
+      description: >-
+        Each persisted event is encoded as `id: <sequence>` and one JSON data
+        value conforming to TaskEvent. Last-Event-ID N returns only sequence > N.
+        During an otherwise idle live stream the Engine emits an SSE comment
+        heartbeat every 15000 ms. Heartbeats have no id and are not persisted.
+      security:
+        - EngineServiceBearer: []
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Last fully processed task-local sequence.
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/tasks/{taskId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Engine control plane]
+      operationId: cancelTask
+      summary: Idempotently request task cancellation
+      security:
+        - EngineServiceBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contractVersion, clientRequestId]
+              properties:
+                contractVersion: { const: '1.0' }
+                clientRequestId:
+                  type: string
+                  pattern: '^cancel\.[A-Za-z0-9_-]{16,120}$'
+      responses:
+        '202':
+          description: Cancellation accepted, already pending, or task already terminal.
+          content:
+            application/json:
+              schema: { $ref: ./schemas/task-view.schema.json }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/tasks/{taskId}/answer:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Engine control plane]
+      operationId: answerTaskQuestion
+      summary: Idempotently answer the currently pending question
+      security:
+        - EngineServiceBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: ./schemas/task-answer.schema.json }
+      responses:
+        '202':
+          description: Answer accepted or exact replay accepted.
+          content:
+            application/json:
+              schema: { $ref: ./schemas/task-view.schema.json }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: >-
+            The question is not pending, the question already accepted a
+            different answer digest, or clientRequestId was reused for another
+            answer. Existing accepted input is never overwritten.
+          content:
+            application/json:
+              schema: { $ref: ./schemas/problem.schema.json }
+  /internal/v1/agent-engine/tasks/{taskId}/workspace/files:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Product tool gateway]
+      operationId: listWorkspaceFiles
+      summary: List the exact frozen Workspace file manifest
+      security:
+        - TaskGrantBearer: []
+      responses:
+        '200':
+          description: Canonically ordered file manifest
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/fileList' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/workspace/read:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Product tool gateway]
+      operationId: readWorkspaceFile
+      summary: Read one complete bounded UTF-8 file from the frozen Workspace
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './schemas/gateway.schema.json#/$defs/fileReadRequest' }
+      responses:
+        '200':
+          description: Exact file bytes decoded as UTF-8 and re-attested by hash
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/fileRead' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/sandbox-executions:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Product tool gateway]
+      operationId: submitSandboxExecution
+      summary: Idempotently execute an allowed command over exact Workspace inputs
+      description: >-
+        The product validates SandboxCommandProfiles, resolves bytes from the
+        authoritative Workspace, computes broker canonical digest, owns broker
+        credentials and persists the formal Receipt. The Engine never supplies
+        broker identity, fence, policy digest, host paths or file contents.
+        After a 202 response the Engine polls the status endpoint after 1, 2,
+        4, 5, 5... seconds, serially and without jitter. Polling ends at
+        timeoutMillis plus 30000 ms measured from acceptance.
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './schemas/gateway.schema.json#/$defs/sandboxSubmit' }
+      responses:
+        '202':
+          description: Accepted or exact idempotent replay
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/sandboxView' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/sandbox-executions/{clientRequestId}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+      - $ref: '#/components/parameters/ToolCallId'
+    get:
+      tags: [Product tool gateway]
+      operationId: getSandboxExecution
+      summary: Read sandbox status without resubmitting or advancing execution
+      description: >-
+        P1 clients use serial fixed exponential polling delays of 1, 2, 4,
+        5, 5... seconds without jitter. If no terminal projection exists by
+        the submit acceptance time plus timeoutMillis plus 30000 ms, the Engine
+        fails with SANDBOX_STATUS_DEADLINE_EXCEEDED in sandbox_system category.
+      security:
+        - TaskGrantBearer: []
+      responses:
+        '200':
+          description: Current execution projection
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/sandboxView' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/receipts/{receiptRef}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+      - $ref: '#/components/parameters/ReceiptRef'
+    get:
+      tags: [Product tool gateway]
+      operationId: getSandboxReceipt
+      summary: Read the formal bounded Receipt projection
+      security:
+        - TaskGrantBearer: []
+      responses:
+        '200':
+          description: Formal receipt projection with exact input hashes
+          content:
+            application/json:
+              schema: { $ref: ./schemas/receipt.schema.json }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    EngineServiceBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-service-token
+      description: Deployment-scoped Java-to-Engine credential, never in JSON.
+    TaskGrantBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-short-lived-task-grant
+      description: Short-lived credential bound to one task, permissions and expiry.
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^task\.[a-f0-9]{64}$'
+    ToolCallId:
+      name: clientRequestId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^call\.[A-Za-z0-9_-]{16,120}$'
+    ReceiptRef:
+      name: receiptRef
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
+  schemas:
+    TaskAccepted:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, replayed, task]
+      properties:
+        contractVersion: { const: '1.0' }
+        replayed: { type: boolean }
+        task: { $ref: ./schemas/task-view.schema.json }
+  responses:
+    Problem:
+      description: Sanitized machine-readable failure
+      content:
+        application/json:
+          schema: { $ref: ./schemas/problem.schema.json }

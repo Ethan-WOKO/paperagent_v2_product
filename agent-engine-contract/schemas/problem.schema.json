@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/problem.schema.json",
+  "title": "Problem",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "code", "category", "message", "retryable"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,95}$" },
+    "category": {
+      "enum": ["request", "authorization", "model", "tool", "code_validation", "sandbox_system", "cancelled", "internal"]
+    },
+    "message": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "retryable": { "type": "boolean" },
+    "sourceRef": { "type": ["string", "null"], "maxLength": 256 }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contractVersion": "1.0",
+  "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+  "sequence": 2,
+  "occurredAt": "2026-08-16T10:00:02Z",
+  "type": "tool",
+  "callId": "call.0123456789abcdef",
+  "name": "project.read",
+  "state": "succeeded",
+  "inputSummary": "Read one source file.",
+  "outputSummary": "Read succeeded.",
+  "receiptRef": null,
+  "input": { "path": "src/main/java/Sort.java", "content": "secret source body" }
+}

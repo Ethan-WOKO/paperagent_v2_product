@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/agent-engine/schemas/task-answer.schema.json",
+  "title": "TaskAnswer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "clientRequestId", "questionId", "answer", "answerDigest"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "clientRequestId": {
+      "type": "string",
+      "pattern": "^answer\\.[A-Za-z0-9_-]{16,120}$"
+    },
+    "questionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "answer": { "type": "string", "minLength": 1, "maxLength": 16000 },
+    "answerDigest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Lowercase SHA-256 of the exact UTF-8 answer bytes."
+    }
+  }
+}
