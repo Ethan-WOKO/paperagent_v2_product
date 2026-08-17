@@ -8,10 +8,9 @@ const MAX_MODEL_CALLS = 20;
 const MAX_OUTPUT_TOKENS = 4096 as const;
 const MAX_RECENT_TURNS = 4;
 const MAX_RECENT_CONTEXT_CHARACTERS = 8_000;
-const MAX_GROUNDING_REPAIRS = 2;
+const MAX_CANDIDATE_VALIDATION_REPAIRS = 2;
 const TERMINAL_SANDBOX = new Set(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"]);
 const SUPERSEDED_REGISTERED_TOOLS = new Set(["project_manifest", "project_read_file"]);
-const PROJECT_FILE_REFERENCE = /(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:java|kt|kts|groovy|scala|xml|gradle|properties|yaml|yml|json|toml|ini|cfg|conf|md|txt|py|js|jsx|ts|tsx|c|cc|cpp|cxx|h|hpp|cs|go|rs|rb|php|swift|sql|sh|ps1|bat|cmd)\b/gi;
 
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the current isolated Workspace manifest. It initially equals the frozen ProjectVersion and reflects later isolated Candidate writes without publishing them.", { type: "object", additionalProperties: false, properties: {} }),
@@ -103,7 +102,7 @@ export class AgentEngine {
       messages: initialMessages(submission, historicalContext), modelCalls: 0,
       metrics: { startedAt: now, promptTokens: 0, completionTokens: 0 },
       receiptRefs: [], pendingCalls: [], nextPendingCall: 0, acceptedAnswers: [],
-      recentConversation, historicalContext, observations: emptyObservations(), groundingRepairs: 0,
+      recentConversation, historicalContext, observations: emptyObservations(),
       candidateValidationRepairs: 0, loadedToolNames: []
     };
     await this.options.store.create(task);
@@ -223,7 +222,7 @@ export class AgentEngine {
           if (task.observations.workspaceChanges.length > 0
               && !candidateWorkspaceValidated(task.observations)) {
             task.candidateValidationRepairs += 1;
-            if (task.candidateValidationRepairs > MAX_GROUNDING_REPAIRS) {
+            if (task.candidateValidationRepairs > MAX_CANDIDATE_VALIDATION_REPAIRS) {
               throw new EngineProblem(502, problem(
                 "CANDIDATE_VALIDATION_REQUIRED", "code_validation",
                 "The modified Workspace was not inspected and validated against exact sandbox inputs", true));
@@ -231,28 +230,6 @@ export class AgentEngine {
             task.messages.push({
               role: "user",
               content: "Server validation feedback: the isolated Workspace has unvalidated changes. Inspect the current Workspace diff, then run the sandbox over every changed path using its exact current afterSha256. Do not claim publication yourself; after exact validation the server performs deterministic automatic publication."
-            });
-            await this.options.store.save(task);
-            continue;
-          }
-          const unobserved = unobservedFileReferences(conclusion, task.observations);
-          const untestedChangeOutcome = claimsUntestedChangeOutcome(conclusion);
-          if (unobserved.length > 0 || untestedChangeOutcome) {
-            task.groundingRepairs += 1;
-            if (task.groundingRepairs > MAX_GROUNDING_REPAIRS) {
-              throw new EngineProblem(502, problem(
-                "MODEL_GROUNDING_FAILED", "model",
-                "Model repeatedly produced conclusions that were not supported by observed evidence", true));
-            }
-            const problems = [
-              ...(unobserved.length > 0
-                ? [`unobserved Project files: ${unobserved.join(", ")}`] : []),
-              ...(untestedChangeOutcome
-                ? ["a hypothetical code change was stated as a verified compile/run outcome"] : [])
-            ];
-            task.messages.push({
-              role: "user",
-              content: `Server validation feedback: the previous proposed conclusion was not accepted because it contained ${problems.join("; ")}. First answer the current task. If the rejected Project reference is irrelevant to the current task, remove it and do not inspect unrelated Project data. Otherwise use a tool to observe it. An untested proposed change must be described as requiring a new validation run. Do not repeat the unsupported claim.`
             });
             await this.options.store.save(task);
             continue;
@@ -766,7 +743,6 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.observations.workspaceRevision ??= 0;
   task.observations.workspaceDiffObservedRevision ??= -1;
   task.observations.workspaceChanges ??= [];
-  task.groundingRepairs ??= 0;
   task.candidateValidationRepairs ??= 0;
   task.loadedToolNames ??= [];
 }
@@ -897,24 +873,6 @@ function pathsFromToolOutput(value: unknown): string[] {
   };
   visit(value);
   return paths.filter((path) => path.length > 0 && path.length <= 512 && !path.includes("\\") && !path.startsWith("/") && !/(?:^|\/)\.\.(?:\/|$)/.test(path));
-}
-
-function unobservedFileReferences(conclusion: string, observations: TaskObservations): string[] {
-  const observedPaths = stableUnique([
-    ...observations.manifestPaths,
-    ...observations.readFiles.map((file) => file.path),
-    ...observations.toolPaths,
-    ...observations.sandboxRuns.flatMap((run) => run.inputs.map((input) => input.path))
-  ]);
-  const allowed = new Set(observedPaths.flatMap((path) => [path.toLowerCase(), path.split("/").at(-1)!.toLowerCase()]));
-  const references = conclusion.match(PROJECT_FILE_REFERENCE) ?? [];
-  return stableUnique(references.filter((reference) => !allowed.has(reference.toLowerCase())));
-}
-
-function claimsUntestedChangeOutcome(conclusion: string): boolean {
-  const english = /\b(?:remove|removed|delete|deleted|change|changed|add|added|replace|replaced)\b[\s\S]{0,160}\b(?:will|would)\s+(?:now\s+)?(?:compile|run|pass)\b/i;
-  const chinese = /(?:移除|删除|修改|添加|替换)[\s\S]{0,160}(?:即可|就能|必然|一定会)[\s\S]{0,30}(?:编译|运行|通过)/;
-  return english.test(conclusion) || chinese.test(conclusion);
 }
 
 function stableUnique(values: string[]): string[] {

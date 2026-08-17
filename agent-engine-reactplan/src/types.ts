@@ -150,7 +150,6 @@ export interface PersistedTask {
   recentConversation: RecentConversationTurn[];
   historicalContext: HistoricalContextEnvelope;
   observations: TaskObservations;
-  groundingRepairs: number;
   candidateValidationRepairs: number;
   publication?: PublicationFact;
   registeredTools?: RegisteredToolSpec[];
