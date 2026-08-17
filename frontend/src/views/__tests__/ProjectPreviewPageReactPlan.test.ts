@@ -7,10 +7,13 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     'utf8',
   );
 
-  it('在现有 Project 对话中提供轻量链路切换且正式链路保持默认', () => {
-    expect(source).toContain("const projectAgentRoute = ref<ProjectAgentRoute>('v2')");
-    expect(source).toContain("@click=\"setProjectAgentRoute('v2')\"");
-    expect(source).toContain("@click=\"setProjectAgentRoute('react')\"");
+  it('隐藏链路选择并始终默认使用 ReAct', () => {
+    expect(source).toContain("const projectAgentRoute = ref<ProjectAgentRoute>('react')");
+    expect(source).toContain("projectAgentRoute.value = 'react'");
+    expect(source).not.toContain("@click=\"setProjectAgentRoute('v2')\"");
+    expect(source).not.toContain("@click=\"setProjectAgentRoute('react')\"");
+    expect(source).not.toContain('class="project-agent-mode"');
+    expect(source).not.toContain('ReAct <small>测试</small>');
     expect(source.match(/class="v2-conversation__composer"/g)).toHaveLength(1);
     expect(source).toContain('v-if="projectAgentRoute === \'v2\'"');
     expect(source).toContain('v-else class="v2-conversation__tasks"');

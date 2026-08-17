@@ -147,16 +147,6 @@
         <section class="project-panel project-panel--main project-panel--v2">
           <div class="project-tabs project-command-bar">
             <div class="project-tabs__actions" role="group" aria-label="Project utilities">
-              <div class="project-agent-mode" aria-label="Agent 链路">
-                <div class="project-agent-mode__switch">
-                  <button type="button" :class="{ active: projectAgentRoute === 'v2' }" :aria-pressed="projectAgentRoute === 'v2'" :disabled="projectAgentBusy" @click="setProjectAgentRoute('v2')">
-                    正式链路
-                  </button>
-                  <button type="button" :class="{ active: projectAgentRoute === 'react' }" :aria-pressed="projectAgentRoute === 'react'" :disabled="projectAgentBusy" @click="setProjectAgentRoute('react')">
-                    ReAct <small>测试</small>
-                  </button>
-                </div>
-              </div>
               <button type="button" class="project-utility-chip project-context-toggle" :aria-expanded="!contextRailCollapsed" @click="setContextRailCollapsed(!contextRailCollapsed)">
                 {{ contextRailCollapsed ? '展开项目资料' : '收起项目资料' }}
               </button>
@@ -940,7 +930,7 @@ const V2_NATURAL_LANGUAGE_STORAGE_KEY = 'yanban.v2NaturalLanguage.activeRequest.
 const REACT_PLAN_STORAGE_KEY = 'yanban.reactPlan.activeTask.';
 const PROJECT_AGENT_ROUTE_STORAGE_KEY = 'yanban.projectAgent.route.';
 const REACT_PLAN_RECONNECT_DELAY_MS = 1_500;
-const projectAgentRoute = ref<ProjectAgentRoute>('v2');
+const projectAgentRoute = ref<ProjectAgentRoute>('react');
 const v2TurnInput = ref('');
 const v2TurnSubmitting = ref(false);
 const v2TurnRefreshing = ref(false);
@@ -1837,29 +1827,6 @@ function isCurrentReactPlan(record: ReactPlanTaskRecord, epoch: number) {
     && record.taskId === reactPlanRecord.value?.taskId;
 }
 
-function setProjectAgentRoute(route: ProjectAgentRoute) {
-  if (route === projectAgentRoute.value || projectAgentBusy.value) return;
-  projectAgentRoute.value = route;
-  if (activeProjectId.value && activeSessionId.value) {
-    window.localStorage.setItem(
-      projectAgentRouteStorageKey(activeProjectId.value, activeSessionId.value),
-      route,
-    );
-  }
-  if (route === 'v2') {
-    invalidateReactPlanStream();
-    return;
-  }
-  invalidateV2NaturalLanguageRequest();
-  const projectId = activeProjectId.value;
-  const sessionId = activeSessionId.value;
-  if (!projectId || !sessionId) return;
-  const stored = storedReactPlanRecords(projectId, sessionId);
-  reactPlanRecords.value = stored;
-  reactPlanRecord.value = stored[stored.length - 1] ?? null;
-  if (reactPlanRecord.value) connectReactPlanTask(reactPlanRecord.value, projectEpoch);
-}
-
 function setProjectAgentInput(value: string) {
   if (projectAgentRoute.value === 'react') reactPlanInput.value = value;
   else v2TurnInput.value = value;
@@ -1945,15 +1912,14 @@ async function connectReactPlanTask(record: ReactPlanTaskRecord, epoch = project
 
 function loadReactPlanRecord(projectId: number, sessionId: number, epoch = projectEpoch) {
   invalidateReactPlanStream();
-  projectAgentRoute.value = window.localStorage.getItem(
-    projectAgentRouteStorageKey(projectId, sessionId),
-  ) === 'react' ? 'react' : 'v2';
+  projectAgentRoute.value = 'react';
+  window.localStorage.removeItem(projectAgentRouteStorageKey(projectId, sessionId));
   const records = storedReactPlanRecords(projectId, sessionId);
   reactPlanRecords.value = records;
   const record = records[records.length - 1] ?? null;
   reactPlanRecord.value = record;
   reactPlanError.value = '';
-  if (record && projectAgentRoute.value === 'react') connectReactPlanTask(record, epoch);
+  if (record) connectReactPlanTask(record, epoch);
 }
 
 async function submitReactPlanTask() {
@@ -2995,13 +2961,6 @@ onUnmounted(() => {
 .project-tabs__title { flex: 0 0 auto; font-size: 12px; line-height: 26px; }
 .project-tabs__actions { min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
 .project-tabs__actions > * { flex: 0 0 auto; }
-.project-agent-mode { min-width: 0; display: flex; align-items: center; gap: 12px; }
-.project-agent-mode__caption { color: var(--yb-text-muted); font-size: 10px; }
-.project-agent-mode__switch { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--yb-border); border-radius: 9px; background: var(--yb-bg-muted); }
-.project-agent-mode__switch button { display: flex; align-items: baseline; gap: 5px; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--yb-text-secondary); font-weight: 750; cursor: pointer; }
-.project-agent-mode__switch button small { color: var(--yb-text-muted); font-size: 9px; font-weight: 500; }
-.project-agent-mode__switch button.active { background: var(--yb-bg-elevated); color: var(--yb-primary); box-shadow: 0 1px 3px color-mix(in srgb, var(--yb-text) 10%, transparent); }
-.project-agent-mode__switch button.active small { color: var(--yb-text-secondary); }
 .project-panel--v2 { overflow: hidden; }
 
 .v2-workbench__hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 16px; border: 1px solid color-mix(in srgb, var(--yb-primary) 28%, var(--yb-border)); border-radius: 12px; background: color-mix(in srgb, var(--yb-primary) 5%, var(--yb-bg-elevated)); }
@@ -3053,7 +3012,6 @@ onUnmounted(() => {
 .v2-task-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .reactplan-task-card code { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 .reactplan-receipt { display: block; margin-top: 3px; }
-.project-agent-mode__switch button:disabled { cursor: not-allowed; opacity: .58; }
 .v2-conversation__process { padding: 0; border-top: 1px solid var(--yb-border); border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__process > summary { display: flex; align-items: center; gap: 8px; min-height: 38px; cursor: pointer; color: var(--yb-text-secondary); font-size: 10px; font-weight: 700; }
 .v2-conversation__process > summary small { margin-left: auto; color: var(--yb-text-muted); font-weight: 400; }
@@ -3467,7 +3425,6 @@ onUnmounted(() => {
 .project-workspace--console .project-panel__title > span,
 .project-workspace--console .project-panel__count,
 .project-workspace--console .project-panel__hint,
-.project-workspace--console .project-agent-mode__caption,
 .project-workspace--console .project-file-list__item,
 .project-workspace--console .project-search-results strong,
 .project-workspace--console .project-search-results span,
@@ -3477,8 +3434,7 @@ onUnmounted(() => {
 
 .project-workspace--console .project-panel__title > span,
 .project-workspace--console .project-panel__count,
-.project-workspace--console .project-panel__hint,
-.project-workspace--console .project-agent-mode__caption {
+.project-workspace--console .project-panel__hint {
   color: var(--project-muted);
 }
 
@@ -3550,10 +3506,6 @@ onUnmounted(() => {
 
 .project-workspace--console .project-command-bar .project-tabs__actions {
   margin-left: auto;
-}
-
-.project-workspace--console .project-agent-mode {
-  gap: 9px;
 }
 
 .project-workspace--console .project-tabs__actions {
