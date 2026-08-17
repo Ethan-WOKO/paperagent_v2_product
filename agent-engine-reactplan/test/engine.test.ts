@@ -46,6 +46,101 @@ describe("AgentEngine", () => {
     expect(JSON.stringify(provider.requests[0]?.tools)).toContain("project_search");
   });
 
+  it("injects only four bounded completed turns from the same Project session", async () => {
+    const responses: ModelResponse[] = [];
+    for (let index = 1; index <= 5; index += 1) {
+      responses.push({ content: `history conclusion ${index}`, toolCalls: [] });
+    }
+    responses.push({ content: "other session conclusion", toolCalls: [] });
+    responses.push({ content: "other project conclusion", toolCalls: [] });
+    responses.push({ content: "continued from bounded history", toolCalls: [] });
+    const provider = new ScriptedProvider(responses);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    for (let index = 1; index <= 5; index += 1) {
+      const request = submissionFor(index, "session.same", `history instruction ${index}`);
+      await engine.submit(request);
+      await waitFor(() => engine.get(request.taskId).state === "succeeded");
+    }
+    const other = submissionFor(90, "session.other", "private other instruction");
+    await engine.submit(other);
+    await waitFor(() => engine.get(other.taskId).state === "succeeded");
+    const otherProject = submissionFor(92, "session.same", "private other project instruction", "2");
+    await engine.submit(otherProject);
+    await waitFor(() => engine.get(otherProject.taskId).state === "succeeded");
+    const current = submissionFor(91, "session.same", "continue the previous task");
+    await engine.submit(current);
+    await waitFor(() => engine.get(current.taskId).state === "succeeded");
+
+    const request = provider.requests.at(-1)!;
+    const history = request.messages.find((message) =>
+      message.role === "user" && message.content?.startsWith("Historical conversation data:"));
+    expect(history).toBeTruthy();
+    const turns = JSON.parse(history!.content!.slice(history!.content!.indexOf("\n") + 1)) as Array<{ instruction: string; conclusion: string }>;
+    expect(turns).toHaveLength(4);
+    expect(turns.at(-1)).toMatchObject({ instruction: "history instruction 5", conclusion: "history conclusion 5" });
+    expect(history!.content).not.toContain("private other instruction");
+    expect(history!.content).not.toContain("private other project instruction");
+    expect(request.messages.at(-1)).toMatchObject({ role: "user", content: "Current task: continue the previous task" });
+    expect(JSON.stringify(turns)).not.toContain("toolCallId");
+  });
+
+  it("rejects an unobserved Project filename and lets the model repair its conclusion", async () => {
+    const provider = new ScriptedProvider([
+      tool("list_project_files", {}),
+      { content: "The pom.xml declares a missing dependency.", toolCalls: [] },
+      { content: "Only Sort.java was observed in the Project manifest; dependency configuration was not inspected.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
+    expect(delivery?.type === "delivery" ? delivery.conclusion : "").not.toContain("pom.xml");
+    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests[2]!.messages.some((message) =>
+      message.role === "user" && message.content?.includes("unobserved Project files: pom.xml"))).toBe(true);
+  });
+
+  it("fails closed after two grounding repairs instead of publishing unsupported files", async () => {
+    const provider = new ScriptedProvider([
+      tool("list_project_files", {}),
+      { content: "pom.xml proves the dependency is present.", toolCalls: [] },
+      { content: "build.gradle proves the dependency is present.", toolCalls: [] },
+      { content: "settings.xml proves the dependency is present.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+
+    expect(engine.get(taskId).error).toMatchObject({ code: "MODEL_GROUNDING_FAILED", category: "model" });
+    expect((await engine.events(taskId)).some((event) => event.type === "delivery")).toBe(false);
+  });
+
+  it("restores the frozen recent conversation instead of rebuilding it on replay", async () => {
+    const directory = await temporaryDirectory();
+    const historyRequest = submissionFor(70, "session.persisted", "inspect the source");
+    const first = await createEngine(
+      new ScriptedProvider([{ content: "the source was inspected", toolCalls: [] }]),
+      new FakeGateway(), directory);
+    await first.submit(historyRequest);
+    await waitFor(() => first.get(historyRequest.taskId).state === "succeeded");
+
+    const current = submissionFor(71, "session.persisted", "continue the inspection");
+    const interrupted = await createEngine(new NeverProvider(), new FakeGateway(), directory);
+    await interrupted.submit(current);
+    await waitFor(() => interrupted.get(current.taskId).state === "running");
+
+    const resumedProvider = new ScriptedProvider([{ content: "continued from frozen context", toolCalls: [] }]);
+    const resumed = await createEngine(resumedProvider, new FakeGateway(), directory);
+    await resumed.submit(current);
+    await waitFor(() => resumed.get(current.taskId).state === "succeeded");
+    const historicalData = resumedProvider.requests[0]!.messages.find((message) =>
+      message.role === "user" && message.content?.startsWith("Historical conversation data:"));
+    expect(historicalData?.content).toContain("the source was inspected");
+    expect(historicalData?.content).toContain("inspect the source");
+  });
+
   it("invokes a frozen read-only registered product tool without leaking its output into events", async () => {
     const provider = new ScriptedProvider([
       tool("project_search", { query: "order-service", maxResults: 20 }),
@@ -245,8 +340,13 @@ class RejectingOnceGateway extends FakeGateway {
 function tool(name: string, args: unknown): ModelResponse { return { content: null, toolCalls: [{ id: "provider-call", name, arguments: JSON.stringify(args) }] }; }
 
 function submission(): TaskSubmission {
-  const authority = { runMode: "PERSISTENT_PLAN_EXECUTE" as const, sessionRef: "session.test", project: { projectId: "1", projectVersion }, instruction: "Compile and run Sort.java", permissions: { readProject: true as const, writeWorkspace: false as const, executeSandbox: true as const }, model: { provider: "test", model: "test-model" } };
-  return { contractVersion: "1.0", taskId, requestDigest: digestObject(authority), authority, gateway: { taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+  return submissionFor("a", "session.test", "Compile and run Sort.java");
+}
+
+function submissionFor(identity: number | string, sessionRef: string, instruction: string, projectId = "1"): TaskSubmission {
+  const suffix = String(identity).repeat(64).slice(0, 64);
+  const authority = { runMode: "PERSISTENT_PLAN_EXECUTE" as const, sessionRef, project: { projectId, projectVersion }, instruction, permissions: { readProject: true as const, writeWorkspace: false as const, executeSandbox: true as const }, model: { provider: "test", model: "test-model" } };
+  return { contractVersion: "1.0", taskId: `task.${suffix}`, requestDigest: digestObject(authority), authority, gateway: { taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
 }
 
 async function createEngine(provider: ModelProvider, gateway: GatewayClient, directory?: string): Promise<AgentEngine> {
