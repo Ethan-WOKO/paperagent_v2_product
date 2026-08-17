@@ -2,6 +2,7 @@ package com.yanban.api.agent.engine;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.AgentMessageCacheService;
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentTurn;
@@ -17,13 +18,16 @@ class ProductEngineTurnTransactions {
     private final ProductEngineTurnRepository engineTurns;
     private final AgentMessageRepository messages;
     private final AgentTurnRepository turns;
+    private final AgentMessageCacheService messageCache;
     private final ObjectMapper json;
 
     ProductEngineTurnTransactions(ProductEngineTurnRepository engineTurns,
                                   AgentMessageRepository messages,
                                   AgentTurnRepository turns,
+                                  AgentMessageCacheService messageCache,
                                   ObjectMapper json) {
-        this.engineTurns = engineTurns; this.messages = messages; this.turns = turns; this.json = json;
+        this.engineTurns = engineTurns; this.messages = messages; this.turns = turns;
+        this.messageCache = messageCache; this.json = json;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -48,6 +52,8 @@ class ProductEngineTurnTransactions {
                 mode, userId, sessionId, projectId, projectVersion, clientRequestId,
                 taskId, digest, productRequestDigest, authorityJson, question,
                 userMessage.getId(), turn.getId()));
+        messageCache.evictSession(userId, sessionId);
+        messageCache.putTurnStatus(turn.getId(), turn.getStatus(), null);
         return new Begin(created.id(), turn.getId(), false);
     }
 
@@ -136,6 +142,8 @@ class ProductEngineTurnTransactions {
             turn.fail(null, entity.failureCode() == null ? "ENGINE_FAILED" : entity.failureCode());
         }
         turns.saveAndFlush(turn);
+        messageCache.evictSession(entity.userId(), entity.sessionId());
+        messageCache.putTurnStatus(entity.agentTurnId(), turn.getStatus(), turn.getErrorMessage());
     }
 
     private boolean terminal(String state) {

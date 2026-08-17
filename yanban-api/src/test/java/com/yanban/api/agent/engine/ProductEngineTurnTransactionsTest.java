@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.AgentMessageCacheService;
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentTurn;
@@ -22,8 +23,9 @@ class ProductEngineTurnTransactionsTest {
     private final ProductEngineTurnRepository repository = mock(ProductEngineTurnRepository.class);
     private final AgentMessageRepository messages = mock(AgentMessageRepository.class);
     private final AgentTurnRepository turns = mock(AgentTurnRepository.class);
+    private final AgentMessageCacheService messageCache = mock(AgentMessageCacheService.class);
     private final ProductEngineTurnTransactions transactions =
-            new ProductEngineTurnTransactions(repository, messages, turns, new ObjectMapper());
+            new ProductEngineTurnTransactions(repository, messages, turns, messageCache, new ObjectMapper());
     private ProductEngineTurnEntity entity;
 
     @BeforeEach
@@ -60,6 +62,8 @@ class ProductEngineTurnTransactionsTest {
         assertThat(result.assistantMessageId()).isEqualTo(77L);
         assertThat(turn.getStatus()).isEqualTo(AgentTurn.STATUS_COMPLETED);
         verify(turns).saveAndFlush(turn);
+        verify(messageCache).evictSession(1L, 2L);
+        verify(messageCache).putTurnStatus(12L, AgentTurn.STATUS_COMPLETED, null);
     }
 
     @Test
