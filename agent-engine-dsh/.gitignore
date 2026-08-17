@@ -1,0 +1,17 @@
+# dependencies / caches / local artifacts
+node_modules/
+.npm-cache/
+*.log
+
+# local runtime artifacts
+engine/.sessions/
+engine/dist/
+
+# env and local data (never commit)
+.env
+.env.*
+!.env.example
+
+# OS noise
+Thumbs.db
+.DS_Store

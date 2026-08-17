@@ -1,0 +1,19 @@
+{
+  "positive": [
+    { "file": "fixtures/positive/task-submission.json", "schema": "task-submission.schema.json" },
+    { "file": "fixtures/positive/task-answer.json", "schema": "task-answer.schema.json" },
+    { "file": "fixtures/positive/task-view.json", "schema": "task-view.schema.json" },
+    { "file": "fixtures/positive/delivery-no-receipt.json", "schema": "task-event.schema.json" },
+    { "file": "fixtures/positive/gateway-file-list.json", "schema": "gateway.schema.json", "definition": "fileList" },
+    { "file": "fixtures/positive/gateway-file-read-request.json", "schema": "gateway.schema.json", "definition": "fileReadRequest" },
+    { "file": "fixtures/positive/gateway-sandbox-submit.json", "schema": "gateway.schema.json", "definition": "sandboxSubmit" },
+    { "file": "fixtures/positive/receipt.json", "schema": "receipt.schema.json" }
+  ],
+  "negative": [
+    { "file": "fixtures/negative/task-write-permission.json", "schema": "task-submission.schema.json" },
+    { "file": "fixtures/negative/task-answer-invalid-digest.json", "schema": "task-answer.schema.json" },
+    { "file": "fixtures/negative/gateway-path-traversal.json", "schema": "gateway.schema.json", "definition": "fileReadRequest" },
+    { "file": "fixtures/negative/tool-event-raw-input.json", "schema": "task-event.schema.json" },
+    { "file": "fixtures/negative/receipt-absolute-path.json", "schema": "receipt.schema.json" }
+  ]
+}

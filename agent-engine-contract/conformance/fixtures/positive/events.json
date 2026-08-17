@@ -1,0 +1,55 @@
+[
+  {
+    "contractVersion": "1.0",
+    "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+    "sequence": 1,
+    "occurredAt": "2026-08-16T10:00:01Z",
+    "type": "status",
+    "state": "running",
+    "error": null
+  },
+  {
+    "contractVersion": "1.0",
+    "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+    "sequence": 2,
+    "occurredAt": "2026-08-16T10:00:02Z",
+    "type": "tool",
+    "callId": "call.0123456789abcdef",
+    "name": "sandbox.execute",
+    "state": "running",
+    "inputSummary": "Compile src/main/java/Sort.java with one declared Maven dependency.",
+    "outputSummary": null,
+    "receiptRef": null
+  },
+  {
+    "contractVersion": "1.0",
+    "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+    "sequence": 3,
+    "occurredAt": "2026-08-16T10:00:05Z",
+    "type": "tool",
+    "callId": "call.0123456789abcdef",
+    "name": "sandbox.execute",
+    "state": "succeeded",
+    "inputSummary": "Compile src/main/java/Sort.java with one declared Maven dependency.",
+    "outputSummary": "Sandbox succeeded with exit code 0.",
+    "receiptRef": "receipt.test.1"
+  },
+  {
+    "contractVersion": "1.0",
+    "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+    "sequence": 4,
+    "occurredAt": "2026-08-16T10:00:06Z",
+    "type": "delivery",
+    "conclusion": "Sort.java compiled successfully in the isolated sandbox. No project files were modified.",
+    "receiptRefs": ["receipt.test.1"]
+  },
+  {
+    "contractVersion": "1.0",
+    "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
+    "sequence": 5,
+    "occurredAt": "2026-08-16T10:00:06Z",
+    "type": "status",
+    "state": "succeeded",
+    "error": null
+  }
+]
