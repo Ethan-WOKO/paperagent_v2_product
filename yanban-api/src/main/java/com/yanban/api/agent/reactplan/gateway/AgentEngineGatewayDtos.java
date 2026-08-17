@@ -24,6 +24,14 @@ public final class AgentEngineGatewayDtos {
                                      String beforeSha256, String afterSha256) { }
     public record WorkspaceDiff(String contractVersion, String taskId, String projectVersion,
                                 boolean changed, List<WorkspaceDiffEntry> entries) { }
+    public record WorkspacePublishRequest(String contractVersion, String clientRequestId,
+                                          String requestDigest, String receiptRef,
+                                          List<WorkspaceDiffEntry> entries) { }
+    public record WorkspacePublishResult(String contractVersion, String clientRequestId,
+                                         String requestDigest, long operationId,
+                                         String baseProjectVersion,
+                                         String publishedProjectVersion,
+                                         long publishedRevisionId, String receiptRef) { }
     public record SandboxInput(String path, String sha256) { }
     public record SandboxSubmit(String contractVersion, String clientRequestId, String requestDigest,
                                 List<String> argv, List<SandboxInput> inputs, long timeoutMillis) { }

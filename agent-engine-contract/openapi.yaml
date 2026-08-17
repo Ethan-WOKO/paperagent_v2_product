@@ -237,7 +237,7 @@ paths:
       tags: [Product tool gateway]
       operationId: getWorkspaceDiff
       summary: Read the authoritative ADD/MODIFY diff for the isolated Workspace
-      description: The ProjectVersion is unchanged and publication is outside this contract.
+      description: The ProjectVersion is unchanged until the deterministic publication terminator succeeds.
       security:
         - TaskGrantBearer: []
       responses:
@@ -249,6 +249,39 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agent-engine/tasks/{taskId}/workspace/publish:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Product tool gateway]
+      operationId: publishValidatedWorkspace
+      summary: Idempotently publish the exact successfully validated Workspace Candidate
+      description: >-
+        This is a deterministic Engine terminator, not a model-visible tool. The
+        product re-attests the complete Workspace diff and file bytes, requires a
+        successful formal Receipt whose exact input hashes cover every changed
+        file, requires the frozen ProjectVersion to remain current, then creates
+        a new immutable ProjectVersion. The previous revision remains available
+        for rollback. No user confirmation is required.
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './schemas/gateway.schema.json#/$defs/workspacePublishRequest' }
+      responses:
+        '200':
+          description: Published revision result, or the exact durable idempotent replay
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/workspacePublishResult' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /internal/v1/agent-engine/tasks/{taskId}/sandbox-executions:
     parameters:
       - $ref: '#/components/parameters/TaskId'

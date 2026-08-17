@@ -107,7 +107,8 @@ Java 用相同 taskId/digest 重新提交以恢复运行时凭证；凭证本身
 ### 5.2 工具事件命名
 
 `tool.name` 是合同稳定名，只允许 `project.list`、`project.read` 和
-`sandbox.execute`。它与模型可见函数名无关；Engine 负责在内部映射，SSE 消费方不得
+`sandbox.execute` 和确定性终结器 `project.publish`。`project.publish` 不属于模型
+可见工具。稳定事件名与模型函数名无关；Engine 负责在内部映射，SSE 消费方不得
 看到框架或 provider 私有工具名。
 
 ## 6. P1 固定执行预算
@@ -154,9 +155,11 @@ P1 是严格只读 Project 验证：真实冻结 ProjectVersion → Workspace li
 conformance/acceptance 行为测试强制，而不是由通用事件 schema 强制。
 
 Issue #165 的 P2 第一段增加受 task authority 约束的 Workspace ADD/MODIFY、diff 与
-精确 Candidate 沙箱绑定，但仍不发布。后续 P2 才增加自动发布。`publish` 永远不是模型工具；确定性终结器必须
-证明最终 Candidate 内容与最后一次成功沙箱的全部输入 hash 完全一致，才可创建新的
-不可变 ProjectVersion，并保留前一版本回滚入口。
+精确 Candidate 沙箱绑定。Issue #167 增加确定性自动发布终结器；`publish` 永远不是
+模型工具。产品会重新校验完整 Workspace diff、Candidate 文件正文与成功 Receipt 的
+全部输入 hash，且冻结版本仍是当前版本时，直接创建新的不可变 ProjectVersion。该过程
+不要求用户二次确认，前一版本保留在现有 revision 历史中，可直接回滚。分析、问候、无
+diff、沙箱失败或 Receipt 不匹配的任务不会发布。
 
 ## 9. 本地合同验证
 

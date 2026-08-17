@@ -124,6 +124,67 @@ public class ProjectRevisionWorkflowService {
                 requestHash, expectedVersion, candidate, accepted, null);
     }
 
+    /** Server-only publication of an exact, successfully validated ReAct Workspace cut. */
+    public ProjectRevisionOperationResponse applyWorkspaceAutomatically(
+            Long userId, Long projectId, String idempotencyKey,
+            String expectedVersion, String receiptRef,
+            List<AutomaticProjectFileChange> changes) {
+        requireIdentity(userId, projectId);
+        String key = requireIdempotencyKey(idempotencyKey);
+        if (expectedVersion == null || !expectedVersion.matches("[a-f0-9]{64}")
+                || receiptRef == null || receiptRef.isBlank()
+                || changes == null || changes.isEmpty() || changes.size() > 64
+                || changes.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Automatic Workspace publication proof is invalid");
+        }
+        List<AutomaticProjectFileChange> canonical = changes.stream()
+                .sorted(Comparator.comparing(AutomaticProjectFileChange::path)).toList();
+        Set<String> paths = new HashSet<>();
+        Set<String> folded = new HashSet<>();
+        for (AutomaticProjectFileChange change : canonical) {
+            if (change == null
+                    || !canonicalProjectPath(change.path())
+                    || !paths.add(change.path())
+                    || !folded.add(change.path().toLowerCase(java.util.Locale.ROOT))
+                    || ProjectAssetAdmissionPolicy.readOnlyBinaryPath(change.path())) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Automatic Workspace changes are invalid");
+            }
+        }
+        String fingerprint = workspaceFingerprint(canonical);
+        String requestHash = sha256(("WORKSPACE_AUTOMATIC_APPLICATION\0"
+                + receiptRef + "\0" + expectedVersion + "\0" + fingerprint)
+                .getBytes(StandardCharsets.UTF_8));
+        ProjectRevisionOperation existing = findReplay(
+                userId, projectId, key, requestHash);
+        if (existing != null) return replay(existing);
+        requireManagedProject(userId, projectId);
+        List<Integer> accepted = java.util.stream.IntStream.range(0, canonical.size())
+                .boxed().toList();
+        ReservedOperation reserved = reserve(userId, projectId, key, requestHash,
+                ProjectRevisionOperation.Type.APPLICATION, expectedVersion,
+                null, fingerprint, accepted, List.of());
+        if (reserved.replay() != null) return replay(reserved.replay());
+        String newPrefix = storage.createPrefix(userId);
+        try {
+            TrustedManifest finalManifest = createWorkspaceRevisionSnapshot(
+                    reserved.basePrefix(), newPrefix, canonical);
+            return publishApplication(reserved, newPrefix, finalManifest, null);
+        } catch (RuntimeException ex) {
+            fail(reserved.operationId(), errorCode(ex));
+            throw ex;
+        }
+    }
+
+    private boolean canonicalProjectPath(String path) {
+        try {
+            return new ProjectRelativePath(path).value().equals(path);
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+    }
+
     private ProjectRevisionOperationResponse applyValidatedCandidate(
             Long userId, Long projectId, Long artifactId, String key,
             String requestHash, String expectedVersion,
@@ -364,6 +425,54 @@ public class ProjectRevisionWorkflowService {
         return restored;
     }
 
+    private TrustedManifest createWorkspaceRevisionSnapshot(
+            String basePrefix, String resultPrefix,
+            List<AutomaticProjectFileChange> changes) {
+        TrustedManifest base = trustedManifest(basePrefix);
+        Map<String, AutomaticProjectFileChange> selected = new HashMap<>();
+        changes.forEach(change -> selected.put(change.path(), change));
+        List<ProjectObjectEntry> result = new ArrayList<>();
+        for (ProjectObjectEntry entry : base.entries()) {
+            AutomaticProjectFileChange change = selected.remove(entry.path());
+            if (change != null && "ADD".equals(change.operation())) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Workspace ADD target already exists in the current Project");
+            }
+            if (change != null && !entry.sha256().equals(change.beforeSha256())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Workspace base file hash changed");
+            }
+            byte[] content = change == null
+                    ? storage.readFile(basePrefix, entry.path(), properties.getMaxFileBytes())
+                    : change.content().getBytes(StandardCharsets.UTF_8);
+            if (change == null && (content.length != entry.sizeBytes()
+                    || !sha256(content).equals(entry.sha256()))) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Project base revision object is incomplete");
+            }
+            result.add(storeChecked(resultPrefix, entry.path(), content));
+        }
+        for (AutomaticProjectFileChange change : selected.values()) {
+            if (!"ADD".equals(change.operation())) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Workspace MODIFY target no longer exists in the current Project");
+            }
+            result.add(storeChecked(resultPrefix, change.path(),
+                    change.content().getBytes(StandardCharsets.UTF_8)));
+        }
+        result.sort(Comparator.comparing(ProjectObjectEntry::path));
+        TrustedManifest expected = validateManifest(result);
+        storage.writeManifest(resultPrefix, expected.entries());
+        TrustedManifest restored = trustedManifest(resultPrefix);
+        if (!sameManifest(expected.entries(), restored.entries())
+                || !expected.version().equals(restored.version())) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Project revision manifest verification failed");
+        }
+        verifyStoredFiles(resultPrefix, restored.entries());
+        return restored;
+    }
+
     private ProjectObjectEntry storeChecked(String prefix, String path, byte[] content) {
         if (content.length > properties.getMaxFileBytes()) {
             throw new ProjectTraversalLimitException("Project revision file budget exceeded");
@@ -584,6 +693,15 @@ public class ProjectRevisionWorkflowService {
     private String requestHash(String type, Long routeId, String expectedVersion, List<Integer> indexes) {
         return sha256((type + "\0" + routeId + "\0" + expectedVersion + "\0" + indexes)
                 .getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String workspaceFingerprint(List<AutomaticProjectFileChange> changes) {
+        StringBuilder value = new StringBuilder("react-workspace-candidate-v1");
+        changes.forEach(change -> value.append('\0').append(change.operation())
+                .append('\0').append(change.path())
+                .append('\0').append(change.beforeSha256() == null ? "" : change.beforeSha256())
+                .append('\0').append(change.afterSha256()));
+        return sha256(value.toString().getBytes(StandardCharsets.UTF_8));
     }
 
     private String sha256(byte[] content) {

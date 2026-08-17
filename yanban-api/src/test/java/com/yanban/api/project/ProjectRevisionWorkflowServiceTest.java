@@ -165,6 +165,37 @@ class ProjectRevisionWorkflowServiceTest {
     }
 
     @Test
+    void exactReactWorkspaceCutPublishesImmutableRevisionAndReplays() {
+        List<AutomaticProjectFileChange> changes = List.of(
+                new AutomaticProjectFileChange(
+                        "MODIFY", "a.txt", hash(bytes("A")),
+                        hash(bytes("A-react")), "A-react"),
+                new AutomaticProjectFileChange(
+                        "ADD", "react.txt", null,
+                        hash(bytes("REACT")), "REACT"));
+
+        ProjectRevisionOperationResponse applied = service.applyWorkspaceAutomatically(
+                owner.getId(), project.getId(), "react-engine-publish-test",
+                baseVersion, "receipt.react.final", changes);
+
+        assertThat(applied.outcome()).isEqualTo(ProjectRevisionOperation.Outcome.SUCCEEDED);
+        assertThat(applied.acceptedChangeIndexes()).containsExactly(0, 1);
+        Project current = projects.findById(project.getId()).orElseThrow();
+        assertThat(objects.get(current.getRootPath()))
+                .containsEntry("a.txt", bytes("A-react"))
+                .containsEntry("react.txt", bytes("REACT"))
+                .containsEntry("keep.txt", bytes("KEEP"));
+        assertThat(objects.get(project.getRootPath())).containsEntry("a.txt", bytes("A"));
+
+        ProjectRevisionOperationResponse replay = service.applyWorkspaceAutomatically(
+                owner.getId(), project.getId(), "react-engine-publish-test",
+                baseVersion, "receipt.react.final", changes);
+        assertThat(replay.operationId()).isEqualTo(applied.operationId());
+        assertThat(revisions.findByProjectIdAndUserIdOrderByCreatedAtDescIdDesc(
+                project.getId(), owner.getId())).hasSize(2);
+    }
+
+    @Test
     void applyRejectsHistoricalValidatedBinaryCandidateBeforeGateOrStorage() {
         CandidateArtifactResponse response = candidate(
                 project.getId(), baseVersion);

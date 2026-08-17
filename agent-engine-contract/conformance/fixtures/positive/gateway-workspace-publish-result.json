@@ -1,0 +1,10 @@
+{
+  "contractVersion": "1.0",
+  "clientRequestId": "call.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "requestDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "operationId": 42,
+  "baseProjectVersion": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "publishedProjectVersion": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "publishedRevisionId": 84,
+  "receiptRef": "receipt.engine.compile.1"
+}

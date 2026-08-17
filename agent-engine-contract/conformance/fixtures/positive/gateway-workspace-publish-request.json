@@ -1,0 +1,14 @@
+{
+  "contractVersion": "1.0",
+  "clientRequestId": "call.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "requestDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "receiptRef": "receipt.engine.compile.1",
+  "entries": [
+    {
+      "operation": "MODIFY",
+      "path": "src/main/java/Sort.java",
+      "beforeSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "afterSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ]
+}

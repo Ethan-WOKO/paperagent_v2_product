@@ -168,6 +168,38 @@
         }
       ]
     },
+    "workspacePublishRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "receiptRef", "entries"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "receiptRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/workspaceDiffEntry" }
+        }
+      }
+    },
+    "workspacePublishResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "operationId", "baseProjectVersion", "publishedProjectVersion", "publishedRevisionId", "receiptRef"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "operationId": { "type": "integer", "minimum": 1 },
+        "baseProjectVersion": { "$ref": "#/$defs/sha256" },
+        "publishedProjectVersion": { "$ref": "#/$defs/sha256" },
+        "publishedRevisionId": { "type": "integer", "minimum": 1 },
+        "receiptRef": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
     "sandboxInput": {
       "type": "object",
       "additionalProperties": false,
