@@ -2,17 +2,25 @@ package com.yanban.api.agent.v2.bootstrap;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapCommand;
+import com.yanban.agent.v2.adapter.bootstrap.ProductPersistentPlanBootstrapRequestAdapter;
+import com.yanban.agent.v2.adapter.bootstrap.ProductPlanIdDerivation;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.persistence.ProductPlanBootstrapRepositoryAdapter;
 import com.yanban.core.agent.AgentRunIdentity;
 import io.paperagent.v2.contracts.Route;
+import io.paperagent.v2.persistence.PlanBootstrapRepository;
 import io.paperagent.v2.persistence.PersistenceOutcome;
+import io.paperagent.v2.runtime.bootstrap.DefaultPersistentPlanBootstrapper;
+import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapper;
 import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapValidationCode;
 import io.paperagent.v2.runtime.bootstrap.PersistentPlanBootstrapValidationException;
+import io.paperagent.v2.runtime.checkpoint.DeterministicInitialCheckpointFreezer;
+import io.paperagent.v2.runtime.planning.DeterministicInitialPlanFreezer;
 import io.paperagent.v2.runtime.routing.RoutingDecision;
 import io.paperagent.v2.runtime.routing.RoutingDecisionReason;
 import io.paperagent.v2.runtime.routing.RoutingRequestId;
+import io.paperagent.v2.runtime.taskframe.DeterministicTaskFrameFreezer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +29,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
@@ -41,18 +50,45 @@ import static org.mockito.Mockito.when;
         "spring.datasource.url=jdbc:h2:mem:v2authenticatedbootstrap;MODE=MySQL;DB_CLOSE_DELAY=-1"
 })
 @Import({
-        AgentV2PlanBootstrapConfiguration.class,
         AuthenticatedAgentTurnPlanBootstrapComposer.class,
         AuthenticatedAgentTurnPlanBootstrapCompositionTest.PersistenceSlice.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AuthenticatedAgentTurnPlanBootstrapCompositionTest {
     @TestConfiguration
-    @ComponentScan(basePackageClasses = ProductPlanBootstrapRepositoryAdapter.class)
+    @ComponentScan(
+            basePackageClasses = ProductPlanBootstrapRepositoryAdapter.class,
+            useDefaultFilters = false,
+            includeFilters = @ComponentScan.Filter(
+                    type = FilterType.REGEX,
+                    pattern = "com\\.yanban\\.api\\.agent\\.v2\\.persistence"
+                            + "\\.ProductPlanBootstrap"
+                            + "(RepositoryAdapter|Transactions|Codec)"))
     static class PersistenceSlice {
         @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper();
+        }
+
+        @Bean
+        ProductPlanIdDerivation productPlanIdDerivation() {
+            return new ProductPlanIdDerivation();
+        }
+
+        @Bean
+        ProductPersistentPlanBootstrapRequestAdapter productPersistentPlanBootstrapRequestAdapter(
+                ProductPlanIdDerivation planIds) {
+            return new ProductPersistentPlanBootstrapRequestAdapter(planIds);
+        }
+
+        @Bean
+        PersistentPlanBootstrapper persistentPlanBootstrapper(
+                PlanBootstrapRepository repository) {
+            return new DefaultPersistentPlanBootstrapper(
+                    new DeterministicTaskFrameFreezer(),
+                    new DeterministicInitialPlanFreezer(),
+                    new DeterministicInitialCheckpointFreezer(),
+                    repository);
         }
     }
 
