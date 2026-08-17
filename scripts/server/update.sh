@@ -9,6 +9,9 @@ require_app_files
 lock_deployment
 
 cd "$APP_DIR"
+current_branch="$(git branch --show-current)"
+[[ "$current_branch" == "$BRANCH" ]] ||
+  fail "Deployment checkout is on '$current_branch'; switch it to '$BRANCH' before updating"
 if [[ "${PAPERAGENT_UPDATE_REEXEC:-0}" != "1" ]]; then
   if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     echo "WARNING: tracked local changes exist; Git will preserve them or stop if they conflict."

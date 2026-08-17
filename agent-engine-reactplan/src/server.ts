@@ -15,6 +15,9 @@ export function createEngineServer(engine: AgentEngine, serviceToken: string): S
     try {
       authenticate(request, serviceToken);
       const url = new URL(request.url ?? "/", "http://engine.local");
+      if (request.method === "GET" && url.pathname === "/health") {
+        return json(response, 200, { status: "UP" });
+      }
       if (request.method === "POST" && url.pathname === "/v1/tasks") {
         const accepted = await engine.submit(await jsonBody(request) as TaskSubmission);
         return json(response, 202, accepted);

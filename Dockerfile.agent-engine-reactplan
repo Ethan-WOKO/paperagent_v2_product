@@ -1,0 +1,20 @@
+FROM node:20-alpine AS build
+WORKDIR /workspace/agent-engine-reactplan
+COPY agent-engine-reactplan/package.json agent-engine-reactplan/package-lock.json ./
+RUN npm ci
+COPY agent-engine-reactplan ./
+RUN npm run build
+
+FROM node:20-alpine
+ENV NODE_ENV=production
+WORKDIR /app/agent-engine-reactplan
+COPY agent-engine-reactplan/package.json agent-engine-reactplan/package-lock.json ./
+RUN npm ci --omit=dev \
+    && npm cache clean --force \
+    && mkdir -p /var/lib/paperagent-engine \
+    && chown node:node /var/lib/paperagent-engine
+COPY --from=build /workspace/agent-engine-reactplan/dist ./dist
+COPY agent-engine-contract /app/agent-engine-contract
+USER node
+EXPOSE 8092
+ENTRYPOINT ["node", "dist/index.js"]
