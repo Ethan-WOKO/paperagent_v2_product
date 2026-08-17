@@ -80,6 +80,17 @@ P1 模型 provider/model 来自任务权威，但模型 API 密钥由 Engine 进
 凭证，不得改写 authority、清空事件或重新提交已经存在的沙箱执行。Engine 冷启动后，
 Java 用相同 taskId/digest 重新提交以恢复运行时凭证；凭证本身不属于持久恢复事实。
 
+### 4.1 Sandbox 输入绑定
+
+`sandboxSubmit.inputs` 中的 path 不得重复。该数组的原始顺序仍属于提交 JSON，因此参与
+该次 sandbox 请求自身的 `requestDigest` 和精确重放冲突判断；但文件输入在执行与
+Receipt 中的权威语义是由唯一 `path + sha256` 组成的集合，而不是模型给出的排列顺序。
+
+产品网关可以按 path 规范排序 `Receipt.inputs`。Engine 校验 Receipt 时必须先拒绝重复
+path，再按 `path + sha256` 比较完整集合；不得按数组下标逐项绑定，也不得因同一集合的
+排列不同而产生 `RECEIPT_INPUTS_BINDING_MISMATCH`。`sizeBytes` 由产品网关从冻结
+Workspace 重证，Engine 仍须验证 Receipt schema 的大小边界。
+
 ## 5. 事件和恢复
 
 - 每个任务的持久事件 `sequence` 从 1 开始严格连续递增。
