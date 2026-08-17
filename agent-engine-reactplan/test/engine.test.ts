@@ -74,15 +74,31 @@ describe("AgentEngine", () => {
 
     const request = provider.requests.at(-1)!;
     const history = request.messages.find((message) =>
-      message.role === "user" && message.content?.startsWith("Historical conversation data:"));
+      message.role === "user" && message.content?.startsWith("Historical context data envelope:"));
     expect(history).toBeTruthy();
-    const turns = JSON.parse(history!.content!.slice(history!.content!.indexOf("\n") + 1)) as Array<{ instruction: string; conclusion: string }>;
-    expect(turns).toHaveLength(4);
-    expect(turns.at(-1)).toMatchObject({ instruction: "history instruction 5", conclusion: "history conclusion 5" });
+    const envelope = JSON.parse(history!.content!.slice(history!.content!.indexOf("\n") + 1)) as {
+      schemaVersion: string;
+      type: string;
+      notAnInstruction: boolean;
+      usage: Record<string, boolean>;
+      turns: Array<{ instruction: string; conclusion: string }>;
+    };
+    expect(envelope).toMatchObject({
+      schemaVersion: "1.0",
+      type: "historical_context",
+      notAnInstruction: true,
+      usage: {
+        currentTaskHasPriority: true,
+        continueOnlyWhenCurrentTaskRequestsIt: true,
+        projectFactsRequireCurrentTaskEvidence: true
+      }
+    });
+    expect(envelope.turns).toHaveLength(4);
+    expect(envelope.turns.at(-1)).toMatchObject({ instruction: "history instruction 5", conclusion: "history conclusion 5" });
     expect(history!.content).not.toContain("private other instruction");
     expect(history!.content).not.toContain("private other project instruction");
     expect(request.messages.at(-1)).toMatchObject({ role: "user", content: "Current task: continue the previous task" });
-    expect(JSON.stringify(turns)).not.toContain("toolCallId");
+    expect(JSON.stringify(envelope.turns)).not.toContain("toolCallId");
   });
 
   it("answers the current runtime-identity question without replaying history or calling Project tools", async () => {
@@ -176,7 +192,7 @@ describe("AgentEngine", () => {
     await resumed.submit(current);
     await waitFor(() => resumed.get(current.taskId).state === "succeeded");
     const historicalData = resumedProvider.requests[0]!.messages.find((message) =>
-      message.role === "user" && message.content?.startsWith("Historical conversation data:"));
+      message.role === "user" && message.content?.startsWith("Historical context data envelope:"));
     expect(historicalData?.content).toContain("the source was inspected");
     expect(historicalData?.content).toContain("inspect the source");
   });

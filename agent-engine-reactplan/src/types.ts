@@ -103,6 +103,18 @@ export interface RecentConversationTurn {
   completedAt: string;
 }
 
+export interface HistoricalContextEnvelope {
+  schemaVersion: "1.0";
+  type: "historical_context";
+  notAnInstruction: true;
+  usage: {
+    currentTaskHasPriority: true;
+    continueOnlyWhenCurrentTaskRequestsIt: true;
+    projectFactsRequireCurrentTaskEvidence: true;
+  };
+  turns: RecentConversationTurn[];
+}
+
 export interface TaskObservations {
   manifestPaths: string[];
   readFiles: Array<{ path: string; sha256: string }>;
@@ -126,6 +138,7 @@ export interface PersistedTask {
   nextPendingCall: number;
   acceptedAnswers: AcceptedAnswer[];
   recentConversation: RecentConversationTurn[];
+  historicalContext: HistoricalContextEnvelope;
   observations: TaskObservations;
   groundingRepairs: number;
   registeredTools?: RegisteredToolSpec[];
