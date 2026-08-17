@@ -79,10 +79,7 @@ class AgentEngineRegisteredToolGatewayTest {
                 .register(retrievalExecutor("recommend_literature",
                         ToolDescriptor.SideEffectType.CREATE,
                         List.of(ToolDescriptor.ResourceScope.EXTERNAL,
-                                ToolDescriptor.ResourceScope.SESSION)))
-                .register(retrievalExecutor("paper_polish_status",
-                        ToolDescriptor.SideEffectType.NONE,
-                        List.of(ToolDescriptor.ResourceScope.SESSION)));
+                                ToolDescriptor.ResourceScope.SESSION)));
         AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
         when(policies.decideProject(null, null)).thenReturn(
                 new AgentToolPolicyEngine.Decision(
@@ -185,6 +182,29 @@ class AgentEngineRegisteredToolGatewayTest {
                 .isInstanceOfSatisfying(EngineGatewayException.class,
                         failure -> assertThat(failure.code()).isEqualTo(
                                 "REGISTERED_TOOL_SERVER_ARGUMENT_FORBIDDEN"));
+    }
+
+    @Test
+    void exposesPaperTaskReadsButNotTheConfirmationGatedCancelTool() {
+        ToolRegistry registry = new ToolRegistry()
+                .register(retrievalExecutor("paper_polish_status",
+                        ToolDescriptor.SideEffectType.NONE,
+                        List.of(ToolDescriptor.ResourceScope.SESSION)))
+                .register(retrievalExecutor("paper_polish_result",
+                        ToolDescriptor.SideEffectType.NONE,
+                        List.of(ToolDescriptor.ResourceScope.SESSION)))
+                .register(retrievalExecutor("paper_task_cancel",
+                        ToolDescriptor.SideEffectType.MODIFY,
+                        List.of(ToolDescriptor.ResourceScope.SESSION)));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(
+                new AgentToolPolicyEngine.Decision(List.of(), 0, 1, "test"));
+        AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
+                json, registry, policies, contexts(VERSION));
+
+        assertThat(gateway.catalog(authority()).tools())
+                .extracting(tool -> tool.function().name())
+                .containsExactly("paper_polish_result", "paper_polish_status");
     }
 
     @Test
