@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDiffEntry;
 import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
@@ -99,6 +100,33 @@ class AgentEngineWorkspaceGatewayTest {
                 "call." + "c".repeat(40), "MODIFY", "Sort.java", hash, "class Wrong {}")))
                 .isInstanceOfSatisfying(EngineGatewayException.class,
                         failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_FILE_HASH_CONFLICT"));
+    }
+
+    @Test
+    void reattestsExactWorkspaceBytesForPublication() {
+        byte[] content = "class Sort {}\n".getBytes(StandardCharsets.UTF_8);
+        String hash = sha256(content);
+        AgentEngineWorkspaceGateway gateway = gateway(content, hash);
+        String replacement = "class Sort { int value; }\n";
+        gateway.write(writableAuthority(), writeRequest(new ObjectMapper(),
+                "call." + "a".repeat(40), "MODIFY", "Sort.java", hash, replacement));
+
+        var diff = gateway.diff(writableAuthority());
+        var changes = gateway.publicationChanges(writableAuthority(), diff.entries());
+
+        assertThat(changes).singleElement().satisfies(change -> {
+            assertThat(change.operation()).isEqualTo("MODIFY");
+            assertThat(change.path()).isEqualTo("Sort.java");
+            assertThat(change.beforeSha256()).isEqualTo(hash);
+            assertThat(change.afterSha256()).isEqualTo(
+                    sha256(replacement.getBytes(StandardCharsets.UTF_8)));
+            assertThat(change.content()).isEqualTo(replacement);
+        });
+        assertThatThrownBy(() -> gateway.publicationChanges(writableAuthority(), List.of(
+                new WorkspaceDiffEntry("MODIFY", "Sort.java", hash, "9".repeat(64)))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("WORKSPACE_PUBLICATION_DIFF_CONFLICT"));
     }
 
     private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {

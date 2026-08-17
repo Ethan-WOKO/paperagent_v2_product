@@ -9,6 +9,8 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxView
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDiff;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteResult;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspacePublishRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspacePublishResult;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -29,15 +31,18 @@ final class AgentEngineGatewayController {
     private final AgentEngineWorkspaceGateway workspaces;
     private final AgentEngineSandboxGateway sandboxes;
     private final AgentEngineRegisteredToolGateway registeredTools;
+    private final AgentEnginePublicationGateway publications;
 
     AgentEngineGatewayController(AgentEngineTaskGrantService grants,
                                  AgentEngineWorkspaceGateway workspaces,
                                  AgentEngineSandboxGateway sandboxes,
-                                 AgentEngineRegisteredToolGateway registeredTools) {
+                                 AgentEngineRegisteredToolGateway registeredTools,
+                                 AgentEnginePublicationGateway publications) {
         this.grants = grants;
         this.workspaces = workspaces;
         this.sandboxes = sandboxes;
         this.registeredTools = registeredTools;
+        this.publications = publications;
     }
 
     @GetMapping("/tools")
@@ -81,6 +86,15 @@ final class AgentEngineGatewayController {
             @PathVariable String taskId,
             @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
         return workspaces.diff(grants.verifyWorkspaceWrite(authorization, taskId));
+    }
+
+    @PostMapping("/workspace/publish")
+    WorkspacePublishResult publish(
+            @PathVariable String taskId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestBody WorkspacePublishRequest request) {
+        return publications.publish(
+                grants.verifyWorkspaceWrite(authorization, taskId), request);
     }
 
     @PostMapping("/sandbox-executions")

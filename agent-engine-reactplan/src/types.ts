@@ -46,9 +46,9 @@ export type TaskEvent =
   | (EventBase & { type: "message"; content: string })
   | (EventBase & { type: "question"; questionId: string; text: string })
   | (EventBase & { type: "tool"; callId: string; name: ToolName; state: "requested" | "running" | "succeeded" | "failed" | "cancelled"; inputSummary: string; outputSummary: string | null; receiptRef: string | null })
-  | (EventBase & { type: "delivery"; conclusion: string; receiptRefs: string[] });
+  | (EventBase & { type: "delivery"; conclusion: string; receiptRefs: string[]; publication?: PublicationFact });
 
-export type ToolName = "project.list" | "project.read" | "workspace.write" | "workspace.diff" | "sandbox.execute";
+export type ToolName = "project.list" | "project.read" | "workspace.write" | "workspace.diff" | "sandbox.execute" | "project.publish";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -124,6 +124,7 @@ export interface TaskObservations {
     status: Receipt["status"];
     inputs: Array<{ path: string; sha256: string }>;
     workspaceRevision: number;
+    receiptRef: string;
   }>;
   workspaceRevision: number;
   workspaceDiffObservedRevision: number;
@@ -151,6 +152,7 @@ export interface PersistedTask {
   observations: TaskObservations;
   groundingRepairs: number;
   candidateValidationRepairs: number;
+  publication?: PublicationFact;
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;
 }
@@ -180,6 +182,18 @@ export interface WorkspaceDiffView {
     beforeSha256: string | null;
     afterSha256: string;
   }>;
+}
+export interface PublicationFact {
+  operationId: number;
+  baseProjectVersion: string;
+  publishedProjectVersion: string;
+  publishedRevisionId: number;
+  receiptRef: string;
+}
+export interface WorkspacePublishResult extends PublicationFact {
+  contractVersion: "1.0";
+  clientRequestId: string;
+  requestDigest: string;
 }
 export interface SandboxView { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; executionRef: string; state: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "TIMED_OUT" | "CANCELLED" | "SYSTEM_ERROR"; receiptRef: string | null }
 export interface Receipt { contractVersion: "1.0"; receiptRef: string; executionRef: string; status: "SUCCEEDED" | "FAILED" | "TIMED_OUT" | "CANCELLED" | "SYSTEM_ERROR"; exitCode: number | null; stdout: { text: string; truncated: boolean; originalBytes: number }; stderr: { text: string; truncated: boolean; originalBytes: number }; inputFingerprint: string; inputs: Array<{ path: string; sha256: string; sizeBytes: number }>; startedAt: string; finishedAt: string }

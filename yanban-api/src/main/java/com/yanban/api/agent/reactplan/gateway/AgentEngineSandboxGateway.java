@@ -133,6 +133,16 @@ final class AgentEngineSandboxGateway {
         return read(value.receiptJson(), Receipt.class);
     }
 
+    Receipt requireSuccessfulReceipt(
+            EngineTaskAuthority authority, String receiptRef) {
+        Receipt receipt = receipt(authority, receiptRef);
+        if (!"SUCCEEDED".equals(receipt.status())
+                || receipt.exitCode() == null || receipt.exitCode() != 0) {
+            throw EngineGatewayException.conflict("WORKSPACE_PUBLICATION_RECEIPT_FAILED");
+        }
+        return receipt;
+    }
+
     private AgentEngineSandboxExecutionEntity dispatch(
             AgentEngineSandboxExecutionEntity value, StoredRequest stored) {
         SandboxDispatch request = dispatch(stored);

@@ -13,6 +13,7 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWr
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnProjectVersionSourceFactory;
+import com.yanban.api.project.AutomaticProjectFileChange;
 import com.yanban.api.project.ProjectStorageProperties;
 import io.paperagent.v2.contracts.DiffId;
 import io.paperagent.v2.contracts.DiffKind;
@@ -210,6 +211,34 @@ final class AgentEngineWorkspaceGateway {
         return new AgentEngineGatewayDtos.WorkspaceDiff(
                 "1.0", authority.taskId(), authority.projectVersion(),
                 !entries.isEmpty(), entries);
+    }
+
+    List<AutomaticProjectFileChange> publicationChanges(
+            EngineTaskAuthority authority,
+            List<AgentEngineGatewayDtos.WorkspaceDiffEntry> requested) {
+        AgentEngineGatewayDtos.WorkspaceDiff actual = diff(authority);
+        if (!actual.changed() || requested == null
+                || !actual.entries().equals(requested)) {
+            throw EngineGatewayException.conflict("WORKSPACE_PUBLICATION_DIFF_CONFLICT");
+        }
+        BoundWorkspace bound = bind(authority);
+        Map<String, WorkspaceFileStat> current = new LinkedHashMap<>();
+        stats(bound).forEach(stat -> current.put(stat.path().value(), stat));
+        List<AutomaticProjectFileChange> changes = new ArrayList<>();
+        for (AgentEngineGatewayDtos.WorkspaceDiffEntry entry : actual.entries()) {
+            WorkspaceFileStat stat = current.get(entry.path());
+            if (stat == null || !stat.hash().value().equals(entry.afterSha256())) {
+                throw EngineGatewayException.conflict("WORKSPACE_PUBLICATION_FILE_CHANGED");
+            }
+            byte[] bytes = bound.port().read(bound.materialized().workspace(), stat.path());
+            if (bytes.length != stat.size() || !sha256(bytes).equals(entry.afterSha256())) {
+                throw EngineGatewayException.conflict("WORKSPACE_PUBLICATION_FILE_CHANGED");
+            }
+            changes.add(new AutomaticProjectFileChange(
+                    entry.operation(), entry.path(), entry.beforeSha256(),
+                    entry.afterSha256(), utf8(bytes)));
+        }
+        return List.copyOf(changes);
     }
 
     ResolvedInputs resolveInputs(EngineTaskAuthority authority, List<SandboxInput> requested) {

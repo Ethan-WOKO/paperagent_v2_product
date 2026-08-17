@@ -85,7 +85,7 @@
         "type": { "const": "tool" },
         "callId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "name": {
-          "enum": ["project.list", "project.read", "workspace.write", "workspace.diff", "sandbox.execute"],
+          "enum": ["project.list", "project.read", "workspace.write", "workspace.diff", "sandbox.execute", "project.publish"],
           "description": "Stable contract name, independent of the model-visible tool name."
         },
         "state": { "enum": ["requested", "running", "succeeded", "failed", "cancelled"] },
@@ -111,6 +111,18 @@
           "maxItems": 64,
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "publication": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operationId", "baseProjectVersion", "publishedProjectVersion", "publishedRevisionId", "receiptRef"],
+          "properties": {
+            "operationId": { "type": "integer", "minimum": 1 },
+            "baseProjectVersion": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "publishedProjectVersion": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "publishedRevisionId": { "type": "integer", "minimum": 1 },
+            "receiptRef": { "type": "string", "minLength": 1, "maxLength": 256 }
+          }
         }
       }
     }
