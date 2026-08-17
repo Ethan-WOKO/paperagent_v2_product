@@ -1,0 +1,9 @@
+{
+  "contractVersion": "1.0",
+  "clientRequestId": "call.abcdefghijklmnop",
+  "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "operation": "MODIFY",
+  "path": "src/main/java/Sort.java",
+  "baseSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "content": "public class Sort {}\n"
+}

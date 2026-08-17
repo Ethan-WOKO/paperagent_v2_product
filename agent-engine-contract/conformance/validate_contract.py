@@ -72,6 +72,8 @@ def validate_openapi() -> int:
         "/v1/tasks/{taskId}/answer",
         "/internal/v1/agent-engine/tasks/{taskId}/workspace/files",
         "/internal/v1/agent-engine/tasks/{taskId}/workspace/read",
+        "/internal/v1/agent-engine/tasks/{taskId}/workspace/write",
+        "/internal/v1/agent-engine/tasks/{taskId}/workspace/diff",
         "/internal/v1/agent-engine/tasks/{taskId}/sandbox-executions",
         "/internal/v1/agent-engine/tasks/{taskId}/sandbox-executions/{clientRequestId}",
         "/internal/v1/agent-engine/tasks/{taskId}/receipts/{receiptRef}",

@@ -1,15 +1,21 @@
 package com.yanban.api.agent.reactplan.gateway;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileEntry;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileList;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileRead;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ReceiptInput;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxInput;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteResult;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnProjectVersionSourceFactory;
 import com.yanban.api.project.ProjectStorageProperties;
+import io.paperagent.v2.contracts.DiffId;
+import io.paperagent.v2.contracts.DiffKind;
 import io.paperagent.v2.contracts.ProjectPath;
 import io.paperagent.v2.contracts.ProjectVersionRef;
 import io.paperagent.v2.contracts.WorkspaceId;
@@ -24,6 +30,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
@@ -45,18 +52,22 @@ final class AgentEngineWorkspaceGateway {
     private final AuthenticatedAgentTurnProjectVersionSourceFactory sources;
     private final ProjectStorageProperties storage;
     private final EngineGatewayProperties properties;
+    private final ObjectMapper json;
     private final Path root;
     private final ConcurrentMap<String, BoundWorkspace> active = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, WriteFact> writes = new ConcurrentHashMap<>();
 
     AgentEngineWorkspaceGateway(
             AgentTurnProductContextResolver contexts,
             AuthenticatedAgentTurnProjectVersionSourceFactory sources,
             ProjectStorageProperties storage,
-            EngineGatewayProperties properties) {
+            EngineGatewayProperties properties,
+            ObjectMapper json) {
         this.contexts = contexts;
         this.sources = sources;
         this.storage = storage;
         this.properties = properties;
+        this.json = json;
         try {
             Path configured = Path.of(properties.getWorkspaceRoot());
             this.root = (configured.isAbsolute()
@@ -104,6 +115,101 @@ final class AgentEngineWorkspaceGateway {
         }
         return new FileRead("1.0", path.value(), bytes.length, stat.hash().value(),
                 mediaType(path.value()), "utf-8", utf8(bytes), false);
+    }
+
+    synchronized WorkspaceWriteResult write(
+            EngineTaskAuthority authority, WorkspaceWriteRequest request) {
+        validateWrite(request);
+        String key = authority.taskId() + "\0" + request.clientRequestId();
+        WriteFact replay = writes.get(key);
+        if (replay != null) {
+            if (!replay.requestDigest().equals(request.requestDigest())) {
+                throw EngineGatewayException.conflict("WORKSPACE_WRITE_DIGEST_CONFLICT");
+            }
+            WorkspaceWriteResult value = replay.result();
+            return new WorkspaceWriteResult(value.contractVersion(), value.clientRequestId(),
+                    value.requestDigest(), true, value.operation(), value.path(),
+                    value.beforeSha256(), value.afterSha256(), value.sizeBytes());
+        }
+        final ProjectPath path;
+        try {
+            path = new ProjectPath(request.path());
+        } catch (RuntimeException invalid) {
+            throw EngineGatewayException.badRequest("WORKSPACE_PATH_INVALID");
+        }
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("operation", request.operation());
+        semantics.put("path", request.path());
+        semantics.put("baseSha256", request.baseSha256());
+        semantics.put("content", request.content());
+        if (!ReactPlanCanonicalJson.digest(json, semantics).equals(request.requestDigest())) {
+            throw EngineGatewayException.badRequest("WORKSPACE_WRITE_DIGEST_INVALID");
+        }
+        byte[] content = request.content().getBytes(StandardCharsets.UTF_8);
+        if (content.length > properties.getMaxReadBytes()) {
+            throw EngineGatewayException.tooLarge("WORKSPACE_FILE_TOO_LARGE");
+        }
+        BoundWorkspace bound = bind(authority);
+        WorkspaceFileStat existing = stats(bound).stream()
+                .filter(value -> value.path().equals(path)).findFirst().orElse(null);
+        String before = existing == null ? null : existing.hash().value();
+        String after = sha256(content);
+        try {
+            if ("ADD".equals(request.operation())) {
+                if (request.baseSha256() != null || existing != null) {
+                    throw EngineGatewayException.conflict("WORKSPACE_ADD_TARGET_EXISTS");
+                }
+                bound.port().create(bound.materialized().workspace(), path, content);
+            } else {
+                if (request.baseSha256() == null
+                        || !request.baseSha256().matches("[a-f0-9]{64}")) {
+                    throw EngineGatewayException.badRequest("WORKSPACE_BASE_HASH_INVALID");
+                }
+                if (existing == null) {
+                    throw EngineGatewayException.notFound("WORKSPACE_FILE_NOT_FOUND");
+                }
+                if (!existing.hash().value().equals(request.baseSha256())) {
+                    throw EngineGatewayException.conflict("WORKSPACE_FILE_HASH_CONFLICT");
+                }
+                if (existing.hash().value().equals(after)) {
+                    throw EngineGatewayException.conflict("WORKSPACE_WRITE_NO_CHANGE");
+                }
+                bound.port().replace(bound.materialized().workspace(), path, content);
+            }
+        } catch (EngineGatewayException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw EngineGatewayException.conflict("WORKSPACE_WRITE_REJECTED");
+        }
+        WorkspaceFileStat written = bound.port().stat(bound.materialized().workspace(), path);
+        if (!written.hash().value().equals(after) || written.size() != content.length) {
+            throw EngineGatewayException.conflict("WORKSPACE_WRITE_ATTESTATION_FAILED");
+        }
+        WorkspaceWriteResult result = new WorkspaceWriteResult(
+                "1.0", request.clientRequestId(), request.requestDigest(), false,
+                request.operation(), path.value(), before, after, content.length);
+        writes.put(key, new WriteFact(request.requestDigest(), result));
+        return result;
+    }
+
+    AgentEngineGatewayDtos.WorkspaceDiff diff(EngineTaskAuthority authority) {
+        BoundWorkspace bound = bind(authority);
+        var source = bound.port().diff(bound.materialized().workspace(),
+                new DiffId("engine-diff." + authority.taskId().substring("task.".length())),
+                Instant.EPOCH);
+        List<AgentEngineGatewayDtos.WorkspaceDiffEntry> entries = source.entries().stream()
+                .filter(entry -> entry.kind() == DiffKind.ADD || entry.kind() == DiffKind.MODIFY)
+                .map(entry -> new AgentEngineGatewayDtos.WorkspaceDiffEntry(
+                        entry.kind().name(), entry.path().value(),
+                        entry.beforeHash().map(value -> value.value()).orElse(null),
+                        entry.afterHash().map(value -> value.value()).orElse(null)))
+                .toList();
+        if (entries.size() != source.entries().size()) {
+            throw EngineGatewayException.conflict("WORKSPACE_DIFF_UNSUPPORTED");
+        }
+        return new AgentEngineGatewayDtos.WorkspaceDiff(
+                "1.0", authority.taskId(), authority.projectVersion(),
+                !entries.isEmpty(), entries);
     }
 
     ResolvedInputs resolveInputs(EngineTaskAuthority authority, List<SandboxInput> requested) {
@@ -190,6 +296,18 @@ final class AgentEngineWorkspaceGateway {
         }
     }
 
+    private static void validateWrite(WorkspaceWriteRequest request) {
+        if (request == null || !"1.0".equals(request.contractVersion())
+                || request.clientRequestId() == null
+                || !request.clientRequestId().matches("call\\.[A-Za-z0-9_-]{16,120}")
+                || request.requestDigest() == null
+                || !request.requestDigest().matches("[a-f0-9]{64}")
+                || !("ADD".equals(request.operation()) || "MODIFY".equals(request.operation()))
+                || request.path() == null || request.content() == null) {
+            throw EngineGatewayException.badRequest("WORKSPACE_WRITE_INVALID");
+        }
+    }
+
     private static String mediaType(String path) {
         String lower = path.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".java")) return "text/x-java-source";
@@ -217,6 +335,7 @@ final class AgentEngineWorkspaceGateway {
 
     record ResolvedInputs(Map<String, String> files, List<ReceiptInput> inputs,
                           String inputFingerprint) { }
+    private record WriteFact(String requestDigest, WorkspaceWriteResult result) { }
     private record BoundWorkspace(WorkspacePort port,
                                   VerifiedWorkspaceMaterialization materialized) { }
 }

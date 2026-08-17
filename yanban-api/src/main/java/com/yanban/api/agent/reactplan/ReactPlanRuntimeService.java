@@ -148,7 +148,7 @@ final class ReactPlanRuntimeService {
         project.put("projectVersion", context.projectVersionId().orElseThrow());
         Map<String, Object> permissions = new LinkedHashMap<>();
         permissions.put("readProject", true);
-        permissions.put("writeWorkspace", false);
+        permissions.put("writeWorkspace", true);
         permissions.put("executeSandbox", true);
         Map<String, Object> selectedModel = new LinkedHashMap<>();
         selectedModel.put("provider", ReactPlanValues.text(provider, "provider"));
@@ -174,7 +174,8 @@ final class ReactPlanRuntimeService {
                         RoutingRequirement.EXECUTION));
         ExecutionProfile profile = new ExecutionProfile(
                 ExecutionTier.SANDBOX_STANDARD,
-                Set.of(Capability.READ_PROJECT, Capability.EXECUTE_COMMAND),
+                Set.of(Capability.READ_PROJECT, Capability.WRITE_WORKSPACE,
+                        Capability.EXECUTE_COMMAND),
                 NetworkPolicy.DENY_ALL,
                 List.of(),
                 new ResourceLimits(
@@ -189,7 +190,7 @@ final class ReactPlanRuntimeService {
                         instruction,
                         List.of("authenticated frozen ProjectVersion"),
                         List.of("receipt-backed answer"),
-                        List.of("read-only Project", "no Project modification")),
+                        List.of("modify isolated Workspace only", "no direct Project modification")),
                 profile,
                 new BoundedExecutionHints(20, Duration.ofMinutes(6)),
                 frozen, frozen.plusMillis(1), frozen.plusMillis(2));

@@ -1,7 +1,7 @@
 {
   "contractVersion": "1.0",
   "taskId": "task.1111111111111111111111111111111111111111111111111111111111111111",
-  "requestDigest": "b032560b2cff0af91ac72eef1d6b3bd9a73dd2896b903f49b547559f16a7ad3d",
+  "requestDigest": "6a42088ede2fb2d079525106e32c78b5208a7329eba680762e6413c3c1131188",
   "authority": {
     "runMode": "PERSISTENT_PLAN_EXECUTE",
     "sessionRef": "session.1",
@@ -12,7 +12,7 @@
     "instruction": "Check whether src/main/java/Sort.java compiles successfully. Do not modify files.",
     "permissions": {
       "readProject": true,
-      "writeWorkspace": false,
+      "writeWorkspace": true,
       "executeSandbox": true
     },
     "model": {

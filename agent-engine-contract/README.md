@@ -6,7 +6,7 @@
 
 状态：Issue #150 冻结候选
 
-适用范围：Java 产品与独立 Agent Engine 的 P1 边界
+适用范围：Java 产品与独立 Agent Engine 的 P1/P2 隔离 Workspace 边界
 
 ## 1. 决策
 
@@ -153,7 +153,8 @@ P1 是严格只读 Project 验证：真实冻结 ProjectVersion → Workspace li
 验收任务涉及沙箱，成功 delivery 必须携带至少一个正式 Receipt 引用；该要求由
 conformance/acceptance 行为测试强制，而不是由通用事件 schema 强制。
 
-P2 才增加 Workspace 写入和自动发布。`publish` 永远不是模型工具；确定性终结器必须
+Issue #165 的 P2 第一段增加受 task authority 约束的 Workspace ADD/MODIFY、diff 与
+精确 Candidate 沙箱绑定，但仍不发布。后续 P2 才增加自动发布。`publish` 永远不是模型工具；确定性终结器必须
 证明最终 Candidate 内容与最后一次成功沙箱的全部输入 hash 完全一致，才可创建新的
 不可变 ProjectVersion，并保留前一版本回滚入口。
 

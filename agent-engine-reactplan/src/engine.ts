@@ -1,5 +1,5 @@
-import type { AcceptedAnswer, ChatMessage, HistoricalContextEnvelope, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RecentConversationTurn, RegisteredToolCatalog, RegisteredToolResult, TaskEvent, TaskObservations, TaskSubmission, TaskView, ToolName } from "./types.js";
-import type { GatewayClient, SandboxRequest } from "./gateway.js";
+import type { AcceptedAnswer, ChatMessage, HistoricalContextEnvelope, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RecentConversationTurn, RegisteredToolCatalog, RegisteredToolResult, TaskEvent, TaskObservations, TaskSubmission, TaskView, ToolName, WorkspaceWriteResult } from "./types.js";
+import type { GatewayClient, SandboxRequest, WorkspaceWriteRequest } from "./gateway.js";
 import { ContractValidator } from "./validation.js";
 import { TaskStore } from "./store.js";
 import { bounded, digestObject, EngineProblem, problem, sha256, terminal } from "./util.js";
@@ -13,10 +13,15 @@ const TERMINAL_SANDBOX = new Set(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED
 const PROJECT_FILE_REFERENCE = /(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:java|kt|kts|groovy|scala|xml|gradle|properties|yaml|yml|json|toml|ini|cfg|conf|md|txt|py|js|jsx|ts|tsx|c|cc|cpp|cxx|h|hpp|cs|go|rs|rb|php|swift|sql|sh|ps1|bat|cmd)\b/gi;
 
 const MODEL_TOOLS = [
-  functionTool("list_project_files", "List the frozen ProjectVersion workspace manifest.", { type: "object", additionalProperties: false, properties: {} }),
-  functionTool("read_project_file", "Read one complete workspace file using its manifest hash.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" } } }),
+  functionTool("list_project_files", "List the current isolated Workspace manifest. It initially equals the frozen ProjectVersion and reflects later isolated Candidate writes without publishing them.", { type: "object", additionalProperties: false, properties: {} }),
+  functionTool("read_project_file", "Read one complete file from the current isolated Workspace using its current manifest hash. This can observe Candidate bytes after an isolated write.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" } } }),
   functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Commands start at the Project root; every source path in argv must use its exact Project-relative input path. For a Java source in any subdirectory, prefer ['yanban-runner','java','path/to/File.java']. Use this to validate code before concluding.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
   functionTool("ask_user", "Pause and ask one necessary, concrete question.", { type: "object", additionalProperties: false, required: ["question"], properties: { question: { type: "string", minLength: 1, maxLength: 4000 } } })
+];
+
+const WORKSPACE_MODEL_TOOLS = [
+  functionTool("write_workspace_file", "Create or fully replace one UTF-8 file in the isolated task Workspace. Use only when the current user explicitly asks to change the Project. MODIFY requires the exact current workspace hash; ADD requires baseSha256=null. This does not publish or alter the ProjectVersion.", { type: "object", additionalProperties: false, required: ["operation", "path", "baseSha256", "content"], properties: { operation: { enum: ["ADD", "MODIFY"] }, path: { type: "string" }, baseSha256: { type: ["string", "null"] }, content: { type: "string" } } }),
+  functionTool("get_workspace_diff", "Inspect the authoritative ADD/MODIFY diff currently present in the isolated task Workspace. This never publishes changes.", { type: "object", additionalProperties: false, properties: {} })
 ];
 
 type Subscriber = (event: TaskEvent) => void;
@@ -88,7 +93,8 @@ export class AgentEngine {
       messages: initialMessages(submission, historicalContext), modelCalls: 0,
       metrics: { startedAt: now, promptTokens: 0, completionTokens: 0 },
       receiptRefs: [], pendingCalls: [], nextPendingCall: 0, acceptedAnswers: [],
-      recentConversation, historicalContext, observations: emptyObservations(), groundingRepairs: 0
+      recentConversation, historicalContext, observations: emptyObservations(), groundingRepairs: 0,
+      candidateValidationRepairs: 0
     };
     await this.options.store.create(task);
     this.tasks.set(submission.taskId, task);
@@ -188,7 +194,9 @@ export class AgentEngine {
           provider: task.authority.model.provider,
           model: task.authority.model.model,
           messages: modelMessages,
-          tools: [...MODEL_TOOLS, ...(task.registeredTools ?? [])],
+          tools: [...MODEL_TOOLS,
+            ...(task.authority.permissions.writeWorkspace ? WORKSPACE_MODEL_TOOLS : []),
+            ...(task.registeredTools ?? [])],
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           signal
         });
@@ -201,6 +209,21 @@ export class AgentEngine {
         if (calls.length === 0) {
           const conclusion = bounded(response.content?.trim() ?? "", 16000);
           if (!conclusion) throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls"));
+          if (task.observations.workspaceChanges.length > 0
+              && !candidateWorkspaceValidated(task.observations)) {
+            task.candidateValidationRepairs += 1;
+            if (task.candidateValidationRepairs > MAX_GROUNDING_REPAIRS) {
+              throw new EngineProblem(502, problem(
+                "CANDIDATE_VALIDATION_REQUIRED", "code_validation",
+                "The modified Workspace was not inspected and validated against exact sandbox inputs", true));
+            }
+            task.messages.push({
+              role: "user",
+              content: "Server validation feedback: the isolated Workspace has unvalidated changes. Inspect the current Workspace diff, then run the sandbox over every changed path using its exact current afterSha256. Do not claim the ProjectVersion was changed; this task can only deliver a validated Candidate."
+            });
+            await this.options.store.save(task);
+            continue;
+          }
           const unobserved = unobservedFileReferences(conclusion, task.observations);
           const untestedChangeOutcome = claimsUntestedChangeOutcome(conclusion);
           if (unobserved.length > 0 || untestedChangeOutcome) {
@@ -279,6 +302,56 @@ export class AgentEngine {
       });
       return false;
     }
+    if (call.name === "write_workspace_file") {
+      if (!task.authority.permissions.writeWorkspace) {
+        throw new EngineProblem(403, problem("WORKSPACE_WRITE_NOT_ALLOWED", "authorization", "This task has no isolated Workspace write authority"));
+      }
+      const request = workspaceWriteRequest(call.id, args);
+      const summary = `operation=${request.operation}; path=${bounded(request.path, 512)}; baseSha256=${request.baseSha256 ?? "null"}; contentSha256=${sha256(request.content)}`;
+      await this.tool(task, call.id, "workspace.write", summary, "requested", null, null);
+      let result;
+      try {
+        result = await this.options.gateway.write(task.view.taskId, grant, request, signal);
+      } catch (error) {
+        if (!recoverableToolRejection(error)) throw error;
+        await this.tool(task, call.id, "workspace.write", summary, "failed",
+          `request rejected; code=${error.problem.code}`, null);
+        task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+          status: "REJECTED", code: error.problem.code,
+          message: "The isolated Workspace write was rejected. Re-read the current file/hash or choose a valid new relative path, then revise the request."
+        }) });
+        return false;
+      }
+      this.options.validator.validate("gateway-workspaceWriteResult", result);
+      if (result.clientRequestId !== call.id || result.requestDigest !== request.requestDigest) {
+        throw new EngineProblem(502, problem("WORKSPACE_WRITE_RESULT_INVALID", "tool", "Workspace write result identity does not match the request", true));
+      }
+      task.observations.workspaceRevision += 1;
+      task.observations.workspaceDiffObservedRevision = -1;
+      upsertWorkspaceChange(task.observations, result);
+      upsertRead(task.observations, result.path, result.afterSha256);
+      await this.tool(task, call.id, "workspace.write", summary, "succeeded",
+        `operation=${result.operation}; path=${result.path}; afterSha256=${result.afterSha256}; sizeBytes=${result.sizeBytes}; replayed=${result.replayed}`, null);
+      task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
+      return false;
+    }
+    if (call.name === "get_workspace_diff") {
+      if (!task.authority.permissions.writeWorkspace) {
+        throw new EngineProblem(403, problem("WORKSPACE_WRITE_NOT_ALLOWED", "authorization", "This task has no isolated Workspace write authority"));
+      }
+      await this.tool(task, call.id, "workspace.diff", "current isolated Workspace diff", "requested", null, null);
+      const result = await this.options.gateway.diff(task.view.taskId, grant, signal);
+      this.options.validator.validate("gateway-workspaceDiff", result);
+      if (result.taskId !== task.view.taskId
+          || result.projectVersion !== task.authority.project.projectVersion) {
+        throw new EngineProblem(502, problem("WORKSPACE_DIFF_INVALID", "tool", "Workspace diff identity is invalid", true));
+      }
+      task.observations.workspaceDiffObservedRevision = task.observations.workspaceRevision;
+      await this.tool(task, call.id, "workspace.diff", "current isolated Workspace diff", "succeeded",
+        `${result.entries.length} changed files; projectVersion unchanged`, null);
+      task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
+      return false;
+    }
     if (call.name === "execute_in_sandbox") {
       const request = sandboxRequest(call.id, args);
       const summary = `argv=${JSON.stringify(request.argv).slice(0, 700)}; inputs=${request.inputs.map((input) => `${input.path}@${input.sha256}`).join(",").slice(0, 250)}; timeoutMillis=${request.timeoutMillis}`;
@@ -315,7 +388,8 @@ export class AgentEngine {
       task.lastSandboxStatus = receipt.status;
       task.observations.sandboxRuns.push({
         argv: [...request.argv], status: receipt.status,
-        inputs: receipt.inputs.map((input) => ({ path: input.path, sha256: input.sha256 }))
+        inputs: receipt.inputs.map((input) => ({ path: input.path, sha256: input.sha256 })),
+        workspaceRevision: task.observations.workspaceRevision
       });
       const succeeded = receipt.status === "SUCCEEDED";
       await this.tool(task, call.id, "sandbox.execute", summary, succeeded ? "succeeded" : "failed", receiptSummary(receipt), receipt.receiptRef);
@@ -412,6 +486,28 @@ function sandboxRequest(callId: string, args: Record<string, unknown>): SandboxR
   return { contractVersion: "1.0", clientRequestId: callId, requestDigest: digestObject(semantics), argv, inputs: normalizedInputs, timeoutMillis: timeoutMillis as number };
 }
 
+function workspaceWriteRequest(callId: string, args: Record<string, unknown>): WorkspaceWriteRequest {
+  const operation = args.operation;
+  const path = requireString(args.path, "path");
+  const content = args.content;
+  const baseSha256 = args.baseSha256;
+  if ((operation !== "ADD" && operation !== "MODIFY") || typeof content !== "string"
+      || (baseSha256 !== null && typeof baseSha256 !== "string")) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Workspace write arguments are invalid"));
+  }
+  if (operation === "ADD" && baseSha256 !== null) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "ADD requires baseSha256=null"));
+  }
+  if (operation === "MODIFY" && (typeof baseSha256 !== "string" || !/^[a-f0-9]{64}$/.test(baseSha256))) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "MODIFY requires the exact current baseSha256"));
+  }
+  const semantics: Pick<WorkspaceWriteRequest, "operation" | "path" | "baseSha256" | "content"> = {
+    operation, path, baseSha256, content
+  };
+  return { contractVersion: "1.0", clientRequestId: callId,
+    requestDigest: digestObject(semantics), ...semantics };
+}
+
 function receiptSummary(receipt: Receipt): string {
   return `status=${receipt.status}; exitCode=${receipt.exitCode ?? "null"}; stdoutBytes=${receipt.stdout.originalBytes}; stderrBytes=${receipt.stderr.originalBytes}; inputFingerprint=${receipt.inputFingerprint}`;
 }
@@ -456,7 +552,7 @@ function initialMessages(
 ): ChatMessage[] {
   const runtimeIdentity = `provider=${submission.authority.model.provider}; model=${submission.authority.model.model}`;
   const messages: ChatMessage[] = [
-    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. Sandbox commands start at the Project root, so argv must use exact Project-relative source paths; prefer yanban-runner for a single Java, Python, C, or C++ source. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
+    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files, and never claim they changed the ProjectVersion. After any Workspace write, inspect the diff and validate the exact changed file hashes in the sandbox before reporting success. Sandbox commands start at the Project root, so argv must use exact Project-relative source paths; prefer yanban-runner for a single Java, Python, C, or C++ source. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
   ];
   if (historicalContext.turns.length > 0) {
     messages.push({
@@ -519,7 +615,10 @@ function selectRecentConversation(
 }
 
 function emptyObservations(): TaskObservations {
-  return { manifestPaths: [], readFiles: [], toolPaths: [], sandboxRuns: [] };
+  return {
+    manifestPaths: [], readFiles: [], toolPaths: [], sandboxRuns: [],
+    workspaceRevision: 0, workspaceDiffObservedRevision: -1, workspaceChanges: []
+  };
 }
 
 function normalizePersistedTask(task: PersistedTask): void {
@@ -530,7 +629,12 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.observations.readFiles ??= [];
   task.observations.toolPaths ??= [];
   task.observations.sandboxRuns ??= [];
+  for (const run of task.observations.sandboxRuns) run.workspaceRevision ??= 0;
+  task.observations.workspaceRevision ??= 0;
+  task.observations.workspaceDiffObservedRevision ??= -1;
+  task.observations.workspaceChanges ??= [];
   task.groundingRepairs ??= 0;
+  task.candidateValidationRepairs ??= 0;
 }
 
 function groundingMessage(observations: TaskObservations): ChatMessage {
@@ -544,7 +648,13 @@ function groundingMessage(observations: TaskObservations): ChatMessage {
     manifestFileCount: observations.manifestPaths.length,
     selectedPaths,
     readFiles: observations.readFiles,
-    sandboxRuns: observations.sandboxRuns
+    sandboxRuns: observations.sandboxRuns,
+    isolatedWorkspace: {
+      projectVersionChanged: false,
+      revision: observations.workspaceRevision,
+      diffObservedAtRevision: observations.workspaceDiffObservedRevision,
+      changes: observations.workspaceChanges
+    }
   };
   return {
     role: "system",
@@ -557,6 +667,35 @@ function upsertRead(observations: TaskObservations, path: string, sha256Value: s
     .filter((file) => file.path !== path)
     .concat({ path, sha256: sha256Value })
     .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function upsertWorkspaceChange(
+  observations: TaskObservations, result: WorkspaceWriteResult
+): void {
+  const previous = observations.workspaceChanges.find((change) => change.path === result.path);
+  const change = previous
+    ? { ...previous, afterSha256: result.afterSha256 }
+    : {
+        operation: result.operation,
+        path: result.path,
+        beforeSha256: result.beforeSha256,
+        afterSha256: result.afterSha256
+      };
+  observations.workspaceChanges = observations.workspaceChanges
+    .filter((item) => item.path !== result.path)
+    .concat(change)
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function candidateWorkspaceValidated(observations: TaskObservations): boolean {
+  if (observations.workspaceChanges.length === 0) return true;
+  if (observations.workspaceDiffObservedRevision !== observations.workspaceRevision) return false;
+  return observations.sandboxRuns.some((run) => {
+    if (run.status !== "SUCCEEDED" || run.workspaceRevision !== observations.workspaceRevision) return false;
+    const inputs = new Map(run.inputs.map((input) => [input.path, input.sha256]));
+    return observations.workspaceChanges.every((change) =>
+      inputs.get(change.path) === change.afterSha256);
+  });
 }
 
 function pathsFromToolOutput(value: unknown): string[] {

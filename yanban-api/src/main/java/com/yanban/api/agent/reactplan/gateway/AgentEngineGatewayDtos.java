@@ -13,6 +13,17 @@ public final class AgentEngineGatewayDtos {
     public record FileReadRequest(String contractVersion, String path, String expectedSha256) { }
     public record FileRead(String contractVersion, String path, long sizeBytes, String sha256,
                            String mediaType, String encoding, String content, boolean truncated) { }
+    public record WorkspaceWriteRequest(String contractVersion, String clientRequestId,
+                                        String requestDigest, String operation, String path,
+                                        String baseSha256, String content) { }
+    public record WorkspaceWriteResult(String contractVersion, String clientRequestId,
+                                       String requestDigest, boolean replayed, String operation,
+                                       String path, String beforeSha256, String afterSha256,
+                                       long sizeBytes) { }
+    public record WorkspaceDiffEntry(String operation, String path,
+                                     String beforeSha256, String afterSha256) { }
+    public record WorkspaceDiff(String contractVersion, String taskId, String projectVersion,
+                                boolean changed, List<WorkspaceDiffEntry> entries) { }
     public record SandboxInput(String path, String sha256) { }
     public record SandboxSubmit(String contractVersion, String clientRequestId, String requestDigest,
                                 List<String> argv, List<SandboxInput> inputs, long timeoutMillis) { }

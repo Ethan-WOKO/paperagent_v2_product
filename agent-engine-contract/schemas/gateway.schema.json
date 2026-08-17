@@ -71,6 +71,103 @@
         "truncated": { "const": false }
       }
     },
+    "workspaceWriteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "operation", "path", "baseSha256", "content"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "operation": { "enum": ["ADD", "MODIFY"] },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "baseSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "content": { "type": "string", "maxLength": 10485760 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "ADD" } }, "required": ["operation"] },
+          "then": { "properties": { "baseSha256": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "MODIFY" } }, "required": ["operation"] },
+          "then": { "properties": { "baseSha256": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
+    },
+    "workspaceWriteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "replayed", "operation", "path", "beforeSha256", "afterSha256", "sizeBytes"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "clientRequestId": { "type": "string", "pattern": "^call\\.[A-Za-z0-9_-]{16,120}$" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "replayed": { "type": "boolean" },
+        "operation": { "enum": ["ADD", "MODIFY"] },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "beforeSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "afterSha256": { "$ref": "#/$defs/sha256" },
+        "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 10485760 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "ADD" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "MODIFY" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
+    },
+    "workspaceDiffEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "path", "beforeSha256", "afterSha256"],
+      "properties": {
+        "operation": { "enum": ["ADD", "MODIFY"] },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "beforeSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "afterSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "ADD" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "MODIFY" } }, "required": ["operation"] },
+          "then": { "properties": { "beforeSha256": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
+    },
+    "workspaceDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "taskId", "projectVersion", "changed", "entries"],
+      "properties": {
+        "contractVersion": { "const": "1.0" },
+        "taskId": { "type": "string", "pattern": "^task\\.[a-f0-9]{64}$" },
+        "projectVersion": { "$ref": "#/$defs/sha256" },
+        "changed": { "type": "boolean" },
+        "entries": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/workspaceDiffEntry" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "changed": { "const": false } }, "required": ["changed"] },
+          "then": { "properties": { "entries": { "maxItems": 0 } } }
+        },
+        {
+          "if": { "properties": { "changed": { "const": true } }, "required": ["changed"] },
+          "then": { "properties": { "entries": { "minItems": 1 } } }
+        }
+      ]
+    },
     "sandboxInput": {
       "type": "object",
       "additionalProperties": false,

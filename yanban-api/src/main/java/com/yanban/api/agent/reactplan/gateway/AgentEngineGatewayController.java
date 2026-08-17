@@ -6,6 +6,9 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadReq
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.Receipt;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxSubmit;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxView;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDiff;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteResult;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -63,6 +66,21 @@ final class AgentEngineGatewayController {
                   @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
                   @RequestBody FileReadRequest request) {
         return workspaces.read(grants.verify(authorization, taskId, false), request);
+    }
+
+    @PostMapping("/workspace/write")
+    WorkspaceWriteResult write(
+            @PathVariable String taskId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestBody WorkspaceWriteRequest request) {
+        return workspaces.write(grants.verifyWorkspaceWrite(authorization, taskId), request);
+    }
+
+    @GetMapping("/workspace/diff")
+    WorkspaceDiff diff(
+            @PathVariable String taskId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+        return workspaces.diff(grants.verifyWorkspaceWrite(authorization, taskId));
     }
 
     @PostMapping("/sandbox-executions")

@@ -32,7 +32,9 @@ class AgentEngineTaskGrantServiceTest {
 
         assertThat(verified).isEqualTo(new EngineTaskAuthority(
                 TASK, DIGEST, 11, 12, 13, 14, VERSION,
-                true, true, NOW.plus(Duration.ofMinutes(10))));
+                true, true, true, NOW.plus(Duration.ofMinutes(10))));
+        assertThat(service.verifyWorkspaceWrite("Bearer " + grant.value(), TASK))
+                .isEqualTo(verified);
         assertThat(grant.expiresAt()).isEqualTo(verified.expiresAt());
 
         AgentEngineTaskGrantService expired = service(properties, NOW.plus(Duration.ofMinutes(11)));
@@ -45,7 +47,11 @@ class AgentEngineTaskGrantServiceTest {
     void rejectsTamperedAndWrongTaskGrantsBeforeAuthorityUse() {
         AgentEngineTaskGrantService service = service(properties(), NOW);
         EngineTaskGrant grant = service.issue(TASK, DIGEST, 11, 12);
-        String tampered = grant.value().substring(0, grant.value().length() - 1) + "A";
+        int signatureStart = grant.value().lastIndexOf('.') + 1;
+        char original = grant.value().charAt(signatureStart);
+        String tampered = grant.value().substring(0, signatureStart)
+                + (original == 'A' ? 'B' : 'A')
+                + grant.value().substring(signatureStart + 1);
 
         assertThatThrownBy(() -> service.verify("Bearer " + tampered, TASK, false))
                 .isInstanceOfSatisfying(EngineGatewayException.class,

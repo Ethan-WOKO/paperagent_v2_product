@@ -21,7 +21,7 @@ export class ContractValidator {
     }
     for (const name of names) this.validators.set(name, ajv.getSchema(`https://paperagent.local/agent-engine/schemas/${name}.schema.json`)!);
     const gatewayId = "https://paperagent.local/agent-engine/schemas/gateway.schema.json";
-    for (const definition of ["fileList", "fileReadRequest", "fileRead", "sandboxSubmit", "sandboxView"]) this.validators.set(`gateway-${definition}`, ajv.getSchema(`${gatewayId}#/$defs/${definition}`)!);
+    for (const definition of ["fileList", "fileReadRequest", "fileRead", "workspaceWriteRequest", "workspaceWriteResult", "workspaceDiff", "sandboxSubmit", "sandboxView"]) this.validators.set(`gateway-${definition}`, ajv.getSchema(`${gatewayId}#/$defs/${definition}`)!);
   }
 
   validate(name: string, value: unknown): void {

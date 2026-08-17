@@ -2,9 +2,9 @@
 
 ## 现在能测试什么
 
-这条链路已经支持：认证用户从 Project session 直接提交任务、由产品创建幂等 Turn、读取该 Turn 冻结的 ProjectVersion、让模型从现有只读 Project 工具和沙箱工具中多轮自主选择、保存正式 Receipt、查看状态/SSE、取消、回答追问以及 Engine 重启恢复。
+这条链路已经支持：认证用户从 Project session 直接提交任务、由产品创建幂等 Turn、读取该 Turn 冻结的 ProjectVersion、让模型从现有只读 Project 工具、隔离 Workspace ADD/MODIFY/diff 工具和沙箱工具中多轮自主选择、保存正式 Receipt、查看状态/SSE、取消、回答追问以及 Engine 重启恢复。
 
-P1 是只读链路：不会修改、发布或回滚 Project。
+P1 仍是只读链路。Issue #165 增加的修改只发生在 task 隔离 Workspace；当前仍不会发布或回滚 Project。
 
 ## 一次性准备
 
@@ -144,7 +144,7 @@ manifest 或其他 Project 工具结果中出现的文件声明了依赖。Engin
 
 任务运行中停止 Engine，再用完全相同的 `AGENT_ENGINE_DATA_DIR` 和环境变量启动。然后用完全相同的 session、`clientRequestId` 和请求内容再次提交：Java 会重用同一个 Turn 和 Plan，并签发新的短期 grant；Engine 会识别同一 task/digest、恢复执行而不新建任务。同一个 `clientRequestId` 改变内容会返回 409。重新请求状态或 SSE 时 sequence 不会倒退或重复。短期 grant 不写入磁盘，因此恢复必须经过这次认证重放，不能绕过产品权限。
 
-注册工具由 Java 根据当前 Project 权限动态筛选并在任务第一次模型调用前冻结。当前只暴露 `NONE/READ_ONLY` 类型，例如 `project_manifest`、`project_search`、`project_read_file` 和已注册的只读分析工具；Candidate、写入和外部副作用工具不会进入 P1。沙箱命令从 Project 根目录开始，子目录源码必须使用完整 Project 相对路径，例如 `yanban-runner java services/order-service/Sort.java`。
+注册工具由 Java 根据当前 Project 权限动态筛选并在任务第一次模型调用前冻结，继续只暴露 `NONE/READ_ONLY` 类型，例如 `project_manifest`、`project_search`、`project_read_file` 和已注册的只读分析工具。Workspace ADD/MODIFY/diff 是单独的 Runtime 工具，只在 task grant 带 `writeWorkspace` 时由 Engine 暴露；外部副作用工具仍不进入本链路。沙箱命令从 Project 根目录开始，子目录源码必须使用完整 Project 相对路径，例如 `yanban-runner java services/order-service/Sort.java`。
 
 ## 常见失败
 

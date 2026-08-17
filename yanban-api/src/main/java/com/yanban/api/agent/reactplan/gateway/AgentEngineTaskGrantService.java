@@ -57,7 +57,7 @@ public final class AgentEngineTaskGrantService {
         EngineTaskAuthority authority = new EngineTaskAuthority(
                 taskId, requestDigest, authenticatedUserId, turnId,
                 context.identity().sessionId(), context.identity().projectId(),
-                context.projectVersionId().orElseThrow(), true, true, expiresAt);
+                context.projectVersionId().orElseThrow(), true, true, true, expiresAt);
         byte[] payload = write(authority);
         String body = Base64.getUrlEncoder().withoutPadding().encodeToString(payload);
         String signature = Base64.getUrlEncoder().withoutPadding()
@@ -99,6 +99,14 @@ public final class AgentEngineTaskGrantService {
         } catch (RuntimeException | java.io.IOException failure) {
             throw EngineGatewayException.unauthorized("TASK_GRANT_INVALID");
         }
+    }
+
+    EngineTaskAuthority verifyWorkspaceWrite(String authorization, String taskId) {
+        EngineTaskAuthority authority = verify(authorization, taskId, false);
+        if (!authority.writeWorkspace()) {
+            throw EngineGatewayException.forbidden("TASK_GRANT_PERMISSION_DENIED");
+        }
+        return authority;
     }
 
     private byte[] write(EngineTaskAuthority authority) {
