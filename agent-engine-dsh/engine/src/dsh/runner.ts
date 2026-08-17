@@ -206,6 +206,27 @@ export class DshRunner implements Runner {
         task.cancelFinalize();
         return;
       }
+      // Authoritative Receipt terminal classification comes BEFORE the model
+      // budget check: a formal sandbox terminal state can never be overridden
+      // by budget exhaustion. A cancelled task never reaches this point — its
+      // original cancelled terminal was already finalized above.
+      const receipts = tools.collectReceipts();
+      const terminal = receipts.find((r) => r.status === 'TIMED_OUT' || r.status === 'SYSTEM_ERROR' || r.status === 'CANCELLED');
+      if (terminal) {
+        const isCancelledStatus = terminal.status === 'CANCELLED';
+        task.emit('status', {
+          state: 'failed',
+          error: {
+            contractVersion: '1.0',
+            code: isCancelledStatus ? 'SANDBOX_CANCELLED' : terminal.status === 'TIMED_OUT' ? 'SANDBOX_TIMED_OUT' : 'SANDBOX_SYSTEM_ERROR',
+            category: isCancelledStatus ? 'cancelled' : 'sandbox_system',
+            message: `sandbox execution ended in ${terminal.status}; the task cannot deliver a result`,
+            retryable: false,
+            sourceRef: null,
+          },
+        });
+        return;
+      }
       if (budgetExhausted) {
         task.emit('status', {
           state: 'failed',
@@ -214,27 +235,6 @@ export class DshRunner implements Runner {
             code: 'MODEL_BUDGET_EXCEEDED',
             category: 'model',
             message: `task exceeded the frozen ${MAX_MODEL_CALLS_PER_TASK} model-call budget`,
-            retryable: false,
-            sourceRef: null,
-          },
-        });
-        return;
-      }
-      const receipts = tools.collectReceipts();
-      // Sandbox system-terminal receipts can never be a successful delivery:
-      // a run that TIMED_OUT or hit SYSTEM_ERROR fails the task with a
-      // sandbox_system classification and produces NO delivery (T3 semantics).
-      // A FAILED receipt (compile error etc.) is a legitimate answer and still
-      // delivers — the model reports the compile failure.
-      const systemTerminal = receipts.find((r) => r.status === 'TIMED_OUT' || r.status === 'SYSTEM_ERROR');
-      if (systemTerminal) {
-        task.emit('status', {
-          state: 'failed',
-          error: {
-            contractVersion: '1.0',
-            code: systemTerminal.status === 'TIMED_OUT' ? 'SANDBOX_TIMED_OUT' : 'SANDBOX_SYSTEM_ERROR',
-            category: 'sandbox_system',
-            message: `sandbox execution ended in ${systemTerminal.status}; the task cannot deliver a result`,
             retryable: false,
             sourceRef: null,
           },

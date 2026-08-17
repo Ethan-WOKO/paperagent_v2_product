@@ -17,10 +17,12 @@
 //  - F7: the deadline is checked before every status request and sleeps never
 //    run past it — no status request is issued after the deadline.
 //  - F8: duplicate sandbox input paths are rejected BEFORE any dispatch.
-//  - F9/F10: TIMED_OUT / SYSTEM_ERROR receipts fail the task with a
-//    sandbox_system code and NO delivery.
+//  - F9/F10/F12: TIMED_OUT / SYSTEM_ERROR / CANCELLED receipts fail the task
+//    with a dedicated code (sandbox_system / cancelled) and NO delivery.
 //  - F11: a FAILED receipt (compile error) is a legitimate answer — the task
 //    succeeds with delivery (T2 semantics).
+//  - F13: Receipt terminal classification beats the model budget — a formal
+//    sandbox terminal state is never overridden by MODEL_BUDGET_EXCEEDED.
 //  - Budget: 20 model calls allowed, the 21st is rejected before dispatch.
 //  - ask_user: formal question/answer gate (no stub finalizer).
 import { spawn } from 'node:child_process';
@@ -619,11 +621,12 @@ async function main() {
     gw.close();
   }
 
-  // ---- F9/F10/F11: sandbox terminal receipt semantics ----
+  // ---- F9/F10/F11/F12: sandbox terminal receipt semantics ----
   for (const scenario of [
-    { suffix: '9', port: 18332, enginePort: 18333, terminalState: 'TIMED_OUT', expectedCode: 'SANDBOX_TIMED_OUT', expectDelivery: false },
-    { suffix: 'a', port: 18334, enginePort: 18335, terminalState: 'SYSTEM_ERROR', expectedCode: 'SANDBOX_SYSTEM_ERROR', expectDelivery: false },
-    { suffix: 'b', port: 18336, enginePort: 18337, terminalState: 'FAILED', expectedCode: null, expectDelivery: true },
+    { suffix: '9', port: 18332, enginePort: 18333, terminalState: 'TIMED_OUT', expectedCode: 'SANDBOX_TIMED_OUT', expectedCategory: 'sandbox_system', expectDelivery: false },
+    { suffix: 'a', port: 18334, enginePort: 18335, terminalState: 'SYSTEM_ERROR', expectedCode: 'SANDBOX_SYSTEM_ERROR', expectedCategory: 'sandbox_system', expectDelivery: false },
+    { suffix: 'b', port: 18336, enginePort: 18337, terminalState: 'FAILED', expectedCode: null, expectedCategory: null, expectDelivery: true },
+    { suffix: 'c', port: 18338, enginePort: 18339, terminalState: 'CANCELLED', expectedCode: 'SANDBOX_CANCELLED', expectedCategory: 'cancelled', expectDelivery: false },
   ]) {
     const gatewayPort = scenario.port;
     const gwLog = join(baseDir, `gw-f${scenario.suffix}.jsonl`);
@@ -652,11 +655,43 @@ async function main() {
       check(`F${scenario.suffix}b delivery carries the receipt`, (events.find((e) => e.type === 'delivery')?.receiptRefs ?? []).length > 0, '');
     } else {
       check(`F${scenario.suffix}a ${scenario.terminalState} receipt fails the task`, view?.state === 'failed', `state=${view?.state}`);
-      check(`F${scenario.suffix}b code and category`, view?.error?.code === scenario.expectedCode && view?.error?.category === 'sandbox_system', `code=${view?.error?.code} category=${view?.error?.category}`);
+      check(`F${scenario.suffix}b code and category`, view?.error?.code === scenario.expectedCode && view?.error?.category === scenario.expectedCategory, `code=${view?.error?.code} category=${view?.error?.category}`);
       check(`F${scenario.suffix}c no delivery`, !hasDelivery, '');
       check(`F${scenario.suffix}d receipt still surfaced in the tool event`, toolReceipt?.receiptRef != null, `receiptRef=${toolReceipt?.receiptRef ?? 'none'}`);
       check(`F${scenario.suffix}e contiguous sequences`, events.map((e) => e.sequence).every((s, i) => s === i + 1), `count=${events.length}`);
     }
+    proc.kill();
+    gw.close();
+  }
+
+  // ---- F13: Receipt terminal classification beats the model budget ----
+  {
+    const gatewayPort = 18340;
+    const gwLog = join(baseDir, 'gw-f13.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, terminalState: 'TIMED_OUT' });
+    const dir = join(baseDir, 'f13');
+    const base = 'http://127.0.0.1:18341';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_MODE: 'budget',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18341',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '7'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['failed'], 400);
+    check('F13a receipt terminal wins over budget exhaustion', view?.error?.code === 'SANDBOX_TIMED_OUT', `code=${view?.error?.code}`);
+    check('F13b category sandbox_system', view?.error?.category === 'sandbox_system', `category=${view?.error?.category}`);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    check('F13c no delivery', !events.some((e) => e.type === 'delivery'), '');
+    const calls = existsSync(join(dir, 'fake-llm-calls.jsonl')) ? readFileSync(join(dir, 'fake-llm-calls.jsonl'), 'utf8').split('\n').filter(Boolean).length : 0;
+    check('F13d budget still enforced at dispatch (20 calls)', calls === 20, `calls=${calls}`);
     proc.kill();
     gw.close();
   }
