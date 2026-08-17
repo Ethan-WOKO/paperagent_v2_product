@@ -85,6 +85,28 @@ describe("AgentEngine", () => {
     expect(JSON.stringify(turns)).not.toContain("toolCallId");
   });
 
+  it("answers the current runtime-identity question without replaying history or calling Project tools", async () => {
+    const provider = new ScriptedProvider([
+      tool("list_project_files", {}),
+      { content: "Sort.java is present in the observed manifest.", toolCalls: [] },
+      { content: "我是 PaperAgent，当前配置为 provider=test、model=test-model。", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+    const history = submissionFor(60, "session.identity", "检查 Sort.java");
+    await engine.submit(history);
+    await waitFor(() => engine.get(history.taskId).state === "succeeded");
+    const current = submissionFor(61, "session.identity", "你好，你是什么模型？");
+    await engine.submit(current);
+    await waitFor(() => engine.get(current.taskId).state === "succeeded");
+
+    const request = provider.requests.at(-1)!;
+    expect(request.messages[0]?.content).toContain("provider=test; model=test-model");
+    expect(request.messages[0]?.content).toContain("Do not call Project or sandbox tools for greetings");
+    expect(request.messages.some((message) =>
+      message.role === "user" && message.content === "Current task: 你好，你是什么模型？")).toBe(true);
+    expect((await engine.events(current.taskId)).filter((event) => event.type === "tool")).toHaveLength(0);
+  });
+
   it("rejects an unobserved Project filename and lets the model repair its conclusion", async () => {
     const provider = new ScriptedProvider([
       tool("list_project_files", {}),
@@ -100,6 +122,8 @@ describe("AgentEngine", () => {
     expect(provider.requests).toHaveLength(3);
     expect(provider.requests[2]!.messages.some((message) =>
       message.role === "user" && message.content?.includes("unobserved Project files: pom.xml"))).toBe(true);
+    expect(provider.requests[2]!.messages.some((message) =>
+      message.role === "user" && message.content?.includes("remove it and do not inspect unrelated Project data"))).toBe(true);
   });
 
   it("fails closed after two grounding repairs instead of publishing unsupported files", async () => {
