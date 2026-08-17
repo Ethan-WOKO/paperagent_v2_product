@@ -206,21 +206,32 @@ export class DshRunner implements Runner {
         task.cancelFinalize();
         return;
       }
-      // Authoritative Receipt terminal classification comes BEFORE the model
-      // budget check: a formal sandbox terminal state can never be overridden
-      // by budget exhaustion. A cancelled task never reaches this point — its
-      // original cancelled terminal was already finalized above.
+      // Authoritative terminal classification comes from the LAST completed
+      // sandbox attempt in the persisted tool ledger (chronological append
+      // order, preserved across restarts): an early TIMED_OUT / SYSTEM_ERROR /
+      // CANCELLED attempt must never override a later formal success — the
+      // model legitimately retries with a different command after a failed
+      // attempt (ReAct correction, T4-R2 ruling). A FAILED receipt (compile
+      // error etc.) is a legitimate answer and still delivers. Classification
+      // also comes BEFORE the model-budget check, so a formal sandbox terminal
+      // state can never be overridden by budget exhaustion.
       const receipts = tools.collectReceipts();
-      const terminal = receipts.find((r) => r.status === 'TIMED_OUT' || r.status === 'SYSTEM_ERROR' || r.status === 'CANCELLED');
-      if (terminal) {
-        const isCancelledStatus = terminal.status === 'CANCELLED';
+      let lastSandboxStatus: string | null = null;
+      for (const entry of [...task.readToolLedger()].reverse()) {
+        if (entry.kind === 'sandbox' && typeof entry.receiptRef === 'string' && typeof entry.status === 'string') {
+          lastSandboxStatus = entry.status;
+          break;
+        }
+      }
+      if (lastSandboxStatus === 'TIMED_OUT' || lastSandboxStatus === 'SYSTEM_ERROR' || lastSandboxStatus === 'CANCELLED') {
+        const isCancelledStatus = lastSandboxStatus === 'CANCELLED';
         task.emit('status', {
           state: 'failed',
           error: {
             contractVersion: '1.0',
-            code: isCancelledStatus ? 'SANDBOX_CANCELLED' : terminal.status === 'TIMED_OUT' ? 'SANDBOX_TIMED_OUT' : 'SANDBOX_SYSTEM_ERROR',
+            code: isCancelledStatus ? 'SANDBOX_CANCELLED' : lastSandboxStatus === 'TIMED_OUT' ? 'SANDBOX_TIMED_OUT' : 'SANDBOX_SYSTEM_ERROR',
             category: isCancelledStatus ? 'cancelled' : 'sandbox_system',
-            message: `sandbox execution ended in ${terminal.status}; the task cannot deliver a result`,
+            message: `sandbox execution ended in ${lastSandboxStatus}; the task cannot deliver a result`,
             retryable: false,
             sourceRef: null,
           },

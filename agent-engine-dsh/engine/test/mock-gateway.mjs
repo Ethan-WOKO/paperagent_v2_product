@@ -39,10 +39,17 @@ function sandboxDigest(argv, inputs, timeoutMillis) {
   return sha256(canonicalJson({ argv, inputs, timeoutMillis }));
 }
 
-export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0, terminalState = 'SUCCEEDED' }) {
+export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0, terminalState = 'SUCCEEDED', terminalSequence = null }) {
   const executions = new Map();
   const receipts = new Map();
   let receiptSeq = 0;
+  let execIndex = 0;
+  // terminalSequence: per-distinct-execution terminal states in first-submit
+  // order (used by multi-attempt tests); falls back to the last entry.
+  const stateFor = (n) => {
+    if (!terminalSequence) return terminalState;
+    return terminalSequence[Math.min(n - 1, terminalSequence.length - 1)];
+  };
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://gateway.local');
     const send = (status, body) => {
@@ -98,6 +105,7 @@ export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0
           argv: parsed.argv,
           inputs: parsed.inputs,
           executionRef,
+          terminalState: stateFor(++execIndex),
           pollCount: 0,
           done: false,
           receipt: null,
@@ -105,7 +113,7 @@ export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0
             if (!this.done) {
               return { contractVersion: '1.0', clientRequestId: this.clientRequestId, requestDigest: this.requestDigest, executionRef: this.executionRef, state: 'RUNNING', receiptRef: null };
             }
-            return { contractVersion: '1.0', clientRequestId: this.clientRequestId, requestDigest: this.requestDigest, executionRef: this.executionRef, state: terminalState, receiptRef: this.receipt.receiptRef };
+            return { contractVersion: '1.0', clientRequestId: this.clientRequestId, requestDigest: this.requestDigest, executionRef: this.executionRef, state: this.terminalState, receiptRef: this.receipt.receiptRef };
           },
         };
         executions.set(parsed.clientRequestId, entry);
@@ -122,10 +130,11 @@ export function startMockGateway({ port, submissionLog, statusLog, holdPolls = 0
       entry.pollCount++;
       if (!entry.done && entry.pollCount > holdPolls) {
         const receiptRef = 'receipt.mock.' + ++receiptSeq;
-        const exitCode = terminalState === 'SUCCEEDED' ? 0 : terminalState === 'FAILED' ? 1 : null;
+        const state = entry.terminalState;
+        const exitCode = state === 'SUCCEEDED' ? 0 : state === 'FAILED' ? 1 : null;
         entry.receipt = {
-          contractVersion: '1.0', receiptRef, executionRef: entry.executionRef, status: terminalState, exitCode,
-          stdout: { text: terminalState === 'SUCCEEDED' ? '[1, 2, 3]\n' : '', truncated: false, originalBytes: 0 },
+          contractVersion: '1.0', receiptRef, executionRef: entry.executionRef, status: state, exitCode,
+          stdout: { text: state === 'SUCCEEDED' ? '[1, 2, 3]\n' : '', truncated: false, originalBytes: 0 },
           stderr: { text: '', truncated: false, originalBytes: 0 },
           inputFingerprint: sha256(canonicalJson({ argv: entry.argv ?? ['javac'], inputs: entry.inputs ?? [] })),
           inputs: (entry.inputs ?? []).map((i) => ({ path: i.path, sha256: i.sha256, sizeBytes: i.path.endsWith('Sort.java') ? Buffer.byteLength(FIXTURE) : 0 })),

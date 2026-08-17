@@ -102,6 +102,31 @@ export class FakeAdapter extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'tool-calls' } };
       return;
     }
+    // two-attempts: two DISTINCT sandbox executions (different argv → different
+    // digest → different clientRequestId), then finalize. Used to test that the
+    // terminal classification follows the LAST attempt. FAKE_ATTEMPT2_DELAY_MS
+    // (default 0) inserts a pause before the second attempt so crash tests can
+    // land between the first receipt and the second dispatch.
+    if (mode === 'two-attempts') {
+      if (this.callCount === 1) {
+        yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+        yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 1000 }) };
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: JSON.stringify({ argv: ['javac', 'src/main/java/Sort.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 1000 }) } as never };
+        yield { type: 'finish', reason: { kind: 'tool-calls' } };
+        return;
+      }
+      if (this.callCount === 2) {
+        const delayMs = Number(process.env.FAKE_ATTEMPT2_DELAY_MS ?? 0);
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+        yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+        yield { type: 'tool-call-delta', index: 0, id: 'fakecall' as never, name: 'sandbox_execute', argumentsDelta: JSON.stringify({ argv: ['javac', 'src/main/java/Other.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 1000 }) };
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'fakecall', name: 'sandbox_execute', arguments: JSON.stringify({ argv: ['javac', 'src/main/java/Other.java'], inputs: [{ path: 'src/main/java/Sort.java', sha256: 'a'.repeat(64) }], timeoutMillis: 1000 }) } as never };
+        yield { type: 'finish', reason: { kind: 'tool-calls' } };
+        return;
+      }
+      yield* finalize();
+      return;
+    }
     // dup-inputs: first call submits a sandbox request with DUPLICATE input
     // paths; the engine must reject it before any dispatch. Subsequent calls
     // finalize so the task reaches a terminal state for assertions.

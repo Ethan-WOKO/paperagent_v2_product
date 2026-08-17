@@ -41,10 +41,11 @@
       答案正文注入模型上下文并续跑（不再重复提问）
 - [x] ask_user 门：waiting_user → 正式回答 → 循环恢复；无 receipt 的纯提问流以
       RECEIPT_REQUIRED_NOT_SATISFIED 失败（无 stub finalizer）
-- [x] 沙箱终态语义（权威 Receipt 分类，先于模型预算判断）：SUCCEEDED/FAILED → 允许 delivery
-      （FAILED=编译失败等合法答案，T2 语义）；TIMED_OUT → failed SANDBOX_TIMED_OUT/sandbox_system；
-      SYSTEM_ERROR → failed SANDBOX_SYSTEM_ERROR/sandbox_system；CANCELLED → failed
-      SANDBOX_CANCELLED/category=cancelled；以上均**无 delivery**；任务自身已 cancelled 时保持原终态
+- [x] 沙箱终态语义（按持久工具账本中**最后一次**完成的沙箱尝试分类，历史尝试不覆盖后续正式成功；
+      分类先于模型预算判断）：末次 SUCCEEDED/FAILED → 允许 delivery（FAILED=编译失败等合法答案，
+      T2 语义）；末次 TIMED_OUT → failed SANDBOX_TIMED_OUT/sandbox_system；末次 SYSTEM_ERROR →
+      failed SANDBOX_SYSTEM_ERROR/sandbox_system；末次 CANCELLED → failed SANDBOX_CANCELLED/
+      category=cancelled；以上均**无 delivery**；任务自身已 cancelled 时保持原终态
 - [x] 真实模型 smoke（T1）：v4-pro 端到端通过，网关为受控 HTTP mock——**不是** #151/E2B 真实网关 T1 证据
 
 ## 目录
@@ -55,9 +56,9 @@
   - `gateway-http.ts` 真实网关客户端；`runner.ts` StubRunner；`dsh/` DSH 装配（runtime/tools/runner）
 - `engine/cordis.yml`：最小 DSH 组合（llm + llm-deepseek + session + system-prompt + tools + agent + agent-loop）
 - `engine/test/conformance.mjs`：契约 conformance 自测（40 项断言，stub 控制面）
-- `engine/test/dsh-formal.mjs`：正式路径测试（79 项：恢复账本/崩溃窗口/预算/ask_user 门/waiting_user 重启/
-      恢复 prompt 事实重建/ledger receipt 再收养/截止轮询边界/重复输入拒绝/沙箱终态语义与预算优先级/
-      摘要规范，FakeAdapter + HTTP mock 网关，无需真实 API key）
+- `engine/test/dsh-formal.mjs`：正式路径测试（93 项：恢复账本/崩溃窗口/预算/ask_user 门/waiting_user 重启/
+      恢复 prompt 事实重建/ledger receipt 再收养/截止轮询边界/重复输入拒绝/末次沙箱尝试终态语义与预算
+      优先级/摘要规范，FakeAdapter + HTTP mock 网关，无需真实 API key）
 - `engine/test/mock-gateway.mjs`：受控 HTTP 网关测试替身（独立重算 canonical 摘要、holdPolls 崩溃窗口、
       statusLog 轮询计数、terminalState 终态注入、计数派发，供 formal/smoke 共用）
 - `engine/test/gateway-binding.mjs`：网关绑定失败测试（24 项，进程内直接测 HttpGatewayClient）
@@ -86,7 +87,7 @@ node src/index.ts                            # 默认 127.0.0.1:8092
 ```powershell
 cd engine
 node test/conformance.mjs   # 控制面 conformance（40 项，全过）
-node test/dsh-formal.mjs    # 正式路径（79 项：恢复/预算/ask_user 门/崩溃窗口/截止轮询/终态语义/摘要，无需真实 API）
+node test/dsh-formal.mjs    # 正式路径（93 项：恢复/预算/ask_user 门/崩溃窗口/截止轮询/末次尝试终态语义/摘要，无需真实 API）
 node test/gateway-binding.mjs  # 网关绑定失败测试（24 项）
 npx tsc -p tsconfig.json    # 类型检查（erasable syntax only）
 # 可选（需环境变量 DEEPSEEK_API_KEY；文件不读任何 .env）：

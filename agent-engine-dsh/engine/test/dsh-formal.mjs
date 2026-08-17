@@ -696,6 +696,132 @@ async function main() {
     gw.close();
   }
 
+  // ---- F14/F15/F17: terminal classification follows the LAST ledger attempt ----
+  // F14: TIMED_OUT then SUCCEEDED → delivery (historical timeout never
+  // overrides a later formal success — the t1-r3 finding).
+  {
+    const gatewayPort = 18342;
+    const gwLog = join(baseDir, 'gw-f14.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, terminalSequence: ['TIMED_OUT', 'SUCCEEDED'] });
+    const dir = join(baseDir, 'f14');
+    const base = 'http://127.0.0.1:18343';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_MODE: 'two-attempts',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18343',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '0'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['succeeded', 'failed'], 200);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    const delivery = events.find((e) => e.type === 'delivery');
+    const ledger = readFileSync(join(dir, t.taskId, 'tool-ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const lastSandbox = [...ledger].reverse().find((e) => e.kind === 'sandbox' && e.receiptRef);
+    check('F14a TIMED_OUT then SUCCEEDED delivers', view?.state === 'succeeded' && delivery != null, `state=${view?.state} delivery=${delivery != null}`);
+    check('F14b last ledger attempt is SUCCEEDED', lastSandbox?.status === 'SUCCEEDED', `status=${lastSandbox?.status}`);
+    check('F14c delivery carries both receipts', (delivery?.receiptRefs ?? []).length === 2, `refs=${JSON.stringify(delivery?.receiptRefs ?? [])}`);
+    const gwLines = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F14d two distinct dispatches (each attempt once)', gwLines === 2, `submissions=${gwLines}`);
+    proc.kill();
+    gw.close();
+  }
+  // F15: SUCCEEDED then TIMED_OUT → the LAST attempt fails the task.
+  {
+    const gatewayPort = 18344;
+    const gwLog = join(baseDir, 'gw-f15.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, terminalSequence: ['SUCCEEDED', 'TIMED_OUT'] });
+    const dir = join(baseDir, 'f15');
+    const base = 'http://127.0.0.1:18345';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_MODE: 'two-attempts',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18345',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '1'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['succeeded', 'failed'], 200);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    const ledger = readFileSync(join(dir, t.taskId, 'tool-ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const lastSandbox = [...ledger].reverse().find((e) => e.kind === 'sandbox' && e.receiptRef);
+    check('F15a last TIMED_OUT fails the task', view?.state === 'failed' && view?.error?.code === 'SANDBOX_TIMED_OUT', `state=${view?.state} code=${view?.error?.code}`);
+    check('F15b category sandbox_system', view?.error?.category === 'sandbox_system', `category=${view?.error?.category}`);
+    check('F15c no delivery', !events.some((e) => e.type === 'delivery'), '');
+    check('F15d last ledger attempt is TIMED_OUT', lastSandbox?.status === 'TIMED_OUT', `status=${lastSandbox?.status}`);
+    proc.kill();
+    gw.close();
+  }
+  // F17: recovery order — crash after the first (TIMED_OUT) receipt, restart,
+  // second attempt SUCCEEDED → delivery; ledger order preserved chronologically.
+  {
+    const gatewayPort = 18346;
+    const gwLog = join(baseDir, 'gw-f17.jsonl');
+    const { server: gw } = await startMockGateway({ port: gatewayPort, submissionLog: gwLog, terminalSequence: ['TIMED_OUT', 'SUCCEEDED'] });
+    const dir = join(baseDir, 'f17');
+    const base = 'http://127.0.0.1:18347';
+    const env = {
+      ENGINE_RUNNER: 'dsh',
+      ENGINE_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
+      ENGINE_FAKE_LLM: '1',
+      FAKE_MODE: 'two-attempts',
+      FAKE_ATTEMPT2_DELAY_MS: '8000',
+      ENGINE_SERVICE_TOKEN: TOKEN,
+      ENGINE_PORT: '18347',
+      ENGINE_DATA_DIR: dir,
+    };
+    const t = { ...fixture, taskId: 'task.' + '2'.repeat(64) };
+    t.requestDigest = (await import('../src/canonical.ts')).requestDigestOf(t.authority);
+    const proc = startEngine(env);
+    await waitUp(base, proc);
+    await post(base, '/v1/tasks', t);
+    // kill as soon as the FIRST attempt's receipt event lands (before the
+    // delayed second attempt is dispatched)
+    let killed = false;
+    let lastSeen = 0;
+    for (let i = 0; i < 200 && !killed; i++) {
+      const next = await readSse(base, '/v1/tasks/' + t.taskId + '/events', lastSeen, 1);
+      if (next.length === 1) {
+        lastSeen = next[0].sequence;
+        if (next[0].type === 'tool' && next[0].receiptRef) {
+          proc.kill();
+          killed = true;
+        }
+      }
+    }
+    check('F17a killed after first receipt', killed, '');
+    await sleep(600);
+    const gwAfterKill = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F17b only the first attempt dispatched before the crash', gwAfterKill === 1, `submissions=${gwAfterKill}`);
+    const proc2 = startEngine(env);
+    await waitUp(base, proc2);
+    await post(base, '/v1/tasks', t);
+    const view = await waitForState(base, t.taskId, ['succeeded', 'failed'], 200);
+    check('F17c recovery delivers (last attempt SUCCEEDED)', view?.state === 'succeeded', `state=${view?.state} code=${view?.error?.code}`);
+    const events = await readSse(base, '/v1/tasks/' + t.taskId + '/events', 0);
+    const delivery = events.find((e) => e.type === 'delivery');
+    check('F17d delivery present with receipts', (delivery?.receiptRefs ?? []).length >= 1, `refs=${JSON.stringify(delivery?.receiptRefs ?? [])}`);
+    const ledger = readFileSync(join(dir, t.taskId, 'tool-ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const completions = ledger.filter((e) => e.kind === 'sandbox' && e.receiptRef);
+    check('F17e ledger chronological order TIMED_OUT → SUCCEEDED', completions.length === 2 && completions[0].status === 'TIMED_OUT' && completions[1].status === 'SUCCEEDED', JSON.stringify(completions.map((c) => c.status)));
+    const gwLines = readFileSync(gwLog, 'utf8').split('\n').filter(Boolean).length;
+    check('F17f two dispatches, none duplicated across restart', gwLines === 2, `submissions=${gwLines}`);
+    proc2.kill();
+    gw.close();
+  }
+
   rmSync(baseDir, { recursive: true, force: true });
   console.log(failures === 0 ? '\nALL FORMAL-PATH CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
