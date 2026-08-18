@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.inOrder;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.web.server.ResponseStatusException;
+import org.mockito.InOrder;
 
 class ReactPlanTaskStateServiceTest {
     private final ObjectMapper json = new ObjectMapper();
@@ -36,8 +38,9 @@ class ReactPlanTaskStateServiceTest {
     private final AgentEngineTaskGrantService grants = mock(AgentEngineTaskGrantService.class);
     private final AgentEngineObservationReader observations = mock(AgentEngineObservationReader.class);
     private final UserQuotaService quotas = mock(UserQuotaService.class);
+    private final ReactPlanTaskSchedulerService scheduler = mock(ReactPlanTaskSchedulerService.class);
     private final ReactPlanTaskStateService service = new ReactPlanTaskStateService(
-            json, checkpoints, events, intakes, contexts, grants, observations, quotas);
+            json, checkpoints, events, intakes, contexts, grants, observations, quotas, scheduler);
     private final String taskId = ReactPlanRuntimeService.taskId(7L, 42L);
 
     @BeforeEach
@@ -67,7 +70,11 @@ class ReactPlanTaskStateServiceTest {
         String digest = checkpoint.path("view").path("requestDigest").asText();
         when(checkpoints.findLockedByTaskId(taskId)).thenReturn(Optional.empty());
 
-        assertThat(service.save(taskId, digest, null, checkpoint)).isEqualTo(1);
+        assertThat(service.save(taskId, digest, null, checkpoint, null)).isEqualTo(1);
+
+        InOrder admissionLocks = inOrder(scheduler, checkpoints);
+        admissionLocks.verify(scheduler).lockScheduler();
+        admissionLocks.verify(checkpoints).findLockedByTaskId(taskId);
 
         ReactPlanTaskCheckpointEntity persisted = new ReactPlanTaskCheckpointEntity(
                 taskId, digest, 7L, 11L, 42L, "running", 0,
@@ -84,7 +91,7 @@ class ReactPlanTaskStateServiceTest {
         event.put("state", "running");
         event.putNull("error");
 
-        service.appendEvent(event);
+        service.appendEvent(event, null);
 
         verify(events).saveAndFlush(any(ReactPlanTaskEventEntity.class));
     }
@@ -94,7 +101,7 @@ class ReactPlanTaskStateServiceTest {
         ObjectNode checkpoint = checkpoint("running", 0);
         String digest = checkpoint.path("view").path("requestDigest").asText();
         checkpoint.put("taskGrant", "must-not-be-persisted");
-        assertThatThrownBy(() -> service.save(taskId, digest, null, checkpoint))
+        assertThatThrownBy(() -> service.save(taskId, digest, null, checkpoint, null))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("CHECKPOINT_SECRET_FIELD_FORBIDDEN");
 
@@ -103,7 +110,7 @@ class ReactPlanTaskStateServiceTest {
                 taskId, digest, 7L, 11L, 42L, "running", 0,
                 clean.toString(), LocalDateTime.now());
         when(checkpoints.findLockedByTaskId(taskId)).thenReturn(Optional.of(persisted));
-        assertThatThrownBy(() -> service.save(taskId, digest, 2L, clean))
+        assertThatThrownBy(() -> service.save(taskId, digest, 2L, clean, null))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("CHECKPOINT_REVISION_CONFLICT");
     }
@@ -146,8 +153,8 @@ class ReactPlanTaskStateServiceTest {
                 new AgentEngineObservationReader.ModelFact("model.3", "test", "model", "FAILED",
                         "2026-08-18T00:00:02Z", "2026-08-18T00:00:03Z", 10, 0, 99, 99, 0, "FAILED")));
 
-        assertThat(service.save(taskId, digest, 1L, succeeded)).isEqualTo(2L);
-        assertThat(service.save(taskId, digest, 2L, succeeded)).isEqualTo(3L);
+        assertThat(service.save(taskId, digest, 1L, succeeded, null)).isEqualTo(2L);
+        assertThat(service.save(taskId, digest, 2L, succeeded, null)).isEqualTo(3L);
 
         verify(quotas, times(1)).recordTaskUsage(7L, "REACT_PLAN", 19L, 5L);
         assertThat(persisted.usageSettled()).isTrue();

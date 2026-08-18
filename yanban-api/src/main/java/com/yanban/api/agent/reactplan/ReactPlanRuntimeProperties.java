@@ -15,6 +15,10 @@ public class ReactPlanRuntimeProperties {
     private String engineServiceToken = "";
     private String defaultProvider = "deepseek";
     private String defaultModel = "deepseek-chat";
+    private int maxConcurrentTasks = 20;
+    private int maxConcurrentTasksPerUser = 3;
+    private int maxQueuedTasksPerUser = 10;
+    private int taskLeaseSeconds = 30;
 
     @AssertTrue(message = "enabled ReAct runtime requires an engine service token of at least 32 characters")
     public boolean isServiceTokenSafe() {
@@ -49,4 +53,17 @@ public class ReactPlanRuntimeProperties {
     public void setDefaultProvider(String defaultProvider) { this.defaultProvider = defaultProvider; }
     public String getDefaultModel() { return defaultModel; }
     public void setDefaultModel(String defaultModel) { this.defaultModel = defaultModel; }
+    public int getMaxConcurrentTasks() { return maxConcurrentTasks; }
+    public void setMaxConcurrentTasks(int value) { maxConcurrentTasks = positive(value, "maxConcurrentTasks"); }
+    public int getMaxConcurrentTasksPerUser() { return maxConcurrentTasksPerUser; }
+    public void setMaxConcurrentTasksPerUser(int value) { maxConcurrentTasksPerUser = positive(value, "maxConcurrentTasksPerUser"); }
+    public int getMaxQueuedTasksPerUser() { return maxQueuedTasksPerUser; }
+    public void setMaxQueuedTasksPerUser(int value) { maxQueuedTasksPerUser = positive(value, "maxQueuedTasksPerUser"); }
+    public int getTaskLeaseSeconds() { return taskLeaseSeconds; }
+    public void setTaskLeaseSeconds(int value) { taskLeaseSeconds = positive(value, "taskLeaseSeconds"); }
+
+    private static int positive(int value, String name) {
+        if (value < 1 || value > 10_000) throw new IllegalArgumentException(name + " must be between 1 and 10000");
+        return value;
+    }
 }

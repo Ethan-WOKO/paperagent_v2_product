@@ -26,8 +26,8 @@ public class SandboxExecutionProperties {
     @NotNull
     private URI brokerUrl = URI.create("http://127.0.0.1:8091");
     @Min(1)
-    @Max(1)
-    private int maxConcurrentRuns = 1;
+    @Max(64)
+    private int maxConcurrentRuns = 18;
     @Min(1)
     @Max(2)
     private int cpus = 2;

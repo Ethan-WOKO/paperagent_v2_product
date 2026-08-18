@@ -10,6 +10,7 @@ public class BrokerProperties {
     private String e2bPythonExecutable=""; private String e2bHelper="";
     private String expectedUser="yanban-sandbox"; private boolean remoteAccess; private boolean tlsTerminated;
     private Mode mode=Mode.PRODUCTION; private String bindAddress="127.0.0.1";
+    private int maxConcurrentRuns=18; private int maxConcurrentRunsPerUser=3;
     @AssertTrue(message="enabled broker requires an absolute dedicated workspace root")
     public boolean isRootSafe(){ if(!enabled)return true; try { var p=java.nio.file.Path.of(workspaceRoot); return p.isAbsolute()&&p.getNameCount()>1; }catch(Exception e){return false;} }
     @AssertTrue(message="enabled E2B broker requires a key, pinned template, Python, and helper")
@@ -36,5 +37,8 @@ public class BrokerProperties {
     public String getE2bTemplate(){return e2bTemplate;} public void setE2bTemplate(String v){e2bTemplate=v;}
     public String getE2bPythonExecutable(){return e2bPythonExecutable;} public void setE2bPythonExecutable(String v){e2bPythonExecutable=v;}
     public String getE2bHelper(){return e2bHelper;} public void setE2bHelper(String v){e2bHelper=v;}
+    public int getMaxConcurrentRuns(){return maxConcurrentRuns;} public void setMaxConcurrentRuns(int v){maxConcurrentRuns=positive(v,"maxConcurrentRuns");}
+    public int getMaxConcurrentRunsPerUser(){return maxConcurrentRunsPerUser;} public void setMaxConcurrentRunsPerUser(int v){maxConcurrentRunsPerUser=positive(v,"maxConcurrentRunsPerUser");}
+    private static int positive(int value,String name){if(value<1||value>1000)throw new IllegalArgumentException(name+" must be between 1 and 1000");return value;}
     public enum Mode { PRODUCTION, LOCAL_ACCEPTANCE }
 }

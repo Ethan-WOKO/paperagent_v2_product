@@ -57,6 +57,31 @@ describe("AgentEngine", () => {
     expect(events.filter((event) => event.type === "status" && event.state === "succeeded")).toHaveLength(1);
   });
 
+  it("records cancellation durably without writing a checkpoint owned by another instance", async () => {
+    const directory = await temporaryDirectory();
+    let modelStarted = false;
+    const blocked = new Promise<ModelResponse>(() => undefined);
+    const first = await createEngine({ complete: () => {
+      modelStarted = true;
+      return blocked;
+    } }, new FakeGateway(), directory);
+    await first.submit(submission());
+    await waitFor(() => modelStarted);
+
+    const unowned = new UnownedDurableStore(directory);
+    const second = new AgentEngine({
+      store: unowned, provider: new ScriptedProvider([]), gateway: new FakeGateway(),
+      validator: new ContractValidator(contractDirectory), sleep: async () => undefined
+    });
+    await second.initialize();
+    await second.load(taskId);
+    await second.cancel(taskId);
+
+    expect(unowned.cancellationRequests).toBe(1);
+    expect(unowned.unownedSaves).toBe(0);
+    expect(second.get(taskId).state).toBe("running");
+  });
+
   it("runs native tools serially and emits a bounded receipt-backed delivery", async () => {
     const provider = new ScriptedProvider([
       tool("list_project_files", {}),
@@ -464,6 +489,70 @@ describe("AgentEngine", () => {
     expect(rejection?.content).toContain("Call load_tool with name=project_search");
     expect((await engine.events(taskId)).filter((event) =>
       event.type === "tool" && event.state === "requested")).toHaveLength(1);
+  });
+
+  it("enforces a model-turn barrier when load_tool and premature tool calls arrive together", async () => {
+    const provider = new ScriptedProvider([
+      {
+        content: null,
+        toolCalls: [
+          { id: "load-read", name: "load_tool", arguments: JSON.stringify({ name: "read_project_file" }) },
+          { id: "premature-read", name: "read_project_file", arguments: JSON.stringify({ path: "Sort.java" }) }
+        ]
+      },
+      tool("read_project_file", { path: "Sort.java", expectedSha256: fileHash }),
+      { content: "Read Sort.java after loading its schema.", toolCalls: [] }
+    ], false);
+    const gateway = new FakeGateway();
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const barrierFeedback = provider.requests[1]!.messages.find((message) =>
+      message.role === "tool" && message.toolCallId === "premature-read");
+    expect(barrierFeedback?.content).toContain("TOOL_SCHEMA_NOT_LOADED");
+    expect(gateway.maximumConcurrent).toBe(1);
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.name === "project.read" && event.state === "requested"))
+      .toHaveLength(1);
+  });
+
+  it("returns malformed loaded-tool arguments to the model for a bounded repair", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", { path: "Sort.java" }),
+      tool("read_project_file", { path: "Sort.java", expectedSha256: fileHash }),
+      { content: "Recovered from invalid arguments.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const repairFeedback = provider.requests.find((request) => request.messages.some((message) =>
+      message.role === "tool" && message.content?.includes("MODEL_TOOL_ARGUMENTS_INVALID")));
+    expect(repairFeedback).toBeTruthy();
+    expect(JSON.stringify(repairFeedback?.messages)).toContain("expectedSha256");
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.name === "project.read" && event.state === "requested"))
+      .toHaveLength(1);
+  });
+
+  it("fails after two model argument-repair rounds instead of looping forever", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", { path: "Sort.java" }),
+      tool("read_project_file", { path: "Sort.java" }),
+      tool("read_project_file", { path: "Sort.java" })
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+
+    expect(engine.get(taskId).error).toMatchObject({
+      code: "MODEL_TOOL_ARGUMENTS_INVALID", category: "model"
+    });
+    expect(provider.requests).toHaveLength(4);
   });
 
   it("rejects a registered catalog that collides with a reserved Engine tool name", async () => {
@@ -911,6 +1000,30 @@ class RecoveringTaskStore extends TaskStore {
   authorizeRecovery(task: import("../src/types.js").PersistedTask) {
     this.recoveryRequests.push(task.view.taskId);
     return Promise.resolve({ taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  }
+}
+
+class UnownedDurableStore extends TaskStore {
+  cancellationRequests = 0;
+  unownedSaves = 0;
+
+  claimNext(): Promise<null> { return Promise.resolve(null); }
+
+  async load(requestedTaskId: string) {
+    const task = (await super.loadAll()).find((candidate) =>
+      candidate.view.taskId === requestedTaskId);
+    if (!task) throw new EngineProblem(404, problem("TASK_NOT_FOUND", "request", "not found"));
+    return task;
+  }
+
+  requestCancellation(): Promise<void> {
+    this.cancellationRequests += 1;
+    return Promise.resolve();
+  }
+
+  override save(task: import("../src/types.js").PersistedTask): Promise<void> {
+    this.unownedSaves += 1;
+    return super.save(task);
   }
 }
 

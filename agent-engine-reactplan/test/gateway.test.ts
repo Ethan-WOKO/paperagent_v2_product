@@ -90,6 +90,7 @@ describe("HttpTaskStore", () => {
       if (request.url?.endsWith("/authorize-recovery")) return response.end(JSON.stringify({ contractVersion: "1.0", taskGrant: "g".repeat(40), expiresAt: "2099-01-01T00:00:00Z" }));
       if (request.url?.endsWith("/events") && request.method === "GET") return response.end(JSON.stringify({ contractVersion: "1.0", events: [event] }));
       if (request.url?.endsWith("/events")) return response.end(JSON.stringify({ contractVersion: "1.0", accepted: true }));
+      if (request.url?.endsWith("/claims/next")) return response.end(JSON.stringify({ contractVersion: "1.0", task: null }));
       if (request.url?.endsWith("/checkpoints")) return response.end(JSON.stringify({ contractVersion: "1.0", checkpointRevision: body.expectedRevision === null ? 1 : 5 }));
       response.statusCode = 404; return response.end("{}");
     });
@@ -101,11 +102,28 @@ describe("HttpTaskStore", () => {
     await store.appendEvent(event);
     expect(await store.events(taskId)).toEqual([event]);
     expect((await store.authorizeRecovery(checkpoint)).taskGrant).toHaveLength(40);
+    expect(await store.claimNext("engine.worker_test")).toBeNull();
 
     expect(requests.every((request) => request.authorization === `Bearer ${serviceToken}`)).toBe(true);
     expect(JSON.stringify(requests)).not.toContain('"taskGrant":"');
     expect(requests.find((request) => request.path.endsWith("/checkpoints")
       && request.body !== null)?.body.expectedRevision).toBe(4);
+  });
+
+  it("preserves the per-user queue rejection as an HTTP 429 engine problem", async () => {
+    const server = createServer((_request, response) => {
+      response.statusCode = 429;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ message: "AGENT_USER_QUEUE_FULL" }));
+    });
+    servers.push(server); await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const store = new HttpTaskStore(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}`, "s".repeat(40));
+
+    await expect(store.create({ view: { taskId, requestDigest: hash } } as PersistedTask))
+      .rejects.toMatchObject({
+        status: 429, problem: { code: "AGENT_USER_QUEUE_FULL" }
+      });
   });
 });
 

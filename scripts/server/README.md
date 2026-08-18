@@ -33,6 +33,12 @@ YANBAN_AGENT_ENGINE_GATEWAY_ENABLED=true
 YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_SECRET=<different-at-least-32-random-characters>
 DEEPSEEK_API_KEY=<server-side-model-key>
 COMPOSE_PROFILES=sandbox,reactplan
+YANBAN_AGENT_MAX_CONCURRENT_TASKS=20
+YANBAN_AGENT_MAX_CONCURRENT_TASKS_PER_USER=3
+YANBAN_AGENT_MAX_QUEUED_TASKS_PER_USER=10
+YANBAN_AGENT_TASK_LEASE_SECONDS=30
+YANBAN_SANDBOX_MAX_CONCURRENT_RUNS=18
+YANBAN_SANDBOX_MAX_CONCURRENT_RUNS_PER_USER=3
 ```
 
 ReAct checkpoints and ordered events are stored in the product MySQL database.
@@ -41,6 +47,12 @@ port 8092 or copy either secret
 into frontend configuration. Use
 `FOLLOW=1 bash /opt/paperagent/scripts/server/logs.sh agent-engine-reactplan`
 to follow Engine logs.
+
+The defaults above admit 20 running Agent tasks system-wide, at most 3 per
+user, and 10 additional queued tasks per user. Sandbox execution is separately
+limited to 18 system-wide and 3 per user. The MySQL-backed leases make these
+limits apply across multiple Engine or Broker instances, rather than once per
+container.
 
 ## E2B sandbox deployment
 

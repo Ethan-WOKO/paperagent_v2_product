@@ -26,7 +26,7 @@ class SandboxDispatchSecurityTest {
 
     @Test void sameKeyDifferentDigestConflictsAndUnsafePathsFailClosed() {
         SandboxExecutionRepository repository = mock(SandboxExecutionRepository.class);
-        SandboxExecutionEntity stored = new SandboxExecutionEntity("e", "key", "a".repeat(64), 7, "yb-e", "{}", java.time.LocalDateTime.now());
+        SandboxExecutionEntity stored = new SandboxExecutionEntity("e", "key", "a".repeat(64), 7, 1L, "yb-e", "{}", java.time.LocalDateTime.now());
         SandboxDispatchStore store=mock(SandboxDispatchStore.class);when(store.current("key")).thenReturn(stored);
         SandboxDispatchService service = new SandboxDispatchService(repository, new ObjectMapper(), new SandboxProcessRegistry(), store);
         SandboxDispatch valid = signed(request("", Map.of("pom.xml", "x"), List.of("mvn", "-o", "test"), 7));

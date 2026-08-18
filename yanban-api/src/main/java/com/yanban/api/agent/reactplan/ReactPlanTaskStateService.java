@@ -45,6 +45,7 @@ class ReactPlanTaskStateService {
     private final AgentEngineTaskGrantService grants;
     private final AgentEngineObservationReader observations;
     private final UserQuotaService quotas;
+    private final ReactPlanTaskSchedulerService scheduler;
 
     ReactPlanTaskStateService(ObjectMapper json,
                               ReactPlanTaskCheckpointRepository checkpoints,
@@ -53,7 +54,8 @@ class ReactPlanTaskStateService {
                               AgentTurnProductContextResolver contexts,
                               AgentEngineTaskGrantService grants,
                               AgentEngineObservationReader observations,
-                              UserQuotaService quotas) {
+                              UserQuotaService quotas,
+                              ReactPlanTaskSchedulerService scheduler) {
         this.json = json;
         this.checkpoints = checkpoints;
         this.events = events;
@@ -62,19 +64,27 @@ class ReactPlanTaskStateService {
         this.grants = grants;
         this.observations = observations;
         this.quotas = quotas;
+        this.scheduler = scheduler;
     }
 
     @Transactional
-    long save(String taskId, String requestDigest, Long expectedRevision, JsonNode checkpoint) {
+    long save(String taskId, String requestDigest, Long expectedRevision, JsonNode checkpoint,
+              ReactPlanTaskSchedulerService.Lease lease) {
         if (expectedRevision != null && expectedRevision < 1) badRequest("CHECKPOINT_REVISION_INVALID");
         CheckpointIdentity identity = validateCheckpoint(taskId, requestDigest, checkpoint);
         String serialized = serialize(checkpoint, MAX_CHECKPOINT_BYTES, "checkpoint");
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        // New task admission and task claiming must acquire locks in the same
+        // scheduler -> checkpoint order. Looking up the checkpoint first and
+        // then locking the scheduler can deadlock with claimNext(), which
+        // deliberately holds the scheduler row before scanning checkpoints.
+        if (expectedRevision == null) scheduler.lockScheduler();
         ReactPlanTaskCheckpointEntity existing = checkpoints.findLockedByTaskId(taskId).orElse(null);
         if (existing == null) {
             if (expectedRevision != null) conflict("CHECKPOINT_REVISION_CONFLICT");
             ReactPlanTurnIntakeEntity intake = requireIntake(taskId);
             requireIdentity(identity, intake);
+            scheduler.assertQueueCapacity(intake.userId());
             ReactPlanTaskCheckpointEntity created = new ReactPlanTaskCheckpointEntity(
                     taskId, requestDigest, intake.userId(), intake.sessionId(), intake.turnId(),
                     identity.state(), identity.lastSequence(), serialized, now);
@@ -93,6 +103,7 @@ class ReactPlanTaskStateService {
         if (expectedRevision.longValue() != existing.checkpointRevision()) {
             conflict("CHECKPOINT_REVISION_CONFLICT");
         }
+        scheduler.requireOwned(existing, lease);
         long latestEvent = latestEventSequence(taskId);
         if (identity.lastSequence() < latestEvent || identity.lastSequence() < existing.lastSequence()) {
             conflict("CHECKPOINT_SEQUENCE_REGRESSION");
@@ -124,7 +135,7 @@ class ReactPlanTaskStateService {
     }
 
     @Transactional
-    void appendEvent(JsonNode event) {
+    void appendEvent(JsonNode event, ReactPlanTaskSchedulerService.Lease lease) {
         rejectSecrets(event);
         String taskId = requiredText(event, "taskId");
         long sequence = requiredNonNegativeLong(event, "sequence");
@@ -137,6 +148,7 @@ class ReactPlanTaskStateService {
             if (replay.eventJson().equals(serialized)) return;
             conflict("EVENT_SEQUENCE_CONFLICT");
         }
+        scheduler.requireOwned(checkpoint, lease);
         long latest = latestEventSequence(taskId);
         if (sequence != latest + 1) conflict("EVENT_SEQUENCE_GAP");
         Instant occurredAt;
@@ -159,6 +171,13 @@ class ReactPlanTaskStateService {
         return checkpoints.findAllByOrderByUpdatedAtAsc().stream()
                 .map(entity -> new StoredCheckpoint(entity.checkpointRevision(), parse(entity.checkpointJson())))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    StoredCheckpoint stored(String taskId) {
+        ReactPlanTaskCheckpointEntity entity = checkpoints.findById(taskId)
+                .orElseThrow(() -> notFound("TASK_NOT_FOUND"));
+        return new StoredCheckpoint(entity.checkpointRevision(), parse(entity.checkpointJson()));
     }
 
     @Transactional(readOnly = true)

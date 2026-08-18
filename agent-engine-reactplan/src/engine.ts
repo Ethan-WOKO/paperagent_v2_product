@@ -3,14 +3,17 @@ import type { GatewayClient, SandboxRequest, WorkspacePublishRequest, WorkspaceW
 import { ContractValidator } from "./validation.js";
 import { reconcileTask, type TaskPersistence } from "./store.js";
 import { bounded, digestObject, EngineProblem, problem, sha256, terminal } from "./util.js";
+import { randomUUID } from "node:crypto";
 
 const MAX_MODEL_CALLS = 20;
 const MAX_OUTPUT_TOKENS = 4096 as const;
 const MAX_RECENT_TURNS = 4;
 const MAX_RECENT_CONTEXT_CHARACTERS = 8_000;
 const MAX_CANDIDATE_VALIDATION_REPAIRS = 2;
+const MAX_TOOL_ARGUMENT_REPAIRS = 2;
 const TERMINAL_SANDBOX = new Set(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"]);
 const SUPERSEDED_REGISTERED_TOOLS = new Set(["project_manifest", "project_read_file"]);
+const TASK_LEASE_LOST = Symbol("TASK_LEASE_LOST");
 
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the current isolated Workspace manifest. It initially equals the frozen ProjectVersion and reflects later isolated Candidate writes without publishing them.", { type: "object", additionalProperties: false, properties: {} }),
@@ -56,6 +59,9 @@ export class AgentEngine {
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly sleep: Sleeper;
   private readonly monotonicNow: () => number;
+  private readonly instanceId = `engine.${randomUUID()}`;
+  private dispatching = false;
+  private dispatchTimer?: NodeJS.Timeout;
 
   constructor(private readonly options: EngineOptions) {
     this.sleep = options.sleep ?? abortableSleep;
@@ -63,11 +69,19 @@ export class AgentEngine {
   }
 
   async initialize(): Promise<void> {
+    if (this.options.store.claimNext) {
+      await this.options.store.initialize();
+      this.dispatchTimer = setInterval(() => { void this.drainQueue(); }, 500);
+      this.dispatchTimer.unref();
+      await this.drainQueue();
+      return;
+    }
     for (const task of await this.options.store.loadAll()) {
       normalizePersistedTask(task);
       reconcileTask(task, await this.options.store.events(task.view.taskId));
       this.tasks.set(task.view.taskId, task);
-      if (!terminal(task.view.state) && this.options.store.authorizeRecovery) {
+      if (!terminal(task.view.state) && this.options.store.authorizeRecovery
+          && !this.options.store.claimNext) {
         const grant = await this.options.store.authorizeRecovery(task);
         this.grants.set(task.view.taskId, { value: grant.taskGrant, expiresAt: grant.expiresAt });
         if (task.view.state !== "waiting_user" || task.cancellationRequested) this.schedule(task);
@@ -90,7 +104,15 @@ export class AgentEngine {
   private async acceptSubmission(submission: TaskSubmission): Promise<{ contractVersion: "1.0"; replayed: boolean; task: TaskView }> {
     if (digestObject(submission.authority) !== submission.requestDigest) throw new EngineProblem(400, problem("REQUEST_DIGEST_INVALID", "request", "requestDigest does not match canonical authority"));
     if (Date.parse(submission.gateway.expiresAt) <= Date.now()) throw new EngineProblem(401, problem("TASK_GRANT_EXPIRED", "authorization", "Task grant is already expired"));
-    const existing = this.tasks.get(submission.taskId);
+    let existing = this.tasks.get(submission.taskId);
+    if (!existing && this.options.store.load) {
+      try {
+        await this.load(submission.taskId);
+        existing = this.tasks.get(submission.taskId);
+      } catch (failure) {
+        if (!(failure instanceof EngineProblem) || failure.status !== 404) throw failure;
+      }
+    }
     if (existing) {
       if (existing.view.requestDigest !== submission.requestDigest) throw new EngineProblem(409, problem("TASK_DIGEST_CONFLICT", "request", "taskId already belongs to another request digest"));
       this.grants.set(submission.taskId, { value: submission.gateway.taskGrant, expiresAt: submission.gateway.expiresAt });
@@ -114,19 +136,28 @@ export class AgentEngine {
       metrics: { startedAt: now, promptTokens: 0, completionTokens: 0 },
       receiptRefs: [], pendingCalls: [], nextPendingCall: 0, acceptedAnswers: [],
       recentConversation, historicalContext, longTermMemory, observations: emptyObservations(),
-      candidateValidationRepairs: 0, loadedToolNames: [], cancellationRequested: false,
+      candidateValidationRepairs: 0, toolArgumentRepairAttempts: 0,
+      loadedToolNames: [], cancellationRequested: false,
       activeSandboxCallId: null
     };
     await this.options.store.create(task);
     this.tasks.set(submission.taskId, task);
     this.grants.set(submission.taskId, { value: submission.gateway.taskGrant, expiresAt: submission.gateway.expiresAt });
-    await this.status(task, "queued", null);
+    if (!this.options.store.claimNext) await this.status(task, "queued", null);
     this.schedule(task);
     return { contractVersion: "1.0", replayed: false, task: structuredClone(task.view) };
   }
 
   get(taskId: string): TaskView {
     return structuredClone(this.requireTask(taskId).view);
+  }
+
+  async load(taskId: string): Promise<void> {
+    if (this.active.has(taskId) || !this.options.store.load) return;
+    const task = await this.options.store.load(taskId);
+    normalizePersistedTask(task);
+    reconcileTask(task, await this.options.store.events(taskId));
+    this.tasks.set(taskId, task);
   }
 
   async events(taskId: string, after = 0): Promise<TaskEvent[]> {
@@ -144,14 +175,26 @@ export class AgentEngine {
   async cancel(taskId: string): Promise<TaskView> {
     const task = this.requireTask(taskId);
     if (terminal(task.view.state)) return structuredClone(task.view);
+    if (this.options.store.requestCancellation) {
+      await this.options.store.requestCancellation(taskId);
+    }
     let cancellation = this.cancellations.get(taskId);
     if (!cancellation) {
       cancellation = (async () => {
         task.cancellationRequested = true;
-        await this.options.store.save(task);
+        // A task owned by another Engine instance has no local lease. The
+        // durable cancellation flag is the authority until that owner observes
+        // it or a dispatcher claims the queued task for cancellation.
+        if (!this.options.store.claimNext || this.active.has(taskId)) {
+          await this.options.store.save(task);
+        }
         this.aborters.get(taskId)?.abort();
         const active = this.active.get(taskId);
         if (active) await active;
+        if (!active && this.options.store.claimNext) {
+          await this.drainQueue();
+          return;
+        }
         if (!terminal(task.view.state)) await this.finishCancellation(task);
       })().finally(() => this.cancellations.delete(taskId));
       this.cancellations.set(taskId, cancellation);
@@ -162,7 +205,8 @@ export class AgentEngine {
 
   async answer(taskId: string, value: { contractVersion: "1.0"; clientRequestId: string; questionId: string; answer: string; answerDigest: string }): Promise<TaskView> {
     this.options.validator.validate("task-answer", value);
-    const task = this.requireTask(taskId);
+    let task = this.requireTask(taskId);
+    let claimedForAnswer = false;
     if (sha256(value.answer) !== value.answerDigest) throw new EngineProblem(400, problem("ANSWER_DIGEST_INVALID", "request", "answerDigest does not match the exact answer bytes"));
     const requestReplay = task.acceptedAnswers.find((answer) => answer.clientRequestId === value.clientRequestId);
     if (requestReplay && (requestReplay.questionId !== value.questionId || requestReplay.answerDigest !== value.answerDigest)) throw new EngineProblem(409, problem("ANSWER_REQUEST_CONFLICT", "request", "clientRequestId was already used for another answer"));
@@ -172,6 +216,15 @@ export class AgentEngine {
       return structuredClone(task.view);
     }
     if (task.view.state !== "waiting_user" || task.view.pendingQuestionId !== value.questionId) throw new EngineProblem(409, problem("QUESTION_NOT_PENDING", "request", "The question is not currently pending"));
+    if (this.options.store.claimTask && !this.active.has(taskId)) {
+      const claimed = await this.options.store.claimTask(taskId, this.instanceId);
+      if (!claimed) throw new EngineProblem(409, problem("AGENT_CAPACITY_EXHAUSTED", "request", "The task remains waiting until an Agent slot is available", true));
+      task = claimed.checkpoint;
+      normalizePersistedTask(task);
+      this.tasks.set(taskId, task);
+      this.grants.set(taskId, { value: claimed.taskGrant, expiresAt: claimed.expiresAt });
+      claimedForAnswer = true;
+    }
     const accepted: AcceptedAnswer = { clientRequestId: value.clientRequestId, questionId: value.questionId, answerDigest: value.answerDigest };
     task.acceptedAnswers.push(accepted);
     const pending = task.pendingCalls[task.nextPendingCall];
@@ -180,24 +233,70 @@ export class AgentEngine {
     task.nextPendingCall += 1;
     task.view.pendingQuestionId = null;
     await this.status(task, "running", null);
-    this.schedule(task);
+    if (claimedForAnswer) this.startOwned(task); else this.schedule(task);
     return structuredClone(task.view);
   }
 
   private schedule(task: PersistedTask): void {
+    if (this.options.store.claimNext) {
+      void this.drainQueue();
+      return;
+    }
+    this.startOwned(task);
+  }
+
+  private startOwned(task: PersistedTask): void {
     if (this.active.has(task.view.taskId) || terminal(task.view.state) || task.view.state === "waiting_user") return;
     const controller = new AbortController();
     this.aborters.set(task.view.taskId, controller);
+    let renewing = false;
+    const heartbeat = this.options.store.renewLease
+      ? setInterval(() => {
+          if (renewing) return;
+          renewing = true;
+          void this.options.store.renewLease!(task.view.taskId).then((result) => {
+            if (result.cancellationRequested) {
+              task.cancellationRequested = true;
+              controller.abort();
+            }
+          }).catch(() => controller.abort(TASK_LEASE_LOST)).finally(() => { renewing = false; });
+        }, 10_000)
+      : undefined;
     const promise = this.run(task, controller.signal).catch((failure: unknown) => {
       const detail = failure instanceof EngineProblem
         ? `${failure.problem.code} (HTTP ${failure.status})`
         : failure instanceof Error ? failure.message : "unknown failure";
       process.stderr.write(`agent-engine-reactplan: task ${task.view.taskId} paused after an execution failure: ${detail}\n`);
-    }).finally(() => {
+    }).finally(async () => {
+      if (heartbeat !== undefined) clearInterval(heartbeat);
       this.active.delete(task.view.taskId); this.aborters.delete(task.view.taskId);
-      if (task.view.state === "running" && !task.cancellationRequested) this.schedule(task);
+      if (this.options.store.releaseLease) await this.options.store.releaseLease(task.view.taskId);
+      if (this.options.store.claimNext) await this.drainQueue();
+      else if (task.view.state === "running" && !task.cancellationRequested) this.schedule(task);
     });
     this.active.set(task.view.taskId, promise);
+  }
+
+  private async drainQueue(): Promise<void> {
+    if (!this.options.store.claimNext || this.dispatching) return;
+    this.dispatching = true;
+    try {
+      while (true) {
+        const claimed = await this.options.store.claimNext(this.instanceId);
+        if (!claimed) return;
+        const task = claimed.checkpoint;
+        normalizePersistedTask(task);
+        task.cancellationRequested = claimed.cancellationRequested;
+        this.tasks.set(task.view.taskId, task);
+        this.grants.set(task.view.taskId, {
+          value: claimed.taskGrant, expiresAt: claimed.expiresAt
+        });
+        this.startOwned(task);
+      }
+    } catch (failure) {
+      const detail = failure instanceof Error ? failure.message : "unknown dispatch failure";
+      process.stderr.write(`agent-engine-reactplan: queue dispatch paused: ${detail}\n`);
+    } finally { this.dispatching = false; }
   }
 
   private async run(task: PersistedTask, signal: AbortSignal): Promise<void> {
@@ -210,7 +309,29 @@ export class AgentEngine {
       while (!terminal(task.view.state) && task.view.state !== "waiting_user") {
         this.checkCancelled(signal);
         while (task.nextPendingCall < task.pendingCalls.length) {
-          const paused = await this.executePending(task, task.pendingCalls[task.nextPendingCall]!, signal);
+          const call = task.pendingCalls[task.nextPendingCall]!;
+          let paused: boolean;
+          try {
+            paused = await this.executePending(task, call, signal);
+          } catch (error) {
+            if (!recoverableModelToolArguments(error)) throw error;
+            const modelCallNumber = call.modelCallNumber ?? task.modelCalls;
+            if (task.toolArgumentRepairModelCall !== modelCallNumber) {
+              task.toolArgumentRepairAttempts = (task.toolArgumentRepairAttempts ?? 0) + 1;
+              task.toolArgumentRepairModelCall = modelCallNumber;
+            }
+            if ((task.toolArgumentRepairAttempts ?? 0) > MAX_TOOL_ARGUMENT_REPAIRS) throw error;
+            task.messages.push({
+              role: "tool", toolCallId: modelCallId(call),
+              content: JSON.stringify({
+                status: "REJECTED",
+                code: error.problem.code,
+                toolName: call.name,
+                message: `${error.problem.message}. Re-read the loaded parameter schema and retry with every required argument. The tool was not executed.`
+              })
+            });
+            paused = false;
+          }
           if (paused) return;
           task.nextPendingCall += 1;
           await this.options.store.save(task);
@@ -247,11 +368,14 @@ export class AgentEngine {
         delete task.pendingModelCall;
         await this.options.store.save(task);
         this.checkCancelled(signal);
+        const loadedAtDispatch = new Set(task.loadedToolNames ?? []);
         const calls = response.toolCalls.map((call, ordinal) => ({
           ...call,
           id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal),
           modelCallId: call.id,
-          ordinal
+          ordinal,
+          schemaLoadedAtDispatch: call.name === "load_tool" || loadedAtDispatch.has(call.name),
+          modelCallNumber: task.modelCalls
         }));
         task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ modelCallId: id, name, arguments: args }) => ({ id: id!, name, arguments: args })) } : {}) });
         if (calls.length === 0) {
@@ -330,6 +454,7 @@ export class AgentEngine {
       }
     } catch (error) {
       if (terminal(task.view.state)) return;
+      if (signal.aborted && signal.reason === TASK_LEASE_LOST) return;
       if (task.cancellationRequested || signal.aborted
           || (error instanceof EngineProblem && error.problem.category === "cancelled")) {
         task.cancellationRequested = true;
@@ -343,7 +468,13 @@ export class AgentEngine {
 
   private async executePending(task: PersistedTask, call: PendingCall, signal: AbortSignal): Promise<boolean> {
     let args: Record<string, unknown>;
-    try { args = JSON.parse(call.arguments) as Record<string, unknown>; }
+    try {
+      const parsed = JSON.parse(call.arguments) as unknown;
+      if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+        throw new Error("tool arguments are not an object");
+      }
+      args = parsed as Record<string, unknown>;
+    }
     catch { throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Model emitted invalid tool arguments")); }
     if (call.name === "load_tool") {
       const name = requireString(args.name, "name");
@@ -360,7 +491,9 @@ export class AgentEngine {
       return false;
     }
     const available = availableToolSpecs(task).find((tool) => tool.function.name === call.name);
-    if (available && !(task.loadedToolNames ?? []).includes(call.name)) {
+    const schemaWasLoaded = call.schemaLoadedAtDispatch
+      ?? (task.loadedToolNames ?? []).includes(call.name);
+    if (available && !schemaWasLoaded) {
       task.messages.push({
         role: "tool", toolCallId: modelCallId(call),
         content: JSON.stringify({
@@ -880,9 +1013,15 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.observations.workspaceDiffObservedRevision ??= -1;
   task.observations.workspaceChanges ??= [];
   task.candidateValidationRepairs ??= 0;
+  task.toolArgumentRepairAttempts ??= 0;
   task.loadedToolNames ??= [];
   task.cancellationRequested ??= false;
   task.activeSandboxCallId ??= null;
+}
+
+function recoverableModelToolArguments(error: unknown): error is EngineProblem {
+  return error instanceof EngineProblem
+    && error.problem.code === "MODEL_TOOL_ARGUMENTS_INVALID";
 }
 
 function availableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {

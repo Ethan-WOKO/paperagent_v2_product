@@ -103,6 +103,10 @@ export interface PendingCall extends ModelToolCall {
   ordinal: number;
   /** Provider-owned protocol identifier; distinct from the deterministic product call id. */
   modelCallId?: string;
+  /** The schema was visible to the model when this call was emitted. */
+  schemaLoadedAtDispatch?: boolean;
+  /** Durable model-turn identity used to bound argument-repair rounds. */
+  modelCallNumber?: number;
 }
 export interface AcceptedAnswer { clientRequestId: string; questionId: string; answerDigest: string }
 
@@ -183,6 +187,8 @@ export interface PersistedTask {
   longTermMemory: LongTermMemoryEnvelope;
   observations: TaskObservations;
   candidateValidationRepairs: number;
+  toolArgumentRepairAttempts?: number;
+  toolArgumentRepairModelCall?: number;
   publication?: PublicationFact;
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;

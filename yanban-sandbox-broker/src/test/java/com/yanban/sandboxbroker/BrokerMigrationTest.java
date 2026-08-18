@@ -16,7 +16,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 @SpringBootTest(properties={"yanban.broker.enabled=true","yanban.broker.mode=LOCAL_ACCEPTANCE","yanban.broker.bind-address=127.0.0.1","yanban.broker.remote-access=false","yanban.broker.workspace-root=C:/test/work","yanban.broker.bearer-token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","yanban.broker.e2b-api-key=server-side-key-that-is-long-enough","yanban.broker.e2b-template=yanban-research-v1","yanban.broker.e2b-python-executable=C:/test/python.exe","yanban.broker.e2b-helper=C:/test/e2b_provider.py","spring.datasource.url=jdbc:h2:mem:broker;MODE=MySQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa","spring.datasource.password=","spring.flyway.enabled=true","spring.flyway.locations=classpath:db/migration"})
+        "spring.datasource.username=sa","spring.datasource.password=","spring.flyway.enabled=true","spring.flyway.locations=classpath:db/migration",
+        "yanban.broker.poll-delay-ms=3600000","yanban.broker.max-concurrent-runs=18","yanban.broker.max-concurrent-runs-per-user=3"})
 class BrokerMigrationTest {
     @Autowired DataSource dataSource;
     @Autowired SandboxDispatchService dispatches;
@@ -26,6 +27,33 @@ class BrokerMigrationTest {
     @Test void createsDurableExecutionAndGlobalConcurrencySlot(){JdbcTemplate jdbc=new JdbcTemplate(dataSource);
         assertThat(jdbc.queryForObject("select count(*) from sandbox_concurrency_slot",Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from sandbox_executions",Integer.class)).isZero();}
+
+    @Test void enforcesThreeActiveSandboxesPerUserWithoutBlockingAnotherUser() {
+        java.util.ArrayList<String> firstUser = new java.util.ArrayList<>();
+        for (int index = 0; index < 4; index++) {
+            firstUser.add(dispatches.dispatch(request("user-one-" + index, 1L, 100 + index)).executionId());
+        }
+        String otherUser = dispatches.dispatch(request("user-two", 2L, 200)).executionId();
+
+        java.util.ArrayList<String> claimed = new java.util.ArrayList<>();
+        for (int index = 0; index < 4; index++) {
+            claimed.add(leases.claim("worker-" + index, Duration.ofMinutes(1)).orElseThrow().executionId());
+        }
+
+        assertThat(claimed.subList(0, 3)).containsExactlyElementsOf(firstUser.subList(0, 3));
+        assertThat(claimed.get(3)).isEqualTo(otherUser);
+        assertThat(leases.claim("worker-over-user-limit", Duration.ofMinutes(1))).isEmpty();
+    }
+
+    @Test void enforcesEighteenActiveSandboxesAcrossBrokerInstances() {
+        for (int index = 0; index < 19; index++) {
+            dispatches.dispatch(request("global-" + index, index + 1L, 300 + index));
+        }
+        for (int index = 0; index < 18; index++) {
+            assertThat(leases.claim("cluster-worker-" + index, Duration.ofMinutes(1))).isPresent();
+        }
+        assertThat(leases.claim("cluster-worker-over-limit", Duration.ofMinutes(1))).isEmpty();
+    }
 
     @Test void durableIdempotencyFenceAndReclaimAreDatabaseBacked() {
         SandboxDispatch request = signed(new SandboxDispatch("durable-key", "", 1, 2, 3, 4, 5, 7,
@@ -133,5 +161,11 @@ class BrokerMigrationTest {
         return new SandboxDispatch(value.idempotencyKey(), digest, value.userId(), value.projectId(), value.sessionId(),
                 value.planId(), value.stepId(), value.fence(), value.projectVersion(), value.policyDigest(), value.files(),
                 value.argv(), value.cpus(), value.memoryBytes(), value.timeoutMillis(), value.maxOutputBytes(), value.networkEnabled());
+    }
+
+    private SandboxDispatch request(String key, long userId, long stepId) {
+        return signed(new SandboxDispatch(key, "", userId, 2, 3, 4, stepId, 7,
+                "a".repeat(64), "b".repeat(64), Map.of("Main.java", "class Main {}"),
+                List.of("java", "Main.java"), 1, 536_870_912L, 60_000, 1_048_576, false));
     }
 }

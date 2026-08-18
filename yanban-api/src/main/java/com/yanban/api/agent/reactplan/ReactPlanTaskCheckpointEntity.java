@@ -40,6 +40,16 @@ final class ReactPlanTaskCheckpointEntity {
     private long settledPromptTokens;
     @Column(name = "settled_completion_tokens", nullable = false)
     private long settledCompletionTokens;
+    @Column(name = "lease_owner", length = 128)
+    private String leaseOwner;
+    @Column(name = "lease_token", length = 64)
+    private String leaseToken;
+    @Column(name = "lease_fence", nullable = false)
+    private long leaseFence;
+    @Column(name = "lease_expires_at")
+    private LocalDateTime leaseExpiresAt;
+    @Column(name = "cancellation_requested", nullable = false)
+    private boolean cancellationRequested;
 
     protected ReactPlanTaskCheckpointEntity() { }
 
@@ -59,6 +69,7 @@ final class ReactPlanTaskCheckpointEntity {
         this.createdAt = now;
         this.updatedAt = now;
         this.usageSettled = false;
+        this.cancellationRequested = false;
     }
 
     void update(String state, long lastSequence, String checkpointJson, LocalDateTime now) {
@@ -67,6 +78,42 @@ final class ReactPlanTaskCheckpointEntity {
         this.checkpointJson = checkpointJson;
         this.checkpointRevision += 1;
         this.updatedAt = now;
+        if (!"running".equals(state)) releaseLease();
+    }
+
+    void claim(String owner, String token, LocalDateTime expiresAt, LocalDateTime now) {
+        leaseOwner = owner;
+        leaseToken = token;
+        leaseFence += 1;
+        leaseExpiresAt = expiresAt;
+        updatedAt = now;
+    }
+
+    void renew(String owner, String token, long fence, LocalDateTime expiresAt, LocalDateTime now) {
+        requireLease(owner, token, fence, now);
+        leaseExpiresAt = expiresAt;
+        updatedAt = now;
+    }
+
+    void requireLease(String owner, String token, long fence, LocalDateTime now) {
+        if (!java.util.Objects.equals(leaseOwner, owner)
+                || !java.util.Objects.equals(leaseToken, token)
+                || leaseFence != fence || leaseExpiresAt == null || !leaseExpiresAt.isAfter(now)) {
+            throw new IllegalStateException("stale ReAct task lease");
+        }
+    }
+
+    void requestCancellation(LocalDateTime now) {
+        if (!java.util.Set.of("succeeded", "failed", "cancelled").contains(state)) {
+            cancellationRequested = true;
+            updatedAt = now;
+        }
+    }
+
+    void releaseLease() {
+        leaseOwner = null;
+        leaseToken = null;
+        leaseExpiresAt = null;
     }
 
     void settleUsage(long promptTokens, long completionTokens) {
@@ -89,4 +136,8 @@ final class ReactPlanTaskCheckpointEntity {
     boolean usageSettled() { return usageSettled; }
     long settledPromptTokens() { return settledPromptTokens; }
     long settledCompletionTokens() { return settledCompletionTokens; }
+    String leaseOwner() { return leaseOwner; }
+    long leaseFence() { return leaseFence; }
+    LocalDateTime leaseExpiresAt() { return leaseExpiresAt; }
+    boolean cancellationRequested() { return cancellationRequested; }
 }

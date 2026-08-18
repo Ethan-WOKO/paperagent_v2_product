@@ -27,6 +27,20 @@ Get-Content -LiteralPath $configPath | ForEach-Object {
     if ($_ -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { $settings[$Matches[1]] = $Matches[2] }
 }
 
+# Keep non-secret concurrency settings in the shared local .env. The
+# Broker-specific file remains authoritative when it explicitly overrides one.
+$productEnvPath = Join-Path $repoRoot '.env'
+if (Test-Path -LiteralPath $productEnvPath -PathType Leaf) {
+    $sharedConcurrency = @('YANBAN_SANDBOX_MAX_CONCURRENT_RUNS', 'YANBAN_SANDBOX_MAX_CONCURRENT_RUNS_PER_USER')
+    Get-Content -LiteralPath $productEnvPath | ForEach-Object {
+        if ($_ -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$' -and
+            $sharedConcurrency -contains $Matches[1] -and
+            -not $settings.ContainsKey($Matches[1])) {
+            $settings[$Matches[1]] = $Matches[2]
+        }
+    }
+}
+
 $required = @(
     'YANBAN_SANDBOX_BROKER_ENABLED',
     'YANBAN_SANDBOX_WORKSPACE_ROOT',

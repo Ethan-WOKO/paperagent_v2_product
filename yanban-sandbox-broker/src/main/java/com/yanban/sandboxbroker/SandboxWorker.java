@@ -14,6 +14,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 
 @Component
 @ConditionalOnProperty(prefix="yanban.broker",name="enabled",havingValue="true")
@@ -23,13 +25,21 @@ class SandboxWorker {
     private static final long CREATE_TIMEOUT_MILLIS=60_000L;
     private final SandboxLeaseService leases; private final BrokerProperties properties; private final ObjectMapper json;
     private final SandboxProcessRegistry processes; private final ProviderEnvironment providerEnvironment; private final SandboxProviderCommandFactory providers; private final String owner=UUID.randomUUID().toString();
+    private ExecutorService workerPool; private final AtomicInteger inFlight=new AtomicInteger();
     SandboxWorker(SandboxLeaseService leases,BrokerProperties properties,ObjectMapper json,SandboxProcessRegistry processes,ProviderEnvironment providerEnvironment,SandboxProviderCommandFactory providers){this.leases=leases;this.properties=properties;this.json=json;this.processes=processes;this.providerEnvironment=providerEnvironment;this.providers=providers;}
 
-    @Scheduled(fixedDelayString="${yanban.broker.poll-delay-ms:1000}")
-    void poll(){leases.claim(owner,LEASE).ifPresent(lease -> {
-        try { runClaim(lease); }
-        catch (RuntimeException lost) { recoverUnexpected(lease,lost); }
-    });}
+    @PostConstruct void startWorkers(){workerPool=Executors.newFixedThreadPool(properties.getMaxConcurrentRuns(),r->{Thread t=new Thread(r,"sandbox-worker");t.setDaemon(true);return t;});}
+    @PreDestroy void stopWorkers(){if(workerPool!=null)workerPool.shutdownNow();}
+
+    @Scheduled(fixedDelayString="${yanban.broker.poll-delay-ms:250}")
+    void poll(){
+        while(inFlight.get()<properties.getMaxConcurrentRuns()){
+            var claimed=leases.claim(owner,LEASE);
+            if(claimed.isEmpty())return;
+            var lease=claimed.orElseThrow();inFlight.incrementAndGet();
+            workerPool.execute(()->{try{runClaim(lease);}catch(RuntimeException lost){recoverUnexpected(lease,lost);}finally{inFlight.decrementAndGet();}});
+        }
+    }
 
     private void runClaim(SandboxLeaseService.Lease lease){
         SandboxExecutionEntity entity=leases.owned(lease);

@@ -23,17 +23,18 @@ export function createEngineServer(engine: AgentEngine, serviceToken: string): S
         return json(response, 202, accepted);
       }
       let match = TASK_PATH.exec(url.pathname);
-      if (request.method === "GET" && match) return json(response, 200, engine.get(match[1]!));
+      if (request.method === "GET" && match) { await engine.load(match[1]!); return json(response, 200, engine.get(match[1]!)); }
       match = EVENTS_PATH.exec(url.pathname);
-      if (request.method === "GET" && match) return await streamEvents(engine, match[1]!, request, response);
+      if (request.method === "GET" && match) { await engine.load(match[1]!); return await streamEvents(engine, match[1]!, request, response); }
       match = CANCEL_PATH.exec(url.pathname);
       if (request.method === "POST" && match) {
+        await engine.load(match[1]!);
         const body = await jsonBody(request) as Record<string, unknown>;
         if (Object.keys(body).sort().join(",") !== "clientRequestId,contractVersion" || body.contractVersion !== "1.0" || typeof body.clientRequestId !== "string" || !/^cancel\.[A-Za-z0-9_-]{16,120}$/.test(body.clientRequestId)) throw new EngineProblem(400, problem("CONTRACT_VALIDATION_FAILED", "request", "Cancellation request is invalid"));
         return json(response, 202, await engine.cancel(match[1]!));
       }
       match = ANSWER_PATH.exec(url.pathname);
-      if (request.method === "POST" && match) return json(response, 202, await engine.answer(match[1]!, await jsonBody(request) as never));
+      if (request.method === "POST" && match) { await engine.load(match[1]!); return json(response, 202, await engine.answer(match[1]!, await jsonBody(request) as never)); }
       throw new EngineProblem(404, problem("ROUTE_NOT_FOUND", "request", "Route was not found"));
     } catch (error) {
       if (response.headersSent) { response.end(); return; }
@@ -67,12 +68,15 @@ async function streamEvents(engine: AgentEngine, taskId: string, request: Incomi
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
   let last = after; const queued: TaskEvent[] = []; let replaying = true;
   let heartbeat: NodeJS.Timeout | undefined;
+  let eventPoll: NodeJS.Timeout | undefined;
+  let polling = false;
   let unsubscribe = (): void => {};
   let closed = false;
   const close = (): void => {
     if (closed) return;
     closed = true;
     if (heartbeat !== undefined) clearInterval(heartbeat);
+    if (eventPoll !== undefined) clearInterval(eventPoll);
     unsubscribe();
   };
   const finish = (): void => {
@@ -99,6 +103,14 @@ async function streamEvents(engine: AgentEngine, taskId: string, request: Incomi
   heartbeat = setInterval(() => {
     if (!response.writableEnded) response.write(": heartbeat\n\n");
   }, 15_000);
+  eventPoll = setInterval(() => {
+    if (polling || closed) return;
+    polling = true;
+    void engine.events(taskId, last).then((events) => {
+      for (const event of events) write(event);
+    }).catch(() => { /* the next poll or client reconnect retries durable events */ })
+      .finally(() => { polling = false; });
+  }, 500);
   request.once("aborted", close);
 }
 

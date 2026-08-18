@@ -2,8 +2,18 @@ import { mkdir, open, readFile, readdir, rename, writeFile } from "node:fs/promi
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PersistedTask, TaskEvent } from "./types.js";
+import { EngineProblem, problem } from "./util.js";
 
 export interface RecoveryGrant { taskGrant: string; expiresAt: string }
+export interface TaskLease { owner: string; token: string; fence: number }
+export interface ClaimedTask {
+  checkpointRevision: number;
+  checkpoint: PersistedTask;
+  lease: TaskLease;
+  taskGrant: string;
+  expiresAt: string;
+  cancellationRequested: boolean;
+}
 
 export interface TaskPersistence {
   initialize(): Promise<void>;
@@ -12,7 +22,13 @@ export interface TaskPersistence {
   appendEvent(event: TaskEvent): Promise<void>;
   events(taskId: string): Promise<TaskEvent[]>;
   loadAll(): Promise<PersistedTask[]>;
+  load?(taskId: string): Promise<PersistedTask>;
   authorizeRecovery?(task: PersistedTask): Promise<RecoveryGrant>;
+  claimNext?(owner: string): Promise<ClaimedTask | null>;
+  claimTask?(taskId: string, owner: string): Promise<ClaimedTask | null>;
+  renewLease?(taskId: string): Promise<{ cancellationRequested: boolean }>;
+  releaseLease?(taskId: string): Promise<void>;
+  requestCancellation?(taskId: string): Promise<void>;
 }
 
 export class TaskStore implements TaskPersistence {
@@ -68,16 +84,18 @@ export class TaskStore implements TaskPersistence {
     }
     return tasks;
   }
+
 }
 
 export class HttpTaskStore implements TaskPersistence {
   private readonly revisions = new Map<string, number>();
+  private readonly leases = new Map<string, TaskLease>();
 
   constructor(private readonly origin: string, private readonly serviceToken: string) {
     if (serviceToken.length < 32) throw new Error("ENGINE_SERVICE_TOKEN must contain at least 32 characters");
   }
 
-  async initialize(): Promise<void> { await this.loadAll(); }
+  async initialize(): Promise<void> { /* Durable tasks are claimed or loaded lazily. */ }
 
   async create(task: PersistedTask): Promise<void> {
     const response = await this.call<{ checkpointRevision: number }>("/checkpoints", "POST", {
@@ -92,13 +110,14 @@ export class HttpTaskStore implements TaskPersistence {
     if (expectedRevision === undefined) throw new Error(`Missing checkpoint revision for ${task.view.taskId}`);
     const response = await this.call<{ checkpointRevision: number }>("/checkpoints", "POST", {
       contractVersion: "1.0", taskId: task.view.taskId,
-      requestDigest: task.view.requestDigest, expectedRevision, checkpoint: task
+      requestDigest: task.view.requestDigest, expectedRevision, checkpoint: task,
+      lease: this.leases.get(task.view.taskId)
     });
     this.revisions.set(task.view.taskId, response.checkpointRevision);
   }
 
   async appendEvent(event: TaskEvent): Promise<void> {
-    await this.call("/events", "POST", { contractVersion: "1.0", event });
+    await this.call("/events", "POST", { contractVersion: "1.0", event, lease: this.leases.get(event.taskId) });
   }
 
   async events(taskId: string): Promise<TaskEvent[]> {
@@ -113,10 +132,67 @@ export class HttpTaskStore implements TaskPersistence {
     return response.tasks.map((item) => item.checkpoint);
   }
 
+  async load(taskId: string): Promise<PersistedTask> {
+    const response = await this.call<{ checkpointRevision: number; checkpoint: PersistedTask }>(
+      `/tasks/${encodeURIComponent(taskId)}/checkpoint`, "GET");
+    this.revisions.set(taskId, response.checkpointRevision);
+    return response.checkpoint;
+  }
+
   authorizeRecovery(task: PersistedTask): Promise<RecoveryGrant> {
     return this.call(`/tasks/${encodeURIComponent(task.view.taskId)}/authorize-recovery`, "POST", {
       contractVersion: "1.0", requestDigest: task.view.requestDigest
     });
+  }
+
+  async claimNext(owner: string): Promise<ClaimedTask | null> {
+    const response = await this.call<{ task: ClaimedTask | null }>("/claims/next", "POST", {
+      contractVersion: "1.0", owner
+    });
+    if (response.task === null) return null;
+    this.revisions.set(response.task.checkpoint.view.taskId, response.task.checkpointRevision);
+    this.leases.set(response.task.checkpoint.view.taskId, response.task.lease);
+    return response.task;
+  }
+
+  async claimTask(taskId: string, owner: string): Promise<ClaimedTask | null> {
+    const response = await this.call<{ task: ClaimedTask | null }>(
+      `/tasks/${encodeURIComponent(taskId)}/claim`, "POST", {
+        contractVersion: "1.0", owner
+      });
+    if (response.task === null) return null;
+    this.revisions.set(taskId, response.task.checkpointRevision);
+    this.leases.set(taskId, response.task.lease);
+    return response.task;
+  }
+
+  renewLease(taskId: string): Promise<{ cancellationRequested: boolean }> {
+    const lease = this.requireLease(taskId);
+    return this.call(`/tasks/${encodeURIComponent(taskId)}/lease/renew`, "POST", {
+      contractVersion: "1.0", lease
+    });
+  }
+
+  async releaseLease(taskId: string): Promise<void> {
+    const lease = this.leases.get(taskId);
+    if (!lease) return;
+    try {
+      await this.call(`/tasks/${encodeURIComponent(taskId)}/lease/release`, "POST", {
+        contractVersion: "1.0", lease
+      });
+    } finally { this.leases.delete(taskId); }
+  }
+
+  requestCancellation(taskId: string): Promise<void> {
+    return this.call(`/tasks/${encodeURIComponent(taskId)}/cancel-request`, "POST", {
+      contractVersion: "1.0"
+    });
+  }
+
+  private requireLease(taskId: string): TaskLease {
+    const lease = this.leases.get(taskId);
+    if (!lease) throw new Error(`Missing task lease for ${taskId}`);
+    return lease;
   }
 
   private async call<T>(path: string, method: "GET" | "POST", body?: unknown): Promise<T> {
@@ -144,7 +220,15 @@ export class HttpTaskStore implements TaskPersistence {
       }
       let message = `Task persistence gateway returned HTTP ${response.status}`;
       try { message = (await response.json() as { message?: string }).message ?? message; } catch { /* bounded fallback */ }
-      throw new Error(message);
+      const queueFull = response.status === 429;
+      throw new EngineProblem(response.status, problem(
+        queueFull ? "AGENT_USER_QUEUE_FULL" : "TASK_PERSISTENCE_REJECTED",
+        response.status >= 500 ? "internal" : "request",
+        queueFull
+          ? "该用户的 Agent 并发和排队数量已达到当前部署上限，请等待其中一个任务结束后重试。"
+          : message,
+        response.status >= 500
+      ));
     }
     throw new Error("Task persistence gateway retry budget exhausted");
   }
