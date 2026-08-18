@@ -32,6 +32,8 @@ export interface ReactPlanTaskRecord {
   instruction: string;
   turnId: number;
   taskId: string;
+  startedAt: string;
+  finishedAt: string | null;
   view: ReactPlanTaskView;
   events: ReactPlanTaskEvent[];
 }
@@ -107,6 +109,23 @@ export function reactPlanStateTagType(state: ReactPlanTaskState) {
   if (state === 'waiting_user') return 'warning' as const;
   if (state === 'running') return 'info' as const;
   return 'default' as const;
+}
+
+export function reactPlanElapsedMillis(record: ReactPlanTaskRecord, now = Date.now()) {
+  const startedAt = Date.parse(record.startedAt);
+  const finishedAt = record.finishedAt ? Date.parse(record.finishedAt) : now;
+  if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) return 0;
+  return Math.max(0, finishedAt - startedAt);
+}
+
+export function formatReactPlanDuration(durationMillis: number) {
+  const totalSeconds = Math.max(0, Math.floor(durationMillis / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分 ${seconds} 秒`;
+  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`;
+  return `${seconds} 秒`;
 }
 
 export function reactPlanToolLabel(tool: Extract<ReactPlanTaskEvent, { type: 'tool' }>) {
@@ -222,5 +241,16 @@ function validReactPlanRecord(value: unknown, projectId: number, sessionId: numb
   if (record.version !== 1 || record.projectId !== projectId || record.sessionId !== sessionId) return null;
   if (!record.clientRequestId?.startsWith('request.') || !record.taskId?.startsWith('task.')) return null;
   if (!Number.isSafeInteger(record.turnId) || record.turnId < 1 || !record.view) return null;
-  return { ...record, events: Array.isArray(record.events) ? record.events.slice(-200) : [] };
+  const storedStartedAt = Date.parse(record.startedAt);
+  const startedAt = Number.isFinite(storedStartedAt) ? record.startedAt : record.view.createdAt;
+  const storedFinishedAt = record.finishedAt ? Date.parse(record.finishedAt) : Number.NaN;
+  const finishedAt = isReactPlanTerminal(record.view.state)
+    ? (Number.isFinite(storedFinishedAt) ? record.finishedAt : record.view.updatedAt)
+    : null;
+  return {
+    ...record,
+    startedAt,
+    finishedAt,
+    events: Array.isArray(record.events) ? record.events.slice(-200) : [],
+  };
 }

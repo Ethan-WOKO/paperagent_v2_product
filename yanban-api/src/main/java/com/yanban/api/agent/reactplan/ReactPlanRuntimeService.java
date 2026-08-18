@@ -166,7 +166,7 @@ final class ReactPlanRuntimeService {
         return engine.events(taskId, afterSequence);
     }
 
-    private void requireTask(long userId, long turnId, String taskId) {
+    void requireTask(long userId, long turnId, String taskId) {
         projectContext(userId, turnId);
         if (!taskId(userId, turnId).equals(taskId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "ReAct task not found");

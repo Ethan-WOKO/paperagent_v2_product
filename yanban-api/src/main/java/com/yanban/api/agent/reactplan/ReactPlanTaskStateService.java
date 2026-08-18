@@ -4,9 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineObservationReader;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.quota.UserQuotaService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -19,15 +21,19 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 @ConditionalOnProperty(prefix = "yanban.agent.reactplan", name = "enabled", havingValue = "true")
 class ReactPlanTaskStateService {
+    private static final Logger log = LoggerFactory.getLogger(ReactPlanTaskStateService.class);
     private static final int MAX_CHECKPOINT_BYTES = 1_048_576;
     private static final int MAX_EVENT_BYTES = 32_768;
     private static final Set<String> STATES = Set.of(
             "queued", "running", "waiting_user", "succeeded", "failed", "cancelled");
     private static final Set<String> RECOVERABLE = Set.of("queued", "running", "waiting_user");
+    private static final Set<String> TERMINAL = Set.of("succeeded", "failed", "cancelled");
     private static final Set<String> FORBIDDEN_KEYS = Set.of(
             "taskgrant", "apikey", "authorization", "servicetoken", "accesstoken", "refreshtoken");
 
@@ -37,19 +43,25 @@ class ReactPlanTaskStateService {
     private final ReactPlanTurnIntakeRepository intakes;
     private final AgentTurnProductContextResolver contexts;
     private final AgentEngineTaskGrantService grants;
+    private final AgentEngineObservationReader observations;
+    private final UserQuotaService quotas;
 
     ReactPlanTaskStateService(ObjectMapper json,
                               ReactPlanTaskCheckpointRepository checkpoints,
                               ReactPlanTaskEventRepository events,
                               ReactPlanTurnIntakeRepository intakes,
                               AgentTurnProductContextResolver contexts,
-                              AgentEngineTaskGrantService grants) {
+                              AgentEngineTaskGrantService grants,
+                              AgentEngineObservationReader observations,
+                              UserQuotaService quotas) {
         this.json = json;
         this.checkpoints = checkpoints;
         this.events = events;
         this.intakes = intakes;
         this.contexts = contexts;
         this.grants = grants;
+        this.observations = observations;
+        this.quotas = quotas;
     }
 
     @Transactional
@@ -63,9 +75,11 @@ class ReactPlanTaskStateService {
             if (expectedRevision != null) conflict("CHECKPOINT_REVISION_CONFLICT");
             ReactPlanTurnIntakeEntity intake = requireIntake(taskId);
             requireIdentity(identity, intake);
-            return checkpoints.saveAndFlush(new ReactPlanTaskCheckpointEntity(
+            ReactPlanTaskCheckpointEntity created = new ReactPlanTaskCheckpointEntity(
                     taskId, requestDigest, intake.userId(), intake.sessionId(), intake.turnId(),
-                    identity.state(), identity.lastSequence(), serialized, now)).checkpointRevision();
+                    identity.state(), identity.lastSequence(), serialized, now);
+            settleUsageIfTerminal(created);
+            return checkpoints.saveAndFlush(created).checkpointRevision();
         }
         if (!existing.requestDigest().equals(requestDigest)) conflict("TASK_DIGEST_CONFLICT");
         if (expectedRevision == null) {
@@ -84,7 +98,29 @@ class ReactPlanTaskStateService {
             conflict("CHECKPOINT_SEQUENCE_REGRESSION");
         }
         existing.update(identity.state(), identity.lastSequence(), serialized, now);
+        settleUsageIfTerminal(existing);
         return checkpoints.saveAndFlush(existing).checkpointRevision();
+    }
+
+    private void settleUsageIfTerminal(ReactPlanTaskCheckpointEntity checkpoint) {
+        if (!TERMINAL.contains(checkpoint.state()) || checkpoint.usageSettled()) return;
+        long promptTokens = 0L;
+        long completionTokens = 0L;
+        for (AgentEngineObservationReader.ModelFact model : observations.models(checkpoint.taskId())) {
+            if (!"SUCCEEDED".equals(model.state())) continue;
+            promptTokens = safeAdd(promptTokens, model.promptTokens());
+            completionTokens = safeAdd(completionTokens, model.completionTokens());
+        }
+        quotas.recordTaskUsage(checkpoint.userId(), "REACT_PLAN", promptTokens, completionTokens);
+        checkpoint.settleUsage(promptTokens, completionTokens);
+        log.info("reactplan_usage taskId={} traceId={} outcome=settled promptTokens={} completionTokens={}",
+                checkpoint.taskId(), ReactPlanTraceIds.forTask(checkpoint.taskId()),
+                promptTokens, completionTokens);
+    }
+
+    private static long safeAdd(long left, long right) {
+        try { return Math.addExact(left, Math.max(0L, right)); }
+        catch (ArithmeticException overflow) { return Long.MAX_VALUE; }
     }
 
     @Transactional
@@ -109,6 +145,13 @@ class ReactPlanTaskStateService {
         events.saveAndFlush(new ReactPlanTaskEventEntity(
                 checkpoint.taskId(), sequence, serialized,
                 LocalDateTime.ofInstant(occurredAt, ZoneOffset.UTC)));
+        String type = event.path("type").asText("unknown");
+        String phase = "tool".equals(type)
+                ? event.path("registeredToolName").asText(event.path("name").asText("tool")) : type;
+        String outcome = "tool".equals(type)
+                ? event.path("state").asText("unknown") : event.path("state").asText("recorded");
+        log.info("reactplan_event taskId={} traceId={} phase={} outcome={} sequence={}",
+                taskId, ReactPlanTraceIds.forTask(taskId), phase, outcome, sequence);
     }
 
     @Transactional(readOnly = true)

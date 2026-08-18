@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 interface AgentEngineModelCompletionRepository extends JpaRepository<AgentEngineModelCompletionEntity, Long> {
+    java.util.List<AgentEngineModelCompletionEntity> findByTaskIdOrderByCreatedAtAsc(String taskId);
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select value from AgentEngineModelCompletionEntity value where value.taskId=:taskId and value.clientRequestId=:clientRequestId")
     Optional<AgentEngineModelCompletionEntity> lock(@Param("taskId") String taskId,

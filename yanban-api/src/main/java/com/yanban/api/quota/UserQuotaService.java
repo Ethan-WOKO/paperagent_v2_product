@@ -38,14 +38,25 @@ public class UserQuotaService {
         if (total <= 0L) {
             return;
         }
-        SysUser user = requireUser(userId);
+        SysUser user = requireLockedUser(userId);
+        user.addAiQuotaUsage(total);
+        usageRecords.save(new AiUsageRecord(userId, feature, prompt, completion, total));
+    }
+
+    @Transactional
+    public void recordTaskUsage(Long userId, String feature, long promptTokens, long completionTokens) {
+        long prompt = Math.max(0L, promptTokens);
+        long completion = Math.max(0L, completionTokens);
+        long total = safeAdd(prompt, completion);
+        if (total <= 0L) return;
+        SysUser user = requireLockedUser(userId);
         user.addAiQuotaUsage(total);
         usageRecords.save(new AiUsageRecord(userId, feature, prompt, completion, total));
     }
 
     @Transactional
     public SysUser updateQuota(Long userId, long total, boolean resetUsed) {
-        SysUser user = requireUser(userId);
+        SysUser user = requireLockedUser(userId);
         user.setAiQuotaTotal(total);
         if (resetUsed) {
             user.resetAiQuotaUsed();
@@ -55,13 +66,18 @@ public class UserQuotaService {
 
     @Transactional
     public SysUser resetQuotaUsage(Long userId) {
-        SysUser user = requireUser(userId);
+        SysUser user = requireLockedUser(userId);
         user.resetAiQuotaUsed();
         return user;
     }
 
     private SysUser requireUser(Long userId) {
         return users.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在"));
+    }
+
+    private SysUser requireLockedUser(Long userId) {
+        return users.findLockedById(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在"));
     }
 

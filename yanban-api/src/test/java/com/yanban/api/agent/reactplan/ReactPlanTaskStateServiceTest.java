@@ -4,15 +4,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineObservationReader;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.quota.UserQuotaService;
 import com.yanban.core.agent.AgentRunIdentity;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -31,8 +34,10 @@ class ReactPlanTaskStateServiceTest {
     private final ReactPlanTurnIntakeRepository intakes = mock(ReactPlanTurnIntakeRepository.class);
     private final AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
     private final AgentEngineTaskGrantService grants = mock(AgentEngineTaskGrantService.class);
+    private final AgentEngineObservationReader observations = mock(AgentEngineObservationReader.class);
+    private final UserQuotaService quotas = mock(UserQuotaService.class);
     private final ReactPlanTaskStateService service = new ReactPlanTaskStateService(
-            json, checkpoints, events, intakes, contexts, grants);
+            json, checkpoints, events, intakes, contexts, grants, observations, quotas);
     private final String taskId = ReactPlanRuntimeService.taskId(7L, 42L);
 
     @BeforeEach
@@ -121,6 +126,33 @@ class ReactPlanTaskStateServiceTest {
         assertThatThrownBy(() -> service.authorizeRecovery(taskId, "f".repeat(64)))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("TASK_DIGEST_CONFLICT");
+    }
+
+    @Test
+    void settlesAllSuccessfulModelCallsOnceWhenTaskBecomesTerminal() {
+        ObjectNode running = checkpoint("running", 0);
+        String digest = running.path("view").path("requestDigest").asText();
+        ReactPlanTaskCheckpointEntity persisted = new ReactPlanTaskCheckpointEntity(
+                taskId, digest, 7L, 11L, 42L, "running", 0,
+                running.toString(), LocalDateTime.now());
+        ObjectNode succeeded = checkpoint("succeeded", 0);
+        when(checkpoints.findLockedByTaskId(taskId)).thenReturn(Optional.of(persisted));
+        when(events.findTopByTaskIdOrderBySequenceNumberDesc(taskId)).thenReturn(Optional.empty());
+        when(observations.models(taskId)).thenReturn(List.of(
+                new AgentEngineObservationReader.ModelFact("model.1", "test", "model", "SUCCEEDED",
+                        "2026-08-18T00:00:00Z", "2026-08-18T00:00:01Z", 10, 20, 12, 3, 0, null),
+                new AgentEngineObservationReader.ModelFact("model.2", "test", "model", "SUCCEEDED",
+                        "2026-08-18T00:00:01Z", "2026-08-18T00:00:02Z", 10, 20, 7, 2, 0, null),
+                new AgentEngineObservationReader.ModelFact("model.3", "test", "model", "FAILED",
+                        "2026-08-18T00:00:02Z", "2026-08-18T00:00:03Z", 10, 0, 99, 99, 0, "FAILED")));
+
+        assertThat(service.save(taskId, digest, 1L, succeeded)).isEqualTo(2L);
+        assertThat(service.save(taskId, digest, 2L, succeeded)).isEqualTo(3L);
+
+        verify(quotas, times(1)).recordTaskUsage(7L, "REACT_PLAN", 19L, 5L);
+        assertThat(persisted.usageSettled()).isTrue();
+        assertThat(persisted.settledPromptTokens()).isEqualTo(19L);
+        assertThat(persisted.settledCompletionTokens()).isEqualTo(5L);
     }
 
     private ObjectNode checkpoint(String state, long sequence) {

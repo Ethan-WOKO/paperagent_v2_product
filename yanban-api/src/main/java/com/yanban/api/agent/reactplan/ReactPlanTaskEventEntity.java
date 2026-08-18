@@ -37,6 +37,7 @@ final class ReactPlanTaskEventEntity {
 
     long sequenceNumber() { return sequenceNumber; }
     String eventJson() { return eventJson; }
+    LocalDateTime occurredAt() { return occurredAt; }
 
     static final class Key implements Serializable {
         private String taskId;

@@ -423,9 +423,12 @@
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
                     <p>{{ item.record.instruction }}</p>
                   </div>
-                  <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
-                    {{ reactPlanStateLabel(item.record.view.state) }}
-                  </NTag>
+                  <div class="v2-task-card__status">
+                    <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
+                      {{ reactPlanStateLabel(item.record.view.state) }}
+                    </NTag>
+                    <small>{{ item.durationLabel }}</small>
+                  </div>
                 </header>
 
                 <details
@@ -681,12 +684,14 @@ import {
 } from '@/utils/v2NaturalLanguageTurn';
 import {
   appendReactPlanEvent,
+  formatReactPlanDuration,
   isReactPlanTerminal,
   latestReactPlanQuestion,
   newReactPlanCancelId,
   newReactPlanRequestId,
   parseReactPlanHistory,
   reactPlanDelivery,
+  reactPlanElapsedMillis,
   reactPlanStateLabel,
   reactPlanStateTagType,
   reactPlanToolEvents,
@@ -776,14 +781,20 @@ const reactPlanSubmitting = ref(false);
 const reactPlanStreaming = ref(false);
 const reactPlanCancelling = ref(false);
 const reactPlanAnswering = ref(false);
+const reactPlanClock = ref(Date.now());
+const reactPlanSubmissionStartedAt = ref<string | null>(null);
 let reactPlanAbortController: AbortController | null = null;
 let reactPlanReconnectTimer: number | null = null;
+let reactPlanClockTimer: number | null = null;
 const reactPlanQuestion = computed(() => latestReactPlanQuestion(
   reactPlanRecord.value?.events ?? [],
   reactPlanRecord.value?.view.pendingQuestionId,
 ));
 const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => ({
   record,
+  durationLabel: `${isReactPlanTerminal(record.view.state) ? '用时' : '已用时'} ${formatReactPlanDuration(
+    reactPlanElapsedMillis(record, reactPlanClock.value),
+  )}`,
   tools: reactPlanToolEvents(record.events),
   delivery: reactPlanDelivery(record.events),
   question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
@@ -797,7 +808,13 @@ const reactPlanCanCancel = computed(() => Boolean(
 ));
 const reactPlanActivityLabel = computed(() => {
   if (reactPlanCancelling.value) return '正在停止任务…';
-  if (reactPlanSubmitting.value) return '正在发送任务…';
+  if (reactPlanSubmitting.value) {
+    const startedAt = Date.parse(reactPlanSubmissionStartedAt.value || '');
+    const elapsed = Number.isFinite(startedAt)
+      ? formatReactPlanDuration(Math.max(0, reactPlanClock.value - startedAt))
+      : '0 秒';
+    return `正在发送任务… · 已用时 ${elapsed}`;
+  }
   if (reactPlanRecord.value?.view.state === 'queued') return '任务已发送，正在准备执行…';
   if (reactPlanRecord.value?.view.state !== 'running') return '';
   const activeTool = [...reactPlanToolEvents(reactPlanRecord.value.events)]
@@ -1645,6 +1662,7 @@ function resetReactPlanView() {
   reactPlanError.value = '';
   reactPlanInput.value = '';
   reactPlanSubmitting.value = false;
+  reactPlanSubmissionStartedAt.value = null;
   reactPlanCancelling.value = false;
   reactPlanAnswering.value = false;
 }
@@ -1657,8 +1675,15 @@ function isCurrentReactPlan(record: ReactPlanTaskRecord, epoch: number) {
 }
 
 function updateReactPlanRecord(record: ReactPlanTaskRecord) {
-  reactPlanRecord.value = record;
-  reactPlanRecords.value = upsertReactPlanRecord(reactPlanRecords.value, record);
+  const normalized = {
+    ...record,
+    startedAt: record.startedAt || record.view.createdAt,
+    finishedAt: isReactPlanTerminal(record.view.state)
+      ? (record.finishedAt || record.view.updatedAt)
+      : null,
+  };
+  reactPlanRecord.value = normalized;
+  reactPlanRecords.value = upsertReactPlanRecord(reactPlanRecords.value, normalized);
   storeReactPlanRecords(reactPlanRecords.value);
 }
 
@@ -1745,6 +1770,8 @@ async function submitReactPlanTask() {
   const instruction = reactPlanInput.value.trim();
   if (!projectId || !instruction || reactPlanBusy.value) return;
   const epoch = projectEpoch;
+  const startedAt = new Date().toISOString();
+  reactPlanSubmissionStartedAt.value = startedAt;
   reactPlanSubmitting.value = true;
   reactPlanError.value = '';
   invalidateReactPlanStream();
@@ -1764,6 +1791,8 @@ async function submitReactPlanTask() {
       instruction,
       turnId: accepted.turnId,
       taskId: accepted.taskId,
+      startedAt,
+      finishedAt: null,
       view: accepted.task,
       events: [],
     };
@@ -1774,7 +1803,10 @@ async function submitReactPlanTask() {
     if (!controller.signal.aborted && epoch === projectEpoch) reactPlanError.value = apiError(cause);
   } finally {
     if (reactPlanAbortController === controller) reactPlanAbortController = null;
-    if (epoch === projectEpoch) reactPlanSubmitting.value = false;
+    if (epoch === projectEpoch) {
+      reactPlanSubmitting.value = false;
+      reactPlanSubmissionStartedAt.value = null;
+    }
   }
 }
 
@@ -2553,6 +2585,9 @@ async function loadProductV2Availability() {
 
 onMounted(() => {
   inspectorOpen.value = false;
+  reactPlanClockTimer = window.setInterval(() => {
+    reactPlanClock.value = Date.now();
+  }, 1_000);
   void loadProductV2Availability();
   void loadProjects();
 });
@@ -2560,6 +2595,7 @@ onUnmounted(() => {
   stopV2NaturalLanguagePolling();
   invalidateReactPlanStream();
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
+  if (reactPlanClockTimer != null) window.clearInterval(reactPlanClockTimer);
   projectEpoch++;
 });
 </script>
@@ -2686,6 +2722,8 @@ onUnmounted(() => {
 .v2-conversation__tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 3px; scrollbar-gutter: stable; }
 .v2-task-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 12px; background: var(--yb-bg-elevated); }
 .v2-task-card__question { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.v2-task-card__status { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.v2-task-card__status small { color: var(--yb-text-muted); font-size: 10px; white-space: nowrap; }
 .v2-task-card__question-copy { min-width: 0; flex: 1 1 auto; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 10px; }
 .v2-task-card__question p { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .v2-task-card__avatar { flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--yb-border-strong); border-radius: 50%; color: var(--yb-primary); background: var(--yb-bg-elevated); font-size: 10px; font-weight: 700; line-height: 1; }

@@ -163,7 +163,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { NButton, NCard, NEmpty, NInputNumber, NPopconfirm, NSpin, NTabPane, NTag, NTabs } from 'naive-ui';
 import AppLayout from '@/components/AppLayout.vue';
 import {
@@ -189,6 +189,9 @@ const quotaTotal = ref<number | null>(null);
 const loading = ref(false);
 const detailLoading = ref(false);
 const quotaSaving = ref(false);
+const ADMIN_USAGE_REFRESH_MS = 15_000;
+let usageRefreshTimer: number | null = null;
+let usageRefreshPending = false;
 
 function formatNumber(value: number) {
   return Number(value || 0).toLocaleString('zh-CN');
@@ -218,6 +221,28 @@ async function refresh() {
   } finally {
     loading.value = false;
   }
+}
+
+async function refreshUsageSnapshot() {
+  if (usageRefreshPending || document.visibilityState !== 'visible') return;
+  usageRefreshPending = true;
+  const userId = selectedUserId.value;
+  try {
+    const [userResponse, detailResponse] = await Promise.all([
+      listAdminUsers(),
+      userId == null ? Promise.resolve(null) : getAdminUser(userId),
+    ]);
+    users.value = userResponse.data;
+    if (detailResponse && selectedUserId.value === userId) detail.value = detailResponse.data;
+  } catch {
+    // Keep the last successful snapshot; the explicit Refresh action reports failures.
+  } finally {
+    usageRefreshPending = false;
+  }
+}
+
+function handleAdminVisibility() {
+  if (document.visibilityState === 'visible') void refreshUsageSnapshot();
 }
 
 async function selectUser(userId: number) {
@@ -298,7 +323,16 @@ async function handleClearDemoProjects() {
   }
 }
 
-onMounted(refresh);
+onMounted(() => {
+  void refresh();
+  usageRefreshTimer = window.setInterval(refreshUsageSnapshot, ADMIN_USAGE_REFRESH_MS);
+  document.addEventListener('visibilitychange', handleAdminVisibility);
+});
+
+onUnmounted(() => {
+  if (usageRefreshTimer != null) window.clearInterval(usageRefreshTimer);
+  document.removeEventListener('visibilitychange', handleAdminVisibility);
+});
 </script>
 
 <style scoped>

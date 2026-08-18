@@ -34,6 +34,12 @@ final class ReactPlanTaskCheckpointEntity {
     private LocalDateTime createdAt;
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+    @Column(name = "usage_settled", nullable = false)
+    private boolean usageSettled;
+    @Column(name = "settled_prompt_tokens", nullable = false)
+    private long settledPromptTokens;
+    @Column(name = "settled_completion_tokens", nullable = false)
+    private long settledCompletionTokens;
 
     protected ReactPlanTaskCheckpointEntity() { }
 
@@ -52,6 +58,7 @@ final class ReactPlanTaskCheckpointEntity {
         this.checkpointJson = checkpointJson;
         this.createdAt = now;
         this.updatedAt = now;
+        this.usageSettled = false;
     }
 
     void update(String state, long lastSequence, String checkpointJson, LocalDateTime now) {
@@ -60,6 +67,12 @@ final class ReactPlanTaskCheckpointEntity {
         this.checkpointJson = checkpointJson;
         this.checkpointRevision += 1;
         this.updatedAt = now;
+    }
+
+    void settleUsage(long promptTokens, long completionTokens) {
+        this.usageSettled = true;
+        this.settledPromptTokens = Math.max(0L, promptTokens);
+        this.settledCompletionTokens = Math.max(0L, completionTokens);
     }
 
     String taskId() { return taskId; }
@@ -71,4 +84,9 @@ final class ReactPlanTaskCheckpointEntity {
     long lastSequence() { return lastSequence; }
     long checkpointRevision() { return checkpointRevision; }
     String checkpointJson() { return checkpointJson; }
+    LocalDateTime createdAt() { return createdAt; }
+    LocalDateTime updatedAt() { return updatedAt; }
+    boolean usageSettled() { return usageSettled; }
+    long settledPromptTokens() { return settledPromptTokens; }
+    long settledCompletionTokens() { return settledCompletionTokens; }
 }

@@ -3,10 +3,12 @@ import { streamReactPlanEvents } from '@/api/reactPlan';
 import {
   appendReactPlanEvent,
   consumeReactPlanSseChunk,
+  formatReactPlanDuration,
   newReactPlanCancelId,
   newReactPlanRequestId,
   parseReactPlanHistory,
   parseReactPlanRecord,
+  reactPlanElapsedMillis,
   reactPlanToolLabel,
   serializeReactPlanHistory,
   upsertReactPlanRecord,
@@ -158,6 +160,16 @@ describe('ReAct task frontend state', () => {
       inputSummary: 'argvDigest=test',
     }))).toBe('沙箱执行');
   });
+
+  it('shows a live duration and freezes it at the terminal timestamp', () => {
+    const running = { ...taskRecord(1), view: { ...taskRecord(1).view, state: 'running' as const }, finishedAt: null };
+    expect(reactPlanElapsedMillis(running, Date.parse('2026-08-17T00:01:05Z'))).toBe(65_000);
+    expect(formatReactPlanDuration(65_000)).toBe('1 分 5 秒');
+
+    const finished = { ...taskRecord(1), finishedAt: '2026-08-17T00:00:09Z' };
+    expect(reactPlanElapsedMillis(finished, Date.parse('2026-08-18T00:00:00Z'))).toBe(9_000);
+    expect(formatReactPlanDuration(9_000)).toBe('9 秒');
+  });
 });
 
 function taskRecord(identity: number): ReactPlanTaskRecord {
@@ -170,6 +182,8 @@ function taskRecord(identity: number): ReactPlanTaskRecord {
     instruction: `task ${identity}`,
     turnId: identity,
     taskId,
+    startedAt: '2026-08-17T00:00:00Z',
+    finishedAt: '2026-08-17T00:00:01Z',
     view: {
       contractVersion: '1.0',
       taskId,

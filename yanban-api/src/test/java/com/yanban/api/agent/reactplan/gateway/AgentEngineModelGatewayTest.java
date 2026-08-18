@@ -3,6 +3,7 @@ package com.yanban.api.agent.reactplan.gateway;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -36,11 +37,11 @@ class AgentEngineModelGatewayTest {
             new AgentEngineModelGateway(json, settings, quotas, models, transactions);
 
     @Test
-    void resolvesOwnerEndpointCallsProductModelAndRecordsUsageOnce() {
+    void resolvesOwnerEndpointCallsProductModelAndPersistsItsUsageFacts() {
         ModelCompletionRequest request = request("deepseek", "deepseek-v4-flash");
         assertThat(request.requestDigest()).isEqualTo(
                 "11f0b506848cfdbea12b5e682806dc0a698032b74515cd501b6e3472cbbbf7a5");
-        when(transactions.claim(any(), any(), any())).thenReturn(Optional.empty());
+        when(transactions.claim(any(), any(), any(), any(), any(), anyLong())).thenReturn(Optional.empty());
         when(settings.resolveModelEndpoint(7L, "deepseek", "deepseek-v4-flash"))
                 .thenReturn(new UserSettingsService.ModelEndpoint(
                         "deepseek", "deepseek-v4-flash", null, "secret", "builtin", "DeepSeek"));
@@ -55,7 +56,7 @@ class AgentEngineModelGatewayTest {
         verify(settings).resolveModelEndpoint(7L, "deepseek", "deepseek-v4-flash");
         verify(quotas).assertCanUseAi(7L);
         verify(transactions).succeed(eq(authority().taskId()), eq(request.clientRequestId()),
-                any(), eq(7L), eq(11), eq(4));
+                any(), eq(11), eq(4));
     }
 
     @Test
@@ -64,7 +65,7 @@ class AgentEngineModelGatewayTest {
         ModelCompletionResult stored = new ModelCompletionResult("1.0", request.clientRequestId(),
                 request.requestDigest(), "cached", List.of(), "stop",
                 new AgentEngineGatewayDtos.ModelUsage(2, 1), false);
-        when(transactions.claim(any(), any(), any()))
+        when(transactions.claim(any(), any(), any(), any(), any(), anyLong()))
                 .thenReturn(Optional.of(json.writeValueAsString(stored)));
 
         assertThat(gateway.complete(authority(), request).replayed()).isTrue();
@@ -78,7 +79,7 @@ class AgentEngineModelGatewayTest {
         assertThatThrownBy(() -> gateway.complete(authority(), request))
                 .isInstanceOf(EngineGatewayException.class)
                 .extracting("code").isEqualTo("MODEL_REQUEST_INVALID");
-        verify(transactions, never()).claim(any(), any(), any());
+        verify(transactions, never()).claim(any(), any(), any(), any(), any(), anyLong());
     }
 
     private ModelCompletionRequest request(String provider, String model) {

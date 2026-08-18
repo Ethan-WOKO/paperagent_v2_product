@@ -3,6 +3,7 @@ package com.yanban.api.agent.reactplan.gateway;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
+import com.yanban.api.agent.reactplan.ReactPlanTraceIds;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ModelCompletionRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ModelCompletionResult;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ModelToolCall;
@@ -23,10 +24,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 @ConditionalOnProperty(prefix = "yanban.agent.engine.gateway", name = "enabled", havingValue = "true")
 final class AgentEngineModelGateway {
+    private static final Logger log = LoggerFactory.getLogger(AgentEngineModelGateway.class);
     private static final int MAX_MESSAGES = 120;
     private static final int MAX_TOOLS = 80;
     private static final int MAX_TOTAL_CHARACTERS = 300_000;
@@ -44,6 +48,7 @@ final class AgentEngineModelGateway {
     }
 
     ModelCompletionResult complete(EngineTaskAuthority authority, ModelCompletionRequest request) {
+        long startedNanos = System.nanoTime();
         validate(authority, request);
         String semanticDigest = ReactPlanCanonicalJson.digest(json, Map.of(
                 "contractVersion", request.contractVersion(),
@@ -61,8 +66,13 @@ final class AgentEngineModelGateway {
         if (!semanticDigest.equals(request.requestDigest())) {
             throw EngineGatewayException.badRequest("MODEL_REQUEST_DIGEST_INVALID");
         }
-        var replay = transactions.claim(authority.taskId(), request.clientRequestId(), request.requestDigest());
-        if (replay.isPresent()) return replay(replay.orElseThrow());
+        long requestBytes = write(request).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        var replay = transactions.claim(authority.taskId(), request.clientRequestId(), request.requestDigest(),
+                request.provider(), request.model(), requestBytes);
+        if (replay.isPresent()) {
+            observe(authority, request, "replayed", null, startedNanos, 0, 0);
+            return replay(replay.orElseThrow());
+        }
         try {
             quotas.assertCanUseAi(authority.userId());
             UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(
@@ -100,24 +110,43 @@ final class AgentEngineModelGateway {
                     new ModelUsage(prompt, completion), false);
             String serialized = write(result);
             transactions.succeed(authority.taskId(), request.clientRequestId(), serialized,
-                    authority.userId(), prompt, completion);
+                    prompt, completion);
+            observe(authority, request, "succeeded", null, startedNanos, prompt, completion);
             return result;
         } catch (EngineGatewayException failure) {
-            transactions.fail(authority.taskId(), request.clientRequestId());
+            transactions.fail(authority.taskId(), request.clientRequestId(), failure.code());
+            observe(authority, request, "failed", failure.code(), startedNanos, 0, 0);
             throw failure;
         } catch (ResponseStatusException failure) {
-            transactions.fail(authority.taskId(), request.clientRequestId());
+            transactions.fail(authority.taskId(), request.clientRequestId(),
+                    failure.getStatusCode().value() == 429 ? "MODEL_QUOTA_EXHAUSTED" : "MODEL_CONFIGURATION_INVALID");
+            observe(authority, request, "failed",
+                    failure.getStatusCode().value() == 429 ? "MODEL_QUOTA_EXHAUSTED" : "MODEL_CONFIGURATION_INVALID",
+                    startedNanos, 0, 0);
             if (failure.getStatusCode().value() == 429) {
                 throw EngineGatewayException.tooManyRequests("MODEL_QUOTA_EXHAUSTED");
             }
             throw EngineGatewayException.badRequest("MODEL_CONFIGURATION_INVALID");
         } catch (ModelProviderException failure) {
-            transactions.fail(authority.taskId(), request.clientRequestId());
+            transactions.fail(authority.taskId(), request.clientRequestId(), "MODEL_PROVIDER_FAILED");
+            observe(authority, request, "failed", "MODEL_PROVIDER_FAILED", startedNanos, 0, 0);
             throw EngineGatewayException.badGateway("MODEL_PROVIDER_FAILED");
         } catch (RuntimeException failure) {
-            transactions.fail(authority.taskId(), request.clientRequestId());
+            transactions.fail(authority.taskId(), request.clientRequestId(), "MODEL_GATEWAY_INTERNAL");
+            observe(authority, request, "failed", "MODEL_GATEWAY_INTERNAL", startedNanos, 0, 0);
             throw failure;
         }
+    }
+
+    private void observe(EngineTaskAuthority authority, ModelCompletionRequest request,
+                         String outcome, String errorCode, long startedNanos,
+                         int promptTokens, int completionTokens) {
+        long durationMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                Math.max(0, System.nanoTime() - startedNanos));
+        log.info("reactplan_model taskId={} traceId={} phase=model.complete callId={} provider={} model={} outcome={} errorCode={} durationMillis={} promptTokens={} completionTokens={}",
+                authority.taskId(), ReactPlanTraceIds.forTask(authority.taskId()), request.clientRequestId(),
+                request.provider(), request.model(), outcome, errorCode, durationMillis,
+                promptTokens, completionTokens);
     }
 
     private void validate(EngineTaskAuthority authority, ModelCompletionRequest request) {
@@ -158,6 +187,10 @@ final class AgentEngineModelGateway {
 
     private int length(String value) { return value == null ? 0 : value.length(); }
     private String write(ModelCompletionResult value) {
+        try { return json.writeValueAsString(value); }
+        catch (JsonProcessingException impossible) { throw new IllegalStateException(impossible); }
+    }
+    private String write(ModelCompletionRequest value) {
         try { return json.writeValueAsString(value); }
         catch (JsonProcessingException impossible) { throw new IllegalStateException(impossible); }
     }

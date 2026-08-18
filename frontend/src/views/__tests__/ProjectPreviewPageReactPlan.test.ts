@@ -31,7 +31,9 @@ describe('ProjectPreviewPage ReAct 接入', () => {
   it('在同一会话中按时间线保留并恢复多轮 ReAct 任务', () => {
     expect(source).toContain('const reactPlanRecords = ref<ReactPlanTaskRecord[]>([])');
     expect(source).toContain('v-for="item in reactPlanTimeline"');
-    expect(source).toContain('upsertReactPlanRecord(reactPlanRecords.value, record)');
+    expect(source).toContain('upsertReactPlanRecord(reactPlanRecords.value, normalized)');
+    expect(source).toContain('reactPlanElapsedMillis(record, reactPlanClock.value)');
+    expect(source).toContain("isReactPlanTerminal(record.view.state) ? '用时' : '已用时'");
     expect(source).toContain('parseReactPlanHistory(raw, projectId, sessionId)');
     expect(source).toContain('serializeReactPlanHistory(records)');
   });
@@ -46,6 +48,12 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).toContain('@click="cancelCurrentReactPlanTask"');
     expect(source).not.toContain('tool.fileContent');
     expect(source).not.toContain('tool.rawOutput');
+  });
+
+  it('不向普通用户展示内部 Trace、模型次数或 Token 统计', () => {
+    expect(source).not.toContain('getReactPlanTrace(');
+    expect(source).not.toContain('reactplan-trace-summary');
+    expect(source).not.toContain('record.trace');
   });
 
   it('回车发送、Shift+Enter 换行，并避开输入法选字确认', () => {
