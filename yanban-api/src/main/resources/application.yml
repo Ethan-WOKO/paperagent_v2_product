@@ -34,6 +34,19 @@ yanban:
     v2:
       workspace:
         root: ${YANBAN_AGENT_V2_WORKSPACE_ROOT:data/agent-v2-workspaces}
+    reactplan:
+      enabled: ${YANBAN_AGENT_REACTPLAN_ENABLED:false}
+      engine-origin: ${YANBAN_AGENT_REACTPLAN_ENGINE_ORIGIN:http://127.0.0.1:8092}
+      engine-service-token: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:}
+      default-provider: ${YANBAN_AGENT_REACTPLAN_DEFAULT_PROVIDER:deepseek}
+      default-model: ${YANBAN_AGENT_REACTPLAN_DEFAULT_MODEL:deepseek-chat}
+    engine:
+      gateway:
+        enabled: ${YANBAN_AGENT_ENGINE_GATEWAY_ENABLED:false}
+        task-grant-secret: ${YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_SECRET:}
+        task-grant-ttl: ${YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_TTL:10m}
+        workspace-root: ${YANBAN_AGENT_ENGINE_GATEWAY_WORKSPACE_ROOT:data/agent-engine-workspaces}
+        max-read-bytes: ${YANBAN_AGENT_ENGINE_GATEWAY_MAX_READ_BYTES:10485760}
   sandbox:
     enabled: ${YANBAN_SANDBOX_ENABLED:false}
     required-at-startup: ${YANBAN_SANDBOX_REQUIRED_AT_STARTUP:false}
