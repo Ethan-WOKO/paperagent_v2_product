@@ -48,6 +48,28 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).not.toContain('tool.rawOutput');
   });
 
+  it('回车发送、Shift+Enter 换行，并避开输入法选字确认', () => {
+    const handler = source.match(/function handleReactPlanKeydown[\s\S]*?\n}/)?.[0] ?? '';
+    expect(handler).toContain("event.key !== 'Enter' || event.shiftKey || event.isComposing");
+    expect(handler).toContain('event.preventDefault();');
+    expect(handler).toContain('!reactPlanInput.value.trim() || reactPlanBusy.value');
+    expect(handler).not.toContain("(!event.ctrlKey && !event.metaKey)");
+  });
+
+  it('执行时提供固定停止入口和轻量状态，不展示无限旋转图标', () => {
+    expect(source).toContain("v-else-if=\"reactPlanExecutionActive || reactPlanCancelling\"");
+    expect(source).toContain("{{ reactPlanCancelling ? '正在停止…' : '停止任务' }}");
+    expect(source).toContain('class="reactplan-activity"');
+    expect(source).not.toContain('<NSpin v-if="reactPlanBusy"');
+    expect(source.match(/@click="cancelCurrentReactPlanTask"/g)).toHaveLength(2);
+  });
+
+  it('空状态和输入提示只描述用户能看到的行为', () => {
+    expect(source).toContain('尚无任务记录。输入任务后，这里会显示执行进度和最终结果。');
+    expect(source).toContain("'让我们一起来做些什么？'");
+    expect(source).not.toContain('ReAct 会自己查找文件');
+  });
+
   it('Project、session 和卸载时中止旧流并按身份恢复', () => {
     expect(source).toContain('record.projectId === activeProjectId.value');
     expect(source).toContain('record.sessionId === activeSessionId.value');

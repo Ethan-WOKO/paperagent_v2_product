@@ -472,22 +472,21 @@
                   </dl>
                 </div>
 
-                <div class="v2-task-card__actions">
-                  <NButton
-                    v-if="item.record.taskId === reactPlanRecord?.taskId && !isReactPlanTerminal(item.record.view.state)"
-                    size="tiny"
-                    secondary
-                    type="error"
-                    :disabled="reactPlanCancelling"
-                    @click="cancelCurrentReactPlanTask"
-                  >取消任务</NButton>
-                </div>
               </article>
-              <NEmpty v-if="reactPlanTimeline.length === 0" description="发送任务后，ReAct 会自己查找文件、选择工具并展示正式执行结果。" />
-              <NSpin v-if="reactPlanBusy" size="small" />
+              <NEmpty v-if="reactPlanTimeline.length === 0" description="尚无任务记录。输入任务后，这里会显示执行进度和最终结果。" />
             </div>
 
             <NAlert v-if="reactPlanError" type="error" :show-icon="false">{{ reactPlanError }}</NAlert>
+            <div
+              v-if="reactPlanActivityLabel"
+              class="reactplan-activity"
+              :data-state="reactPlanCancelling ? 'cancelling' : 'running'"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="reactplan-activity__dot" aria-hidden="true"></span>
+              <span>{{ reactPlanActivityLabel }}</span>
+            </div>
             <div class="v2-conversation__composer">
               <NInput
                 v-model:value="reactPlanInput"
@@ -495,19 +494,44 @@
                 type="textarea"
                 :maxlength="20000"
                 :autosize="{ minRows: 2, maxRows: 8 }"
-                :placeholder="reactPlanQuestion ? '输入对模型追问的回复' : '描述任务，ReAct 会自己查找文件并选择工具'"
+                :placeholder="reactPlanQuestion ? '输入对模型追问的回复' : '让我们一起来做些什么？'"
                 :disabled="reactPlanBusy"
                 @keydown="handleReactPlanKeydown"
               />
-              <NButton
-                class="project-send-button"
-                type="primary"
-                :loading="reactPlanBusy"
-                :disabled="!activeProject || !reactPlanInput.trim() || reactPlanBusy"
-                @click="sendReactPlanTask"
-              >
-                {{ reactPlanQuestion ? '回复' : '发送' }}
-              </NButton>
+              <div class="reactplan-composer-actions">
+                <NButton
+                  v-if="reactPlanSubmitting"
+                  class="project-send-button project-stop-button"
+                  secondary
+                  disabled
+                >正在发送…</NButton>
+                <NButton
+                  v-else-if="reactPlanExecutionActive || reactPlanCancelling"
+                  class="project-send-button project-stop-button"
+                  secondary
+                  type="error"
+                  :disabled="reactPlanCancelling"
+                  @click="cancelCurrentReactPlanTask"
+                >{{ reactPlanCancelling ? '正在停止…' : '停止任务' }}</NButton>
+                <template v-else>
+                  <NButton
+                    class="project-send-button"
+                    type="primary"
+                    :disabled="!activeProject || !reactPlanInput.trim() || reactPlanBusy"
+                    @click="sendReactPlanTask"
+                  >
+                    {{ reactPlanQuestion ? '回复' : '发送' }}
+                  </NButton>
+                  <NButton
+                    v-if="reactPlanQuestion && reactPlanCanCancel"
+                    class="project-cancel-button"
+                    size="small"
+                    secondary
+                    type="error"
+                    @click="cancelCurrentReactPlanTask"
+                  >取消任务</NButton>
+                </template>
+              </div>
             </div>
           </section>
         </section>
@@ -764,10 +788,26 @@ const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => 
   delivery: reactPlanDelivery(record.events),
   question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
 })));
+const reactPlanExecutionActive = computed(() => (
+  reactPlanRecord.value?.view.state === 'queued'
+    || reactPlanRecord.value?.view.state === 'running'
+));
+const reactPlanCanCancel = computed(() => Boolean(
+  reactPlanRecord.value && !isReactPlanTerminal(reactPlanRecord.value.view.state),
+));
+const reactPlanActivityLabel = computed(() => {
+  if (reactPlanCancelling.value) return '正在停止任务…';
+  if (reactPlanSubmitting.value) return '正在发送任务…';
+  if (reactPlanRecord.value?.view.state === 'queued') return '任务已发送，正在准备执行…';
+  if (reactPlanRecord.value?.view.state !== 'running') return '';
+  const activeTool = [...reactPlanToolEvents(reactPlanRecord.value.events)]
+    .reverse()
+    .find((tool) => tool.state === 'requested' || tool.state === 'running');
+  return activeTool ? `正在执行：${reactPlanToolLabel(activeTool)}` : '正在执行任务…';
+});
 const reactPlanBusy = computed(() => (
   reactPlanSubmitting.value || reactPlanCancelling.value || reactPlanAnswering.value
-    || reactPlanRecord.value?.view.state === 'queued'
-    || reactPlanRecord.value?.view.state === 'running'
+    || reactPlanExecutionActive.value
 ));
 
 const loading = reactive({
@@ -1802,8 +1842,9 @@ function sendReactPlanTask() {
 }
 
 function handleReactPlanKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
   event.preventDefault();
+  if (!activeProject.value || !reactPlanInput.value.trim() || reactPlanBusy.value) return;
   sendReactPlanTask();
 }
 
@@ -2656,9 +2697,12 @@ onUnmounted(() => {
 .v2-task-card__validation { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 10px; }
 .v2-task-card__validation dt { color: var(--yb-text-muted); }
 .v2-task-card__validation dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.v2-task-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .reactplan-task-card code { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 .reactplan-receipt { display: block; margin-top: 3px; }
+.reactplan-activity { width: min(1040px, 100%); display: flex; align-items: center; gap: 7px; margin: 0 auto -5px; padding: 0 9px; color: var(--yb-text-muted); font-size: 10px; line-height: 1.4; }
+.reactplan-activity__dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--yb-primary); animation: reactplan-activity-pulse 1.6s ease-in-out infinite; }
+.reactplan-activity[data-state='cancelling'] .reactplan-activity__dot { background: var(--yb-danger, #d65b5b); }
+@keyframes reactplan-activity-pulse { 0%, 100% { opacity: .38; transform: scale(.82); } 50% { opacity: 1; transform: scale(1); } }
 .v2-conversation__question { align-self: flex-end; max-width: min(82%, 720px); padding: 10px 12px; border-radius: 12px 12px 2px 12px; background: var(--yb-bg-muted); }
 .v2-conversation__process, .v2-conversation__result { padding: 12px 0; border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__question small { color: var(--yb-text-muted); font-size: 9px; }
@@ -2696,6 +2740,7 @@ onUnmounted(() => {
 }
 .v2-conversation__composer :deep(.n-input__border),
 .v2-conversation__composer :deep(.n-input__state-border) { display: none; }
+.reactplan-composer-actions { display: flex; align-items: center; gap: 6px; }
 .v2-conversation__composer .project-send-button {
   width: 72px;
   min-width: 72px;
@@ -2703,6 +2748,8 @@ onUnmounted(() => {
   padding: 0;
   border-radius: 8px !important;
 }
+.v2-conversation__composer .project-stop-button { width: 88px; min-width: 88px; }
+.v2-conversation__composer .project-cancel-button { min-width: 68px; height: 40px; border-radius: 8px !important; }
 .v2-conversation__composer .project-send-button :deep(.n-button__content) {
   width: 100%;
   justify-content: center;
@@ -3553,6 +3600,8 @@ onUnmounted(() => {
     z-index: 2;
   }
   .project-workspace--console .v2-conversation__composer :deep(.n-button) { width: 100%; min-height: 44px; }
+  .project-workspace--console .reactplan-composer-actions { width: 100%; }
+  .project-workspace--console .reactplan-composer-actions :deep(.n-button) { width: auto; min-width: 0; flex: 1 1 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
