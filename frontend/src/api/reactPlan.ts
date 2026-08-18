@@ -35,6 +35,38 @@ export interface StartReactPlanTaskResponse {
   task: ReactPlanTaskView;
 }
 
+export interface ReactPlanSessionTask {
+  contractVersion: '1.0';
+  clientRequestId: string;
+  instruction: string;
+  turnId: number;
+  taskId: string;
+  task: ReactPlanTaskView;
+  events: ReactPlanTaskEvent[] | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface ReactPlanSessionTaskPage {
+  contractVersion: '1.0';
+  items: ReactPlanSessionTask[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export function listReactPlanSessionTasks(
+  sessionId: number,
+  includeEvents = false,
+  cursor?: string,
+  limit = 12,
+  signal?: AbortSignal,
+) {
+  return http.get<ReactPlanSessionTaskPage>(
+    `/react-agent/sessions/${sessionId}/tasks`,
+    { params: { includeEvents, cursor, limit }, signal },
+  );
+}
+
 export function startReactPlanTask(
   sessionId: number,
   payload: { clientRequestId: string; instruction: string; provider?: string; model?: string },

@@ -35,6 +35,7 @@ final class ReactPlanTaskEventEntity {
         this.occurredAt = occurredAt;
     }
 
+    String taskId() { return taskId; }
     long sequenceNumber() { return sequenceNumber; }
     String eventJson() { return eventJson; }
     LocalDateTime occurredAt() { return occurredAt; }

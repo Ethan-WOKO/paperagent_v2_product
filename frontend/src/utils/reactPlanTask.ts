@@ -1,4 +1,9 @@
-import type { ReactPlanProblem, ReactPlanTaskState, ReactPlanTaskView } from '@/api/reactPlan';
+import type {
+  ReactPlanProblem,
+  ReactPlanSessionTask,
+  ReactPlanTaskState,
+  ReactPlanTaskView,
+} from '@/api/reactPlan';
 
 interface ReactPlanEventBase {
   contractVersion: '1.0';
@@ -45,7 +50,7 @@ export interface ReactPlanTaskHistory {
   records: ReactPlanTaskRecord[];
 }
 
-export const MAX_REACT_PLAN_HISTORY = 12;
+export const MAX_REACT_PLAN_CACHE = 50;
 
 export function newReactPlanRequestId(randomUuid: () => string = () => crypto.randomUUID()) {
   return `request.${randomUuid()}`;
@@ -209,7 +214,7 @@ export function parseReactPlanHistory(value: string | null, projectId: number, s
     return history.records.reduce<ReactPlanTaskRecord[]>((records, candidate) => {
       const record = validReactPlanRecord(candidate, projectId, sessionId);
       return record ? upsertReactPlanRecord(records, record) : records;
-    }, []).slice(-MAX_REACT_PLAN_HISTORY);
+    }, []).slice(-MAX_REACT_PLAN_CACHE);
   } catch {
     return [];
   }
@@ -220,7 +225,33 @@ export function upsertReactPlanRecord(
   record: ReactPlanTaskRecord,
 ) {
   return [...records.filter((candidate) => candidate.taskId !== record.taskId), record]
-    .slice(-MAX_REACT_PLAN_HISTORY);
+    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+}
+
+export function mergeReactPlanSessionTasks(
+  localRecords: ReactPlanTaskRecord[],
+  serverTasks: ReactPlanSessionTask[],
+  projectId: number,
+  sessionId: number,
+) {
+  const localByTaskId = new Map(localRecords.map((record) => [record.taskId, record]));
+  return serverTasks.reduce<ReactPlanTaskRecord[]>((records, task) => {
+    const local = localByTaskId.get(task.taskId);
+    const record: ReactPlanTaskRecord = {
+      version: 1,
+      projectId,
+      sessionId,
+      clientRequestId: task.clientRequestId,
+      instruction: task.instruction,
+      turnId: task.turnId,
+      taskId: task.taskId,
+      startedAt: task.startedAt,
+      finishedAt: task.finishedAt,
+      view: task.task,
+      events: task.events ?? local?.events ?? [],
+    };
+    return upsertReactPlanRecord(records, record);
+  }, localRecords);
 }
 
 export function serializeReactPlanHistory(records: ReactPlanTaskRecord[]) {
@@ -230,7 +261,7 @@ export function serializeReactPlanHistory(records: ReactPlanTaskRecord[]) {
     version: 2,
     projectId: latest.projectId,
     sessionId: latest.sessionId,
-    records: records.slice(-MAX_REACT_PLAN_HISTORY),
+    records: records.slice(-MAX_REACT_PLAN_CACHE),
   };
   return JSON.stringify(history);
 }

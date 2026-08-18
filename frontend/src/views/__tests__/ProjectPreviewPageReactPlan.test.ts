@@ -86,4 +86,32 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).toContain('invalidateReactPlanStream();');
     expect(source).toContain('loadReactPlanRecord(activeProjectId.value, sessionId, epoch)');
   });
+
+  it('任务运行时允许切换和新建会话，离开时只断开事件流', () => {
+    const selectConversation = source.match(/async function selectConversation[\s\S]*?\n}/)?.[0] ?? '';
+    const startNewConversation = source.match(/async function startNewConversation[\s\S]*?\n}/)?.[0] ?? '';
+    expect(selectConversation).not.toContain('reactPlanBusy.value');
+    expect(startNewConversation).not.toContain('reactPlanBusy.value');
+    expect(source).toContain('class="project-new-conversation" size="tiny" quaternary @click="startNewConversation"');
+    expect(selectConversation).toContain('resetReactPlanView();');
+    expect(selectConversation).not.toContain('cancelReactPlanTask(');
+  });
+
+  it('从服务端会话任务索引补齐事件并展示各会话状态', () => {
+    expect(source).toContain('listReactPlanSessionTasks(sessionId, true)');
+    expect(source).toContain('mergeReactPlanSessionTasks(localRecords, page.items, projectId, sessionId)');
+    expect(source).toContain('refreshReactPlanSessionSummaries(true)');
+    expect(source).toContain("queued: '排队中'");
+    expect(source).toContain("running: '执行中'");
+    expect(source).toContain("succeeded: '已完成'");
+    expect(source).toContain(':data-state="reactPlanSessionState(session.id)"');
+  });
+
+  it('使用服务端游标分页恢复全部历史任务', () => {
+    expect(source).toContain('const reactPlanNextCursor = ref<string | null>(null)');
+    expect(source).toContain('page.hasMore ? page.nextCursor : null');
+    expect(source).toContain('function loadEarlierReactPlanTasks()');
+    expect(source).toContain('listReactPlanSessionTasks(sessionId, true, cursor)');
+    expect(source).toContain('加载更早任务');
+  });
 });

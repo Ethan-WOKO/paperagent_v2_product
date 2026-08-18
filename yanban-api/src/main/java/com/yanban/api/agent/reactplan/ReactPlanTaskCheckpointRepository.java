@@ -1,6 +1,7 @@
 package com.yanban.api.agent.reactplan;
 
 import jakarta.persistence.LockModeType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -13,4 +14,5 @@ interface ReactPlanTaskCheckpointRepository
     @Query("select checkpoint from ReactPlanTaskCheckpointEntity checkpoint where checkpoint.taskId = :taskId")
     Optional<ReactPlanTaskCheckpointEntity> findLockedByTaskId(String taskId);
     List<ReactPlanTaskCheckpointEntity> findAllByOrderByUpdatedAtAsc();
+    List<ReactPlanTaskCheckpointEntity> findByTaskIdIn(Collection<String> taskIds);
 }
