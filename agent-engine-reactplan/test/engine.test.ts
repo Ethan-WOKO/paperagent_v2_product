@@ -19,6 +19,36 @@ const directories: string[] = [];
 afterEach(() => { directories.length = 0; });
 
 describe("AgentEngine", () => {
+  it("automatically resumes a running checkpoint after restart without resubmission", async () => {
+    const directory = await temporaryDirectory();
+    const blocked = new Promise<ModelResponse>(() => undefined);
+    let firstModelStarted = false;
+    const firstProvider: ModelProvider = { complete: () => {
+      firstModelStarted = true;
+      return blocked;
+    } };
+    const first = await createEngine(firstProvider, new FakeGateway(), directory);
+    await first.submit(submission());
+    await waitFor(() => firstModelStarted);
+
+    const recoveryStore = new RecoveringTaskStore(directory);
+    const recovered = new AgentEngine({
+      store: recoveryStore,
+      provider: new ScriptedProvider([{ content: "Recovered without resubmission.", toolCalls: [] }]),
+      gateway: new FakeGateway(), validator: new ContractValidator(contractDirectory),
+      sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => ["succeeded", "failed"].includes(recovered.get(taskId).state));
+
+    expect(recovered.get(taskId).error).toBeNull();
+    expect(recovered.get(taskId).state).toBe("succeeded");
+    expect(recoveryStore.recoveryRequests).toEqual([taskId]);
+    const events = await recovered.events(taskId);
+    expect(events.map((event) => event.sequence)).toEqual(events.map((_, index) => index + 1));
+    expect(events.filter((event) => event.type === "status" && event.state === "succeeded")).toHaveLength(1);
+  });
+
   it("runs native tools serially and emits a bounded receipt-backed delivery", async () => {
     const provider = new ScriptedProvider([
       tool("list_project_files", {}),
@@ -744,6 +774,14 @@ class RejectingOnceGateway extends FakeGateway {
         problem("SANDBOX_COMMAND_DENIED", "request", "rejected")));
     }
     return super.submit(taskIdValue, grantValue, request);
+  }
+}
+
+class RecoveringTaskStore extends TaskStore {
+  recoveryRequests: string[] = [];
+  authorizeRecovery(task: import("../src/types.js").PersistedTask) {
+    this.recoveryRequests.push(task.view.taskId);
+    return Promise.resolve({ taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() });
   }
 }
 

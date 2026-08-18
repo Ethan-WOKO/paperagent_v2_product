@@ -7,4 +7,5 @@ interface ReactPlanTurnIntakeRepository
         extends JpaRepository<ReactPlanTurnIntakeEntity, Long> {
     Optional<ReactPlanTurnIntakeEntity> findByUserIdAndSessionIdAndClientRequestId(
             Long userId, Long sessionId, String clientRequestId);
+    Optional<ReactPlanTurnIntakeEntity> findByTaskId(String taskId);
 }

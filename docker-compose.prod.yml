@@ -164,9 +164,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      agent-engine-reactplan:
-        condition: service_healthy
-        required: false
     volumes:
       - api_data:/app/data
 
@@ -184,10 +181,10 @@ services:
       ENGINE_SERVICE_TOKEN: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:-}
       PRODUCT_GATEWAY_ORIGIN: http://api:8080
       AGENT_ENGINE_CONTRACT_DIR: /app/agent-engine-contract
-      AGENT_ENGINE_DATA_DIR: /var/lib/paperagent-engine
       AGENT_ENGINE_PROVIDERS_JSON: '{"deepseek":{"baseUrl":"https://api.deepseek.com","apiKeyEnv":"DEEPSEEK_API_KEY"}}'
-    volumes:
-      - agent_engine_reactplan_data:/var/lib/paperagent-engine
+    depends_on:
+      api:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8092/health',{headers:{authorization:'Bearer '+process.env.ENGINE_SERVICE_TOKEN}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -247,4 +244,3 @@ volumes:
   minio_data:
   api_data:
   sandbox_broker_data:
-  agent_engine_reactplan_data:

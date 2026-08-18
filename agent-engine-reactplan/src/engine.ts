@@ -1,7 +1,7 @@
 import type { AcceptedAnswer, ChatMessage, HistoricalContextEnvelope, LongTermMemoryEnvelope, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RecentConversationTurn, RegisteredToolCatalog, RegisteredToolResult, RegisteredToolSpec, TaskEvent, TaskObservations, TaskSubmission, TaskView, ToolName, WorkspaceWriteResult } from "./types.js";
 import type { GatewayClient, SandboxRequest, WorkspacePublishRequest, WorkspaceWriteRequest } from "./gateway.js";
 import { ContractValidator } from "./validation.js";
-import { TaskStore } from "./store.js";
+import { reconcileTask, type TaskPersistence } from "./store.js";
 import { bounded, digestObject, EngineProblem, problem, sha256, terminal } from "./util.js";
 
 const MAX_MODEL_CALLS = 20;
@@ -38,7 +38,7 @@ type Sleeper = (milliseconds: number, signal: AbortSignal) => Promise<void>;
 type EventBody = TaskEvent extends infer Event ? Event extends TaskEvent ? Omit<Event, "contractVersion" | "taskId" | "sequence" | "occurredAt"> : never : never;
 
 export interface EngineOptions {
-  store: TaskStore;
+  store: TaskPersistence;
   provider: ModelProvider;
   gateway: GatewayClient;
   validator: ContractValidator;
@@ -65,7 +65,13 @@ export class AgentEngine {
   async initialize(): Promise<void> {
     for (const task of await this.options.store.loadAll()) {
       normalizePersistedTask(task);
+      reconcileTask(task, await this.options.store.events(task.view.taskId));
       this.tasks.set(task.view.taskId, task);
+      if (!terminal(task.view.state) && this.options.store.authorizeRecovery) {
+        const grant = await this.options.store.authorizeRecovery(task);
+        this.grants.set(task.view.taskId, { value: grant.taskGrant, expiresAt: grant.expiresAt });
+        if (task.view.state !== "waiting_user") this.schedule(task);
+      }
     }
   }
 

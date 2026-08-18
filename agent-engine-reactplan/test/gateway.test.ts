@@ -2,6 +2,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { HttpGatewayClient, type SandboxRequest } from "../src/gateway.js";
+import { HttpTaskStore } from "../src/store.js";
+import type { PersistedTask, TaskEvent } from "../src/types.js";
 
 const taskId = `task.${"a".repeat(64)}`;
 const hash = "b".repeat(64);
@@ -14,7 +16,7 @@ describe("HttpGatewayClient", () => {
   it("consumes the Java gateway operations with task-bound bearer authentication", async () => {
     const requests: Array<{ method: string; path: string; authorization: string | undefined; body: unknown }> = [];
     const server = createServer(async (request, response) => {
-      const body = await readBody(request);
+      const body = await readBody(request) as any;
       requests.push({ method: request.method!, path: request.url!, authorization: request.headers.authorization, body });
       response.setHeader("content-type", "application/json");
       const base = `/internal/v1/agent-engine/tasks/${taskId}`;
@@ -61,6 +63,40 @@ describe("HttpGatewayClient", () => {
     expect(requests[3]?.body).toEqual({ contractVersion: "1.0", path: "Sort.java", expectedSha256: hash });
     expect(requests[4]?.body).toEqual(workspaceWrite);
     expect(requests[6]?.body).toEqual(sandbox);
+  });
+});
+
+describe("HttpTaskStore", () => {
+  it("persists checkpoints and events and obtains a fresh recovery grant without storing it", async () => {
+    const requests: Array<{ path: string; authorization: string | undefined; body: any }> = [];
+    const checkpoint = { view: { taskId, requestDigest: hash } } as PersistedTask;
+    const event = { contractVersion: "1.0", taskId, sequence: 1,
+      occurredAt: "2026-08-18T00:00:00Z", type: "status", state: "running", error: null } as TaskEvent;
+    const serviceToken = "s".repeat(40);
+    const server = createServer(async (request, response) => {
+      const body = await readBody(request) as any;
+      requests.push({ path: request.url!, authorization: request.headers.authorization, body });
+      response.setHeader("content-type", "application/json");
+      if (request.url?.endsWith("/checkpoints") && request.method === "GET") return response.end(JSON.stringify({ contractVersion: "1.0", tasks: [{ checkpointRevision: 4, checkpoint }] }));
+      if (request.url?.endsWith("/authorize-recovery")) return response.end(JSON.stringify({ contractVersion: "1.0", taskGrant: "g".repeat(40), expiresAt: "2099-01-01T00:00:00Z" }));
+      if (request.url?.endsWith("/events") && request.method === "GET") return response.end(JSON.stringify({ contractVersion: "1.0", events: [event] }));
+      if (request.url?.endsWith("/events")) return response.end(JSON.stringify({ contractVersion: "1.0", accepted: true }));
+      if (request.url?.endsWith("/checkpoints")) return response.end(JSON.stringify({ contractVersion: "1.0", checkpointRevision: body.expectedRevision === null ? 1 : 5 }));
+      response.statusCode = 404; return response.end("{}");
+    });
+    servers.push(server); await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const store = new HttpTaskStore(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, serviceToken);
+
+    expect(await store.loadAll()).toEqual([checkpoint]);
+    await store.save(checkpoint);
+    await store.appendEvent(event);
+    expect(await store.events(taskId)).toEqual([event]);
+    expect((await store.authorizeRecovery(checkpoint)).taskGrant).toHaveLength(40);
+
+    expect(requests.every((request) => request.authorization === `Bearer ${serviceToken}`)).toBe(true);
+    expect(JSON.stringify(requests)).not.toContain('"taskGrant":"');
+    expect(requests.find((request) => request.path.endsWith("/checkpoints")
+      && request.body !== null)?.body.expectedRevision).toBe(4);
   });
 });
 

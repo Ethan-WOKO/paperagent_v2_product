@@ -52,6 +52,8 @@ final class ReactPlanTurnIntakeEntity {
     }
 
     String requestDigest() { return requestDigest; }
+    long userId() { return userId; }
+    long sessionId() { return sessionId; }
     long turnId() { return turnId; }
     String taskId() { return taskId; }
 }

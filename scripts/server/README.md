@@ -35,9 +35,9 @@ DEEPSEEK_API_KEY=<server-side-model-key>
 COMPOSE_PROFILES=sandbox,reactplan
 ```
 
-Engine task and event state is retained in the
-`agent_engine_reactplan_data` named volume. `status.sh` checks the private
-Engine with its service bearer. Do not publish port 8092 or copy either secret
+ReAct checkpoints and ordered events are stored in the product MySQL database.
+`status.sh` checks the private Engine with its service bearer. Do not publish
+port 8092 or copy either secret
 into frontend configuration. Use
 `FOLLOW=1 bash /opt/paperagent/scripts/server/logs.sh agent-engine-reactplan`
 to follow Engine logs.
