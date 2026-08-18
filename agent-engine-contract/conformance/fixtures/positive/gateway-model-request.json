@@ -1,0 +1,10 @@
+{
+  "contractVersion": "1.0",
+  "clientRequestId": "model.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "requestDigest": "d78f0ae1c95ec707d6e8fbf20167952b4ab7d9800fdc287994aaf72b97ef3402",
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "messages": [{ "role": "user", "content": "Inspect Sort.java" }],
+  "tools": [{ "type": "function", "function": { "name": "load_tool", "description": "Load one tool schema", "parameters": { "type": "object" } } }],
+  "maxOutputTokens": 4096
+}

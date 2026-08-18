@@ -34,13 +34,30 @@ yanban:
     v2:
       workspace:
         root: ${YANBAN_AGENT_V2_WORKSPACE_ROOT:data/agent-v2-workspaces}
+    reactplan:
+      enabled: ${YANBAN_AGENT_REACTPLAN_ENABLED:false}
+      engine-origin: ${YANBAN_AGENT_REACTPLAN_ENGINE_ORIGIN:http://127.0.0.1:8092}
+      engine-service-token: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:}
+      default-provider: ${YANBAN_AGENT_REACTPLAN_DEFAULT_PROVIDER:deepseek}
+      default-model: ${YANBAN_AGENT_REACTPLAN_DEFAULT_MODEL:deepseek-chat}
+      max-concurrent-tasks: ${YANBAN_AGENT_MAX_CONCURRENT_TASKS:20}
+      max-concurrent-tasks-per-user: ${YANBAN_AGENT_MAX_CONCURRENT_TASKS_PER_USER:3}
+      max-queued-tasks-per-user: ${YANBAN_AGENT_MAX_QUEUED_TASKS_PER_USER:10}
+      task-lease-seconds: ${YANBAN_AGENT_TASK_LEASE_SECONDS:30}
+    engine:
+      gateway:
+        enabled: ${YANBAN_AGENT_ENGINE_GATEWAY_ENABLED:false}
+        task-grant-secret: ${YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_SECRET:}
+        task-grant-ttl: ${YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_TTL:10m}
+        workspace-root: ${YANBAN_AGENT_ENGINE_GATEWAY_WORKSPACE_ROOT:data/agent-engine-workspaces}
+        max-read-bytes: ${YANBAN_AGENT_ENGINE_GATEWAY_MAX_READ_BYTES:10485760}
   sandbox:
     enabled: ${YANBAN_SANDBOX_ENABLED:false}
     required-at-startup: ${YANBAN_SANDBOX_REQUIRED_AT_STARTUP:false}
     provider: ${YANBAN_SANDBOX_PROVIDER:e2b}
     broker-url: ${YANBAN_SANDBOX_BROKER_URL:http://127.0.0.1:8091}
     broker-token: ${YANBAN_SANDBOX_BROKER_TOKEN:}
-    max-concurrent-runs: ${YANBAN_SANDBOX_MAX_CONCURRENT_RUNS:1}
+    max-concurrent-runs: ${YANBAN_SANDBOX_MAX_CONCURRENT_RUNS:18}
     cpus: ${YANBAN_SANDBOX_CPUS:2}
     memory-limit: ${YANBAN_SANDBOX_MEMORY_LIMIT:4GB}
     execution-timeout: ${YANBAN_SANDBOX_EXECUTION_TIMEOUT:15m}

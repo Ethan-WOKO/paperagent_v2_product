@@ -30,6 +30,10 @@
       "expectation": "Repeated cancellation converges on one cancelled terminal event; cancellation after another terminal state does not rewrite it."
     },
     {
+      "id": "sandbox-hard-cancel",
+      "expectation": "Cancelling a task with an active sandbox uses only its task-bound clientRequestId, causes the product gateway to cancel the exact stored Broker execution with the server-derived fence, observes a terminal sandbox outcome, and never publishes afterward."
+    },
+    {
       "id": "answer-exact-replay",
       "expectation": "The same questionId and answerDigest is accepted as a replay and consumes the pending question exactly once."
     },
@@ -56,6 +60,10 @@
     {
       "id": "event-redaction",
       "expectation": "Events contain bounded summaries and refs but no source body, task grant, service credential, host path or unbounded process output."
+    },
+    {
+      "id": "model-gateway-replay",
+      "expectation": "A model completion is authorized by the task-bound provider/model, an exact clientRequestId and digest replay returns the persisted response, and usage is recorded only once."
     }
   ]
 }

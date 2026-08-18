@@ -1,4 +1,9 @@
-import type { ReactPlanProblem, ReactPlanTaskState, ReactPlanTaskView } from '@/api/reactPlan';
+import type {
+  ReactPlanProblem,
+  ReactPlanSessionTask,
+  ReactPlanTaskState,
+  ReactPlanTaskView,
+} from '@/api/reactPlan';
 
 interface ReactPlanEventBase {
   contractVersion: '1.0';
@@ -32,6 +37,8 @@ export interface ReactPlanTaskRecord {
   instruction: string;
   turnId: number;
   taskId: string;
+  startedAt: string;
+  finishedAt: string | null;
   view: ReactPlanTaskView;
   events: ReactPlanTaskEvent[];
 }
@@ -43,7 +50,7 @@ export interface ReactPlanTaskHistory {
   records: ReactPlanTaskRecord[];
 }
 
-export const MAX_REACT_PLAN_HISTORY = 12;
+export const MAX_REACT_PLAN_CACHE = 50;
 
 export function newReactPlanRequestId(randomUuid: () => string = () => crypto.randomUUID()) {
   return `request.${randomUuid()}`;
@@ -107,6 +114,23 @@ export function reactPlanStateTagType(state: ReactPlanTaskState) {
   if (state === 'waiting_user') return 'warning' as const;
   if (state === 'running') return 'info' as const;
   return 'default' as const;
+}
+
+export function reactPlanElapsedMillis(record: ReactPlanTaskRecord, now = Date.now()) {
+  const startedAt = Date.parse(record.startedAt);
+  const finishedAt = record.finishedAt ? Date.parse(record.finishedAt) : now;
+  if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) return 0;
+  return Math.max(0, finishedAt - startedAt);
+}
+
+export function formatReactPlanDuration(durationMillis: number) {
+  const totalSeconds = Math.max(0, Math.floor(durationMillis / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分 ${seconds} 秒`;
+  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`;
+  return `${seconds} 秒`;
 }
 
 export function reactPlanToolLabel(tool: Extract<ReactPlanTaskEvent, { type: 'tool' }>) {
@@ -190,7 +214,7 @@ export function parseReactPlanHistory(value: string | null, projectId: number, s
     return history.records.reduce<ReactPlanTaskRecord[]>((records, candidate) => {
       const record = validReactPlanRecord(candidate, projectId, sessionId);
       return record ? upsertReactPlanRecord(records, record) : records;
-    }, []).slice(-MAX_REACT_PLAN_HISTORY);
+    }, []).slice(-MAX_REACT_PLAN_CACHE);
   } catch {
     return [];
   }
@@ -201,7 +225,33 @@ export function upsertReactPlanRecord(
   record: ReactPlanTaskRecord,
 ) {
   return [...records.filter((candidate) => candidate.taskId !== record.taskId), record]
-    .slice(-MAX_REACT_PLAN_HISTORY);
+    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+}
+
+export function mergeReactPlanSessionTasks(
+  localRecords: ReactPlanTaskRecord[],
+  serverTasks: ReactPlanSessionTask[],
+  projectId: number,
+  sessionId: number,
+) {
+  const localByTaskId = new Map(localRecords.map((record) => [record.taskId, record]));
+  return serverTasks.reduce<ReactPlanTaskRecord[]>((records, task) => {
+    const local = localByTaskId.get(task.taskId);
+    const record: ReactPlanTaskRecord = {
+      version: 1,
+      projectId,
+      sessionId,
+      clientRequestId: task.clientRequestId,
+      instruction: task.instruction,
+      turnId: task.turnId,
+      taskId: task.taskId,
+      startedAt: task.startedAt,
+      finishedAt: task.finishedAt,
+      view: task.task,
+      events: task.events ?? local?.events ?? [],
+    };
+    return upsertReactPlanRecord(records, record);
+  }, localRecords);
 }
 
 export function serializeReactPlanHistory(records: ReactPlanTaskRecord[]) {
@@ -211,7 +261,7 @@ export function serializeReactPlanHistory(records: ReactPlanTaskRecord[]) {
     version: 2,
     projectId: latest.projectId,
     sessionId: latest.sessionId,
-    records: records.slice(-MAX_REACT_PLAN_HISTORY),
+    records: records.slice(-MAX_REACT_PLAN_CACHE),
   };
   return JSON.stringify(history);
 }
@@ -222,5 +272,16 @@ function validReactPlanRecord(value: unknown, projectId: number, sessionId: numb
   if (record.version !== 1 || record.projectId !== projectId || record.sessionId !== sessionId) return null;
   if (!record.clientRequestId?.startsWith('request.') || !record.taskId?.startsWith('task.')) return null;
   if (!Number.isSafeInteger(record.turnId) || record.turnId < 1 || !record.view) return null;
-  return { ...record, events: Array.isArray(record.events) ? record.events.slice(-200) : [] };
+  const storedStartedAt = Date.parse(record.startedAt);
+  const startedAt = Number.isFinite(storedStartedAt) ? record.startedAt : record.view.createdAt;
+  const storedFinishedAt = record.finishedAt ? Date.parse(record.finishedAt) : Number.NaN;
+  const finishedAt = isReactPlanTerminal(record.view.state)
+    ? (Number.isFinite(storedFinishedAt) ? record.finishedAt : record.view.updatedAt)
+    : null;
+  return {
+    ...record,
+    startedAt,
+    finishedAt,
+    events: Array.isArray(record.events) ? record.events.slice(-200) : [],
+  };
 }

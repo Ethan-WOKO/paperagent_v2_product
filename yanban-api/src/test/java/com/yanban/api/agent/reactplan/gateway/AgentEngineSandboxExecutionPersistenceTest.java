@@ -42,4 +42,22 @@ class AgentEngineSandboxExecutionPersistenceTest {
         assertThat(recovered.receiptRef()).isEqualTo("receipt." + "5".repeat(64));
         assertThat(transactions.findReceipt(TASK, recovered.receiptRef())).isPresent();
     }
+
+    @Test
+    void cancellationIntentCanBePersistedForAnAlreadyDispatchedExecution() {
+        String cancellationTask = "task." + "6".repeat(64);
+        String cancellationCall = "call.cancellationtest";
+        transactions.create(new AgentEngineSandboxExecutionEntity(
+                cancellationTask, cancellationCall, "2".repeat(64), "3".repeat(64),
+                "execution." + "6".repeat(64), "{}", LocalDateTime.now()));
+        transactions.dispatched(cancellationTask, cancellationCall, "broker-1", "QUEUED");
+
+        AgentEngineSandboxExecutionEntity requested = transactions.requestCancel(
+                cancellationTask, cancellationCall);
+
+        entities.clear();
+        assertThat(requested.state()).isEqualTo("CANCEL_REQUESTED");
+        assertThat(transactions.find(cancellationTask, cancellationCall).orElseThrow().state())
+                .isEqualTo("CANCEL_REQUESTED");
+    }
 }

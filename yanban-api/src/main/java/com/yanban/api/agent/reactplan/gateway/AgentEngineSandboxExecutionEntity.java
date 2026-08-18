@@ -76,8 +76,18 @@ class AgentEngineSandboxExecutionEntity {
             throw new IllegalStateException("broker execution identity is immutable");
         }
         this.brokerExecutionRef = brokerExecutionRef;
-        this.state = state;
+        if (!"CANCEL_REQUESTED".equals(this.state)) {
+            this.state = state;
+        }
         this.updatedAt = now;
+    }
+
+    void requestCancel(LocalDateTime now) {
+        if (!java.util.Set.of("SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR")
+                .contains(state)) {
+            state = "CANCEL_REQUESTED";
+            updatedAt = now;
+        }
     }
 
     void terminal(String state, String receiptRef, String receiptJson, LocalDateTime now) {

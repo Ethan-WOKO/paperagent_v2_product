@@ -150,6 +150,10 @@ services:
       YANBAN_AGENT_REACTPLAN_ENABLED: ${YANBAN_AGENT_REACTPLAN_ENABLED:-true}
       YANBAN_AGENT_REACTPLAN_ENGINE_ORIGIN: http://agent-engine-reactplan:8092
       YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:-}
+      YANBAN_AGENT_MAX_CONCURRENT_TASKS: ${YANBAN_AGENT_MAX_CONCURRENT_TASKS:-20}
+      YANBAN_AGENT_MAX_CONCURRENT_TASKS_PER_USER: ${YANBAN_AGENT_MAX_CONCURRENT_TASKS_PER_USER:-3}
+      YANBAN_AGENT_MAX_QUEUED_TASKS_PER_USER: ${YANBAN_AGENT_MAX_QUEUED_TASKS_PER_USER:-10}
+      YANBAN_AGENT_TASK_LEASE_SECONDS: ${YANBAN_AGENT_TASK_LEASE_SECONDS:-30}
       YANBAN_AGENT_ENGINE_GATEWAY_ENABLED: ${YANBAN_AGENT_ENGINE_GATEWAY_ENABLED:-true}
       YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_SECRET: ${YANBAN_AGENT_ENGINE_GATEWAY_TASK_GRANT_SECRET:-}
       YANBAN_AGENT_ENGINE_GATEWAY_WORKSPACE_ROOT: /app/data/agent-engine-workspaces
@@ -164,9 +168,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      agent-engine-reactplan:
-        condition: service_healthy
-        required: false
     volumes:
       - api_data:/app/data
 
@@ -176,18 +177,15 @@ services:
       context: .
       dockerfile: Dockerfile.agent-engine-reactplan
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       HOST: 0.0.0.0
       PORT: 8092
       ENGINE_SERVICE_TOKEN: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:-}
       PRODUCT_GATEWAY_ORIGIN: http://api:8080
       AGENT_ENGINE_CONTRACT_DIR: /app/agent-engine-contract
-      AGENT_ENGINE_DATA_DIR: /var/lib/paperagent-engine
-      AGENT_ENGINE_PROVIDERS_JSON: '{"deepseek":{"baseUrl":"https://api.deepseek.com","apiKeyEnv":"DEEPSEEK_API_KEY"}}'
-    volumes:
-      - agent_engine_reactplan_data:/var/lib/paperagent-engine
+    depends_on:
+      api:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8092/health',{headers:{authorization:'Bearer '+process.env.ENGINE_SERVICE_TOKEN}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -216,6 +214,8 @@ services:
       E2B_API_KEY: ${E2B_API_KEY:-}
       YANBAN_E2B_TEMPLATE: ${YANBAN_E2B_TEMPLATE:-yanban-research-v1}
       YANBAN_SANDBOX_DB_URL: jdbc:mysql://mysql:3306/${YANBAN_SANDBOX_DB_NAME:-yanban_sandbox}?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      YANBAN_SANDBOX_MAX_CONCURRENT_RUNS: ${YANBAN_SANDBOX_MAX_CONCURRENT_RUNS:-18}
+      YANBAN_SANDBOX_MAX_CONCURRENT_RUNS_PER_USER: ${YANBAN_SANDBOX_MAX_CONCURRENT_RUNS_PER_USER:-3}
     depends_on:
       mysql:
         condition: service_healthy
@@ -247,4 +247,3 @@ volumes:
   minio_data:
   api_data:
   sandbox_broker_data:
-  agent_engine_reactplan_data:

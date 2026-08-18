@@ -156,6 +156,32 @@ paths:
           content:
             application/json:
               schema: { $ref: ./schemas/problem.schema.json }
+  /internal/v1/agent-engine/tasks/{taskId}/model-completions:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Product tool gateway]
+      operationId: completeModel
+      summary: Idempotently complete one model turn using product-owned credentials
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './schemas/model-gateway.schema.json#/$defs/request' }
+      responses:
+        '200':
+          description: Model completion or exact persisted replay
+          content:
+            application/json:
+              schema: { $ref: './schemas/model-gateway.schema.json#/$defs/response' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '502': { $ref: '#/components/responses/Problem' }
   /internal/v1/agent-engine/tasks/{taskId}/workspace/files:
     parameters:
       - $ref: '#/components/parameters/TaskId'
@@ -338,6 +364,39 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Product tool gateway]
+      operationId: cancelSandboxExecution
+      summary: Idempotently cancel the exact task-bound sandbox execution
+      description: >-
+        The Engine supplies only the task-bound clientRequestId. The product
+        validates the task grant and stored execution authority, derives the
+        immutable Broker execution identity and fence on the server, and
+        requests process termination. A submit/cancel race retains the
+        cancellation intent and cancels immediately after Broker binding.
+      security:
+        - TaskGrantBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contractVersion]
+              properties:
+                contractVersion: { const: '1.0' }
+      responses:
+        '200':
+          description: Current projection after accepting or replaying cancellation
+          content:
+            application/json:
+              schema: { $ref: './schemas/gateway.schema.json#/$defs/sandboxView' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
   /internal/v1/agent-engine/tasks/{taskId}/receipts/{receiptRef}:
     parameters:
       - $ref: '#/components/parameters/TaskId'

@@ -72,7 +72,12 @@
                 @click="selectConversation(session.id)"
                 @keydown.enter.prevent="selectConversation(session.id)"
               >
-                <span>{{ session.title || `Conversation #${session.id}` }}</span>
+                <span class="project-conversation-item__copy">
+                  <span>{{ session.title || `Conversation #${session.id}` }}</span>
+                  <small v-if="reactPlanSessionState(session.id)" :data-state="reactPlanSessionState(session.id)">
+                    {{ reactPlanSessionStateLabel(session.id) }}
+                  </small>
+                </span>
                 <NDropdown trigger="click" :options="sessionMenuOptions" @select="(key) => handleSessionMenuSelect(key, session)">
                   <button type="button" class="project-conversation-item__more" :aria-label="t('project.page.conversationActions')" @click.stop>...</button>
                 </NDropdown>
@@ -154,7 +159,7 @@
               <button type="button" class="project-utility-chip project-utility-chip--secondary" :class="{ active: inspectorOpen && inspectorTab === 'evidence' }" :aria-pressed="inspectorOpen && inspectorTab === 'evidence'" aria-controls="project-inspector" @click="toggleInspector('evidence')">证据 <span>{{ evidence.length }}</span></button>
               <button type="button" class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'changes' }" :aria-pressed="inspectorOpen && inspectorTab === 'changes'" aria-controls="project-inspector" @click="toggleInspector('changes')">修改与验证 <span>{{ candidates.length }}</span></button>
               <button type="button" class="project-utility-chip project-utility-chip--secondary" :class="{ active: inspectorOpen && inspectorTab === 'versions' }" :aria-pressed="inspectorOpen && inspectorTab === 'versions'" aria-controls="project-inspector" @click="toggleInspector('versions')">项目版本 <span>{{ revisions.length }}</span></button>
-              <NButton class="project-new-conversation" size="tiny" quaternary :disabled="reactPlanBusy" @click="startNewConversation">新建会话</NButton>
+              <NButton class="project-new-conversation" size="tiny" quaternary @click="startNewConversation">新建会话</NButton>
               <NDropdown trigger="click" :options="projectUtilityMenuOptions" @select="handleProjectUtilityMenuSelect">
                 <button type="button" class="project-utility-chip project-utility-more" :aria-label="isEnglish ? 'More project tools' : '更多项目工具'">
                   {{ isEnglish ? 'More tools' : '更多工具' }}
@@ -412,6 +417,11 @@
 
           <section class="v2-conversation">
             <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="reactPlanBusy">
+              <div v-if="reactPlanNextCursor" class="reactplan-history-more">
+                <NButton size="tiny" secondary :loading="reactPlanLoadingOlder" @click="loadEarlierReactPlanTasks">
+                  加载更早任务
+                </NButton>
+              </div>
               <article
                 v-for="item in reactPlanTimeline"
                 :key="item.record.taskId"
@@ -423,9 +433,12 @@
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
                     <p>{{ item.record.instruction }}</p>
                   </div>
-                  <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
-                    {{ reactPlanStateLabel(item.record.view.state) }}
-                  </NTag>
+                  <div class="v2-task-card__status">
+                    <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
+                      {{ reactPlanStateLabel(item.record.view.state) }}
+                    </NTag>
+                    <small>{{ item.durationLabel }}</small>
+                  </div>
                 </header>
 
                 <details
@@ -472,22 +485,21 @@
                   </dl>
                 </div>
 
-                <div class="v2-task-card__actions">
-                  <NButton
-                    v-if="item.record.taskId === reactPlanRecord?.taskId && !isReactPlanTerminal(item.record.view.state)"
-                    size="tiny"
-                    secondary
-                    type="error"
-                    :disabled="reactPlanCancelling"
-                    @click="cancelCurrentReactPlanTask"
-                  >取消任务</NButton>
-                </div>
               </article>
-              <NEmpty v-if="reactPlanTimeline.length === 0" description="发送任务后，ReAct 会自己查找文件、选择工具并展示正式执行结果。" />
-              <NSpin v-if="reactPlanBusy" size="small" />
+              <NEmpty v-if="reactPlanTimeline.length === 0" description="尚无任务记录。输入任务后，这里会显示执行进度和最终结果。" />
             </div>
 
             <NAlert v-if="reactPlanError" type="error" :show-icon="false">{{ reactPlanError }}</NAlert>
+            <div
+              v-if="reactPlanActivityLabel"
+              class="reactplan-activity"
+              :data-state="reactPlanCancelling ? 'cancelling' : 'running'"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="reactplan-activity__dot" aria-hidden="true"></span>
+              <span>{{ reactPlanActivityLabel }}</span>
+            </div>
             <div class="v2-conversation__composer">
               <NInput
                 v-model:value="reactPlanInput"
@@ -495,19 +507,44 @@
                 type="textarea"
                 :maxlength="20000"
                 :autosize="{ minRows: 2, maxRows: 8 }"
-                :placeholder="reactPlanQuestion ? '输入对模型追问的回复' : '描述任务，ReAct 会自己查找文件并选择工具'"
+                :placeholder="reactPlanQuestion ? '输入对模型追问的回复' : '让我们一起来做些什么？'"
                 :disabled="reactPlanBusy"
                 @keydown="handleReactPlanKeydown"
               />
-              <NButton
-                class="project-send-button"
-                type="primary"
-                :loading="reactPlanBusy"
-                :disabled="!activeProject || !reactPlanInput.trim() || reactPlanBusy"
-                @click="sendReactPlanTask"
-              >
-                {{ reactPlanQuestion ? '回复' : '发送' }}
-              </NButton>
+              <div class="reactplan-composer-actions">
+                <NButton
+                  v-if="reactPlanSubmitting"
+                  class="project-send-button project-stop-button"
+                  secondary
+                  disabled
+                >正在发送…</NButton>
+                <NButton
+                  v-else-if="reactPlanExecutionActive || reactPlanCancelling"
+                  class="project-send-button project-stop-button"
+                  secondary
+                  type="error"
+                  :disabled="reactPlanCancelling"
+                  @click="cancelCurrentReactPlanTask"
+                >{{ reactPlanCancelling ? '正在停止…' : '停止任务' }}</NButton>
+                <template v-else>
+                  <NButton
+                    class="project-send-button"
+                    type="primary"
+                    :disabled="!activeProject || !reactPlanInput.trim() || reactPlanBusy"
+                    @click="sendReactPlanTask"
+                  >
+                    {{ reactPlanQuestion ? '回复' : '发送' }}
+                  </NButton>
+                  <NButton
+                    v-if="reactPlanQuestion && reactPlanCanCancel"
+                    class="project-cancel-button"
+                    size="small"
+                    secondary
+                    type="error"
+                    @click="cancelCurrentReactPlanTask"
+                  >取消任务</NButton>
+                </template>
+              </div>
             </div>
           </section>
         </section>
@@ -637,7 +674,7 @@ import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
-import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, startReactPlanTask, streamReactPlanEvents } from '@/api/reactPlan';
+import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listReactPlanSessionTasks, startReactPlanTask, streamReactPlanEvents, type ReactPlanSessionTask, type ReactPlanTaskState } from '@/api/reactPlan';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
@@ -657,12 +694,15 @@ import {
 } from '@/utils/v2NaturalLanguageTurn';
 import {
   appendReactPlanEvent,
+  formatReactPlanDuration,
   isReactPlanTerminal,
   latestReactPlanQuestion,
+  mergeReactPlanSessionTasks,
   newReactPlanCancelId,
   newReactPlanRequestId,
   parseReactPlanHistory,
   reactPlanDelivery,
+  reactPlanElapsedMillis,
   reactPlanStateLabel,
   reactPlanStateTagType,
   reactPlanToolEvents,
@@ -747,28 +787,78 @@ const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.v
 const reactPlanInput = ref('');
 const reactPlanRecord = ref<ReactPlanTaskRecord | null>(null);
 const reactPlanRecords = ref<ReactPlanTaskRecord[]>([]);
+const reactPlanSessionStates = ref<Record<number, ReactPlanTaskState | undefined>>({});
+const reactPlanNextCursor = ref<string | null>(null);
+const reactPlanLoadingOlder = ref(false);
 const reactPlanError = ref('');
 const reactPlanSubmitting = ref(false);
 const reactPlanStreaming = ref(false);
 const reactPlanCancelling = ref(false);
 const reactPlanAnswering = ref(false);
+const reactPlanClock = ref(Date.now());
+const reactPlanSubmissionStartedAt = ref<string | null>(null);
 let reactPlanAbortController: AbortController | null = null;
 let reactPlanReconnectTimer: number | null = null;
+let reactPlanClockTimer: number | null = null;
+let reactPlanSessionPollTimer: number | null = null;
+let reactPlanSessionRefreshProjectId: number | null = null;
 const reactPlanQuestion = computed(() => latestReactPlanQuestion(
   reactPlanRecord.value?.events ?? [],
   reactPlanRecord.value?.view.pendingQuestionId,
 ));
 const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => ({
   record,
+  durationLabel: `${isReactPlanTerminal(record.view.state) ? '用时' : '已用时'} ${formatReactPlanDuration(
+    reactPlanElapsedMillis(record, reactPlanClock.value),
+  )}`,
   tools: reactPlanToolEvents(record.events),
   delivery: reactPlanDelivery(record.events),
   question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
 })));
-const reactPlanBusy = computed(() => (
-  reactPlanSubmitting.value || reactPlanCancelling.value || reactPlanAnswering.value
-    || reactPlanRecord.value?.view.state === 'queued'
+const reactPlanExecutionActive = computed(() => (
+  reactPlanRecord.value?.view.state === 'queued'
     || reactPlanRecord.value?.view.state === 'running'
 ));
+const reactPlanCanCancel = computed(() => Boolean(
+  reactPlanRecord.value && !isReactPlanTerminal(reactPlanRecord.value.view.state),
+));
+const reactPlanActivityLabel = computed(() => {
+  if (reactPlanCancelling.value) return '正在停止任务…';
+  if (reactPlanSubmitting.value) {
+    const startedAt = Date.parse(reactPlanSubmissionStartedAt.value || '');
+    const elapsed = Number.isFinite(startedAt)
+      ? formatReactPlanDuration(Math.max(0, reactPlanClock.value - startedAt))
+      : '0 秒';
+    return `正在发送任务… · 已用时 ${elapsed}`;
+  }
+  if (reactPlanRecord.value?.view.state === 'queued') return '任务已发送，正在准备执行…';
+  if (reactPlanRecord.value?.view.state !== 'running') return '';
+  const activeTool = [...reactPlanToolEvents(reactPlanRecord.value.events)]
+    .reverse()
+    .find((tool) => tool.state === 'requested' || tool.state === 'running');
+  return activeTool ? `正在执行：${reactPlanToolLabel(activeTool)}` : '正在执行任务…';
+});
+const reactPlanBusy = computed(() => (
+  reactPlanSubmitting.value || reactPlanCancelling.value || reactPlanAnswering.value
+    || reactPlanExecutionActive.value
+));
+
+function reactPlanSessionState(sessionId: number) {
+  return reactPlanSessionStates.value[sessionId];
+}
+
+function reactPlanSessionStateLabel(sessionId: number) {
+  const state = reactPlanSessionState(sessionId);
+  if (!state) return '';
+  return {
+    queued: '排队中',
+    running: '执行中',
+    waiting_user: '等待回复',
+    succeeded: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }[state];
+}
 
 const loading = reactive({
   projects: false,
@@ -1529,6 +1619,7 @@ async function ensureSessionOnce(_recovered: boolean): Promise<number | null> {
   try {
     projectSessions.value = (await listProjectSessions(project.id)).data;
     if (activeProjectId.value !== project.id) return null;
+    void refreshReactPlanSessionSummaries();
     if (projectSessions.value.length) {
       const requested = requestedSessionId(project.id);
       activeSessionId.value = projectSessions.value.find((item) => item.id === requested)?.id || projectSessions.value[0].id;
@@ -1588,6 +1679,43 @@ function storeReactPlanRecords(records: ReactPlanTaskRecord[]) {
   window.localStorage.setItem(reactPlanStorageKey(latest.projectId, latest.sessionId), value);
 }
 
+function rememberReactPlanSessionTasks(sessionId: number, tasks: ReactPlanSessionTask[]) {
+  reactPlanSessionStates.value = {
+    ...reactPlanSessionStates.value,
+    [sessionId]: tasks[tasks.length - 1]?.task.state,
+  };
+}
+
+async function refreshReactPlanSessionSummaries(activeOnly = false) {
+  const projectId = activeProjectId.value;
+  const epoch = projectEpoch;
+  if (!projectId) return;
+  if (activeOnly && reactPlanSessionRefreshProjectId === projectId) return;
+  const sessions = projectSessions.value.filter((session) => {
+    if (!activeOnly) return true;
+    const state = reactPlanSessionState(session.id);
+    return state === 'queued' || state === 'running';
+  });
+  if (sessions.length === 0) return;
+  if (activeOnly) reactPlanSessionRefreshProjectId = projectId;
+  try {
+    await Promise.all(sessions.map(async (session) => {
+      try {
+        const page = (await listReactPlanSessionTasks(session.id, false, undefined, 1)).data;
+        if (epoch === projectEpoch && projectId === activeProjectId.value) {
+          rememberReactPlanSessionTasks(session.id, page.items);
+        }
+      } catch {
+        // A sidebar summary is advisory. Opening the session performs a visible full reconciliation.
+      }
+    }));
+  } finally {
+    if (activeOnly && reactPlanSessionRefreshProjectId === projectId) {
+      reactPlanSessionRefreshProjectId = null;
+    }
+  }
+}
+
 function invalidateReactPlanStream() {
   reactPlanAbortController?.abort();
   reactPlanAbortController = null;
@@ -1602,9 +1730,12 @@ function resetReactPlanView() {
   invalidateReactPlanStream();
   reactPlanRecord.value = null;
   reactPlanRecords.value = [];
+  reactPlanNextCursor.value = null;
+  reactPlanLoadingOlder.value = false;
   reactPlanError.value = '';
   reactPlanInput.value = '';
   reactPlanSubmitting.value = false;
+  reactPlanSubmissionStartedAt.value = null;
   reactPlanCancelling.value = false;
   reactPlanAnswering.value = false;
 }
@@ -1617,8 +1748,19 @@ function isCurrentReactPlan(record: ReactPlanTaskRecord, epoch: number) {
 }
 
 function updateReactPlanRecord(record: ReactPlanTaskRecord) {
-  reactPlanRecord.value = record;
-  reactPlanRecords.value = upsertReactPlanRecord(reactPlanRecords.value, record);
+  const normalized = {
+    ...record,
+    startedAt: record.startedAt || record.view.createdAt,
+    finishedAt: isReactPlanTerminal(record.view.state)
+      ? (record.finishedAt || record.view.updatedAt)
+      : null,
+  };
+  reactPlanRecord.value = normalized;
+  reactPlanRecords.value = upsertReactPlanRecord(reactPlanRecords.value, normalized);
+  reactPlanSessionStates.value = {
+    ...reactPlanSessionStates.value,
+    [normalized.sessionId]: normalized.view.state,
+  };
   storeReactPlanRecords(reactPlanRecords.value);
 }
 
@@ -1690,14 +1832,59 @@ async function connectReactPlanTask(record: ReactPlanTaskRecord, epoch = project
   }
 }
 
-function loadReactPlanRecord(projectId: number, sessionId: number, epoch = projectEpoch) {
+async function loadReactPlanRecord(projectId: number, sessionId: number, epoch = projectEpoch) {
   invalidateReactPlanStream();
-  const records = storedReactPlanRecords(projectId, sessionId);
+  const localRecords = storedReactPlanRecords(projectId, sessionId);
+  let records = localRecords;
+  let reconciliationFailed = false;
+  try {
+    const page = (await listReactPlanSessionTasks(sessionId, true)).data;
+    if (epoch !== projectEpoch || projectId !== activeProjectId.value
+        || sessionId !== activeSessionId.value) return;
+    rememberReactPlanSessionTasks(sessionId, page.items);
+    reactPlanNextCursor.value = page.hasMore ? page.nextCursor : null;
+    records = mergeReactPlanSessionTasks(localRecords, page.items, projectId, sessionId);
+    if (records.length) storeReactPlanRecords(records);
+    else window.localStorage.removeItem(reactPlanStorageKey(projectId, sessionId));
+  } catch (cause) {
+    if (epoch !== projectEpoch || projectId !== activeProjectId.value
+        || sessionId !== activeSessionId.value) return;
+    reconciliationFailed = true;
+    if (localRecords.length === 0) reactPlanError.value = apiError(cause);
+  }
   reactPlanRecords.value = records;
   const record = records[records.length - 1] ?? null;
   reactPlanRecord.value = record;
-  reactPlanError.value = '';
+  if (!reconciliationFailed) reactPlanError.value = '';
   if (record) connectReactPlanTask(record, epoch);
+}
+
+async function loadEarlierReactPlanTasks() {
+  const projectId = activeProjectId.value;
+  const sessionId = activeSessionId.value;
+  const cursor = reactPlanNextCursor.value;
+  const epoch = projectEpoch;
+  if (!projectId || !sessionId || !cursor || reactPlanLoadingOlder.value) return;
+  reactPlanLoadingOlder.value = true;
+  try {
+    const page = (await listReactPlanSessionTasks(sessionId, true, cursor)).data;
+    if (epoch !== projectEpoch || projectId !== activeProjectId.value
+        || sessionId !== activeSessionId.value) return;
+    reactPlanRecords.value = mergeReactPlanSessionTasks(
+      reactPlanRecords.value, page.items, projectId, sessionId,
+    );
+    reactPlanRecord.value = reactPlanRecords.value[reactPlanRecords.value.length - 1] ?? null;
+    reactPlanNextCursor.value = page.hasMore ? page.nextCursor : null;
+    storeReactPlanRecords(reactPlanRecords.value);
+  } catch (cause) {
+    if (epoch === projectEpoch && sessionId === activeSessionId.value) {
+      reactPlanError.value = apiError(cause);
+    }
+  } finally {
+    if (epoch === projectEpoch && sessionId === activeSessionId.value) {
+      reactPlanLoadingOlder.value = false;
+    }
+  }
 }
 
 async function submitReactPlanTask() {
@@ -1705,16 +1892,21 @@ async function submitReactPlanTask() {
   const instruction = reactPlanInput.value.trim();
   if (!projectId || !instruction || reactPlanBusy.value) return;
   const epoch = projectEpoch;
+  const startedAt = new Date().toISOString();
+  reactPlanSubmissionStartedAt.value = startedAt;
   reactPlanSubmitting.value = true;
   reactPlanError.value = '';
   invalidateReactPlanStream();
   const controller = new AbortController();
-  reactPlanAbortController = controller;
   try {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
     const clientRequestId = newReactPlanRequestId();
     const accepted = (await startReactPlanTask(sessionId, { clientRequestId, instruction }, controller.signal)).data;
+    reactPlanSessionStates.value = {
+      ...reactPlanSessionStates.value,
+      [sessionId]: accepted.task.state,
+    };
     if (epoch !== projectEpoch || sessionId !== activeSessionId.value) return;
     const record: ReactPlanTaskRecord = {
       version: 1,
@@ -1724,6 +1916,8 @@ async function submitReactPlanTask() {
       instruction,
       turnId: accepted.turnId,
       taskId: accepted.taskId,
+      startedAt,
+      finishedAt: null,
       view: accepted.task,
       events: [],
     };
@@ -1733,8 +1927,10 @@ async function submitReactPlanTask() {
   } catch (cause) {
     if (!controller.signal.aborted && epoch === projectEpoch) reactPlanError.value = apiError(cause);
   } finally {
-    if (reactPlanAbortController === controller) reactPlanAbortController = null;
-    if (epoch === projectEpoch) reactPlanSubmitting.value = false;
+    if (epoch === projectEpoch) {
+      reactPlanSubmitting.value = false;
+      reactPlanSubmissionStartedAt.value = null;
+    }
   }
 }
 
@@ -1748,7 +1944,6 @@ async function answerCurrentReactPlanQuestion() {
   reactPlanError.value = '';
   invalidateReactPlanStream();
   const controller = new AbortController();
-  reactPlanAbortController = controller;
   try {
     const view = (await answerReactPlanQuestion(
       record.turnId,
@@ -1763,7 +1958,6 @@ async function answerCurrentReactPlanQuestion() {
   } catch (cause) {
     if (!controller.signal.aborted && isCurrentReactPlan(record, epoch)) reactPlanError.value = apiError(cause);
   } finally {
-    if (reactPlanAbortController === controller) reactPlanAbortController = null;
     if (isCurrentReactPlan(record, epoch)) reactPlanAnswering.value = false;
   }
 }
@@ -1777,7 +1971,6 @@ async function cancelCurrentReactPlanTask() {
   reactPlanError.value = '';
   invalidateReactPlanStream();
   const controller = new AbortController();
-  reactPlanAbortController = controller;
   try {
     const view = (await cancelReactPlanTask(
       record.turnId,
@@ -1791,7 +1984,6 @@ async function cancelCurrentReactPlanTask() {
   } catch (cause) {
     if (!controller.signal.aborted && isCurrentReactPlan(record, epoch)) reactPlanError.value = apiError(cause);
   } finally {
-    if (reactPlanAbortController === controller) reactPlanAbortController = null;
     if (isCurrentReactPlan(record, epoch)) reactPlanCancelling.value = false;
   }
 }
@@ -1802,8 +1994,9 @@ function sendReactPlanTask() {
 }
 
 function handleReactPlanKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
   event.preventDefault();
+  if (!activeProject.value || !reactPlanInput.value.trim() || reactPlanBusy.value) return;
   sendReactPlanTask();
 }
 
@@ -2150,6 +2343,7 @@ async function selectProject(projectId: number) {
   activeProjectId.value = projectId;
   activeSessionId.value = null;
   projectSessions.value = [];
+  reactPlanSessionStates.value = {};
   collapsedDirectories.value = new Set(collapsedDirectoriesByProject.get(projectId) || []);
   manifest.value = null;
   selectedFile.value = null;
@@ -2233,7 +2427,7 @@ async function loadConversation(epoch = projectEpoch) {
       loadV2TurnHistory(sessionId, epoch),
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
-      loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
+      await loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
       void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
@@ -2283,7 +2477,7 @@ async function refreshCandidates() {
 }
 
 async function selectConversation(sessionId: number) {
-  if (sessionId === activeSessionId.value || reactPlanBusy.value) return;
+  if (sessionId === activeSessionId.value) return;
   resetV2NaturalLanguageView();
   resetReactPlanView();
   projectEpoch++;
@@ -2306,7 +2500,7 @@ async function selectConversation(sessionId: number) {
       loadV2TurnHistory(sessionId, epoch),
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
-      loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
+      await loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
       void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
@@ -2316,7 +2510,7 @@ async function selectConversation(sessionId: number) {
 
 async function startNewConversation() {
   const project = activeProject.value;
-  if (!project || reactPlanBusy.value) return;
+  if (!project) return;
   resetV2NaturalLanguageView();
   resetReactPlanView();
   projectEpoch++;
@@ -2330,6 +2524,7 @@ async function startNewConversation() {
     const created = (await createProjectSession(project.id, { title: DEFAULT_SESSION_TITLE, ragDisabled: true })).data;
     if (epoch !== projectEpoch) return;
     projectSessions.value = [created, ...projectSessions.value.filter((item) => item.id !== created.id)];
+    reactPlanSessionStates.value = { ...reactPlanSessionStates.value, [created.id]: undefined };
     activeSessionId.value = created.id;
     syncProjectLocation(project.id, created.id);
   } catch (cause) {
@@ -2375,8 +2570,10 @@ async function confirmRenameSession() {
 }
 
 async function deleteConversation(session: AgentSessionResponse) {
-  if (reactPlanBusy.value) {
-    error.value = 'Current Project Agent request is still running. Please wait before deleting a conversation.';
+  const taskState = reactPlanSessionState(session.id);
+  if (taskState === 'queued' || taskState === 'running'
+      || (session.id === activeSessionId.value && reactPlanSubmitting.value)) {
+    error.value = 'This conversation still has an active task. Stop it before deleting the conversation.';
     return;
   }
   const sessionTitle = session.title || `Conversation #${session.id}`;
@@ -2391,6 +2588,9 @@ async function deleteConversation(session: AgentSessionResponse) {
     }
     await deleteAgentSession(session.id);
     projectSessions.value = projectSessions.value.filter((item) => item.id !== session.id);
+    const nextStates = { ...reactPlanSessionStates.value };
+    delete nextStates[session.id];
+    reactPlanSessionStates.value = nextStates;
     if (!wasActive) return;
     resetV2NaturalLanguageView();
     resetReactPlanView();
@@ -2436,6 +2636,7 @@ async function removeActiveProject() {
     selectedFile.value = null;
     searchResults.value = [];
     projectSessions.value = [];
+    reactPlanSessionStates.value = {};
     activeSessionId.value = null;
     syncProjectLocation(null, null);
     evidence.value = [];
@@ -2512,6 +2713,12 @@ async function loadProductV2Availability() {
 
 onMounted(() => {
   inspectorOpen.value = false;
+  reactPlanClockTimer = window.setInterval(() => {
+    reactPlanClock.value = Date.now();
+  }, 1_000);
+  reactPlanSessionPollTimer = window.setInterval(() => {
+    void refreshReactPlanSessionSummaries(true);
+  }, 4_000);
   void loadProductV2Availability();
   void loadProjects();
 });
@@ -2519,6 +2726,8 @@ onUnmounted(() => {
   stopV2NaturalLanguagePolling();
   invalidateReactPlanStream();
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
+  if (reactPlanClockTimer != null) window.clearInterval(reactPlanClockTimer);
+  if (reactPlanSessionPollTimer != null) window.clearInterval(reactPlanSessionPollTimer);
   projectEpoch++;
 });
 </script>
@@ -2643,8 +2852,11 @@ onUnmounted(() => {
 .v2-workbench__progress > article > div small { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 .v2-conversation { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 2px; }
 .v2-conversation__tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 3px; scrollbar-gutter: stable; }
+.reactplan-history-more { display: flex; justify-content: center; padding: 2px 0 4px; }
 .v2-task-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 12px; background: var(--yb-bg-elevated); }
 .v2-task-card__question { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.v2-task-card__status { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.v2-task-card__status small { color: var(--yb-text-muted); font-size: 10px; white-space: nowrap; }
 .v2-task-card__question-copy { min-width: 0; flex: 1 1 auto; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 10px; }
 .v2-task-card__question p { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .v2-task-card__avatar { flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--yb-border-strong); border-radius: 50%; color: var(--yb-primary); background: var(--yb-bg-elevated); font-size: 10px; font-weight: 700; line-height: 1; }
@@ -2656,9 +2868,12 @@ onUnmounted(() => {
 .v2-task-card__validation { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 10px; }
 .v2-task-card__validation dt { color: var(--yb-text-muted); }
 .v2-task-card__validation dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.v2-task-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .reactplan-task-card code { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 .reactplan-receipt { display: block; margin-top: 3px; }
+.reactplan-activity { width: min(1040px, 100%); display: flex; align-items: center; gap: 7px; margin: 0 auto -5px; padding: 0 9px; color: var(--yb-text-muted); font-size: 10px; line-height: 1.4; }
+.reactplan-activity__dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--yb-primary); animation: reactplan-activity-pulse 1.6s ease-in-out infinite; }
+.reactplan-activity[data-state='cancelling'] .reactplan-activity__dot { background: var(--yb-danger, #d65b5b); }
+@keyframes reactplan-activity-pulse { 0%, 100% { opacity: .38; transform: scale(.82); } 50% { opacity: 1; transform: scale(1); } }
 .v2-conversation__question { align-self: flex-end; max-width: min(82%, 720px); padding: 10px 12px; border-radius: 12px 12px 2px 12px; background: var(--yb-bg-muted); }
 .v2-conversation__process, .v2-conversation__result { padding: 12px 0; border-bottom: 1px solid var(--yb-border); }
 .v2-conversation__question small { color: var(--yb-text-muted); font-size: 9px; }
@@ -2696,6 +2911,7 @@ onUnmounted(() => {
 }
 .v2-conversation__composer :deep(.n-input__border),
 .v2-conversation__composer :deep(.n-input__state-border) { display: none; }
+.reactplan-composer-actions { display: flex; align-items: center; gap: 6px; }
 .v2-conversation__composer .project-send-button {
   width: 72px;
   min-width: 72px;
@@ -2703,6 +2919,8 @@ onUnmounted(() => {
   padding: 0;
   border-radius: 8px !important;
 }
+.v2-conversation__composer .project-stop-button { width: 88px; min-width: 88px; }
+.v2-conversation__composer .project-cancel-button { min-width: 68px; height: 40px; border-radius: 8px !important; }
 .v2-conversation__composer .project-send-button :deep(.n-button__content) {
   width: 100%;
   justify-content: center;
@@ -2725,6 +2943,12 @@ onUnmounted(() => {
 .project-conversation-item:hover { background: var(--yb-bg-muted); }
 .project-conversation-item.active { background: var(--yb-sidebar-active); color: var(--yb-text); }
 .project-conversation-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-conversation-item__copy { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.project-conversation-item__copy > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-conversation-item__copy > small { flex: 0 0 auto; color: var(--yb-text-muted); font-size: 9px; }
+.project-conversation-item__copy > small[data-state="running"] { color: var(--yb-primary); }
+.project-conversation-item__copy > small[data-state="queued"] { color: var(--project-warning, #b7791f); }
+.project-conversation-item__copy > small[data-state="succeeded"] { color: var(--project-success, #17845a); }
 .project-conversation-item__more { width: 36px; height: 36px; margin: -4px -4px -4px 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--yb-text-muted); cursor: pointer; font-size: 12px; line-height: 1; }
 .project-conversation-item__more:hover { background: var(--yb-bg-elevated); color: var(--yb-text); }
 
@@ -3553,6 +3777,8 @@ onUnmounted(() => {
     z-index: 2;
   }
   .project-workspace--console .v2-conversation__composer :deep(.n-button) { width: 100%; min-height: 44px; }
+  .project-workspace--console .reactplan-composer-actions { width: 100%; }
+  .project-workspace--console .reactplan-composer-actions :deep(.n-button) { width: auto; min-width: 0; flex: 1 1 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

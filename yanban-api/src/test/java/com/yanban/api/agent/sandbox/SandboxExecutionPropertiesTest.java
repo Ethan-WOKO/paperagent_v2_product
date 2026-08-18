@@ -25,7 +25,7 @@ class SandboxExecutionPropertiesTest {
             assertThat(properties.isRequiredAtStartup()).isFalse();
             assertThat(properties.getProvider()).isEqualTo("e2b");
             assertThat(properties.getBrokerUrl()).isEqualTo(URI.create("http://127.0.0.1:8091"));
-            assertThat(properties.getMaxConcurrentRuns()).isEqualTo(1);
+            assertThat(properties.getMaxConcurrentRuns()).isEqualTo(18);
             assertThat(properties.getCpus()).isEqualTo(2);
             assertThat(properties.getMemoryLimit()).isEqualTo(DataSize.ofGigabytes(4));
             assertThat(properties.getExecutionTimeout()).isEqualTo(Duration.ofMinutes(15));
@@ -43,7 +43,7 @@ class SandboxExecutionPropertiesTest {
                         "yanban.sandbox.required-at-startup=true",
                         "yanban.sandbox.provider=e2b",
                         "yanban.sandbox.broker-url=https://sandbox-worker:8091",
-                        "yanban.sandbox.max-concurrent-runs=1",
+                        "yanban.sandbox.max-concurrent-runs=20",
                         "yanban.sandbox.cpus=1",
                         "yanban.sandbox.memory-limit=3GB",
                         "yanban.sandbox.execution-timeout=8m",
@@ -56,7 +56,7 @@ class SandboxExecutionPropertiesTest {
                     assertThat(properties.isEnabled()).isTrue();
                     assertThat(properties.isRequiredAtStartup()).isTrue();
                     assertThat(properties.getBrokerUrl()).isEqualTo(URI.create("https://sandbox-worker:8091"));
-                    assertThat(properties.getMaxConcurrentRuns()).isEqualTo(1);
+                    assertThat(properties.getMaxConcurrentRuns()).isEqualTo(20);
                     assertThat(properties.getCpus()).isEqualTo(1);
                     assertThat(properties.getMemoryLimit()).isEqualTo(DataSize.ofGigabytes(3));
                     assertThat(properties.getExecutionTimeout()).isEqualTo(Duration.ofMinutes(8));
@@ -87,7 +87,7 @@ class SandboxExecutionPropertiesTest {
 
     @Test
     void rejectsDeploymentValuesAboveFrozenCeilings() {
-        contextRunner.withPropertyValues("yanban.sandbox.max-concurrent-runs=2")
+        contextRunner.withPropertyValues("yanban.sandbox.max-concurrent-runs=65")
                 .run(context -> assertThat(context).hasFailed());
         contextRunner.withPropertyValues("yanban.sandbox.cpus=3")
                 .run(context -> assertThat(context).hasFailed());

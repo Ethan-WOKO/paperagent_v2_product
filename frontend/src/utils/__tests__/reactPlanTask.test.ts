@@ -3,10 +3,13 @@ import { streamReactPlanEvents } from '@/api/reactPlan';
 import {
   appendReactPlanEvent,
   consumeReactPlanSseChunk,
+  formatReactPlanDuration,
+  mergeReactPlanSessionTasks,
   newReactPlanCancelId,
   newReactPlanRequestId,
   parseReactPlanHistory,
   parseReactPlanRecord,
+  reactPlanElapsedMillis,
   reactPlanToolLabel,
   serializeReactPlanHistory,
   upsertReactPlanRecord,
@@ -93,19 +96,53 @@ describe('ReAct task frontend state', () => {
     expect(parseReactPlanRecord(record, 1, 9)).toBeNull();
   });
 
-  it('migrates one legacy record and keeps a bounded ordered task history', () => {
-    const records = Array.from({ length: 13 }, (_, index) => taskRecord(index + 1));
-    const bounded = records.reduce(upsertReactPlanRecord, [] as ReactPlanTaskRecord[]);
-    expect(bounded).toHaveLength(12);
-    expect(bounded[0]?.turnId).toBe(2);
-    expect(bounded[bounded.length - 1]?.turnId).toBe(13);
+  it('keeps all loaded tasks in memory and only bounds the optional browser cache', () => {
+    const records = Array.from({ length: 51 }, (_, index) => taskRecord(index + 1));
+    const loaded = records.reduce(upsertReactPlanRecord, [] as ReactPlanTaskRecord[]);
+    expect(loaded).toHaveLength(51);
+    expect(loaded[0]?.turnId).toBe(1);
+    expect(loaded[loaded.length - 1]?.turnId).toBe(51);
 
-    const serialized = serializeReactPlanHistory(bounded);
+    const serialized = serializeReactPlanHistory(loaded);
     expect(parseReactPlanHistory(serialized, 1, 2).map((record) => record.turnId))
-      .toEqual(Array.from({ length: 12 }, (_, index) => index + 2));
+      .toEqual(Array.from({ length: 50 }, (_, index) => index + 2));
     expect(parseReactPlanHistory(JSON.stringify(taskRecord(7)), 1, 2))
       .toEqual([taskRecord(7)]);
     expect(parseReactPlanHistory(serialized, 9, 2)).toEqual([]);
+  });
+
+  it('recovers a session history from the server when local storage is empty', () => {
+    const record = taskRecord(7);
+    const recovered = mergeReactPlanSessionTasks([], [{
+      contractVersion: '1.0',
+      clientRequestId: record.clientRequestId,
+      instruction: record.instruction,
+      turnId: record.turnId,
+      taskId: record.taskId,
+      task: record.view,
+      events: [status(1)],
+      startedAt: record.startedAt,
+      finishedAt: record.finishedAt,
+    }], 1, 2);
+
+    expect(recovered).toEqual([{ ...record, events: [status(1)] }]);
+  });
+
+  it('keeps cached events when a server summary intentionally omits event bodies', () => {
+    const record = { ...taskRecord(7), events: [status(1)] };
+    const merged = mergeReactPlanSessionTasks([record], [{
+      contractVersion: '1.0',
+      clientRequestId: record.clientRequestId,
+      instruction: record.instruction,
+      turnId: record.turnId,
+      taskId: record.taskId,
+      task: record.view,
+      events: null,
+      startedAt: record.startedAt,
+      finishedAt: record.finishedAt,
+    }], 1, 2);
+
+    expect(merged[0]?.events).toEqual([status(1)]);
   });
 
   it('streams with auth and Last-Event-ID and emits parsed events', async () => {
@@ -158,6 +195,16 @@ describe('ReAct task frontend state', () => {
       inputSummary: 'argvDigest=test',
     }))).toBe('沙箱执行');
   });
+
+  it('shows a live duration and freezes it at the terminal timestamp', () => {
+    const running = { ...taskRecord(1), view: { ...taskRecord(1).view, state: 'running' as const }, finishedAt: null };
+    expect(reactPlanElapsedMillis(running, Date.parse('2026-08-17T00:01:05Z'))).toBe(65_000);
+    expect(formatReactPlanDuration(65_000)).toBe('1 分 5 秒');
+
+    const finished = { ...taskRecord(1), finishedAt: '2026-08-17T00:00:09Z' };
+    expect(reactPlanElapsedMillis(finished, Date.parse('2026-08-18T00:00:00Z'))).toBe(9_000);
+    expect(formatReactPlanDuration(9_000)).toBe('9 秒');
+  });
 });
 
 function taskRecord(identity: number): ReactPlanTaskRecord {
@@ -170,6 +217,8 @@ function taskRecord(identity: number): ReactPlanTaskRecord {
     instruction: `task ${identity}`,
     turnId: identity,
     taskId,
+    startedAt: '2026-08-17T00:00:00Z',
+    finishedAt: '2026-08-17T00:00:01Z',
     view: {
       contractVersion: '1.0',
       taskId,

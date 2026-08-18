@@ -43,7 +43,8 @@ public final class AgentEngineTaskGrantService {
     }
 
     public EngineTaskGrant issue(
-            String taskId, String requestDigest, long authenticatedUserId, long turnId) {
+            String taskId, String requestDigest, long authenticatedUserId, long turnId,
+            String modelProvider, String modelName) {
         VerifiedAgentTurnProductContext context = contexts.resolve(authenticatedUserId, turnId);
         if (!"AGENT_TURN".equals(context.identity().source())
                 || !String.valueOf(turnId).equals(context.identity().sourceId())
@@ -57,7 +58,8 @@ public final class AgentEngineTaskGrantService {
         EngineTaskAuthority authority = new EngineTaskAuthority(
                 taskId, requestDigest, authenticatedUserId, turnId,
                 context.identity().sessionId(), context.identity().projectId(),
-                context.projectVersionId().orElseThrow(), true, true, true, expiresAt);
+                context.projectVersionId().orElseThrow(), true, true, true,
+                modelProvider, modelName, expiresAt);
         byte[] payload = write(authority);
         String body = Base64.getUrlEncoder().withoutPadding().encodeToString(payload);
         String signature = Base64.getUrlEncoder().withoutPadding()

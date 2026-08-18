@@ -19,6 +19,117 @@ const directories: string[] = [];
 afterEach(() => { directories.length = 0; });
 
 describe("AgentEngine", () => {
+  it("automatically resumes a running checkpoint after restart without resubmission", async () => {
+    const directory = await temporaryDirectory();
+    const blocked = new Promise<ModelResponse>(() => undefined);
+    let firstModelStarted = false;
+    let firstModelRequestId = "";
+    const firstProvider: ModelProvider = { complete: (_request, context) => {
+      firstModelStarted = true;
+      firstModelRequestId = context.clientRequestId;
+      return blocked;
+    } };
+    const first = await createEngine(firstProvider, new FakeGateway(), directory);
+    await first.submit(submission());
+    await waitFor(() => firstModelStarted);
+
+    const recoveryStore = new RecoveringTaskStore(directory);
+    let recoveredModelRequestId = "";
+    const recoveredProvider: ModelProvider = { complete: (_request, context) => {
+      recoveredModelRequestId = context.clientRequestId;
+      return Promise.resolve({ content: "Recovered without resubmission.", toolCalls: [] });
+    } };
+    const recovered = new AgentEngine({
+      store: recoveryStore,
+      provider: recoveredProvider,
+      gateway: new FakeGateway(), validator: new ContractValidator(contractDirectory),
+      sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => ["succeeded", "failed"].includes(recovered.get(taskId).state));
+
+    expect(recovered.get(taskId).error).toBeNull();
+    expect(recovered.get(taskId).state).toBe("succeeded");
+    expect(recoveryStore.recoveryRequests).toEqual([taskId]);
+    expect(recoveredModelRequestId).toBe(firstModelRequestId);
+    const events = await recovered.events(taskId);
+    expect(events.map((event) => event.sequence)).toEqual(events.map((_, index) => index + 1));
+    expect(events.filter((event) => event.type === "status" && event.state === "succeeded")).toHaveLength(1);
+  });
+
+  it("resumes an already submitted sandbox call by lookup instead of submitting it again", async () => {
+    const directory = await temporaryDirectory();
+    const firstGateway = new SuspendedSandboxGateway();
+    const first = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000
+      })
+    ]), firstGateway, directory);
+    await first.submit(submission());
+    await waitFor(() => firstGateway.executionLookups === 1);
+
+    const recoveredGateway = new ResumedSandboxGateway();
+    const recovered = new AgentEngine({
+      store: new RecoveringTaskStore(directory),
+      provider: new ScriptedProvider([{ content: "Recovered sandbox result.", toolCalls: [] }]),
+      gateway: recoveredGateway, validator: new ContractValidator(contractDirectory),
+      sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => recovered.get(taskId).state === "succeeded");
+
+    expect(recoveredGateway.submissions).toBe(0);
+    expect(recoveredGateway.executionLookups).toBe(1);
+    expect((await recovered.events(taskId)).map((event) => event.sequence))
+      .toEqual((await recovered.events(taskId)).map((_, index) => index + 1));
+  });
+
+  it("reloads the authoritative checkpoint and reaches one failure state after a persistence conflict", async () => {
+    const directory = await temporaryDirectory();
+    const store = new ConflictOnceTaskStore(directory);
+    const engine = new AgentEngine({
+      store,
+      provider: { complete: () => Promise.reject(new Error("provider unavailable")) },
+      gateway: new FakeGateway(), validator: new ContractValidator(contractDirectory),
+      sleep: async () => undefined
+    });
+    await engine.initialize();
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+
+    // One idempotency lookup happens during admission and one authoritative
+    // reload resolves the simulated persistence conflict; there is no loop.
+    expect(store.recoveryLoads).toBe(2);
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "status" && event.state === "failed")).toHaveLength(1);
+  });
+
+  it("records cancellation durably without writing a checkpoint owned by another instance", async () => {
+    const directory = await temporaryDirectory();
+    let modelStarted = false;
+    const blocked = new Promise<ModelResponse>(() => undefined);
+    const first = await createEngine({ complete: () => {
+      modelStarted = true;
+      return blocked;
+    } }, new FakeGateway(), directory);
+    await first.submit(submission());
+    await waitFor(() => modelStarted);
+
+    const unowned = new UnownedDurableStore(directory);
+    const second = new AgentEngine({
+      store: unowned, provider: new ScriptedProvider([]), gateway: new FakeGateway(),
+      validator: new ContractValidator(contractDirectory), sleep: async () => undefined
+    });
+    await second.initialize();
+    await second.load(taskId);
+    await second.cancel(taskId);
+
+    expect(unowned.cancellationRequests).toBe(1);
+    expect(unowned.unownedSaves).toBe(0);
+    expect(second.get(taskId).state).toBe("running");
+  });
+
   it("runs native tools serially and emits a bounded receipt-backed delivery", async () => {
     const provider = new ScriptedProvider([
       tool("list_project_files", {}),
@@ -47,6 +158,13 @@ describe("AgentEngine", () => {
     expect((provider.requests[0]?.tools as Array<{ function: { name: string } }>).map((candidate) =>
       candidate.function.name)).toEqual(["load_tool"]);
     expect(JSON.stringify(provider.requests[0]?.messages)).toContain("project_search");
+    const firstFollowUp = provider.requests[1]!.messages;
+    expect(firstFollowUp.find((message) => message.role === "assistant")?.toolCalls?.[0]?.id)
+      .toBe("provider-load-0");
+    expect(firstFollowUp.find((message) => message.role === "tool")?.toolCallId)
+      .toBe("provider-load-0");
+    const firstToolEvent = events.find((event) => event.type === "tool");
+    expect(firstToolEvent?.type === "tool" ? firstToolEvent.callId : "").toMatch(/^call\./);
   });
 
   it("creates an isolated Workspace candidate and requires exact diff and sandbox validation", async () => {
@@ -421,6 +539,70 @@ describe("AgentEngine", () => {
       event.type === "tool" && event.state === "requested")).toHaveLength(1);
   });
 
+  it("enforces a model-turn barrier when load_tool and premature tool calls arrive together", async () => {
+    const provider = new ScriptedProvider([
+      {
+        content: null,
+        toolCalls: [
+          { id: "load-read", name: "load_tool", arguments: JSON.stringify({ name: "read_project_file" }) },
+          { id: "premature-read", name: "read_project_file", arguments: JSON.stringify({ path: "Sort.java" }) }
+        ]
+      },
+      tool("read_project_file", { path: "Sort.java", expectedSha256: fileHash }),
+      { content: "Read Sort.java after loading its schema.", toolCalls: [] }
+    ], false);
+    const gateway = new FakeGateway();
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const barrierFeedback = provider.requests[1]!.messages.find((message) =>
+      message.role === "tool" && message.toolCallId === "premature-read");
+    expect(barrierFeedback?.content).toContain("TOOL_SCHEMA_NOT_LOADED");
+    expect(gateway.maximumConcurrent).toBe(1);
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.name === "project.read" && event.state === "requested"))
+      .toHaveLength(1);
+  });
+
+  it("returns malformed loaded-tool arguments to the model for a bounded repair", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", { path: "Sort.java" }),
+      tool("read_project_file", { path: "Sort.java", expectedSha256: fileHash }),
+      { content: "Recovered from invalid arguments.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const repairFeedback = provider.requests.find((request) => request.messages.some((message) =>
+      message.role === "tool" && message.content?.includes("MODEL_TOOL_ARGUMENTS_INVALID")));
+    expect(repairFeedback).toBeTruthy();
+    expect(JSON.stringify(repairFeedback?.messages)).toContain("expectedSha256");
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.name === "project.read" && event.state === "requested"))
+      .toHaveLength(1);
+  });
+
+  it("fails after two model argument-repair rounds instead of looping forever", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", { path: "Sort.java" }),
+      tool("read_project_file", { path: "Sort.java" }),
+      tool("read_project_file", { path: "Sort.java" })
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+
+    expect(engine.get(taskId).error).toMatchObject({
+      code: "MODEL_TOOL_ARGUMENTS_INVALID", category: "model"
+    });
+    expect(provider.requests).toHaveLength(4);
+  });
+
   it("rejects a registered catalog that collides with a reserved Engine tool name", async () => {
     const provider = new ScriptedProvider([{ content: "must not run", toolCalls: [] }]);
     const engine = await createEngine(provider, new ConflictingToolGateway());
@@ -497,6 +679,81 @@ describe("AgentEngine", () => {
     await engine.submit(submission()); await waitFor(() => engine.get(taskId).state === "waiting_user");
     await Promise.all([engine.cancel(taskId), engine.cancel(taskId)]);
     expect((await engine.events(taskId)).filter((event) => event.type === "status" && event.state === "cancelled")).toHaveLength(1);
+  });
+
+  it("hard-cancels the exact active sandbox before completing task cancellation", async () => {
+    const gateway = new HardCancelGateway();
+    const engine = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 60_000
+      })
+    ]), gateway);
+    await engine.submit(submission());
+    await waitFor(() => gateway.accepted);
+
+    const cancelled = await engine.cancel(taskId);
+
+    expect(cancelled.state).toBe("cancelled");
+    expect(gateway.cancelledCallIds).toHaveLength(1);
+    expect(gateway.cancelledCallIds[0]).toMatch(/^call\./);
+    expect(gateway.publishCalls).toBe(0);
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "status" && event.state === "cancelled")).toHaveLength(1);
+    expect((await engine.events(taskId)).some((event) =>
+      event.type === "tool" && event.name === "sandbox.execute"
+      && event.state === "cancelled")).toBe(true);
+  });
+
+  it("resumes a persisted cancellation intent after restart without model or publication work", async () => {
+    const directory = await temporaryDirectory();
+    const gateway = new HardCancelGateway();
+    const first = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 60_000
+      })
+    ]), gateway, directory);
+    await first.submit(submission());
+    await waitFor(() => gateway.accepted);
+
+    const recoveryStore = new CancellingRecoveryStore(directory);
+    const provider = new NeverProvider();
+    const recovered = new AgentEngine({
+      store: recoveryStore, provider, gateway,
+      validator: new ContractValidator(contractDirectory), sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => recovered.get(taskId).state === "cancelled");
+
+    expect(recoveryStore.recoveryRequests).toEqual([taskId]);
+    expect(gateway.cancelledCallIds).toHaveLength(1);
+    expect(provider.requests).toHaveLength(0);
+    expect(gateway.publishCalls).toBe(0);
+  });
+
+  it("keeps the Engine available when one recovered cancellation cannot reach the gateway", async () => {
+    const directory = await temporaryDirectory();
+    const firstGateway = new HardCancelGateway();
+    const first = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 60_000
+      })
+    ]), firstGateway, directory);
+    await first.submit(submission());
+    await waitFor(() => firstGateway.accepted);
+
+    const gateway = new FailingCancelGateway();
+    const recovered = new AgentEngine({
+      store: new CancellingRecoveryStore(directory), provider: new NeverProvider(), gateway,
+      validator: new ContractValidator(contractDirectory), sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => gateway.cancelAttempts === 1);
+
+    expect(recovered.get(taskId).state).toBe("running");
+    expect(recovered.get(taskId).terminalSequence).toBeNull();
   });
 
   it("uses the frozen polling schedule and delivers a trustworthy failed compile", async () => {
@@ -600,8 +857,75 @@ class FakeGateway implements GatewayClient {
   diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
   publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
-  execution(_taskId: string, _grant: string, _clientRequestId: string): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
+  cancelExecution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId, requestDigest: "f".repeat(64), executionRef: "execution.1", state: "CANCELLED", receiptRef: "receipt.cancelled" }); }
+  execution(_taskId: string, _grant: string, _clientRequestId: string, _signal: AbortSignal): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
   receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class HardCancelGateway extends FakeGateway {
+  accepted = false;
+  cancelledCallIds: string[] = [];
+  private requestDigest = "";
+
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.accepted = true;
+    this.requestDigest = request.requestDigest;
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, executionRef: "execution.long-running",
+      state: "RUNNING", receiptRef: null });
+  }
+
+  override execution(_taskId: string, _grant: string, _clientRequestId: string,
+                     signal: AbortSignal): Promise<SandboxView> {
+    return new Promise((_, reject) => signal.addEventListener("abort", () =>
+      reject(new DOMException("aborted", "AbortError")), { once: true }));
+  }
+
+  override cancelExecution(_taskId: string, _grant: string,
+                           clientRequestId: string): Promise<SandboxView> {
+    this.cancelledCallIds.push(clientRequestId);
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId,
+      requestDigest: this.requestDigest, executionRef: "execution.long-running",
+      state: "CANCELLED", receiptRef: "receipt.cancelled" });
+  }
+}
+
+class SuspendedSandboxGateway extends FakeGateway {
+  executionLookups = 0;
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, executionRef: "execution.recover", state: "RUNNING", receiptRef: null });
+  }
+  override execution(): Promise<SandboxView> {
+    this.executionLookups += 1;
+    return new Promise(() => undefined);
+  }
+}
+
+class ResumedSandboxGateway extends FakeGateway {
+  submissions = 0;
+  executionLookups = 0;
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.submissions += 1;
+    return super.submit(_taskId, _grant, request);
+  }
+  override execution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> {
+    this.executionLookups += 1;
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId,
+      requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }),
+      executionRef: "execution.recover", state: "SUCCEEDED", receiptRef: "receipt.1" });
+  }
+}
+
+class FailingCancelGateway extends FakeGateway {
+  cancelAttempts = 0;
+
+  override cancelExecution(): Promise<SandboxView> {
+    this.cancelAttempts += 1;
+    return Promise.reject(new EngineProblem(500,
+      problem("ENGINE_GATEWAY_INTERNAL", "internal", "gateway failed", true)));
+  }
 }
 
 class RangeReadGateway extends FakeGateway {
@@ -744,6 +1068,72 @@ class RejectingOnceGateway extends FakeGateway {
         problem("SANDBOX_COMMAND_DENIED", "request", "rejected")));
     }
     return super.submit(taskIdValue, grantValue, request);
+  }
+}
+
+class RecoveringTaskStore extends TaskStore {
+  recoveryRequests: string[] = [];
+  authorizeRecovery(task: import("../src/types.js").PersistedTask) {
+    this.recoveryRequests.push(task.view.taskId);
+    return Promise.resolve({ taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  }
+}
+
+class ConflictOnceTaskStore extends TaskStore {
+  recoveryLoads = 0;
+  private rejectFailure = true;
+
+  override async appendEvent(event: import("../src/types.js").TaskEvent): Promise<void> {
+    if (event.type === "status" && event.state === "failed" && this.rejectFailure) {
+      this.rejectFailure = false;
+      throw new EngineProblem(409, problem(
+        "TASK_PERSISTENCE_REJECTED", "request", "simulated stale event sequence"));
+    }
+    return super.appendEvent(event);
+  }
+
+  async load(requestedTaskId: string) {
+    this.recoveryLoads += 1;
+    const task = (await super.loadAll()).find((candidate) =>
+      candidate.view.taskId === requestedTaskId);
+    if (!task) throw new EngineProblem(404, problem("TASK_NOT_FOUND", "request", "not found"));
+    return task;
+  }
+}
+
+class UnownedDurableStore extends TaskStore {
+  cancellationRequests = 0;
+  unownedSaves = 0;
+
+  claimNext(): Promise<null> { return Promise.resolve(null); }
+
+  async load(requestedTaskId: string) {
+    const task = (await super.loadAll()).find((candidate) =>
+      candidate.view.taskId === requestedTaskId);
+    if (!task) throw new EngineProblem(404, problem("TASK_NOT_FOUND", "request", "not found"));
+    return task;
+  }
+
+  requestCancellation(): Promise<void> {
+    this.cancellationRequests += 1;
+    return Promise.resolve();
+  }
+
+  override save(task: import("../src/types.js").PersistedTask): Promise<void> {
+    this.unownedSaves += 1;
+    return super.save(task);
+  }
+}
+
+class CancellingRecoveryStore extends RecoveringTaskStore {
+  override async loadAll() {
+    const tasks = await super.loadAll();
+    for (const task of tasks) {
+      if (!["succeeded", "failed", "cancelled"].includes(task.view.state)) {
+        task.cancellationRequested = true;
+      }
+    }
+    return tasks;
   }
 }
 

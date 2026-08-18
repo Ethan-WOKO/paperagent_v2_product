@@ -20,9 +20,12 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @ConditionalOnProperty(prefix = "yanban.agent.reactplan", name = "enabled", havingValue = "true")
 final class ReactPlanRuntimeController {
     private final ReactPlanRuntimeService runtime;
+    private final ReactPlanObservabilityService observability;
 
-    ReactPlanRuntimeController(ReactPlanRuntimeService runtime) {
+    ReactPlanRuntimeController(ReactPlanRuntimeService runtime,
+                               ReactPlanObservabilityService observability) {
         this.runtime = runtime;
+        this.observability = observability;
     }
 
     @PostMapping
@@ -39,6 +42,15 @@ final class ReactPlanRuntimeController {
             @PathVariable long turnId,
             @PathVariable String taskId) {
         return runtime.task(userId, turnId, taskId);
+    }
+
+    @GetMapping("/{taskId}/trace")
+    java.util.Map<String, Object> trace(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable long turnId,
+            @PathVariable String taskId) {
+        runtime.requireTask(userId, turnId, taskId);
+        return observability.trace(taskId);
     }
 
     @PostMapping("/{taskId}/cancel")

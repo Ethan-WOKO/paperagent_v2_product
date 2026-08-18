@@ -22,7 +22,7 @@ class SandboxDispatchService {
         validate(request);
         String executionId=UUID.randomUUID().toString();
         String sandboxName="yb-"+executionId.replace("-","");
-        store.insert(executionId,request.idempotencyKey(),request.requestDigest(),request.fence(),sandboxName,write(request));
+        store.insert(executionId,request.idempotencyKey(),request.requestDigest(),request.fence(),request.userId(),sandboxName,write(request));
         return response(store.current(request.idempotencyKey()),request.requestDigest());
     }
 

@@ -36,3 +36,5 @@ yanban:
     e2b-template: ${YANBAN_E2B_TEMPLATE:yanban-research-v1}
     e2b-python-executable: ${YANBAN_E2B_PYTHON_EXECUTABLE:}
     e2b-helper: ${YANBAN_E2B_HELPER:}
+    max-concurrent-runs: ${YANBAN_SANDBOX_MAX_CONCURRENT_RUNS:18}
+    max-concurrent-runs-per-user: ${YANBAN_SANDBOX_MAX_CONCURRENT_RUNS_PER_USER:3}

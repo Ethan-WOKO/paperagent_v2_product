@@ -2,6 +2,7 @@ package com.yanban.api.agent.reactplan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,8 +37,7 @@ class ReactPlanTurnIntakeServiceTest {
         transactions = mock(ReactPlanTurnIntakeTransactions.class);
         runtime = mock(ReactPlanRuntimeService.class);
         service = new ReactPlanTurnIntakeService(
-                json, sessions, transactions, runtime,
-                new ReactPlanRuntimeProperties());
+                json, sessions, transactions, runtime);
         when(sessions.findByIdAndUserId(11L, 7L)).thenReturn(Optional.of(
                 new AgentSession(7L, "project", "deepseek", "deepseek-chat",
                         20, true, AgentSessionScope.PROJECT, 88L)));
@@ -60,8 +60,8 @@ class ReactPlanTurnIntakeServiceTest {
                 ArgumentCaptor.forClass(ReactPlanTaskRequest.class);
         verify(runtime).submit(org.mockito.ArgumentMatchers.eq(7L),
                 org.mockito.ArgumentMatchers.eq(42L), task.capture());
-        assertEquals("deepseek", task.getValue().provider());
-        assertEquals("deepseek-chat", task.getValue().model());
+        assertNull(task.getValue().provider());
+        assertNull(task.getValue().model());
     }
 
     @Test
@@ -96,8 +96,8 @@ class ReactPlanTurnIntakeServiceTest {
         ObjectNode value = json.createObjectNode();
         value.put("clientRequestId", request.clientRequestId());
         value.put("instruction", request.instruction());
-        value.put("provider", "deepseek");
-        value.put("model", "deepseek-chat");
+        value.putNull("provider");
+        value.putNull("model");
         return ReactPlanCanonicalJson.digest(json, value);
     }
 

@@ -3,6 +3,8 @@ package com.yanban.sandboxbroker;
 import java.time.*;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,16 +14,25 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class SandboxLeaseService {
     private final SandboxExecutionRepository executions;
     private final JdbcTemplate jdbc;
-    SandboxLeaseService(SandboxExecutionRepository executions,JdbcTemplate jdbc){this.executions=executions;this.jdbc=jdbc;}
+    private final BrokerProperties properties;
+    SandboxLeaseService(SandboxExecutionRepository executions,JdbcTemplate jdbc,BrokerProperties properties){this.executions=executions;this.jdbc=jdbc;this.properties=properties;}
 
     @Transactional
     Optional<Lease> claim(String owner,Duration duration){
         jdbc.queryForObject("select slot_id from sandbox_concurrency_slot where slot_id=1 for update",Integer.class);
         Integer active=jdbc.queryForObject("select count(*) from sandbox_executions where status not in ('ACCEPTED','SUCCEEDED','FAILED','CANCELLED','TIMED_OUT','CLEANUP_FAILED') and lease_expires_at>current_timestamp",Integer.class);
-        if(active!=null&&active>0)return Optional.empty();
-        var found=executions.lockClaimable(PageRequest.of(0,1));
-        if(found.isEmpty())return Optional.empty();
-        SandboxExecutionEntity entity=found.get(0);
+        if(active!=null&&active>=properties.getMaxConcurrentRuns())return Optional.empty();
+        var found=executions.lockClaimable(PageRequest.of(0,512));
+        SandboxExecutionEntity entity=null;
+        Map<Long,Integer> activeByUser=new HashMap<>();
+        for(SandboxExecutionEntity candidate:found){
+            Integer userActive=activeByUser.computeIfAbsent(candidate.userId(),user -> {
+                Integer count=jdbc.queryForObject("select count(*) from sandbox_executions where user_id=? and status not in ('ACCEPTED','SUCCEEDED','FAILED','CANCELLED','TIMED_OUT','CLEANUP_FAILED') and lease_expires_at>current_timestamp",Integer.class,user);
+                return count==null?0:count;
+            });
+            if(userActive==null||userActive<properties.getMaxConcurrentRunsPerUser()){entity=candidate;break;}
+        }
+        if(entity==null)return Optional.empty();
         LocalDateTime now=databaseNow(entity.executionId());
         String previous=entity.status();
         String token=UUID.randomUUID().toString().replace("-","");

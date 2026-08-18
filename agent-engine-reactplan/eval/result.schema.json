@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperagent.local/schemas/react-evaluation-result-1.0.json",
+  "title": "PaperAgent ReAct evaluation report",
+  "type": "object",
+  "required": ["contractVersion", "issue", "createdAt", "results", "summary"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "issue": { "type": "integer", "minimum": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "action": { "type": "string" },
+    "runId": { "type": "string" },
+    "projectId": { "type": "integer", "minimum": 1 },
+    "environment": { "type": "object" },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "score"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "score": {
+            "type": "object",
+            "required": ["passed", "checks"],
+            "properties": {
+              "passed": { "type": "boolean" },
+              "checks": { "type": "array" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total", "passed", "failed", "successRate"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "successRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "durationMillis": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

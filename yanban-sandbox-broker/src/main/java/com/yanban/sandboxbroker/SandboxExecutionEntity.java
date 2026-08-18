@@ -14,6 +14,7 @@ class SandboxExecutionEntity {
     @Column(name="idempotency_key",nullable=false,length=128) private String idempotencyKey;
     @Column(name="request_digest",nullable=false,length=64) private String requestDigest;
     @Column(name="api_fence",nullable=false) private long apiFence;
+    @Column(name="user_id") private Long userId;
     @Column(nullable=false,length=32) private String status;
     @Column(name="worker_owner",length=128) private String workerOwner;
     @Column(name="worker_token",length=32) private String workerToken;
@@ -31,8 +32,8 @@ class SandboxExecutionEntity {
     @Column(name="started_at") private LocalDateTime startedAt;
     @Column(name="finished_at") private LocalDateTime finishedAt;
     protected SandboxExecutionEntity() {}
-    SandboxExecutionEntity(String executionId,String key,String digest,long fence,String name,String requestJson,LocalDateTime now){this.executionId=executionId;idempotencyKey=key;requestDigest=digest;apiFence=fence;sandboxName=name;this.requestJson=requestJson;status="ACCEPTED";createdAt=updatedAt=now;}
-    String executionId(){return executionId;} String idempotencyKey(){return idempotencyKey;} String requestDigest(){return requestDigest;} long apiFence(){return apiFence;} String status(){return status;} String requestJson(){return requestJson;} String sandboxName(){return sandboxName;} long workerFence(){return workerFence;} String workerToken(){return workerToken;} boolean cancelRequested(){return cancelRequested;} String errorCode(){return errorCode;}
+    SandboxExecutionEntity(String executionId,String key,String digest,long fence,long userId,String name,String requestJson,LocalDateTime now){this.executionId=executionId;idempotencyKey=key;requestDigest=digest;apiFence=fence;this.userId=userId;sandboxName=name;this.requestJson=requestJson;status="ACCEPTED";createdAt=updatedAt=now;}
+    String executionId(){return executionId;} String idempotencyKey(){return idempotencyKey;} String requestDigest(){return requestDigest;} long apiFence(){return apiFence;} long userId(){return userId==null?0L:userId;} String status(){return status;} String requestJson(){return requestJson;} String sandboxName(){return sandboxName;} long workerFence(){return workerFence;} String workerToken(){return workerToken;} boolean cancelRequested(){return cancelRequested;} String errorCode(){return errorCode;}
     void requestCancel(long fence,LocalDateTime now){if(fence!=apiFence)throw new IllegalStateException("stale API fence");if(java.util.Set.of("SUCCEEDED","FAILED","CANCELLED","TIMED_OUT","CLEANUP_FAILED").contains(status))return;cancelRequested=true;status="CANCEL_REQUESTED";updatedAt=now;}
     void claim(String owner,String token,LocalDateTime now,LocalDateTime until){workerOwner=owner;workerToken=token;workerFence++;leaseExpiresAt=until;status="CLAIMED";if(startedAt==null)startedAt=now;updatedAt=now;}
     boolean leaseMatches(String owner,String token,long fence,LocalDateTime now){return Objects.equals(workerOwner,owner)&&Objects.equals(workerToken,token)&&workerFence==fence&&leaseExpiresAt!=null&&leaseExpiresAt.isAfter(now);}

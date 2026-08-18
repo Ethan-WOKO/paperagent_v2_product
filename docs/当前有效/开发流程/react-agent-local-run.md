@@ -59,14 +59,12 @@ mvn -pl yanban-api spring-boot:run -Dspring-boot.run.profiles=dev
 Set-Location agent-engine-reactplan
 $env:ENGINE_SERVICE_TOKEN = $engineToken
 $env:PRODUCT_GATEWAY_ORIGIN = "http://127.0.0.1:8080"
-$env:AGENT_ENGINE_DATA_DIR = ".data"
-$env:AGENT_ENGINE_PROVIDERS_JSON = '{"deepseek":{"baseUrl":"https://api.deepseek.com","apiKeyEnv":"DEEPSEEK_API_KEY"}}'
-$env:DEEPSEEK_API_KEY = "your-deepseek-key"
 npm install
 npm start
 ```
 
-看到 `agent-engine-reactplan listening on 127.0.0.1:8092` 即启动成功。
+模型密钥只配置给 Java 产品后端；不要把 `DEEPSEEK_API_KEY` 或其他模型凭证传给
+Engine。看到 `agent-engine-reactplan listening on 127.0.0.1:8092` 即启动成功。
 
 ## 4. 提交 Sort.java 测试
 
@@ -142,7 +140,7 @@ manifest 或其他 Project 工具结果中出现的文件声明了依赖。Engin
 
 ## 恢复验证
 
-任务运行中停止 Engine，再用完全相同的 `AGENT_ENGINE_DATA_DIR` 和环境变量启动。然后用完全相同的 session、`clientRequestId` 和请求内容再次提交：Java 会重用同一个 Turn 和 Plan，并签发新的短期 grant；Engine 会识别同一 task/digest、恢复执行而不新建任务。同一个 `clientRequestId` 改变内容会返回 409。重新请求状态或 SSE 时 sequence 不会倒退或重复。短期 grant 不写入磁盘，因此恢复必须经过这次认证重放，不能绕过产品权限。
+任务运行中停止 Engine，然后使用相同的服务配置重新启动 Engine。checkpoint 与有序事件保存在产品 MySQL 中；Engine 启动后会通过 Java 内部网关读取未完成任务，并在 Java 重新核对原始 Turn、session、ProjectVersion 和 request digest 后取得新的短期 grant，随后自动继续，不需要用户重新发送任务。重新请求状态或 SSE 时 sequence 不会倒退或重复。短期 grant、服务 token 和模型 key 都不会写入 checkpoint。
 
 注册工具由 Java 根据当前 Project 权限动态筛选并在任务第一次模型调用前冻结，继续只暴露 `NONE/READ_ONLY` 类型，例如 `project_manifest`、`project_search`、`project_read_file` 和已注册的只读分析工具。Workspace ADD/MODIFY/diff 是单独的 Runtime 工具，只在 task grant 带 `writeWorkspace` 时由 Engine 暴露；外部副作用工具仍不进入本链路。沙箱命令从 Project 根目录开始，子目录源码必须使用完整 Project 相对路径，例如 `yanban-runner java services/order-service/Sort.java`。
 

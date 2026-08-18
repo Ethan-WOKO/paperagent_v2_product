@@ -5,6 +5,7 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.BoundedOutp
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.Receipt;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ReceiptInput;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxSubmit;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxCancelRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxView;
 import com.yanban.api.agent.sandbox.SandboxBrokerClient;
 import com.yanban.api.agent.sandbox.SandboxExecutionProperties;
@@ -119,6 +120,33 @@ final class AgentEngineSandboxGateway {
                 state, receiptRef, write(bound)));
     }
 
+    SandboxView cancel(EngineTaskAuthority authority, String clientRequestId,
+                       SandboxCancelRequest request) {
+        if (request == null || !"1.0".equals(request.contractVersion())) {
+            throw EngineGatewayException.badRequest("SANDBOX_CANCEL_REQUEST_INVALID");
+        }
+        requireCallId(clientRequestId);
+        AgentEngineSandboxExecutionEntity current = transactions.find(
+                        authority.taskId(), clientRequestId)
+                .orElseThrow(() -> EngineGatewayException.notFound("SANDBOX_EXECUTION_NOT_FOUND"));
+        StoredRequest stored = read(current.requestJson(), StoredRequest.class);
+        requireTaskAuthority(authority, stored);
+        if (TERMINAL.contains(current.state())) return view(current);
+
+        AgentEngineSandboxExecutionEntity requested = transactions.requestCancel(
+                authority.taskId(), clientRequestId);
+        if (requested.brokerExecutionRef() != null) {
+            try {
+                broker.cancel(requested.brokerExecutionRef(), dispatch(stored).fence());
+            } catch (RuntimeException unavailable) {
+                throw new EngineGatewayException(
+                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                        "SANDBOX_CANCEL_UNAVAILABLE");
+            }
+        }
+        return view(requested);
+    }
+
     Receipt receipt(EngineTaskAuthority authority, String receiptRef) {
         if (receiptRef == null || receiptRef.isBlank() || receiptRef.length() > 256) {
             throw EngineGatewayException.badRequest("SANDBOX_RECEIPT_REF_INVALID");
@@ -160,8 +188,19 @@ final class AgentEngineSandboxGateway {
             throw EngineGatewayException.conflict("SANDBOX_BROKER_IDENTITY_CONFLICT");
         }
         String state = state(response.status());
-        return transactions.dispatched(value.taskId(), value.clientRequestId(),
+        AgentEngineSandboxExecutionEntity dispatched = transactions.dispatched(
+                value.taskId(), value.clientRequestId(),
                 response.executionId(), TERMINAL.contains(state) ? "RUNNING" : state);
+        if ("CANCEL_REQUESTED".equals(dispatched.state())) {
+            try {
+                broker.cancel(response.executionId(), request.fence());
+            } catch (RuntimeException unavailable) {
+                throw new EngineGatewayException(
+                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                        "SANDBOX_CANCEL_UNAVAILABLE");
+            }
+        }
+        return dispatched;
     }
 
     private SandboxDispatch dispatch(StoredRequest stored) {
@@ -306,7 +345,8 @@ final class AgentEngineSandboxGateway {
 
     private static SandboxView view(AgentEngineSandboxExecutionEntity value) {
         return new SandboxView("1.0", value.clientRequestId(), value.requestDigest(),
-                value.executionRef(), value.state(), value.receiptRef());
+                value.executionRef(), "CANCEL_REQUESTED".equals(value.state())
+                        ? "RUNNING" : value.state(), value.receiptRef());
     }
 
     private String write(Object value) {
