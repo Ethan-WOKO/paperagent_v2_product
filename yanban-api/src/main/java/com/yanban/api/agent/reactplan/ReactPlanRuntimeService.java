@@ -52,6 +52,8 @@ final class ReactPlanRuntimeService {
     private final ReactPlanEngineClient engine;
     private final LongTermMemoryRetrievalService longTermMemories;
     private final UserSettingsService settings;
+    private final ReactPlanConversationContextService conversations;
+    private final ReactPlanConversationSummaryQueue conversationSummaries;
 
     ReactPlanRuntimeService(
             ObjectMapper json,
@@ -60,7 +62,9 @@ final class ReactPlanRuntimeService {
             AgentEngineTaskGrantService grants,
             ReactPlanEngineClient engine,
             LongTermMemoryRetrievalService longTermMemories,
-            UserSettingsService settings) {
+            UserSettingsService settings,
+            ReactPlanConversationContextService conversations,
+            ReactPlanConversationSummaryQueue conversationSummaries) {
         this.json = json;
         this.contexts = contexts;
         this.plans = plans;
@@ -68,6 +72,8 @@ final class ReactPlanRuntimeService {
         this.engine = engine;
         this.longTermMemories = longTermMemories;
         this.settings = settings;
+        this.conversations = conversations;
+        this.conversationSummaries = conversationSummaries;
     }
 
     JsonNode submit(long userId, long turnId, ReactPlanTaskRequest request) {
@@ -77,6 +83,7 @@ final class ReactPlanRuntimeService {
                 userId, request.provider(), request.model());
         String provider = endpoint.providerKey();
         String model = endpoint.modelName();
+        conversationSummaries.catchUp(userId, context.identity().sessionId());
         Map<String, Object> authority = authority(context, request.instruction(), provider, model);
         String requestDigest = ReactPlanCanonicalJson.digest(json, authority);
 
@@ -93,7 +100,9 @@ final class ReactPlanRuntimeService {
         submission.put("taskId", taskId);
         submission.put("requestDigest", requestDigest);
         submission.set("authority", json.valueToTree(authority));
-        submission.set("context", contextEnvelope(memorySnapshot(
+        submission.set("context", contextEnvelope(
+                conversations.envelope(userId, context.identity().sessionId()),
+                memorySnapshot(
                 userId,
                 context.identity().projectId(),
                 context.projectVersionId().orElseThrow(),
@@ -104,8 +113,9 @@ final class ReactPlanRuntimeService {
         return engine.submit(submission);
     }
 
-    private JsonNode contextEnvelope(LongTermMemorySnapshot snapshot) {
+    private JsonNode contextEnvelope(JsonNode historicalContext, LongTermMemorySnapshot snapshot) {
         ObjectNode result = json.createObjectNode();
+        result.set("historicalContext", historicalContext);
         ObjectNode memory = result.putObject("longTermMemory");
         memory.put("schemaVersion", "1.0");
         memory.put("type", "long_term_memory");

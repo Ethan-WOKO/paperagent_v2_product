@@ -19,6 +19,7 @@ import java.util.Set;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import org.slf4j.Logger;
@@ -46,6 +47,7 @@ class ReactPlanTaskStateService {
     private final AgentEngineObservationReader observations;
     private final UserQuotaService quotas;
     private final ReactPlanTaskSchedulerService scheduler;
+    private final ApplicationEventPublisher applicationEvents;
 
     ReactPlanTaskStateService(ObjectMapper json,
                               ReactPlanTaskCheckpointRepository checkpoints,
@@ -55,7 +57,8 @@ class ReactPlanTaskStateService {
                               AgentEngineTaskGrantService grants,
                               AgentEngineObservationReader observations,
                               UserQuotaService quotas,
-                              ReactPlanTaskSchedulerService scheduler) {
+                              ReactPlanTaskSchedulerService scheduler,
+                              ApplicationEventPublisher applicationEvents) {
         this.json = json;
         this.checkpoints = checkpoints;
         this.events = events;
@@ -65,6 +68,7 @@ class ReactPlanTaskStateService {
         this.observations = observations;
         this.quotas = quotas;
         this.scheduler = scheduler;
+        this.applicationEvents = applicationEvents;
     }
 
     @Transactional
@@ -88,8 +92,10 @@ class ReactPlanTaskStateService {
             ReactPlanTaskCheckpointEntity created = new ReactPlanTaskCheckpointEntity(
                     taskId, requestDigest, intake.userId(), intake.sessionId(), intake.turnId(),
                     identity.state(), identity.lastSequence(), serialized, now);
-            settleUsageIfTerminal(created);
-            return checkpoints.saveAndFlush(created).checkpointRevision();
+            boolean becameTerminal = settleUsageIfTerminal(created);
+            long revision = checkpoints.saveAndFlush(created).checkpointRevision();
+            if (becameTerminal) requestConversationSummary(intake);
+            return revision;
         }
         if (!existing.requestDigest().equals(requestDigest)) conflict("TASK_DIGEST_CONFLICT");
         if (expectedRevision == null) {
@@ -109,12 +115,14 @@ class ReactPlanTaskStateService {
             conflict("CHECKPOINT_SEQUENCE_REGRESSION");
         }
         existing.update(identity.state(), identity.lastSequence(), serialized, now);
-        settleUsageIfTerminal(existing);
-        return checkpoints.saveAndFlush(existing).checkpointRevision();
+        boolean becameTerminal = settleUsageIfTerminal(existing);
+        long revision = checkpoints.saveAndFlush(existing).checkpointRevision();
+        if (becameTerminal) requestConversationSummary(requireIntake(taskId));
+        return revision;
     }
 
-    private void settleUsageIfTerminal(ReactPlanTaskCheckpointEntity checkpoint) {
-        if (!TERMINAL.contains(checkpoint.state()) || checkpoint.usageSettled()) return;
+    private boolean settleUsageIfTerminal(ReactPlanTaskCheckpointEntity checkpoint) {
+        if (!TERMINAL.contains(checkpoint.state()) || checkpoint.usageSettled()) return false;
         long promptTokens = 0L;
         long completionTokens = 0L;
         for (AgentEngineObservationReader.ModelFact model : observations.models(checkpoint.taskId())) {
@@ -127,6 +135,12 @@ class ReactPlanTaskStateService {
         log.info("reactplan_usage taskId={} traceId={} outcome=settled promptTokens={} completionTokens={}",
                 checkpoint.taskId(), ReactPlanTraceIds.forTask(checkpoint.taskId()),
                 promptTokens, completionTokens);
+        return true;
+    }
+
+    private void requestConversationSummary(ReactPlanTurnIntakeEntity intake) {
+        applicationEvents.publishEvent(new ReactPlanConversationSummaryRequested(
+                intake.userId(), intake.sessionId(), intake.id()));
     }
 
     private static long safeAdd(long left, long right) {

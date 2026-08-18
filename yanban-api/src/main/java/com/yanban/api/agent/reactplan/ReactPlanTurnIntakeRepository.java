@@ -14,4 +14,10 @@ interface ReactPlanTurnIntakeRepository
             Long userId, Long sessionId, Pageable pageable);
     List<ReactPlanTurnIntakeEntity> findByUserIdAndSessionIdAndIdLessThanOrderByIdDesc(
             Long userId, Long sessionId, Long id, Pageable pageable);
+    @org.springframework.data.jpa.repository.Query("select intake from ReactPlanTurnIntakeEntity intake, "
+            + "ReactPlanTaskCheckpointEntity checkpoint where intake.taskId=checkpoint.taskId "
+            + "and intake.userId=:userId and intake.sessionId=:sessionId "
+            + "and checkpoint.state in ('succeeded','failed','cancelled') order by intake.id asc")
+    List<ReactPlanTurnIntakeEntity> findTerminalByOwnerAndSession(
+            Long userId, Long sessionId);
 }

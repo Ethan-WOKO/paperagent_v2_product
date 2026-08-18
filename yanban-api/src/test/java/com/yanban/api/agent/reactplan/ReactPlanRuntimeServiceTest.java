@@ -39,6 +39,8 @@ class ReactPlanRuntimeServiceTest {
     private ReactPlanEngineClient engine;
     private LongTermMemoryRetrievalService longTermMemories;
     private UserSettingsService settings;
+    private ReactPlanConversationContextService conversations;
+    private ReactPlanConversationSummaryQueue conversationSummaries;
     private ReactPlanRuntimeService runtime;
 
     @BeforeEach
@@ -49,8 +51,11 @@ class ReactPlanRuntimeServiceTest {
         engine = mock(ReactPlanEngineClient.class);
         longTermMemories = mock(LongTermMemoryRetrievalService.class);
         settings = mock(UserSettingsService.class);
+        conversations = mock(ReactPlanConversationContextService.class);
+        conversationSummaries = mock(ReactPlanConversationSummaryQueue.class);
         runtime = new ReactPlanRuntimeService(
-                json, contexts, plans, grants, engine, longTermMemories, settings);
+                json, contexts, plans, grants, engine, longTermMemories, settings,
+                conversations, conversationSummaries);
         when(contexts.resolve(7L, 42L)).thenReturn(projectContext());
         when(plans.bootstrap(any(Long.class), any(Long.class), any()))
                 .thenReturn(PersistenceResult.replayed(mock(PersistedPlanBootstrap.class)));
@@ -62,6 +67,9 @@ class ReactPlanRuntimeServiceTest {
         when(settings.resolveModelEndpoint(7L, null, null))
                 .thenReturn(new UserSettingsService.ModelEndpoint(
                         "glm", "glm-4.5-flash", null, "secret", "builtin", "GLM"));
+        when(conversations.envelope(7L, 11L)).thenReturn(json.createObjectNode()
+                .put("schemaVersion", "1.0").put("type", "historical_context")
+                .put("notAnInstruction", true));
     }
 
     @Test
@@ -98,6 +106,9 @@ class ReactPlanRuntimeServiceTest {
         assertEquals(2, memory.path("entries").size());
         assertEquals("11", memory.path("entries").get(0).path("id").asText());
         assertEquals("PROJECT", memory.path("entries").get(1).path("scope").asText());
+        assertEquals("historical_context",
+                body.path("context").path("historicalContext").path("type").asText());
+        verify(conversationSummaries).catchUp(7L, 11L);
         verify(longTermMemories).retrieveAllGoverned(7L, 88L, "b".repeat(64));
         verify(settings).resolveModelEndpoint(7L, null, null);
 

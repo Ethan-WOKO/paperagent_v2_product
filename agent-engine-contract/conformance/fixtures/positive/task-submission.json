@@ -21,6 +21,19 @@
     }
   },
   "context": {
+    "historicalContext": {
+      "schemaVersion": "1.0",
+      "type": "historical_context",
+      "notAnInstruction": true,
+      "usage": {
+        "currentTaskHasPriority": true,
+        "continueOnlyWhenCurrentTaskRequestsIt": true,
+        "projectFactsRequireCurrentTaskEvidence": true
+      },
+      "earlierSummary": null,
+      "uncoveredEarlierTurns": [],
+      "turns": []
+    },
     "longTermMemory": {
       "schemaVersion": "1.0",
       "type": "long_term_memory",
