@@ -9,10 +9,26 @@ final class ReactPlanEventStreamCopier {
 
     static void copyAndFlush(InputStream source, OutputStream target) throws IOException {
         byte[] buffer = new byte[1024];
-        int read;
-        while ((read = source.read(buffer)) != -1) {
-            target.write(buffer, 0, read);
-            target.flush();
+        try {
+            int read;
+            while ((read = source.read(buffer)) != -1) {
+                target.write(buffer, 0, read);
+                target.flush();
+            }
+        } catch (IOException failure) {
+            if (!causedByInterruption(failure)) {
+                throw failure;
+            }
+            Thread.currentThread().interrupt();
         }
+    }
+
+    private static boolean causedByInterruption(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof InterruptedException) return true;
+            current = current.getCause();
+        }
+        return false;
     }
 }

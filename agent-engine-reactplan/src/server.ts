@@ -63,19 +63,51 @@ async function streamEvents(engine: AgentEngine, taskId: string, request: Incomi
   const header = request.headers["last-event-id"];
   const after = header === undefined ? 0 : Number(Array.isArray(header) ? header[0] : header);
   if (!Number.isSafeInteger(after) || after < 0) throw new EngineProblem(400, problem("LAST_EVENT_ID_INVALID", "request", "Last-Event-ID must be a non-negative integer"));
-  engine.get(taskId);
+  const initialView = engine.get(taskId);
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
   let last = after; const queued: TaskEvent[] = []; let replaying = true;
-  const write = (event: TaskEvent): void => {
-    if (event.sequence <= last) return;
-    response.write(`id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`); last = event.sequence;
+  let heartbeat: NodeJS.Timeout | undefined;
+  let unsubscribe = (): void => {};
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    if (heartbeat !== undefined) clearInterval(heartbeat);
+    unsubscribe();
   };
-  const unsubscribe = engine.subscribe(taskId, (event) => { if (replaying) queued.push(event); else write(event); });
-  for (const event of await engine.events(taskId, after)) write(event);
+  const finish = (): void => {
+    close();
+    if (!response.writableEnded) response.end();
+  };
+  const write = (event: TaskEvent): void => {
+    if (closed || event.sequence <= last) return;
+    response.write(`id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`); last = event.sequence;
+    if (isTerminalStatus(event)) finish();
+  };
+  response.once("close", close);
+  unsubscribe = engine.subscribe(taskId, (event) => { if (replaying) queued.push(event); else write(event); });
+  for (const event of await engine.events(taskId, after)) {
+    write(event);
+    if (closed) return;
+  }
   replaying = false; for (const event of queued) write(event);
-  const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
-  const close = (): void => { clearInterval(heartbeat); unsubscribe(); };
-  request.once("close", close); response.once("close", close);
+  if (closed) return;
+  if (isTerminalState(initialView.state)) {
+    finish();
+    return;
+  }
+  heartbeat = setInterval(() => {
+    if (!response.writableEnded) response.write(": heartbeat\n\n");
+  }, 15_000);
+  request.once("aborted", close);
+}
+
+function isTerminalStatus(event: TaskEvent): boolean {
+  return event.type === "status" && isTerminalState(event.state);
+}
+
+function isTerminalState(state: string): boolean {
+  return state === "succeeded" || state === "failed" || state === "cancelled";
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {

@@ -36,11 +36,10 @@ describe("Engine HTTP control plane", () => {
     const submitted = await fetch(`${origin}/v1/tasks`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(submission()) });
     expect(submitted.status).toBe(202);
     await waitFor(async () => (await authenticatedJson(`${origin}/v1/tasks/${taskId}`) as { state: string }).state === "succeeded");
-    const controller = new AbortController();
-    const stream = await fetch(`${origin}/v1/tasks/${taskId}/events`, { headers: { authorization: `Bearer ${token}`, "Last-Event-ID": "1" }, signal: controller.signal });
-    const chunk = await stream.body!.getReader().read(); controller.abort();
-    const text = new TextDecoder().decode(chunk.value);
+    const stream = await fetch(`${origin}/v1/tasks/${taskId}/events`, { headers: { authorization: `Bearer ${token}`, "Last-Event-ID": "1" } });
+    const text = await stream.text();
     expect(text).toContain("id: 2"); expect(text).not.toContain("id: 1\n");
+    expect(text).toContain('"state":"succeeded"');
   });
 });
 
