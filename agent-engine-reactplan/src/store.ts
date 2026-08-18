@@ -136,6 +136,7 @@ export class HttpTaskStore implements TaskPersistence {
     const response = await this.call<{ checkpointRevision: number; checkpoint: PersistedTask }>(
       `/tasks/${encodeURIComponent(taskId)}/checkpoint`, "GET");
     this.revisions.set(taskId, response.checkpointRevision);
+    reconcileTask(response.checkpoint, await this.events(taskId));
     return response.checkpoint;
   }
 
@@ -152,6 +153,7 @@ export class HttpTaskStore implements TaskPersistence {
     if (response.task === null) return null;
     this.revisions.set(response.task.checkpoint.view.taskId, response.task.checkpointRevision);
     this.leases.set(response.task.checkpoint.view.taskId, response.task.lease);
+    await this.reconcileClaim(response.task);
     return response.task;
   }
 
@@ -163,7 +165,16 @@ export class HttpTaskStore implements TaskPersistence {
     if (response.task === null) return null;
     this.revisions.set(taskId, response.task.checkpointRevision);
     this.leases.set(taskId, response.task.lease);
+    await this.reconcileClaim(response.task);
     return response.task;
+  }
+
+  private async reconcileClaim(task: ClaimedTask): Promise<void> {
+    // Events and checkpoints are stored in separate durable records. A process
+    // can stop after an event commit but before the following checkpoint save.
+    // Reconcile the newly claimed checkpoint before the worker emits anything,
+    // otherwise it can reuse an already committed sequence and receive 409.
+    reconcileTask(task.checkpoint, await this.events(task.checkpoint.view.taskId));
   }
 
   renewLease(taskId: string): Promise<{ cancellationRequested: boolean }> {

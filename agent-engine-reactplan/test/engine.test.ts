@@ -57,6 +57,54 @@ describe("AgentEngine", () => {
     expect(events.filter((event) => event.type === "status" && event.state === "succeeded")).toHaveLength(1);
   });
 
+  it("resumes an already submitted sandbox call by lookup instead of submitting it again", async () => {
+    const directory = await temporaryDirectory();
+    const firstGateway = new SuspendedSandboxGateway();
+    const first = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000
+      })
+    ]), firstGateway, directory);
+    await first.submit(submission());
+    await waitFor(() => firstGateway.executionLookups === 1);
+
+    const recoveredGateway = new ResumedSandboxGateway();
+    const recovered = new AgentEngine({
+      store: new RecoveringTaskStore(directory),
+      provider: new ScriptedProvider([{ content: "Recovered sandbox result.", toolCalls: [] }]),
+      gateway: recoveredGateway, validator: new ContractValidator(contractDirectory),
+      sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => recovered.get(taskId).state === "succeeded");
+
+    expect(recoveredGateway.submissions).toBe(0);
+    expect(recoveredGateway.executionLookups).toBe(1);
+    expect((await recovered.events(taskId)).map((event) => event.sequence))
+      .toEqual((await recovered.events(taskId)).map((_, index) => index + 1));
+  });
+
+  it("reloads the authoritative checkpoint and reaches one failure state after a persistence conflict", async () => {
+    const directory = await temporaryDirectory();
+    const store = new ConflictOnceTaskStore(directory);
+    const engine = new AgentEngine({
+      store,
+      provider: { complete: () => Promise.reject(new Error("provider unavailable")) },
+      gateway: new FakeGateway(), validator: new ContractValidator(contractDirectory),
+      sleep: async () => undefined
+    });
+    await engine.initialize();
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "failed");
+
+    // One idempotency lookup happens during admission and one authoritative
+    // reload resolves the simulated persistence conflict; there is no loop.
+    expect(store.recoveryLoads).toBe(2);
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "status" && event.state === "failed")).toHaveLength(1);
+  });
+
   it("records cancellation durably without writing a checkpoint owned by another instance", async () => {
     const directory = await temporaryDirectory();
     let modelStarted = false;
@@ -842,6 +890,34 @@ class HardCancelGateway extends FakeGateway {
   }
 }
 
+class SuspendedSandboxGateway extends FakeGateway {
+  executionLookups = 0;
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, executionRef: "execution.recover", state: "RUNNING", receiptRef: null });
+  }
+  override execution(): Promise<SandboxView> {
+    this.executionLookups += 1;
+    return new Promise(() => undefined);
+  }
+}
+
+class ResumedSandboxGateway extends FakeGateway {
+  submissions = 0;
+  executionLookups = 0;
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.submissions += 1;
+    return super.submit(_taskId, _grant, request);
+  }
+  override execution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> {
+    this.executionLookups += 1;
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId,
+      requestDigest: digestObject({ argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 5000 }),
+      executionRef: "execution.recover", state: "SUCCEEDED", receiptRef: "receipt.1" });
+  }
+}
+
 class FailingCancelGateway extends FakeGateway {
   cancelAttempts = 0;
 
@@ -1000,6 +1076,28 @@ class RecoveringTaskStore extends TaskStore {
   authorizeRecovery(task: import("../src/types.js").PersistedTask) {
     this.recoveryRequests.push(task.view.taskId);
     return Promise.resolve({ taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  }
+}
+
+class ConflictOnceTaskStore extends TaskStore {
+  recoveryLoads = 0;
+  private rejectFailure = true;
+
+  override async appendEvent(event: import("../src/types.js").TaskEvent): Promise<void> {
+    if (event.type === "status" && event.state === "failed" && this.rejectFailure) {
+      this.rejectFailure = false;
+      throw new EngineProblem(409, problem(
+        "TASK_PERSISTENCE_REJECTED", "request", "simulated stale event sequence"));
+    }
+    return super.appendEvent(event);
+  }
+
+  async load(requestedTaskId: string) {
+    this.recoveryLoads += 1;
+    const task = (await super.loadAll()).find((candidate) =>
+      candidate.view.taskId === requestedTaskId);
+    if (!task) throw new EngineProblem(404, problem("TASK_NOT_FOUND", "request", "not found"));
+    return task;
   }
 }
 

@@ -262,19 +262,45 @@ export class AgentEngine {
           }).catch(() => controller.abort(TASK_LEASE_LOST)).finally(() => { renewing = false; });
         }, 10_000)
       : undefined;
-    const promise = this.run(task, controller.signal).catch((failure: unknown) => {
+    const promise = this.run(task, controller.signal).catch(async (failure: unknown) => {
       const detail = failure instanceof EngineProblem
         ? `${failure.problem.code} (HTTP ${failure.status})`
         : failure instanceof Error ? failure.message : "unknown failure";
       process.stderr.write(`agent-engine-reactplan: task ${task.view.taskId} paused after an execution failure: ${detail}\n`);
+      await this.failFromAuthoritativeCheckpoint(task, failure);
     }).finally(async () => {
       if (heartbeat !== undefined) clearInterval(heartbeat);
       this.active.delete(task.view.taskId); this.aborters.delete(task.view.taskId);
       if (this.options.store.releaseLease) await this.options.store.releaseLease(task.view.taskId);
       if (this.options.store.claimNext) await this.drainQueue();
-      else if (task.view.state === "running" && !task.cancellationRequested) this.schedule(task);
+      else {
+        const authoritative = this.tasks.get(task.view.taskId) ?? task;
+        if (authoritative.view.state === "running" && !authoritative.cancellationRequested) {
+          this.schedule(authoritative);
+        }
+      }
     });
     this.active.set(task.view.taskId, promise);
+  }
+
+  private async failFromAuthoritativeCheckpoint(task: PersistedTask, cause: unknown): Promise<void> {
+    if (!this.options.store.load || terminal(task.view.state)) return;
+    try {
+      const current = await this.options.store.load(task.view.taskId);
+      normalizePersistedTask(current);
+      this.tasks.set(current.view.taskId, current);
+      if (terminal(current.view.state)) return;
+      const source = cause instanceof EngineProblem ? cause.problem.code : "ENGINE_INTERNAL_FAILURE";
+      await this.status(current, "failed", problem(
+        "TASK_RECOVERY_FAILED", "internal",
+        `Task recovery stopped safely after ${source}; retry the task instead of replaying an uncertain checkpoint.`,
+        true));
+    } catch (failure) {
+      const detail = failure instanceof EngineProblem
+        ? `${failure.problem.code} (HTTP ${failure.status})`
+        : failure instanceof Error ? failure.message : "unknown failure";
+      process.stderr.write(`agent-engine-reactplan: task ${task.view.taskId} could not persist its bounded recovery failure: ${detail}\n`);
+    }
   }
 
   private async drainQueue(): Promise<void> {
@@ -599,23 +625,36 @@ export class AgentEngine {
     if (call.name === "execute_in_sandbox") {
       const request = sandboxRequest(call.id, args);
       const summary = `argv=${JSON.stringify(request.argv).slice(0, 700)}; inputs=${request.inputs.map((input) => `${input.path}@${input.sha256}`).join(",").slice(0, 250)}; timeoutMillis=${request.timeoutMillis}`;
-      await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, null);
-      task.activeSandboxCallId = call.id;
-      await this.options.store.save(task);
       let view;
-      try {
-        view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
-      } catch (error) {
-        if (!recoverableToolRejection(error)) throw error;
-        task.activeSandboxCallId = null;
+      if (task.activeSandboxCallId === call.id) {
+        // Submission intent is checkpointed before the broker call. After a
+        // restart, first look up that deterministic call id: an accepted E2B
+        // execution must be resumed rather than submitted a second time.
+        try {
+          view = await this.options.gateway.execution(
+            task.view.taskId, grant, request.clientRequestId, signal);
+        } catch (error) {
+          if (!(error instanceof EngineProblem) || error.status !== 404) throw error;
+          view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
+        }
+      } else {
+        await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, null);
+        task.activeSandboxCallId = call.id;
         await this.options.store.save(task);
-        await this.tool(task, call.id, "sandbox.execute", summary, "failed",
-          `request rejected; code=${error.problem.code}`, null);
-        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
-          status: "REJECTED", code: error.problem.code,
-          message: "The requested sandbox command or inputs were rejected by product policy. Choose another allowed argv using exact Project-relative input paths."
-        }) });
-        return false;
+        try {
+          view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
+        } catch (error) {
+          if (!recoverableToolRejection(error)) throw error;
+          task.activeSandboxCallId = null;
+          await this.options.store.save(task);
+          await this.tool(task, call.id, "sandbox.execute", summary, "failed",
+            `request rejected; code=${error.problem.code}`, null);
+          task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
+            status: "REJECTED", code: error.problem.code,
+            message: "The requested sandbox command or inputs were rejected by product policy. Choose another allowed argv using exact Project-relative input paths."
+          }) });
+          return false;
+        }
       }
       const acceptedAt = this.monotonicNow();
       this.options.validator.validate("gateway-sandboxView", view);

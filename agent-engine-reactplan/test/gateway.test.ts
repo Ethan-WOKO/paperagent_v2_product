@@ -125,6 +125,41 @@ describe("HttpTaskStore", () => {
         status: 429, problem: { code: "AGENT_USER_QUEUE_FULL" }
       });
   });
+
+  it("reconciles committed events into a newly claimed stale checkpoint", async () => {
+    const serviceToken = "s".repeat(40);
+    const checkpoint = {
+      view: { taskId, requestDigest: hash, state: "running", lastSequence: 1,
+        updatedAt: "2026-08-18T00:00:00Z", error: null, terminalSequence: null }
+    } as PersistedTask;
+    const events = [
+      { contractVersion: "1.0", taskId, sequence: 1, occurredAt: "2026-08-18T00:00:00Z",
+        type: "status", state: "running", error: null },
+      { contractVersion: "1.0", taskId, sequence: 2, occurredAt: "2026-08-18T00:00:01Z",
+        type: "tool", callId: "call.abcdefghijklmnop", name: "project.list",
+        state: "succeeded", inputSummary: "manifest", outputSummary: "1 file", receiptRef: null }
+    ] as TaskEvent[];
+    const server = createServer(async (request, response) => {
+      await readBody(request);
+      response.setHeader("content-type", "application/json");
+      if (request.url?.endsWith("/claims/next")) return response.end(JSON.stringify({
+        contractVersion: "1.0", task: { checkpointRevision: 7, checkpoint,
+          lease: { owner: "engine.worker_test", token: "lease", fence: 2 },
+          taskGrant: "g".repeat(40), expiresAt: "2099-01-01T00:00:00Z",
+          cancellationRequested: false }
+      }));
+      if (request.url?.endsWith("/events")) return response.end(JSON.stringify({ contractVersion: "1.0", events }));
+      response.statusCode = 404; return response.end("{}");
+    });
+    servers.push(server); await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const store = new HttpTaskStore(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}`, serviceToken);
+
+    const claimed = await store.claimNext("engine.worker_test");
+
+    expect(claimed?.checkpoint.view.lastSequence).toBe(2);
+    expect(claimed?.checkpoint.view.updatedAt).toBe("2026-08-18T00:00:01Z");
+  });
 });
 
 async function readBody(request: import("node:http").IncomingMessage): Promise<unknown> {
