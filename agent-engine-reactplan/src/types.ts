@@ -83,7 +83,7 @@ export interface RegisteredToolResult {
   evidenceRefs: string[];
   version: string | null;
 }
-export interface ModelResponse { content: string | null; toolCalls: ModelToolCall[]; usage?: { promptTokens: number; completionTokens: number } }
+export interface ModelResponse { content: string | null; toolCalls: ModelToolCall[]; finishReason?: string | null; usage?: { promptTokens: number; completionTokens: number } }
 export interface ModelRequest {
   provider: string;
   model: string;
@@ -92,9 +92,18 @@ export interface ModelRequest {
   maxOutputTokens: 4096;
   signal: AbortSignal;
 }
-export interface ModelProvider { complete(request: ModelRequest): Promise<ModelResponse> }
+export interface ModelInvocationContext {
+  taskId: string;
+  taskGrant: string;
+  clientRequestId: string;
+}
+export interface ModelProvider { complete(request: ModelRequest, context: ModelInvocationContext): Promise<ModelResponse> }
 
-export interface PendingCall extends ModelToolCall { ordinal: number }
+export interface PendingCall extends ModelToolCall {
+  ordinal: number;
+  /** Provider-owned protocol identifier; distinct from the deterministic product call id. */
+  modelCallId?: string;
+}
 export interface AcceptedAnswer { clientRequestId: string; questionId: string; answerDigest: string }
 
 export interface RecentConversationTurn {
@@ -162,6 +171,7 @@ export interface PersistedTask {
   view: TaskView;
   messages: ChatMessage[];
   modelCalls: number;
+  pendingModelCall?: { clientRequestId: string };
   metrics: { startedAt: string; finishedAt?: string; promptTokens: number; completionTokens: number };
   receiptRefs: string[];
   lastSandboxStatus?: Receipt["status"];

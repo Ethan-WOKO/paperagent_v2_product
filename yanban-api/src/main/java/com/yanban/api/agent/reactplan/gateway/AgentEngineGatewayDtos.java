@@ -58,6 +58,20 @@ public final class AgentEngineGatewayDtos {
                                        String errorCode, String errorMessage,
                                        boolean retryable, List<String> evidenceRefs,
                                        String version) { }
+    public record ModelToolCall(String id, String name, String arguments) { }
+    public record ModelMessage(String role, String content, String toolCallId,
+                               List<ModelToolCall> toolCalls) { }
+    public record ModelToolFunction(String name, String description, JsonNode parameters) { }
+    public record ModelToolSpec(String type, ModelToolFunction function) { }
+    public record ModelCompletionRequest(String contractVersion, String clientRequestId,
+                                         String requestDigest, String provider, String model,
+                                         List<ModelMessage> messages, List<ModelToolSpec> tools,
+                                         int maxOutputTokens) { }
+    public record ModelUsage(int promptTokens, int completionTokens) { }
+    public record ModelCompletionResult(String contractVersion, String clientRequestId,
+                                        String requestDigest, String content,
+                                        List<ModelToolCall> toolCalls, String finishReason,
+                                        ModelUsage usage, boolean replayed) { }
     public record Problem(String contractVersion, String code, String category,
                           String message, boolean retryable) { }
 }

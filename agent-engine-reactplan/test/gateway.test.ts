@@ -20,6 +20,7 @@ describe("HttpGatewayClient", () => {
       requests.push({ method: request.method!, path: request.url!, authorization: request.headers.authorization, body });
       response.setHeader("content-type", "application/json");
       const base = `/internal/v1/agent-engine/tasks/${taskId}`;
+      if (request.url === `${base}/model-completions`) return response.end(JSON.stringify({ contractVersion: "1.0", clientRequestId: `model.${"c".repeat(64)}`, requestDigest: hash, content: "done", toolCalls: [], finishReason: "stop", usage: { promptTokens: 3, completionTokens: 1 }, replayed: false }));
       if (request.url === `${base}/tools`) return response.end(JSON.stringify({ contractVersion: "1.0", taskId, projectVersion: hash, catalogDigest: hash, tools: [{ type: "function", function: { name: "project_search", description: "Search project", parameters: { type: "object" } } }] }));
       if (request.url === `${base}/tool-calls`) return response.end(JSON.stringify({ contractVersion: "1.0", callId: "call.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", toolName: "project_search", requestDigest: hash, success: true, output: { hits: [] }, errorCode: null, errorMessage: null, retryable: false, evidenceRefs: [], version: hash }));
       if (request.url === `${base}/workspace/files`) return response.end(JSON.stringify({ contractVersion: "1.0", taskId, projectVersion: hash, files: [{ path: "Sort.java", sizeBytes: 4, sha256: hash, mediaType: "text/x-java-source" }] }));
@@ -40,6 +41,7 @@ describe("HttpGatewayClient", () => {
     const client = new HttpGatewayClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
     const signal = new AbortController().signal;
     const sandbox: SandboxRequest = { contractVersion: "1.0", clientRequestId: "call.abcdefghijklmnop", requestDigest: hash, argv: ["yanban-runner", "java", "Sort.java"], inputs: [{ path: "Sort.java", sha256: hash }], timeoutMillis: 5000 };
+    await client.completeModel!(taskId, grant, { contractVersion: "1.0", clientRequestId: `model.${"c".repeat(64)}`, requestDigest: hash, provider: "deepseek", model: "deepseek-v4-flash", messages: [{ role: "user", content: "hello" }], tools: [], maxOutputTokens: 4096 }, signal);
     await client.tools(taskId, grant, signal);
     await client.invoke(taskId, grant, { contractVersion: "1.0", callId: "call.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", toolName: "project_search", arguments: { query: "Sort" }, requestDigest: hash }, signal);
     await client.list(taskId, grant, signal);
@@ -52,6 +54,7 @@ describe("HttpGatewayClient", () => {
     await client.execution(taskId, grant, sandbox.clientRequestId, signal);
     await client.receipt(taskId, grant, "receipt.1", signal);
     expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+      `POST /internal/v1/agent-engine/tasks/${taskId}/model-completions`,
       `GET /internal/v1/agent-engine/tasks/${taskId}/tools`,
       `POST /internal/v1/agent-engine/tasks/${taskId}/tool-calls`,
       `GET /internal/v1/agent-engine/tasks/${taskId}/workspace/files`,
@@ -64,11 +67,11 @@ describe("HttpGatewayClient", () => {
       `GET /internal/v1/agent-engine/tasks/${taskId}/receipts/receipt.1`
     ]);
     expect(requests.every((request) => request.authorization === `Bearer ${grant}`)).toBe(true);
-    expect(requests[1]?.body).toEqual({ contractVersion: "1.0", callId: "call.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", toolName: "project_search", arguments: { query: "Sort" }, requestDigest: hash });
-    expect(requests[3]?.body).toEqual({ contractVersion: "1.0", path: "Sort.java", expectedSha256: hash });
-    expect(requests[4]?.body).toEqual(workspaceWrite);
-    expect(requests[6]?.body).toEqual(sandbox);
-    expect(requests[7]?.body).toEqual({ contractVersion: "1.0" });
+    expect(requests[2]?.body).toEqual({ contractVersion: "1.0", callId: "call.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", toolName: "project_search", arguments: { query: "Sort" }, requestDigest: hash });
+    expect(requests[4]?.body).toEqual({ contractVersion: "1.0", path: "Sort.java", expectedSha256: hash });
+    expect(requests[5]?.body).toEqual(workspaceWrite);
+    expect(requests[7]?.body).toEqual(sandbox);
+    expect(requests[8]?.body).toEqual({ contractVersion: "1.0" });
   });
 });
 

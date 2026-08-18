@@ -216,10 +216,15 @@ export class AgentEngine {
           await this.options.store.save(task);
         }
         task.pendingCalls = []; task.nextPendingCall = 0;
-        if (task.modelCalls >= MAX_MODEL_CALLS) throw new EngineProblem(422, problem("MODEL_CALL_BUDGET_EXHAUSTED", "model", "Task reached the 20-call model budget"));
         await this.ensureRegisteredTools(task, signal);
-        task.modelCalls += 1;
-        await this.options.store.save(task);
+        if (!task.pendingModelCall) {
+          if (task.modelCalls >= MAX_MODEL_CALLS) throw new EngineProblem(422, problem("MODEL_CALL_BUDGET_EXHAUSTED", "model", "Task reached the 20-call model budget"));
+          task.modelCalls += 1;
+          task.pendingModelCall = {
+            clientRequestId: `model.${sha256(`${task.view.taskId}\0${task.modelCalls}`)}`
+          };
+          await this.options.store.save(task);
+        }
         const modelMessages = structuredClone(task.messages);
         const availableTools = availableToolSpecs(task);
         modelMessages.splice(1, 0,
@@ -232,13 +237,23 @@ export class AgentEngine {
           tools: [LOAD_TOOL, ...loadedToolSpecs(availableTools, task.loadedToolNames ?? [])],
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           signal
+        }, {
+          taskId: task.view.taskId,
+          taskGrant: this.grants.get(task.view.taskId)!.value,
+          clientRequestId: task.pendingModelCall.clientRequestId
         });
         task.metrics.promptTokens += response.usage?.promptTokens ?? 0;
         task.metrics.completionTokens += response.usage?.completionTokens ?? 0;
+        delete task.pendingModelCall;
         await this.options.store.save(task);
         this.checkCancelled(signal);
-        const calls = response.toolCalls.map((call, ordinal) => ({ ...call, id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal), ordinal }));
-        task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ id, name, arguments: args }) => ({ id, name, arguments: args })) } : {}) });
+        const calls = response.toolCalls.map((call, ordinal) => ({
+          ...call,
+          id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal),
+          modelCallId: call.id,
+          ordinal
+        }));
+        task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ modelCallId: id, name, arguments: args }) => ({ id: id!, name, arguments: args })) } : {}) });
         if (calls.length === 0) {
           const conclusion = bounded(response.content?.trim() ?? "", 16000);
           if (!conclusion) throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls"));
@@ -339,7 +354,7 @@ export class AgentEngine {
       }
       task.loadedToolNames = stableUnique([...(task.loadedToolNames ?? []), name]);
       task.messages.push({
-        role: "tool", toolCallId: call.id,
+        role: "tool", toolCallId: modelCallId(call),
         content: JSON.stringify({ loaded: name, instruction: `The ${name} parameter schema is now available. Call ${name} when needed.` })
       });
       return false;
@@ -347,7 +362,7 @@ export class AgentEngine {
     const available = availableToolSpecs(task).find((tool) => tool.function.name === call.name);
     if (available && !(task.loadedToolNames ?? []).includes(call.name)) {
       task.messages.push({
-        role: "tool", toolCallId: call.id,
+        role: "tool", toolCallId: modelCallId(call),
         content: JSON.stringify({
           status: "REJECTED",
           code: "TOOL_SCHEMA_NOT_LOADED",
@@ -372,7 +387,7 @@ export class AgentEngine {
       this.options.validator.validate("gateway-fileList", result);
       task.observations.manifestPaths = stableUnique(result.files.map((file) => file.path));
       await this.tool(task, call.id, "project.list", "frozen workspace manifest", "succeeded", `${result.files.length} files; projectVersion=${result.projectVersion}`, null);
-      task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({ files: result.files }) });
+      task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({ files: result.files }) });
       return false;
     }
     if (call.name === "read_project_file") {
@@ -384,7 +399,7 @@ export class AgentEngine {
       const selected = selectLineRange(result.content, requestedRange);
       if (!selected) {
         await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "failed", "requested line range is outside the file", null);
-        task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
           status: "REJECTED", code: "PROJECT_FILE_LINE_RANGE_INVALID",
           message: "The requested line range is invalid. Use 1-based lines, require endLine >= startLine, and choose a startLine that exists in the file."
         }) });
@@ -393,7 +408,7 @@ export class AgentEngine {
       upsertRead(task.observations, result.path, result.sha256);
       await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "succeeded", `read lines ${selected.startLine}-${selected.endLine} from ${result.sizeBytes} bytes; sha256=${result.sha256}`, null);
       task.messages.push({
-        role: "tool", toolCallId: call.id,
+        role: "tool", toolCallId: modelCallId(call),
         content: JSON.stringify({ path: result.path, sizeBytes: result.sizeBytes, sha256: result.sha256, mediaType: result.mediaType, encoding: result.encoding, startLine: selected.startLine, endLine: selected.endLine, content: selected.content, truncated: result.truncated })
       });
       return false;
@@ -412,7 +427,7 @@ export class AgentEngine {
         if (!recoverableToolRejection(error)) throw error;
         await this.tool(task, call.id, "workspace.write", summary, "failed",
           `request rejected; code=${error.problem.code}`, null);
-        task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
           status: "REJECTED", code: error.problem.code,
           message: "The isolated Workspace write was rejected. Re-read the current file/hash or choose a valid new relative path, then revise the request."
         }) });
@@ -428,7 +443,7 @@ export class AgentEngine {
       upsertRead(task.observations, result.path, result.afterSha256);
       await this.tool(task, call.id, "workspace.write", summary, "succeeded",
         `operation=${result.operation}; path=${result.path}; afterSha256=${result.afterSha256}; sizeBytes=${result.sizeBytes}; replayed=${result.replayed}`, null);
-      task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
+      task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify(result) });
       return false;
     }
     if (call.name === "get_workspace_diff") {
@@ -445,7 +460,7 @@ export class AgentEngine {
       task.observations.workspaceDiffObservedRevision = task.observations.workspaceRevision;
       await this.tool(task, call.id, "workspace.diff", "current isolated Workspace diff", "succeeded",
         `${result.entries.length} changed files; projectVersion unchanged`, null);
-      task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
+      task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify(result) });
       return false;
     }
     if (call.name === "execute_in_sandbox") {
@@ -463,7 +478,7 @@ export class AgentEngine {
         await this.options.store.save(task);
         await this.tool(task, call.id, "sandbox.execute", summary, "failed",
           `request rejected; code=${error.problem.code}`, null);
-        task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
           status: "REJECTED", code: error.problem.code,
           message: "The requested sandbox command or inputs were rejected by product policy. Choose another allowed argv using exact Project-relative input paths."
         }) });
@@ -495,7 +510,7 @@ export class AgentEngine {
       const succeeded = receipt.status === "SUCCEEDED";
       await this.tool(task, call.id, "sandbox.execute", summary, succeeded ? "succeeded" : "failed", receiptSummary(receipt), receipt.receiptRef);
       task.messages.push({
-        role: "tool", toolCallId: call.id,
+        role: "tool", toolCallId: modelCallId(call),
         content: JSON.stringify({ status: receipt.status, exitCode: receipt.exitCode, stdout: receipt.stdout, stderr: receipt.stderr, inputFingerprint: receipt.inputFingerprint, inputs: receipt.inputs, startedAt: receipt.startedAt, finishedAt: receipt.finishedAt })
       });
       if (receipt.status === "SYSTEM_ERROR" || receipt.status === "TIMED_OUT") throw new EngineProblem(502, problem(receipt.status === "SYSTEM_ERROR" ? "SANDBOX_SYSTEM_ERROR" : "SANDBOX_TIMED_OUT", "sandbox_system", `Sandbox ended with ${receipt.status}`, true, receipt.receiptRef));
@@ -520,7 +535,7 @@ export class AgentEngine {
         result.success ? "succeeded" : "failed",
         registeredToolResultSummary(call.name, result),
         null, call.name);
-      task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
+      task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
         success: result.success, output: result.output, errorCode: result.errorCode,
         errorMessage: result.errorMessage, retryable: result.retryable,
         evidenceRefs: result.evidenceRefs, version: result.version
@@ -619,6 +634,7 @@ export class AgentEngine {
 
 function functionTool(name: string, description: string, parameters: unknown): RegisteredToolSpec { return { type: "function", function: { name, description, parameters } }; }
 function deterministicCallId(taskId: string, modelCall: number, ordinal: number): string { return `call.${sha256(`${taskId}:${modelCall}:${ordinal}`).slice(0, 40)}`; }
+function modelCallId(call: PendingCall): string { return call.modelCallId ?? call.id; }
 function requireString(value: unknown, name: string): string { if (typeof value !== "string" || !value) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", `Tool argument ${name} must be a non-empty string`)); return value; }
 
 function requestedLineRange(args: Record<string, unknown>): { startLine?: number; endLine?: number } {

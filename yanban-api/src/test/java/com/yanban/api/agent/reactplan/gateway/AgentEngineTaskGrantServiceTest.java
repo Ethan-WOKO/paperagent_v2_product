@@ -27,12 +27,14 @@ class AgentEngineTaskGrantServiceTest {
         EngineGatewayProperties properties = properties();
         AgentEngineTaskGrantService service = service(properties, NOW);
 
-        EngineTaskGrant grant = service.issue(TASK, DIGEST, 11, 12);
+        EngineTaskGrant grant = service.issue(TASK, DIGEST, 11, 12,
+                "deepseek", "deepseek-v4-flash");
         EngineTaskAuthority verified = service.verify("Bearer " + grant.value(), TASK, true);
 
         assertThat(verified).isEqualTo(new EngineTaskAuthority(
                 TASK, DIGEST, 11, 12, 13, 14, VERSION,
-                true, true, true, NOW.plus(Duration.ofMinutes(10))));
+                true, true, true, "deepseek", "deepseek-v4-flash",
+                NOW.plus(Duration.ofMinutes(10))));
         assertThat(service.verifyWorkspaceWrite("Bearer " + grant.value(), TASK))
                 .isEqualTo(verified);
         assertThat(grant.expiresAt()).isEqualTo(verified.expiresAt());
@@ -46,7 +48,8 @@ class AgentEngineTaskGrantServiceTest {
     @Test
     void rejectsTamperedAndWrongTaskGrantsBeforeAuthorityUse() {
         AgentEngineTaskGrantService service = service(properties(), NOW);
-        EngineTaskGrant grant = service.issue(TASK, DIGEST, 11, 12);
+        EngineTaskGrant grant = service.issue(TASK, DIGEST, 11, 12,
+                "deepseek", "deepseek-v4-flash");
         int signatureStart = grant.value().lastIndexOf('.') + 1;
         char original = grant.value().charAt(signatureStart);
         String tampered = grant.value().substring(0, signatureStart)

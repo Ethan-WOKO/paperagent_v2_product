@@ -17,11 +17,13 @@ final class AgentEngineGatewayExceptionHandler {
     ResponseEntity<Problem> gateway(EngineGatewayException failure) {
         String category = switch (failure.status()) {
             case UNAUTHORIZED, FORBIDDEN -> "authorization";
-            default -> failure.code().startsWith("SANDBOX_") ? "sandbox_system" : "request";
+            default -> failure.code().startsWith("SANDBOX_") ? "sandbox_system"
+                    : failure.code().startsWith("MODEL_") ? "model" : "request";
         };
         return ResponseEntity.status(failure.status()).body(new Problem(
                 "1.0", failure.code(), category,
-                "The product tool gateway rejected the request.", false));
+                "The product gateway rejected the request.",
+                failure.status().is5xxServerError() || failure.status().value() == 429));
     }
 
     @ExceptionHandler(Exception.class)

@@ -173,15 +173,12 @@ services:
       context: .
       dockerfile: Dockerfile.agent-engine-reactplan
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       HOST: 0.0.0.0
       PORT: 8092
       ENGINE_SERVICE_TOKEN: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:-}
       PRODUCT_GATEWAY_ORIGIN: http://api:8080
       AGENT_ENGINE_CONTRACT_DIR: /app/agent-engine-contract
-      AGENT_ENGINE_PROVIDERS_JSON: '{"deepseek":{"baseUrl":"https://api.deepseek.com","apiKeyEnv":"DEEPSEEK_API_KEY"}}'
     depends_on:
       api:
         condition: service_started

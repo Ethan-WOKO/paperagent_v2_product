@@ -59,13 +59,12 @@ mvn -pl yanban-api spring-boot:run -Dspring-boot.run.profiles=dev
 Set-Location agent-engine-reactplan
 $env:ENGINE_SERVICE_TOKEN = $engineToken
 $env:PRODUCT_GATEWAY_ORIGIN = "http://127.0.0.1:8080"
-$env:AGENT_ENGINE_PROVIDERS_JSON = '{"deepseek":{"baseUrl":"https://api.deepseek.com","apiKeyEnv":"DEEPSEEK_API_KEY"}}'
-$env:DEEPSEEK_API_KEY = "your-deepseek-key"
 npm install
 npm start
 ```
 
-看到 `agent-engine-reactplan listening on 127.0.0.1:8092` 即启动成功。
+模型密钥只配置给 Java 产品后端；不要把 `DEEPSEEK_API_KEY` 或其他模型凭证传给
+Engine。看到 `agent-engine-reactplan listening on 127.0.0.1:8092` 即启动成功。
 
 ## 4. 提交 Sort.java 测试
 

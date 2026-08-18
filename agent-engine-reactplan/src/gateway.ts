@@ -1,10 +1,12 @@
-import type { FileList, FileRead, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, WorkspaceDiffView, WorkspacePublishResult, WorkspaceWriteResult } from "./types.js";
+import type { FileList, FileRead, ModelRequest, ModelResponse, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, WorkspaceDiffView, WorkspacePublishResult, WorkspaceWriteResult } from "./types.js";
 import { EngineProblem, problem } from "./util.js";
 
 export interface SandboxRequest { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; argv: string[]; inputs: Array<{ path: string; sha256: string }>; timeoutMillis: number }
 export interface WorkspaceWriteRequest { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; operation: "ADD" | "MODIFY"; path: string; baseSha256: string | null; content: string }
 export interface WorkspacePublishRequest { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; receiptRef: string; entries: WorkspaceDiffView["entries"] }
+export interface ModelCompletionRequest { contractVersion: "1.0"; clientRequestId: string; requestDigest: string; provider: string; model: string; messages: ModelRequest["messages"]; tools: ModelRequest["tools"]; maxOutputTokens: number }
 export interface GatewayClient {
+  completeModel?(taskId: string, grant: string, request: ModelCompletionRequest, signal: AbortSignal): Promise<ModelResponse>;
   tools(taskId: string, grant: string, signal: AbortSignal): Promise<RegisteredToolCatalog>;
   invoke(taskId: string, grant: string, request: { contractVersion: "1.0"; callId: string; toolName: string; arguments: Record<string, unknown>; requestDigest: string }, signal: AbortSignal): Promise<RegisteredToolResult>;
   list(taskId: string, grant: string, signal: AbortSignal): Promise<FileList>;
@@ -21,6 +23,7 @@ export interface GatewayClient {
 export class HttpGatewayClient implements GatewayClient {
   constructor(private readonly origin: string) {}
   private base(taskId: string): string { return `${this.origin.replace(/\/$/, "")}/internal/v1/agent-engine/tasks/${encodeURIComponent(taskId)}`; }
+  completeModel(taskId: string, grant: string, request: ModelCompletionRequest, signal: AbortSignal): Promise<ModelResponse> { return this.call(`${this.base(taskId)}/model-completions`, grant, signal, request, "model"); }
   tools(taskId: string, grant: string, signal: AbortSignal): Promise<RegisteredToolCatalog> { return this.call(`${this.base(taskId)}/tools`, grant, signal); }
   invoke(taskId: string, grant: string, request: { contractVersion: "1.0"; callId: string; toolName: string; arguments: Record<string, unknown>; requestDigest: string }, signal: AbortSignal): Promise<RegisteredToolResult> { return this.call(`${this.base(taskId)}/tool-calls`, grant, signal, request); }
   list(taskId: string, grant: string, signal: AbortSignal): Promise<FileList> { return this.call(`${this.base(taskId)}/workspace/files`, grant, signal); }
@@ -33,18 +36,18 @@ export class HttpGatewayClient implements GatewayClient {
   execution(taskId: string, grant: string, clientRequestId: string, signal: AbortSignal): Promise<SandboxView> { return this.call(`${this.base(taskId)}/sandbox-executions/${encodeURIComponent(clientRequestId)}`, grant, signal); }
   receipt(taskId: string, grant: string, receiptRef: string, signal: AbortSignal): Promise<Receipt> { return this.call(`${this.base(taskId)}/receipts/${encodeURIComponent(receiptRef)}`, grant, signal); }
 
-  private async call<T>(url: string, grant: string, signal: AbortSignal, body?: unknown): Promise<T> {
+  private async call<T>(url: string, grant: string, signal: AbortSignal, body?: unknown, fallbackCategory: import("./types.js").Problem["category"] = "tool"): Promise<T> {
     let response: Response;
     try {
       response = await fetch(url, { method: body === undefined ? "GET" : "POST", headers: { authorization: `Bearer ${grant}`, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal });
     } catch (error) {
       if (signal.aborted) throw error;
-      throw new EngineProblem(502, problem("GATEWAY_TRANSPORT_FAILED", "tool", "Product tool gateway request failed", true));
+      throw new EngineProblem(502, problem("GATEWAY_TRANSPORT_FAILED", fallbackCategory, "Product gateway request failed", true));
     }
     if (!response.ok) {
       let gatewayProblem: { code?: string; category?: import("./types.js").Problem["category"]; message?: string; retryable?: boolean } = {};
       try { gatewayProblem = await response.json() as typeof gatewayProblem; } catch { /* sanitized fallback */ }
-      throw new EngineProblem(response.status, problem(gatewayProblem.code ?? "GATEWAY_REQUEST_FAILED", gatewayProblem.category ?? "tool", gatewayProblem.message ?? `Product tool gateway returned HTTP ${response.status}`, gatewayProblem.retryable ?? response.status >= 500));
+      throw new EngineProblem(response.status, problem(gatewayProblem.code ?? "GATEWAY_REQUEST_FAILED", gatewayProblem.category ?? fallbackCategory, gatewayProblem.message ?? `Product gateway returned HTTP ${response.status}`, gatewayProblem.retryable ?? response.status >= 500));
     }
     return await response.json() as T;
   }

@@ -38,4 +38,12 @@ public final class EngineGatewayException extends RuntimeException {
     static EngineGatewayException tooLarge(String code) {
         return new EngineGatewayException(HttpStatus.PAYLOAD_TOO_LARGE, code);
     }
+
+    static EngineGatewayException tooManyRequests(String code) {
+        return new EngineGatewayException(HttpStatus.TOO_MANY_REQUESTS, code);
+    }
+
+    static EngineGatewayException badGateway(String code) {
+        return new EngineGatewayException(HttpStatus.BAD_GATEWAY, code);
+    }
 }

@@ -21,24 +21,21 @@ final class ReactPlanTurnIntakeService {
     private final AgentSessionRepository sessions;
     private final ReactPlanTurnIntakeTransactions transactions;
     private final ReactPlanRuntimeService runtime;
-    private final ReactPlanRuntimeProperties properties;
 
     ReactPlanTurnIntakeService(
             ObjectMapper json,
             AgentSessionRepository sessions,
             ReactPlanTurnIntakeTransactions transactions,
-            ReactPlanRuntimeService runtime,
-            ReactPlanRuntimeProperties properties) {
+            ReactPlanRuntimeService runtime) {
         this.json = json;
         this.sessions = sessions;
         this.transactions = transactions;
         this.runtime = runtime;
-        this.properties = properties;
     }
 
     JsonNode start(long userId, long sessionId, ReactPlanSessionTaskRequest request) {
         requireProjectSession(userId, sessionId);
-        ReactPlanTaskRequest task = normalized(request.taskRequest());
+        ReactPlanTaskRequest task = request.taskRequest();
         String digest = requestDigest(request.clientRequestId(), task);
         ResolvedIntake resolved = transactions.find(
                         userId, sessionId, request.clientRequestId())
@@ -91,14 +88,6 @@ final class ReactPlanTurnIntakeService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "ReAct P1 requires a Project-scoped session");
         }
-    }
-
-    private ReactPlanTaskRequest normalized(ReactPlanTaskRequest request) {
-        String provider = request.provider() == null
-                ? properties.getDefaultProvider() : request.provider();
-        String model = request.model() == null
-                ? properties.getDefaultModel() : request.model();
-        return new ReactPlanTaskRequest(request.instruction(), provider, model);
     }
 
     private String requestDigest(String clientRequestId, ReactPlanTaskRequest request) {

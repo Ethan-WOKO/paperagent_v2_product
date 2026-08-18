@@ -70,6 +70,7 @@ def validate_openapi() -> int:
         "/v1/tasks/{taskId}/events",
         "/v1/tasks/{taskId}/cancel",
         "/v1/tasks/{taskId}/answer",
+        "/internal/v1/agent-engine/tasks/{taskId}/model-completions",
         "/internal/v1/agent-engine/tasks/{taskId}/workspace/files",
         "/internal/v1/agent-engine/tasks/{taskId}/workspace/read",
         "/internal/v1/agent-engine/tasks/{taskId}/workspace/write",
@@ -139,6 +140,13 @@ def validate_answer_digest() -> None:
     assert actual == answer["answerDigest"], "answer digest mismatch"
 
 
+def validate_model_digest() -> None:
+    request = load_json(CONFORMANCE / "fixtures/positive/gateway-model-request.json")
+    semantic = {key: value for key, value in request.items() if key != "requestDigest"}
+    actual = hashlib.sha256(canonical_json(semantic)).hexdigest()
+    assert actual == request["requestDigest"], "model request digest mismatch"
+
+
 def validate_scenarios() -> int:
     scenarios = load_json(CONFORMANCE / "scenarios.json")
     ids = [row["id"] for row in scenarios["requiredScenarios"]]
@@ -158,6 +166,7 @@ def validate_scenarios() -> int:
         "fixed-sse-heartbeat",
         "task-grant-boundary",
         "event-redaction",
+        "model-gateway-replay",
     }
     assert len(ids) == len(set(ids)), "duplicate conformance scenario id"
     assert set(ids) == required, "required conformance scenario set drifted"
@@ -198,6 +207,7 @@ def main() -> int:
     event_count = validate_event_sequence(schemas, registry)
     validate_digest()
     validate_answer_digest()
+    validate_model_digest()
     scenario_count = validate_scenarios()
 
     print(

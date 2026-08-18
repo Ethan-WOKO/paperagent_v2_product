@@ -23,8 +23,10 @@ describe("AgentEngine", () => {
     const directory = await temporaryDirectory();
     const blocked = new Promise<ModelResponse>(() => undefined);
     let firstModelStarted = false;
-    const firstProvider: ModelProvider = { complete: () => {
+    let firstModelRequestId = "";
+    const firstProvider: ModelProvider = { complete: (_request, context) => {
       firstModelStarted = true;
+      firstModelRequestId = context.clientRequestId;
       return blocked;
     } };
     const first = await createEngine(firstProvider, new FakeGateway(), directory);
@@ -32,9 +34,14 @@ describe("AgentEngine", () => {
     await waitFor(() => firstModelStarted);
 
     const recoveryStore = new RecoveringTaskStore(directory);
+    let recoveredModelRequestId = "";
+    const recoveredProvider: ModelProvider = { complete: (_request, context) => {
+      recoveredModelRequestId = context.clientRequestId;
+      return Promise.resolve({ content: "Recovered without resubmission.", toolCalls: [] });
+    } };
     const recovered = new AgentEngine({
       store: recoveryStore,
-      provider: new ScriptedProvider([{ content: "Recovered without resubmission.", toolCalls: [] }]),
+      provider: recoveredProvider,
       gateway: new FakeGateway(), validator: new ContractValidator(contractDirectory),
       sleep: async () => undefined
     });
@@ -44,6 +51,7 @@ describe("AgentEngine", () => {
     expect(recovered.get(taskId).error).toBeNull();
     expect(recovered.get(taskId).state).toBe("succeeded");
     expect(recoveryStore.recoveryRequests).toEqual([taskId]);
+    expect(recoveredModelRequestId).toBe(firstModelRequestId);
     const events = await recovered.events(taskId);
     expect(events.map((event) => event.sequence)).toEqual(events.map((_, index) => index + 1));
     expect(events.filter((event) => event.type === "status" && event.state === "succeeded")).toHaveLength(1);
@@ -77,6 +85,13 @@ describe("AgentEngine", () => {
     expect((provider.requests[0]?.tools as Array<{ function: { name: string } }>).map((candidate) =>
       candidate.function.name)).toEqual(["load_tool"]);
     expect(JSON.stringify(provider.requests[0]?.messages)).toContain("project_search");
+    const firstFollowUp = provider.requests[1]!.messages;
+    expect(firstFollowUp.find((message) => message.role === "assistant")?.toolCalls?.[0]?.id)
+      .toBe("provider-load-0");
+    expect(firstFollowUp.find((message) => message.role === "tool")?.toolCallId)
+      .toBe("provider-load-0");
+    const firstToolEvent = events.find((event) => event.type === "tool");
+    expect(firstToolEvent?.type === "tool" ? firstToolEvent.callId : "").toMatch(/^call\./);
   });
 
   it("creates an isolated Workspace candidate and requires exact diff and sandbox validation", async () => {

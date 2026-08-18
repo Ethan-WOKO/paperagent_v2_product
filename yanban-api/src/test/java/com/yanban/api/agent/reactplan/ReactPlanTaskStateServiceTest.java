@@ -111,13 +111,13 @@ class ReactPlanTaskStateServiceTest {
                 taskId, digest, 7L, 11L, 42L, "running", 3,
                 checkpoint.toString(), LocalDateTime.now());
         when(checkpoints.findById(taskId)).thenReturn(Optional.of(persisted));
-        when(grants.issue(taskId, digest, 7L, 42L)).thenReturn(
+        when(grants.issue(taskId, digest, 7L, 42L, "test", "test-model")).thenReturn(
                 new EngineTaskGrant("g".repeat(40), Instant.parse("2026-08-18T00:05:00Z")));
 
         EngineTaskGrant recovered = service.authorizeRecovery(taskId, digest);
 
         assertThat(recovered.value()).hasSize(40);
-        verify(grants).issue(taskId, digest, 7L, 42L);
+        verify(grants).issue(taskId, digest, 7L, 42L, "test", "test-model");
         assertThatThrownBy(() -> service.authorizeRecovery(taskId, "f".repeat(64)))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("TASK_DIGEST_CONFLICT");

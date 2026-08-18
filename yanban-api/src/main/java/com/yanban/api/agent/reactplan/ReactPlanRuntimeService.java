@@ -9,6 +9,7 @@ import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.memory.LongTermMemorySnapshot;
+import com.yanban.api.settings.UserSettingsService;
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.ExecutionProfile;
@@ -45,37 +46,37 @@ final class ReactPlanRuntimeService {
     private static final Logger log = LoggerFactory.getLogger(ReactPlanRuntimeService.class);
 
     private final ObjectMapper json;
-    private final ReactPlanRuntimeProperties properties;
     private final AgentTurnProductContextResolver contexts;
     private final AuthenticatedReactPlanBootstrapComposer plans;
     private final AgentEngineTaskGrantService grants;
     private final ReactPlanEngineClient engine;
     private final LongTermMemoryRetrievalService longTermMemories;
+    private final UserSettingsService settings;
 
     ReactPlanRuntimeService(
             ObjectMapper json,
-            ReactPlanRuntimeProperties properties,
             AgentTurnProductContextResolver contexts,
             AuthenticatedReactPlanBootstrapComposer plans,
             AgentEngineTaskGrantService grants,
             ReactPlanEngineClient engine,
-            LongTermMemoryRetrievalService longTermMemories) {
+            LongTermMemoryRetrievalService longTermMemories,
+            UserSettingsService settings) {
         this.json = json;
-        this.properties = properties;
         this.contexts = contexts;
         this.plans = plans;
         this.grants = grants;
         this.engine = engine;
         this.longTermMemories = longTermMemories;
+        this.settings = settings;
     }
 
     JsonNode submit(long userId, long turnId, ReactPlanTaskRequest request) {
         VerifiedAgentTurnProductContext context = projectContext(userId, turnId);
         String taskId = taskId(userId, turnId);
-        String provider = request.provider() == null
-                ? properties.getDefaultProvider() : request.provider();
-        String model = request.model() == null
-                ? properties.getDefaultModel() : request.model();
+        UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(
+                userId, request.provider(), request.model());
+        String provider = endpoint.providerKey();
+        String model = endpoint.modelName();
         Map<String, Object> authority = authority(context, request.instruction(), provider, model);
         String requestDigest = ReactPlanCanonicalJson.digest(json, authority);
 
@@ -85,7 +86,8 @@ final class ReactPlanRuntimeService {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT, "The authenticated Turn is bound to another Plan request");
         }
-        EngineTaskGrant grant = grants.issue(taskId, requestDigest, userId, turnId);
+        EngineTaskGrant grant = grants.issue(
+                taskId, requestDigest, userId, turnId, provider, model);
         ObjectNode submission = json.createObjectNode();
         submission.put("contractVersion", "1.0");
         submission.put("taskId", taskId);

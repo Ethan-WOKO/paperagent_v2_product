@@ -33,17 +33,28 @@ final class AgentEngineGatewayController {
     private final AgentEngineSandboxGateway sandboxes;
     private final AgentEngineRegisteredToolGateway registeredTools;
     private final AgentEnginePublicationGateway publications;
+    private final AgentEngineModelGateway models;
 
     AgentEngineGatewayController(AgentEngineTaskGrantService grants,
                                  AgentEngineWorkspaceGateway workspaces,
                                  AgentEngineSandboxGateway sandboxes,
                                  AgentEngineRegisteredToolGateway registeredTools,
-                                 AgentEnginePublicationGateway publications) {
+                                 AgentEnginePublicationGateway publications,
+                                 AgentEngineModelGateway models) {
         this.grants = grants;
         this.workspaces = workspaces;
         this.sandboxes = sandboxes;
         this.registeredTools = registeredTools;
         this.publications = publications;
+        this.models = models;
+    }
+
+    @PostMapping("/model-completions")
+    AgentEngineGatewayDtos.ModelCompletionResult completeModel(
+            @PathVariable String taskId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestBody AgentEngineGatewayDtos.ModelCompletionRequest request) {
+        return models.complete(grants.verify(authorization, taskId, false), request);
     }
 
     @GetMapping("/tools")

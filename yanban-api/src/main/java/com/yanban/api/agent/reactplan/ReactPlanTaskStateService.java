@@ -135,7 +135,8 @@ class ReactPlanTaskStateService {
         CheckpointIdentity identity = validateCheckpoint(
                 taskId, requestDigest, parse(checkpoint.checkpointJson()));
         requireIdentity(identity, intake);
-        return grants.issue(taskId, requestDigest, intake.userId(), intake.turnId());
+        return grants.issue(taskId, requestDigest, intake.userId(), intake.turnId(),
+                identity.modelProvider(), identity.modelName());
     }
 
     private CheckpointIdentity validateCheckpoint(
@@ -162,7 +163,10 @@ class ReactPlanTaskStateService {
         try { projectId = Long.parseLong(requiredText(authority.path("project"), "projectId")); }
         catch (NumberFormatException invalid) { throw badRequest("CHECKPOINT_PROJECT_INVALID"); }
         String projectVersion = requiredText(authority.path("project"), "projectVersion");
-        return new CheckpointIdentity(state, sequence, sessionId, projectId, projectVersion);
+        String modelProvider = requiredText(authority.path("model"), "provider");
+        String modelName = requiredText(authority.path("model"), "model");
+        return new CheckpointIdentity(state, sequence, sessionId, projectId, projectVersion,
+                modelProvider, modelName);
     }
 
     private void requireIdentity(CheckpointIdentity identity, ReactPlanTurnIntakeEntity intake) {
@@ -240,5 +244,6 @@ class ReactPlanTaskStateService {
 
     record StoredCheckpoint(long checkpointRevision, JsonNode checkpoint) { }
     private record CheckpointIdentity(String state, long lastSequence, long sessionId,
-                                      long projectId, String projectVersion) { }
+                                      long projectId, String projectVersion,
+                                      String modelProvider, String modelName) { }
 }
