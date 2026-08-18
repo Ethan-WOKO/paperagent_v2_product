@@ -70,7 +70,7 @@ export class AgentEngine {
       if (!terminal(task.view.state) && this.options.store.authorizeRecovery) {
         const grant = await this.options.store.authorizeRecovery(task);
         this.grants.set(task.view.taskId, { value: grant.taskGrant, expiresAt: grant.expiresAt });
-        if (task.view.state !== "waiting_user") this.schedule(task);
+        if (task.view.state !== "waiting_user" || task.cancellationRequested) this.schedule(task);
       }
     }
   }
@@ -94,7 +94,10 @@ export class AgentEngine {
     if (existing) {
       if (existing.view.requestDigest !== submission.requestDigest) throw new EngineProblem(409, problem("TASK_DIGEST_CONFLICT", "request", "taskId already belongs to another request digest"));
       this.grants.set(submission.taskId, { value: submission.gateway.taskGrant, expiresAt: submission.gateway.expiresAt });
-      if (!terminal(existing.view.state) && existing.view.state !== "waiting_user") this.schedule(existing);
+      if (!terminal(existing.view.state)
+          && (existing.view.state !== "waiting_user" || existing.cancellationRequested)) {
+        this.schedule(existing);
+      }
       return { contractVersion: "1.0", replayed: true, task: structuredClone(existing.view) };
     }
     const now = new Date().toISOString();
@@ -111,7 +114,8 @@ export class AgentEngine {
       metrics: { startedAt: now, promptTokens: 0, completionTokens: 0 },
       receiptRefs: [], pendingCalls: [], nextPendingCall: 0, acceptedAnswers: [],
       recentConversation, historicalContext, longTermMemory, observations: emptyObservations(),
-      candidateValidationRepairs: 0, loadedToolNames: []
+      candidateValidationRepairs: 0, loadedToolNames: [], cancellationRequested: false,
+      activeSandboxCallId: null
     };
     await this.options.store.create(task);
     this.tasks.set(submission.taskId, task);
@@ -143,10 +147,12 @@ export class AgentEngine {
     let cancellation = this.cancellations.get(taskId);
     if (!cancellation) {
       cancellation = (async () => {
+        task.cancellationRequested = true;
+        await this.options.store.save(task);
         this.aborters.get(taskId)?.abort();
         const active = this.active.get(taskId);
         if (active) await active;
-        if (!terminal(task.view.state)) await this.status(task, "cancelled", null);
+        if (!terminal(task.view.state)) await this.finishCancellation(task);
       })().finally(() => this.cancellations.delete(taskId));
       this.cancellations.set(taskId, cancellation);
     }
@@ -182,15 +188,24 @@ export class AgentEngine {
     if (this.active.has(task.view.taskId) || terminal(task.view.state) || task.view.state === "waiting_user") return;
     const controller = new AbortController();
     this.aborters.set(task.view.taskId, controller);
-    const promise = this.run(task, controller.signal).finally(() => {
+    const promise = this.run(task, controller.signal).catch((failure: unknown) => {
+      const detail = failure instanceof EngineProblem
+        ? `${failure.problem.code} (HTTP ${failure.status})`
+        : failure instanceof Error ? failure.message : "unknown failure";
+      process.stderr.write(`agent-engine-reactplan: task ${task.view.taskId} paused after an execution failure: ${detail}\n`);
+    }).finally(() => {
       this.active.delete(task.view.taskId); this.aborters.delete(task.view.taskId);
-      if (task.view.state === "running") this.schedule(task);
+      if (task.view.state === "running" && !task.cancellationRequested) this.schedule(task);
     });
     this.active.set(task.view.taskId, promise);
   }
 
   private async run(task: PersistedTask, signal: AbortSignal): Promise<void> {
     try {
+      if (task.cancellationRequested) {
+        await this.finishCancellation(task);
+        return;
+      }
       if (task.view.state !== "running") await this.status(task, "running", null);
       while (!terminal(task.view.state) && task.view.state !== "waiting_user") {
         this.checkCancelled(signal);
@@ -300,7 +315,12 @@ export class AgentEngine {
       }
     } catch (error) {
       if (terminal(task.view.state)) return;
-      if (signal.aborted) { await this.status(task, "cancelled", null); return; }
+      if (task.cancellationRequested || signal.aborted
+          || (error instanceof EngineProblem && error.problem.category === "cancelled")) {
+        task.cancellationRequested = true;
+        await this.finishCancellation(task);
+        return;
+      }
       const failure = error instanceof EngineProblem ? error.problem : problem("ENGINE_INTERNAL_FAILURE", "internal", "The agent engine encountered an internal failure", true);
       await this.status(task, "failed", failure);
     }
@@ -432,11 +452,15 @@ export class AgentEngine {
       const request = sandboxRequest(call.id, args);
       const summary = `argv=${JSON.stringify(request.argv).slice(0, 700)}; inputs=${request.inputs.map((input) => `${input.path}@${input.sha256}`).join(",").slice(0, 250)}; timeoutMillis=${request.timeoutMillis}`;
       await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, null);
+      task.activeSandboxCallId = call.id;
+      await this.options.store.save(task);
       let view;
       try {
         view = await this.options.gateway.submit(task.view.taskId, grant, request, signal);
       } catch (error) {
         if (!recoverableToolRejection(error)) throw error;
+        task.activeSandboxCallId = null;
+        await this.options.store.save(task);
         await this.tool(task, call.id, "sandbox.execute", summary, "failed",
           `request rejected; code=${error.problem.code}`, null);
         task.messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({
@@ -476,6 +500,7 @@ export class AgentEngine {
       });
       if (receipt.status === "SYSTEM_ERROR" || receipt.status === "TIMED_OUT") throw new EngineProblem(502, problem(receipt.status === "SYSTEM_ERROR" ? "SANDBOX_SYSTEM_ERROR" : "SANDBOX_TIMED_OUT", "sandbox_system", `Sandbox ended with ${receipt.status}`, true, receipt.receiptRef));
       if (receipt.status === "CANCELLED") throw new EngineProblem(409, problem("SANDBOX_CANCELLED", "cancelled", "Sandbox execution was cancelled", false, receipt.receiptRef));
+      task.activeSandboxCallId = null;
       return false;
     }
     if (availableRegisteredToolSpecs(task).some((tool) => tool.function.name === call.name)) {
@@ -526,6 +551,46 @@ export class AgentEngine {
     const task = this.tasks.get(taskId);
     if (!task) throw new EngineProblem(404, problem("TASK_NOT_FOUND", "request", "Task was not found"));
     return task;
+  }
+
+  private async finishCancellation(task: PersistedTask): Promise<void> {
+    if (terminal(task.view.state)) return;
+    const callId = task.activeSandboxCallId;
+    if (callId) {
+      const grant = this.requireGrant(task.view.taskId);
+      const controller = new AbortController();
+      let view: import("./types.js").SandboxView | undefined;
+      for (let attempt = 0; attempt < 6 && !view; attempt += 1) {
+        try {
+          view = await this.options.gateway.cancelExecution(
+            task.view.taskId, grant, callId, controller.signal);
+        } catch (error) {
+          if (!(error instanceof EngineProblem) || error.status !== 404 || attempt === 5) throw error;
+          await this.sleep(100 * (2 ** attempt), controller.signal);
+        }
+      }
+      if (view) {
+        this.options.validator.validate("gateway-sandboxView", view);
+        const delays = [100, 200, 400, 800, 1000];
+        for (let poll = 0; !TERMINAL_SANDBOX.has(view.state) && poll < 35; poll += 1) {
+          await this.sleep(delays[poll] ?? 1000, controller.signal);
+          view = await this.options.gateway.execution(
+            task.view.taskId, grant, callId, controller.signal);
+          this.options.validator.validate("gateway-sandboxView", view);
+        }
+        if (!TERMINAL_SANDBOX.has(view.state)) {
+          throw new EngineProblem(503, problem(
+            "SANDBOX_CANCELLATION_UNCONFIRMED", "sandbox_system",
+            "Sandbox cancellation did not reach a terminal state", true, view.executionRef));
+        }
+        await this.tool(task, callId, "sandbox.execute", "active sandbox execution",
+          view.state === "CANCELLED" ? "cancelled" : "succeeded",
+          view.state === "CANCELLED" ? "sandbox process terminated" : `sandbox already terminal: ${view.state}`,
+          view.receiptRef);
+      }
+      task.activeSandboxCallId = null;
+    }
+    await this.status(task, "cancelled", null);
   }
 
   private async status(task: PersistedTask, state: TaskView["state"], error: Problem | null): Promise<void> {
@@ -800,6 +865,8 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.observations.workspaceChanges ??= [];
   task.candidateValidationRepairs ??= 0;
   task.loadedToolNames ??= [];
+  task.cancellationRequested ??= false;
+  task.activeSandboxCallId ??= null;
 }
 
 function availableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {

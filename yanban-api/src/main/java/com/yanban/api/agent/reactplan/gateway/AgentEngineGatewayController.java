@@ -4,6 +4,7 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileList;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileRead;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.Receipt;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxCancelRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxSubmit;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxView;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDiff;
@@ -110,6 +111,16 @@ final class AgentEngineGatewayController {
                        @PathVariable String clientRequestId,
                        @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
         return sandboxes.status(grants.verify(authorization, taskId, true), clientRequestId);
+    }
+
+    @PostMapping("/sandbox-executions/{clientRequestId}/cancel")
+    SandboxView cancelExecution(
+            @PathVariable String taskId,
+            @PathVariable String clientRequestId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestBody SandboxCancelRequest request) {
+        return sandboxes.cancel(
+                grants.verify(authorization, taskId, true), clientRequestId, request);
     }
 
     @GetMapping("/receipts/{receiptRef}")

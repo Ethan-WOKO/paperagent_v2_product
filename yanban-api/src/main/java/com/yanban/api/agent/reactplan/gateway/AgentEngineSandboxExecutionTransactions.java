@@ -40,6 +40,15 @@ class AgentEngineSandboxExecutionTransactions {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    AgentEngineSandboxExecutionEntity requestCancel(
+            String taskId, String clientRequestId) {
+        AgentEngineSandboxExecutionEntity value = repository.lock(taskId, clientRequestId)
+                .orElseThrow(() -> EngineGatewayException.notFound("SANDBOX_EXECUTION_NOT_FOUND"));
+        value.requestCancel(LocalDateTime.now());
+        return repository.saveAndFlush(value);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     AgentEngineSandboxExecutionEntity terminal(
             String taskId, String clientRequestId, String state,
             String receiptRef, String receiptJson) {

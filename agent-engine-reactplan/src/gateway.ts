@@ -13,6 +13,7 @@ export interface GatewayClient {
   diff(taskId: string, grant: string, signal: AbortSignal): Promise<WorkspaceDiffView>;
   publish(taskId: string, grant: string, request: WorkspacePublishRequest, signal: AbortSignal): Promise<WorkspacePublishResult>;
   submit(taskId: string, grant: string, request: SandboxRequest, signal: AbortSignal): Promise<SandboxView>;
+  cancelExecution(taskId: string, grant: string, clientRequestId: string, signal: AbortSignal): Promise<SandboxView>;
   execution(taskId: string, grant: string, clientRequestId: string, signal: AbortSignal): Promise<SandboxView>;
   receipt(taskId: string, grant: string, receiptRef: string, signal: AbortSignal): Promise<Receipt>;
 }
@@ -28,6 +29,7 @@ export class HttpGatewayClient implements GatewayClient {
   diff(taskId: string, grant: string, signal: AbortSignal): Promise<WorkspaceDiffView> { return this.call(`${this.base(taskId)}/workspace/diff`, grant, signal); }
   publish(taskId: string, grant: string, request: WorkspacePublishRequest, signal: AbortSignal): Promise<WorkspacePublishResult> { return this.call(`${this.base(taskId)}/workspace/publish`, grant, signal, request); }
   submit(taskId: string, grant: string, request: SandboxRequest, signal: AbortSignal): Promise<SandboxView> { return this.call(`${this.base(taskId)}/sandbox-executions`, grant, signal, request); }
+  cancelExecution(taskId: string, grant: string, clientRequestId: string, signal: AbortSignal): Promise<SandboxView> { return this.call(`${this.base(taskId)}/sandbox-executions/${encodeURIComponent(clientRequestId)}/cancel`, grant, signal, { contractVersion: "1.0" }); }
   execution(taskId: string, grant: string, clientRequestId: string, signal: AbortSignal): Promise<SandboxView> { return this.call(`${this.base(taskId)}/sandbox-executions/${encodeURIComponent(clientRequestId)}`, grant, signal); }
   receipt(taskId: string, grant: string, receiptRef: string, signal: AbortSignal): Promise<Receipt> { return this.call(`${this.base(taskId)}/receipts/${encodeURIComponent(receiptRef)}`, grant, signal); }
 

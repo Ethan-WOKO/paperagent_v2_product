@@ -529,6 +529,81 @@ describe("AgentEngine", () => {
     expect((await engine.events(taskId)).filter((event) => event.type === "status" && event.state === "cancelled")).toHaveLength(1);
   });
 
+  it("hard-cancels the exact active sandbox before completing task cancellation", async () => {
+    const gateway = new HardCancelGateway();
+    const engine = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 60_000
+      })
+    ]), gateway);
+    await engine.submit(submission());
+    await waitFor(() => gateway.accepted);
+
+    const cancelled = await engine.cancel(taskId);
+
+    expect(cancelled.state).toBe("cancelled");
+    expect(gateway.cancelledCallIds).toHaveLength(1);
+    expect(gateway.cancelledCallIds[0]).toMatch(/^call\./);
+    expect(gateway.publishCalls).toBe(0);
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "status" && event.state === "cancelled")).toHaveLength(1);
+    expect((await engine.events(taskId)).some((event) =>
+      event.type === "tool" && event.name === "sandbox.execute"
+      && event.state === "cancelled")).toBe(true);
+  });
+
+  it("resumes a persisted cancellation intent after restart without model or publication work", async () => {
+    const directory = await temporaryDirectory();
+    const gateway = new HardCancelGateway();
+    const first = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 60_000
+      })
+    ]), gateway, directory);
+    await first.submit(submission());
+    await waitFor(() => gateway.accepted);
+
+    const recoveryStore = new CancellingRecoveryStore(directory);
+    const provider = new NeverProvider();
+    const recovered = new AgentEngine({
+      store: recoveryStore, provider, gateway,
+      validator: new ContractValidator(contractDirectory), sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => recovered.get(taskId).state === "cancelled");
+
+    expect(recoveryStore.recoveryRequests).toEqual([taskId]);
+    expect(gateway.cancelledCallIds).toHaveLength(1);
+    expect(provider.requests).toHaveLength(0);
+    expect(gateway.publishCalls).toBe(0);
+  });
+
+  it("keeps the Engine available when one recovered cancellation cannot reach the gateway", async () => {
+    const directory = await temporaryDirectory();
+    const firstGateway = new HardCancelGateway();
+    const first = await createEngine(new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["yanban-runner", "java", "Sort.java"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }], timeoutMillis: 60_000
+      })
+    ]), firstGateway, directory);
+    await first.submit(submission());
+    await waitFor(() => firstGateway.accepted);
+
+    const gateway = new FailingCancelGateway();
+    const recovered = new AgentEngine({
+      store: new CancellingRecoveryStore(directory), provider: new NeverProvider(), gateway,
+      validator: new ContractValidator(contractDirectory), sleep: async () => undefined
+    });
+    await recovered.initialize();
+    await waitFor(() => gateway.cancelAttempts === 1);
+
+    expect(recovered.get(taskId).state).toBe("running");
+    expect(recovered.get(taskId).terminalSequence).toBeNull();
+  });
+
   it("uses the frozen polling schedule and delivers a trustworthy failed compile", async () => {
     const sleeps: number[] = [];
     const directory = await temporaryDirectory();
@@ -630,8 +705,47 @@ class FakeGateway implements GatewayClient {
   diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
   publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
-  execution(_taskId: string, _grant: string, _clientRequestId: string): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
+  cancelExecution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId, requestDigest: "f".repeat(64), executionRef: "execution.1", state: "CANCELLED", receiptRef: "receipt.cancelled" }); }
+  execution(_taskId: string, _grant: string, _clientRequestId: string, _signal: AbortSignal): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
   receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class HardCancelGateway extends FakeGateway {
+  accepted = false;
+  cancelledCallIds: string[] = [];
+  private requestDigest = "";
+
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.accepted = true;
+    this.requestDigest = request.requestDigest;
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, executionRef: "execution.long-running",
+      state: "RUNNING", receiptRef: null });
+  }
+
+  override execution(_taskId: string, _grant: string, _clientRequestId: string,
+                     signal: AbortSignal): Promise<SandboxView> {
+    return new Promise((_, reject) => signal.addEventListener("abort", () =>
+      reject(new DOMException("aborted", "AbortError")), { once: true }));
+  }
+
+  override cancelExecution(_taskId: string, _grant: string,
+                           clientRequestId: string): Promise<SandboxView> {
+    this.cancelledCallIds.push(clientRequestId);
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId,
+      requestDigest: this.requestDigest, executionRef: "execution.long-running",
+      state: "CANCELLED", receiptRef: "receipt.cancelled" });
+  }
+}
+
+class FailingCancelGateway extends FakeGateway {
+  cancelAttempts = 0;
+
+  override cancelExecution(): Promise<SandboxView> {
+    this.cancelAttempts += 1;
+    return Promise.reject(new EngineProblem(500,
+      problem("ENGINE_GATEWAY_INTERNAL", "internal", "gateway failed", true)));
+  }
 }
 
 class RangeReadGateway extends FakeGateway {
@@ -782,6 +896,18 @@ class RecoveringTaskStore extends TaskStore {
   authorizeRecovery(task: import("../src/types.js").PersistedTask) {
     this.recoveryRequests.push(task.view.taskId);
     return Promise.resolve({ taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  }
+}
+
+class CancellingRecoveryStore extends RecoveringTaskStore {
+  override async loadAll() {
+    const tasks = await super.loadAll();
+    for (const task of tasks) {
+      if (!["succeeded", "failed", "cancelled"].includes(task.view.state)) {
+        task.cancellationRequested = true;
+      }
+    }
+    return tasks;
   }
 }
 

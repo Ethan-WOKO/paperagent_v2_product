@@ -177,6 +177,8 @@ export interface PersistedTask {
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;
   loadedToolNames?: string[];
+  cancellationRequested?: boolean;
+  activeSandboxCallId?: string | null;
 }
 
 export interface FileEntry { path: string; sizeBytes: number; sha256: string; mediaType: string }

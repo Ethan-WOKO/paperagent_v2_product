@@ -26,6 +26,9 @@ describe("HttpGatewayClient", () => {
       if (request.url === `${base}/workspace/read`) return response.end(JSON.stringify({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 4, sha256: hash, mediaType: "text/x-java-source", encoding: "utf-8", content: "code", truncated: false }));
       if (request.url === `${base}/workspace/write`) return response.end(JSON.stringify({ contractVersion: "1.0", clientRequestId: "call.abcdefghijklmnop", requestDigest: hash, replayed: false, operation: "MODIFY", path: "Sort.java", beforeSha256: hash, afterSha256: "c".repeat(64), sizeBytes: 7 }));
       if (request.url === `${base}/workspace/diff`) return response.end(JSON.stringify({ contractVersion: "1.0", taskId, projectVersion: hash, changed: true, entries: [{ operation: "MODIFY", path: "Sort.java", beforeSha256: hash, afterSha256: "c".repeat(64) }] }));
+      if (request.url === `${base}/sandbox-executions/call.abcdefghijklmnop/cancel`) {
+        return response.end(JSON.stringify({ contractVersion: "1.0", clientRequestId: "call.abcdefghijklmnop", requestDigest: hash, executionRef: "execution.1", state: "CANCELLED", receiptRef: "receipt.1" }));
+      }
       if (request.url === `${base}/sandbox-executions` || request.url === `${base}/sandbox-executions/call.abcdefghijklmnop`) {
         response.statusCode = request.method === "POST" ? 202 : 200;
         return response.end(JSON.stringify({ contractVersion: "1.0", clientRequestId: "call.abcdefghijklmnop", requestDigest: hash, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }));
@@ -45,6 +48,7 @@ describe("HttpGatewayClient", () => {
     await client.write(taskId, grant, workspaceWrite, signal);
     await client.diff(taskId, grant, signal);
     await client.submit(taskId, grant, sandbox, signal);
+    await client.cancelExecution(taskId, grant, sandbox.clientRequestId, signal);
     await client.execution(taskId, grant, sandbox.clientRequestId, signal);
     await client.receipt(taskId, grant, "receipt.1", signal);
     expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
@@ -55,6 +59,7 @@ describe("HttpGatewayClient", () => {
       `POST /internal/v1/agent-engine/tasks/${taskId}/workspace/write`,
       `GET /internal/v1/agent-engine/tasks/${taskId}/workspace/diff`,
       `POST /internal/v1/agent-engine/tasks/${taskId}/sandbox-executions`,
+      `POST /internal/v1/agent-engine/tasks/${taskId}/sandbox-executions/call.abcdefghijklmnop/cancel`,
       `GET /internal/v1/agent-engine/tasks/${taskId}/sandbox-executions/call.abcdefghijklmnop`,
       `GET /internal/v1/agent-engine/tasks/${taskId}/receipts/receipt.1`
     ]);
@@ -63,6 +68,7 @@ describe("HttpGatewayClient", () => {
     expect(requests[3]?.body).toEqual({ contractVersion: "1.0", path: "Sort.java", expectedSha256: hash });
     expect(requests[4]?.body).toEqual(workspaceWrite);
     expect(requests[6]?.body).toEqual(sandbox);
+    expect(requests[7]?.body).toEqual({ contractVersion: "1.0" });
   });
 });
 

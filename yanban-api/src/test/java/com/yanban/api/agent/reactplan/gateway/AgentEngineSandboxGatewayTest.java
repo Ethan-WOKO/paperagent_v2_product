@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ReceiptInput;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxInput;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxCancelRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxSubmit;
 import com.yanban.api.agent.sandbox.SandboxBrokerClient;
 import com.yanban.api.agent.sandbox.SandboxExecutionProperties;
@@ -93,6 +94,66 @@ class AgentEngineSandboxGatewayTest {
         verify(broker, never()).dispatch(any());
     }
 
+    @Test
+    void cancelsOnlyTheStoredTaskBoundBrokerExecutionWithServerFence() {
+        AgentEngineWorkspaceGateway workspaces = mock(AgentEngineWorkspaceGateway.class);
+        AgentEngineSandboxExecutionTransactions transactions =
+                mock(AgentEngineSandboxExecutionTransactions.class);
+        SandboxBrokerClient broker = mock(SandboxBrokerClient.class);
+        AgentEngineSandboxExecutionEntity stored = new AgentEngineSandboxExecutionEntity(
+                TASK, CALL, "5".repeat(64), "6".repeat(64),
+                "execution.local", new ObjectMapper().findAndRegisterModules()
+                        .valueToTree(new StoredRequestFixture()).toString(),
+                java.time.LocalDateTime.now());
+        stored.dispatched("broker-exact", "RUNNING", java.time.LocalDateTime.now());
+        when(transactions.find(TASK, CALL)).thenReturn(Optional.of(stored));
+        when(transactions.requestCancel(TASK, CALL)).thenAnswer(invocation -> {
+            stored.requestCancel(java.time.LocalDateTime.now());
+            return stored;
+        });
+        AgentEngineSandboxGateway gateway = gateway(workspaces, transactions, broker);
+
+        var result = gateway.cancel(authority(), CALL, new SandboxCancelRequest("1.0"));
+
+        assertThat(result.state()).isEqualTo("RUNNING");
+        verify(broker).cancel("broker-exact", 1L);
+    }
+
+    @Test
+    void submitCancelRaceCancelsImmediatelyAfterBrokerIdentityIsBound() {
+        AgentEngineWorkspaceGateway workspaces = mock(AgentEngineWorkspaceGateway.class);
+        AgentEngineSandboxExecutionTransactions transactions =
+                mock(AgentEngineSandboxExecutionTransactions.class);
+        SandboxBrokerClient broker = mock(SandboxBrokerClient.class);
+        AtomicReference<AgentEngineSandboxExecutionEntity> stored = new AtomicReference<>();
+        when(workspaces.resolveInputs(any(), any())).thenReturn(inputs());
+        when(transactions.create(any())).thenAnswer(invocation -> {
+            AgentEngineSandboxExecutionEntity value = invocation.getArgument(0);
+            value.requestCancel(java.time.LocalDateTime.now());
+            stored.set(value);
+            return value;
+        });
+        when(transactions.dispatched(anyString(), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> {
+                    AgentEngineSandboxExecutionEntity value = stored.get();
+                    value.dispatched(invocation.getArgument(2), invocation.getArgument(3),
+                            java.time.LocalDateTime.now());
+                    return value;
+                });
+        when(broker.dispatch(any())).thenAnswer(invocation -> {
+            SandboxDispatch request = invocation.getArgument(0);
+            return new SandboxDispatchResponse("broker-race", request.idempotencyKey(),
+                    request.requestDigest(), request.fence(), SandboxExecutionStatus.ACCEPTED);
+        });
+        AgentEngineSandboxGateway gateway = gateway(workspaces, transactions, broker);
+
+        var result = gateway.submit(authority(),
+                request("5".repeat(64), List.of("yanban-runner", "java", "Sort.java")));
+
+        assertThat(result.state()).isEqualTo("RUNNING");
+        verify(broker).cancel("broker-race", 1L);
+    }
+
     private static AgentEngineSandboxGateway gateway(
             AgentEngineWorkspaceGateway workspaces,
             AgentEngineSandboxExecutionTransactions transactions,
@@ -118,5 +179,17 @@ class AgentEngineSandboxGatewayTest {
         return new EngineTaskAuthority(TASK, AUTHORITY_DIGEST,
                 11, 12, 13, 14, VERSION, true, true,
                 Instant.parse("2026-08-16T11:00:00Z"));
+    }
+
+    private record StoredRequestFixture(
+            String authorityRequestDigest, long userId, long turnId,
+            long sessionId, long projectId, String projectVersion,
+            SandboxSubmit submit,
+            AgentEngineWorkspaceGateway.ResolvedInputs inputs) {
+        private StoredRequestFixture() {
+            this(AUTHORITY_DIGEST, 11, 12, 13, 14, VERSION,
+                    request("5".repeat(64), List.of("yanban-runner", "java", "Sort.java")),
+                    AgentEngineSandboxGatewayTest.inputs());
+        }
     }
 }

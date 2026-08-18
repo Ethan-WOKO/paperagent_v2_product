@@ -150,6 +150,7 @@ def validate_scenarios() -> int:
         "sandbox-digest-conflict",
         "restart-after-receipt",
         "cancel-idempotent",
+        "sandbox-hard-cancel",
         "answer-exact-replay",
         "answer-content-conflict",
         "fixed-model-budget",

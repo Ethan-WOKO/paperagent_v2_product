@@ -35,6 +35,7 @@ public final class AgentEngineGatewayDtos {
     public record SandboxInput(String path, String sha256) { }
     public record SandboxSubmit(String contractVersion, String clientRequestId, String requestDigest,
                                 List<String> argv, List<SandboxInput> inputs, long timeoutMillis) { }
+    public record SandboxCancelRequest(String contractVersion) { }
     public record SandboxView(String contractVersion, String clientRequestId, String requestDigest,
                               String executionRef, String state, String receiptRef) { }
     public record BoundedOutput(String text, boolean truncated, long originalBytes) { }
