@@ -54,7 +54,6 @@ import org.springframework.web.server.ResponseStatusException;
 public class AgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
-    private static final int GENERATED_TITLE_MAX_LENGTH = 40;
     private static final int DEFAULT_VISIBLE_MESSAGE_LIMIT = 50;
     private static final int MAX_VISIBLE_MESSAGE_LIMIT = 100;
     private static final int SESSION_SUMMARY_MAX_CHARACTERS = 4_000;
@@ -1711,7 +1710,8 @@ public class AgentService {
                                             String firstUserMessage,
                                             boolean shouldAutoGenerateTitle) {
         if (shouldAutoGenerateTitle) {
-            String generatedTitle = generateSessionTitle(session, userId, firstUserMessage);
+            String generatedTitle = AgentSessionTitleGenerator.generate(
+                    titleModelProvider, userSettingsService, session, userId, firstUserMessage);
             if (StringUtils.hasText(generatedTitle)) {
                 session.updateTitle(generatedTitle);
             }
@@ -1721,7 +1721,7 @@ public class AgentService {
     }
 
     private boolean shouldAutoGenerateTitle(AgentSession session, int rawMessageCount) {
-        return rawMessageCount == 0 && isDefaultSessionTitle(session.getTitle());
+        return rawMessageCount == 0 && AgentSessionTitleGenerator.isDefaultTitle(session.getTitle());
     }
 
     private boolean isRuntimeIdentityQuestion(String content) {
@@ -1770,66 +1770,6 @@ public class AgentService {
             case "glm" -> "GLM";
             default -> providerKey.trim();
         };
-    }
-
-    private boolean isDefaultSessionTitle(String title) {
-        if (!StringUtils.hasText(title)) {
-            return true;
-        }
-        String normalized = title.trim();
-        return "新会话".equals(normalized) || "研伴对话".equals(normalized);
-    }
-
-    private String generateSessionTitle(AgentSession session, Long userId, String firstUserMessage) {
-        try {
-            UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
-                    userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
-            ChatResponse response = titleModelProvider.chat(new ChatRequest(
-                    endpoint.providerKey(),
-                    endpoint.modelName(),
-                    List.of(
-                            ChatMessage.system("你是一个会话标题生成器。只输出标题，不要解释，不要标点，不要引号。中文不超过16个字，英文不超过8个词。"),
-                            ChatMessage.user("请根据用户第一条消息生成简洁会话标题：\n" + firstUserMessage)
-                    ),
-                    0.2,
-                    64,
-                    null,
-                    endpoint.apiKey(),
-                    endpoint.apiUrl(),
-                    null,
-                    null,
-                    null
-            ));
-            return sanitizeGeneratedTitle(response == null || response.message() == null ? null : response.message().content(), firstUserMessage);
-        } catch (Exception ex) {
-            log.warn("Failed to generate title for session id={}", session.getId(), ex);
-            return fallbackTitle(firstUserMessage);
-        }
-    }
-
-    private String sanitizeGeneratedTitle(String generated, String fallbackSource) {
-        String title = StringUtils.hasText(generated) ? generated.trim() : fallbackTitle(fallbackSource);
-        int lineBreak = title.indexOf('\n');
-        if (lineBreak >= 0) {
-            title = title.substring(0, lineBreak).trim();
-        }
-        title = title.replaceAll("^[\\s\\\"'“”‘’《》]+|[\\s\\\"'“”‘’《》]+$", "")
-                .replaceAll("[。！？!?，,；;：:]+$", "")
-                .trim();
-        if (!StringUtils.hasText(title)) {
-            title = fallbackTitle(fallbackSource);
-        }
-        return title.length() <= GENERATED_TITLE_MAX_LENGTH
-                ? title
-                : title.substring(0, GENERATED_TITLE_MAX_LENGTH).trim();
-    }
-
-    private String fallbackTitle(String firstUserMessage) {
-        if (!StringUtils.hasText(firstUserMessage)) {
-            return "新会话";
-        }
-        String normalized = firstUserMessage.trim().replaceAll("\\s+", " ");
-        return normalized.length() <= 16 ? normalized : normalized.substring(0, 16).trim();
     }
 
     private String resolveDefaultModel(SysUserSettings settings, String provider) {

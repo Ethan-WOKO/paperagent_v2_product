@@ -79,6 +79,20 @@ public class ProjectService {
         return projects.findByUserIdOrderByUpdatedAtDesc(userId).stream().map(ProjectSummaryResponse::from).toList();
     }
 
+    @Transactional
+    public ProjectSummaryResponse rename(Long userId, Long projectId, String requestedName) {
+        Project project = ownedProject(userId, projectId);
+        String name = requestedName == null ? "" : requestedName.trim();
+        if (name.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project name is required");
+        }
+        if (name.length() > 255) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project name must not exceed 255 characters");
+        }
+        project.rename(name);
+        return ProjectSummaryResponse.from(projects.saveAndFlush(project));
+    }
+
     /** Local bindings stay untouched; server-owned upload snapshots are removed only after the DB commit succeeds. */
     @Transactional
     public void delete(Long userId, Long projectId) {

@@ -29,8 +29,8 @@
         <NEmpty :description="t('project.page.noProjects')" />
       </section>
 
-      <section v-else class="project-workspace__grid" :class="{ 'project-workspace__grid--context-collapsed': contextRailCollapsed }">
-        <aside class="project-panel project-panel--files project-context-rail">
+      <section v-else class="project-workspace__grid" :class="{ 'project-workspace__grid--context-collapsed': contextRailCollapsed }" :style="projectLayoutStyle">
+        <aside ref="projectContextRailRef" class="project-panel project-panel--files project-context-rail" :style="projectRailStyle">
           <section class="project-sidebar-section project-sidebar-section--projects" :class="{ 'project-sidebar-section--collapsed': sidebarSections.projects }">
             <div class="project-sidebar-section__toggle">
               <span>
@@ -42,12 +42,36 @@
               <span class="project-panel__count">{{ projects.length }}</span>
             </div>
             <div v-show="!sidebarSections.projects" class="project-list">
-              <button v-for="project in projects" :key="project.id" type="button" class="project-list__item" :class="{ active: project.id === activeProjectId }" :aria-current="project.id === activeProjectId ? 'page' : undefined" @click="selectProject(project.id)">
+              <div
+                v-for="project in projects"
+                :key="project.id"
+                role="button"
+                tabindex="0"
+                class="project-list__item"
+                :class="{ active: project.id === activeProjectId }"
+                :aria-current="project.id === activeProjectId ? 'page' : undefined"
+                :title="project.name"
+                @click="selectProject(project.id)"
+                @keydown.enter.prevent="selectProject(project.id)"
+              >
                 <strong>{{ project.name }}</strong>
-                <small>#{{ project.id }} - {{ project.accessMode }}</small>
-              </button>
+                <NDropdown trigger="click" :options="projectMenuOptions" @select="(key) => handleProjectMenuSelect(key, project)">
+                  <button type="button" class="project-conversation-item__more" aria-label="项目操作" @click.stop>...</button>
+                </NDropdown>
+              </div>
             </div>
           </section>
+
+          <button
+            type="button"
+            class="project-rail-resizer project-rail-resizer--row"
+            aria-label="调整项目列表高度"
+            title="拖动调整高度，双击恢复默认"
+            :disabled="sidebarSections.projects"
+            @pointerdown="startProjectLayoutResize('projects', $event)"
+            @keydown="handleProjectLayoutResizeKey('projects', $event)"
+            @dblclick="resetProjectLayout"
+          />
 
           <section class="project-sidebar-section project-sidebar-section--chats" :class="{ 'project-sidebar-section--collapsed': sidebarSections.conversations }">
             <div class="project-sidebar-section__toggle">
@@ -86,6 +110,17 @@
             </div>
           </section>
 
+          <button
+            type="button"
+            class="project-rail-resizer project-rail-resizer--row"
+            aria-label="调整会话列表高度"
+            title="拖动调整高度，双击恢复默认"
+            :disabled="sidebarSections.conversations"
+            @pointerdown="startProjectLayoutResize('conversations', $event)"
+            @keydown="handleProjectLayoutResizeKey('conversations', $event)"
+            @dblclick="resetProjectLayout"
+          />
+
           <section class="project-sidebar-section project-sidebar-section--file-browser" :class="{ 'project-sidebar-section--collapsed': sidebarSections.files }">
             <div class="project-sidebar-section__header">
               <div class="project-sidebar-section__toggle">
@@ -99,6 +134,7 @@
               <NSpace class="project-panel__title-actions" :size="4" align="center">
                 <span class="project-panel__count">{{ manifest?.files.length || 0 }}</span>
                 <template v-if="!sidebarSections.files">
+                  <NButton size="tiny" quaternary title="搜索当前项目的文件内容" @click="showInspector('search')">搜索内容</NButton>
                   <NButton
                     size="tiny"
                     quaternary
@@ -135,19 +171,18 @@
               <NEmpty v-if="manifest && manifest.files.length === 0" size="small" :description="t('project.page.noReadableFiles')" />
             </div>
 
-            <div v-show="!sidebarSections.files" class="project-search">
-              <NInput v-model:value="searchQuery" size="small" :placeholder="t('project.page.searchProject')" @keyup.enter="runSearch" />
-              <NButton size="small" secondary :loading="loading.search" :disabled="!activeProject" @click="runSearch">{{ t('project.page.search') }}</NButton>
-            </div>
-
-            <div v-if="!sidebarSections.files && searchResults.length" class="project-search-results">
-              <button v-for="hit in searchResults" :key="`${hit.path}:${hit.lineNumber}`" type="button" @click="openFile(hit.path)">
-                <strong>{{ hit.path }}:{{ hit.lineNumber }}</strong>
-                <span>{{ hit.line }}</span>
-              </button>
-            </div>
           </section>
         </aside>
+
+        <button
+          type="button"
+          class="project-rail-resizer project-rail-resizer--column"
+          aria-label="调整项目资料栏宽度"
+          title="拖动调整宽度，双击恢复默认"
+          @pointerdown="startProjectLayoutResize('width', $event)"
+          @keydown="handleProjectLayoutResizeKey('width', $event)"
+          @dblclick="resetProjectLayout"
+        />
 
         <section class="project-panel project-panel--main project-panel--v2">
           <div class="project-tabs project-command-bar">
@@ -170,12 +205,29 @@
 
           <section v-if="inspectorOpen" id="project-inspector" class="project-inspector">
             <div class="project-inspector__tabs">
-              <strong>任务详情</strong>
+              <strong>{{ inspectorTitle }}</strong>
               <button type="button" class="project-inspector__close" @click="inspectorOpen = false">收起</button>
             </div>
 
             <div class="project-inspector__body">
-              <template v-if="inspectorTab === 'preview'">
+              <template v-if="inspectorTab === 'search'">
+                <div class="project-search-workspace">
+                  <div class="project-search-workspace__form">
+                    <NInput v-model:value="searchQuery" clearable placeholder="搜索当前项目的文件内容" @keyup.enter="runSearch" />
+                    <NButton type="primary" :loading="loading.search" :disabled="!activeProject || !searchQuery.trim()" @click="runSearch">搜索</NButton>
+                  </div>
+                  <div v-if="searchResults.length" class="project-search-results project-search-results--wide">
+                    <button v-for="hit in searchResults" :key="`${hit.path}:${hit.lineNumber}`" type="button" @click="openFile(hit.path)">
+                      <strong>{{ hit.path }}:{{ hit.lineNumber }}</strong>
+                      <span>{{ hit.line }}</span>
+                    </button>
+                  </div>
+                  <NEmpty v-else-if="searchQuery.trim() && !loading.search" size="small" description="没有找到匹配内容。" />
+                  <NEmpty v-else-if="!loading.search" size="small" description="输入关键词，搜索当前项目中的文件内容。" />
+                </div>
+              </template>
+
+              <template v-else-if="inspectorTab === 'preview'">
                 <div class="project-preview project-preview--inline">
                   <div class="project-panel__title"><strong>{{ selectedFile?.path || '文件预览' }}</strong><span v-if="selectedFile">{{ shortHash(selectedFile.sha256) }}</span></div>
                   <NSpin v-if="loading.file" size="small" />
@@ -416,7 +468,8 @@
           </section>
 
           <section class="v2-conversation">
-            <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="reactPlanBusy">
+            <div class="project-conversation-shell">
+            <div ref="reactPlanTasksRef" class="v2-conversation__tasks" aria-live="polite" :aria-busy="reactPlanBusy" @scroll="syncReactPlanNavigation">
               <div v-if="reactPlanNextCursor" class="reactplan-history-more">
                 <NButton size="tiny" secondary :loading="reactPlanLoadingOlder" @click="loadEarlierReactPlanTasks">
                   加载更早任务
@@ -425,6 +478,7 @@
               <article
                 v-for="item in reactPlanTimeline"
                 :key="item.record.taskId"
+                :ref="(element) => setReactPlanTaskRef(element, item.record.taskId)"
                 class="v2-task-card reactplan-task-card"
                 :data-task-state="item.record.view.state"
               >
@@ -487,6 +541,13 @@
 
               </article>
               <NEmpty v-if="reactPlanTimeline.length === 0" description="尚无任务记录。输入任务后，这里会显示执行进度和最终结果。" />
+            </div>
+            <ConversationQuestionRail
+              :items="reactPlanNavigationItems"
+              :active-id="activeReactPlanNavigationId"
+              aria-label="当前项目会话问题导航"
+              @select="scrollToReactPlanTask"
+            />
             </div>
 
             <NAlert v-if="reactPlanError" type="error" :show-icon="false">{{ reactPlanError }}</NAlert>
@@ -606,6 +667,22 @@
       </NSpace>
     </NModal>
 
+    <NModal v-model:show="renameProjectModalOpen" preset="card" title="重命名项目" :style="{ width: 'min(420px, calc(100vw - 32px))' }">
+      <NSpace vertical :size="14">
+        <NInput
+          v-model:value="renameProjectDraft"
+          maxlength="255"
+          show-count
+          placeholder="项目名称"
+          @keydown.enter.prevent="confirmRenameProject"
+        />
+        <NSpace justify="end">
+          <NButton secondary @click="renameProjectModalOpen = false">取消</NButton>
+          <NButton type="primary" :loading="loading.renameProject" :disabled="!renameProjectDraft.trim()" @click="confirmRenameProject">保存</NButton>
+        </NSpace>
+      </NSpace>
+    </NModal>
+
     <NModal v-model:show="renameSessionModalOpen" preset="card" title="Rename conversation" :style="{ width: 'min(420px, calc(100vw - 32px))' }">
       <NSpace vertical :size="14">
         <NInput
@@ -672,11 +749,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
+import ConversationQuestionRail from '@/components/ConversationQuestionRail.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
 import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listReactPlanSessionTasks, startReactPlanTask, streamReactPlanEvents, type ReactPlanSessionTask, type ReactPlanTaskState } from '@/api/reactPlan';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, renameProject, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
 import {
@@ -714,7 +792,7 @@ import {
   type ReactPlanTaskRecord,
 } from '@/utils/reactPlanTask';
 
-type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
+type ProjectInspectorTab = 'search' | 'preview' | 'evidence' | 'changes' | 'versions';
 
 interface CandidateReviewItem {
   artifact: ArtifactResponse;
@@ -761,9 +839,19 @@ const revisionMessage = ref('');
 const revisionMessageType = ref<'success' | 'warning' | 'error'>('success');
 const inspectorTab = ref<ProjectInspectorTab>('preview');
 const inspectorOpen = ref(false);
+const inspectorTitle = computed(() => ({
+  search: '搜索项目内容',
+  preview: '文件预览',
+  evidence: '证据',
+  changes: '修改与验证',
+  versions: '项目版本',
+}[inspectorTab.value]));
 const error = ref('');
 const createModalOpen = ref(false);
 const deleteModalOpen = ref(false);
+const renameProjectModalOpen = ref(false);
+const renameProjectId = ref<number | null>(null);
+const renameProjectDraft = ref('');
 const renameSessionModalOpen = ref(false);
 const renameSessionId = ref<number | null>(null);
 const renameSessionDraft = ref('');
@@ -797,6 +885,9 @@ const reactPlanCancelling = ref(false);
 const reactPlanAnswering = ref(false);
 const reactPlanClock = ref(Date.now());
 const reactPlanSubmissionStartedAt = ref<string | null>(null);
+const reactPlanTasksRef = ref<HTMLElement | null>(null);
+const reactPlanTaskRefs: Record<string, HTMLElement | null> = {};
+const activeReactPlanNavigationId = ref<string | null>(null);
 let reactPlanAbortController: AbortController | null = null;
 let reactPlanReconnectTimer: number | null = null;
 let reactPlanClockTimer: number | null = null;
@@ -814,6 +905,18 @@ const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => 
   tools: reactPlanToolEvents(record.events),
   delivery: reactPlanDelivery(record.events),
   question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
+})));
+const reactPlanNavigationItems = computed(() => reactPlanTimeline.value.map((item) => ({
+  id: item.record.taskId,
+  user: navigationPreviewText(item.record.instruction),
+  assistant: navigationPreviewText(
+    item.delivery?.conclusion
+      || item.question?.text
+      || (item.record.view.state === 'failed'
+        ? item.record.view.error?.message || '任务执行失败'
+        : reactPlanStateLabel(item.record.view.state)),
+  ),
+  state: item.record.view.state,
 })));
 const reactPlanExecutionActive = computed(() => (
   reactPlanRecord.value?.view.state === 'queued'
@@ -842,6 +945,10 @@ const reactPlanBusy = computed(() => (
   reactPlanSubmitting.value || reactPlanCancelling.value || reactPlanAnswering.value
     || reactPlanExecutionActive.value
 ));
+
+watch(reactPlanNavigationItems, () => {
+  void nextTick(syncReactPlanNavigation);
+}, { flush: 'post' });
 
 function reactPlanSessionState(sessionId: number) {
   return reactPlanSessionStates.value[sessionId];
@@ -876,6 +983,7 @@ const loading = reactive({
   rollback: false,
   create: false,
   deleteProject: false,
+  renameProject: false,
   renameSession: false,
   v2History: false,
 });
@@ -914,15 +1022,40 @@ const collapsedDirectories = ref<Set<string>>(new Set());
 const collapsedDirectoriesByProject = new Map<number, Set<string>>();
 const PROJECT_HEADER_COLLAPSED_KEY = 'yanban.project.headerCollapsed';
 const PROJECT_CONTEXT_COLLAPSED_KEY = 'yanban.project.contextCollapsed';
+const PROJECT_LAYOUT_KEY = 'yanban.project.contextLayout.v1';
+const DEFAULT_PROJECT_LAYOUT = Object.freeze({ width: 270, projects: 170, conversations: 190 });
+type ProjectLayoutAxis = 'width' | 'projects' | 'conversations';
+const projectContextRailRef = ref<HTMLElement | null>(null);
+const projectLayout = reactive(readStoredProjectLayout());
+let activeProjectLayoutDrag: {
+  axis: ProjectLayoutAxis;
+  startCoordinate: number;
+  startValue: number;
+} | null = null;
 const DEFAULT_SESSION_TITLE = '\u65b0\u4f1a\u8bdd';
 const projectHeaderCollapsed = ref(readStoredBoolean(PROJECT_HEADER_COLLAPSED_KEY, false));
 const contextRailCollapsed = ref(readStoredBoolean(
   PROJECT_CONTEXT_COLLAPSED_KEY,
   typeof window !== 'undefined' && window.innerWidth <= 980,
 ));
+const projectLayoutStyle = computed(() => ({
+  '--project-context-width': `${projectLayout.width}px`,
+}));
+const projectRailStyle = computed(() => ({
+  gridTemplateRows: [
+    sidebarSections.projects ? '34px' : `${projectLayout.projects}px`,
+    '7px',
+    sidebarSections.conversations ? '34px' : `${projectLayout.conversations}px`,
+    '7px',
+    sidebarSections.files ? '34px' : 'minmax(140px, 1fr)',
+  ].join(' '),
+}));
 const sessionMenuOptions = computed(() => [
   { label: isEnglish.value ? 'Rename' : '重命名', key: 'rename' },
   { label: isEnglish.value ? 'Delete' : '删除', key: 'delete' },
+]);
+const projectMenuOptions = computed(() => [
+  { label: isEnglish.value ? 'Rename project' : '重命名项目', key: 'rename' },
 ]);
 const projectUtilityMenuOptions = computed(() => [
   { label: isEnglish.value ? 'File preview' : '文件预览', key: 'preview' },
@@ -1008,6 +1141,90 @@ function readStoredBoolean(key: string, fallback: boolean) {
   if (typeof window === 'undefined') return fallback;
   const value = window.localStorage.getItem(key);
   return value == null ? fallback : value === 'true';
+}
+
+function clampProjectLayout(value: number, minimum: number, maximum: number) {
+  return Math.min(Math.max(Math.round(value), minimum), maximum);
+}
+
+function readStoredProjectLayout() {
+  if (typeof window === 'undefined') return { ...DEFAULT_PROJECT_LAYOUT };
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(PROJECT_LAYOUT_KEY) || '{}') as Partial<typeof DEFAULT_PROJECT_LAYOUT>;
+    return {
+      width: clampProjectLayout(Number(stored.width) || DEFAULT_PROJECT_LAYOUT.width, 220, 480),
+      projects: clampProjectLayout(Number(stored.projects) || DEFAULT_PROJECT_LAYOUT.projects, 72, 360),
+      conversations: clampProjectLayout(Number(stored.conversations) || DEFAULT_PROJECT_LAYOUT.conversations, 72, 420),
+    };
+  } catch {
+    return { ...DEFAULT_PROJECT_LAYOUT };
+  }
+}
+
+function persistProjectLayout() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(PROJECT_LAYOUT_KEY, JSON.stringify(projectLayout));
+  }
+}
+
+function projectLayoutMaximum(axis: ProjectLayoutAxis) {
+  if (axis === 'width') return Math.min(480, Math.max(220, window.innerWidth * .42));
+  const railHeight = projectContextRailRef.value?.clientHeight || window.innerHeight * .72;
+  const other = axis === 'projects'
+    ? (sidebarSections.conversations ? 34 : projectLayout.conversations)
+    : (sidebarSections.projects ? 34 : projectLayout.projects);
+  return Math.max(72, railHeight - other - 188);
+}
+
+function updateProjectLayout(axis: ProjectLayoutAxis, value: number) {
+  const minimum = axis === 'width' ? 220 : 72;
+  projectLayout[axis] = clampProjectLayout(value, minimum, projectLayoutMaximum(axis));
+}
+
+function startProjectLayoutResize(axis: ProjectLayoutAxis, event: PointerEvent) {
+  if (window.innerWidth <= 980 || contextRailCollapsed.value) return;
+  activeProjectLayoutDrag = {
+    axis,
+    startCoordinate: axis === 'width' ? event.clientX : event.clientY,
+    startValue: projectLayout[axis],
+  };
+  event.currentTarget instanceof HTMLElement && event.currentTarget.setPointerCapture(event.pointerId);
+  document.documentElement.classList.add('project-layout-resizing');
+  window.addEventListener('pointermove', handleProjectLayoutPointerMove);
+  window.addEventListener('pointerup', stopProjectLayoutResize, { once: true });
+  event.preventDefault();
+}
+
+function handleProjectLayoutPointerMove(event: PointerEvent) {
+  if (!activeProjectLayoutDrag) return;
+  const coordinate = activeProjectLayoutDrag.axis === 'width' ? event.clientX : event.clientY;
+  updateProjectLayout(
+    activeProjectLayoutDrag.axis,
+    activeProjectLayoutDrag.startValue + coordinate - activeProjectLayoutDrag.startCoordinate,
+  );
+}
+
+function stopProjectLayoutResize() {
+  if (!activeProjectLayoutDrag) return;
+  activeProjectLayoutDrag = null;
+  document.documentElement.classList.remove('project-layout-resizing');
+  window.removeEventListener('pointermove', handleProjectLayoutPointerMove);
+  persistProjectLayout();
+}
+
+function handleProjectLayoutResizeKey(axis: ProjectLayoutAxis, event: KeyboardEvent) {
+  if (window.innerWidth <= 980 || contextRailCollapsed.value) return;
+  const negative = axis === 'width' ? event.key === 'ArrowLeft' : event.key === 'ArrowUp';
+  const positive = axis === 'width' ? event.key === 'ArrowRight' : event.key === 'ArrowDown';
+  if (!negative && !positive) return;
+  event.preventDefault();
+  updateProjectLayout(axis, projectLayout[axis] + (positive ? 12 : -12));
+  persistProjectLayout();
+}
+
+function resetProjectLayout() {
+  Object.assign(projectLayout, DEFAULT_PROJECT_LAYOUT);
+  persistProjectLayout();
 }
 
 function setProjectHeaderCollapsed(collapsed: boolean) {
@@ -1147,6 +1364,30 @@ function toggleInspector(tab: ProjectInspectorTab) {
 function handleProjectUtilityMenuSelect(key: string | number) {
   if (key === 'preview' || key === 'evidence' || key === 'versions') {
     toggleInspector(key);
+  }
+}
+
+function handleProjectMenuSelect(key: string | number, project: ProjectSummaryResponse) {
+  if (key !== 'rename') return;
+  renameProjectId.value = project.id;
+  renameProjectDraft.value = project.name;
+  renameProjectModalOpen.value = true;
+}
+
+async function confirmRenameProject() {
+  const projectId = renameProjectId.value;
+  const name = renameProjectDraft.value.trim();
+  if (!projectId || !name) return;
+  loading.renameProject = true;
+  error.value = '';
+  try {
+    const { data } = await renameProject(projectId, name);
+    projects.value = projects.value.map((project) => project.id === data.id ? data : project);
+    renameProjectModalOpen.value = false;
+  } catch (cause) {
+    error.value = apiError(cause);
+  } finally {
+    loading.renameProject = false;
   }
 }
 
@@ -1738,6 +1979,47 @@ function resetReactPlanView() {
   reactPlanSubmissionStartedAt.value = null;
   reactPlanCancelling.value = false;
   reactPlanAnswering.value = false;
+  activeReactPlanNavigationId.value = null;
+  Object.keys(reactPlanTaskRefs).forEach((taskId) => delete reactPlanTaskRefs[taskId]);
+}
+
+function navigationPreviewText(value: string | null | undefined) {
+  const normalized = (value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > 100 ? `${normalized.slice(0, 100)}…` : normalized;
+}
+
+function setReactPlanTaskRef(element: unknown, taskId: string) {
+  if (element instanceof HTMLElement) reactPlanTaskRefs[taskId] = element;
+  else delete reactPlanTaskRefs[taskId];
+}
+
+function syncReactPlanNavigation() {
+  const container = reactPlanTasksRef.value;
+  if (!container || reactPlanTimeline.value.length === 0) {
+    activeReactPlanNavigationId.value = null;
+    return;
+  }
+  const threshold = container.getBoundingClientRect().top + 24;
+  let activeId = reactPlanTimeline.value[0]?.record.taskId ?? null;
+  for (const item of reactPlanTimeline.value) {
+    const card = reactPlanTaskRefs[item.record.taskId];
+    if (!card || card.getBoundingClientRect().top > threshold) break;
+    activeId = item.record.taskId;
+  }
+  activeReactPlanNavigationId.value = activeId;
+}
+
+async function scrollToReactPlanTask(taskId: string) {
+  await nextTick();
+  const container = reactPlanTasksRef.value;
+  const card = reactPlanTaskRefs[taskId];
+  if (!container || !card) return;
+  const containerTop = container.getBoundingClientRect().top;
+  const cardTop = card.getBoundingClientRect().top;
+  const targetTop = container.scrollTop + cardTop - containerTop - 8;
+  container.scrollTo({ top: Math.max(targetTop, 0), behavior: 'smooth' });
+  activeReactPlanNavigationId.value = taskId;
 }
 
 function isCurrentReactPlan(record: ReactPlanTaskRecord, epoch: number) {
@@ -1903,6 +2185,11 @@ async function submitReactPlanTask() {
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
     const clientRequestId = newReactPlanRequestId();
     const accepted = (await startReactPlanTask(sessionId, { clientRequestId, instruction }, controller.signal)).data;
+    void listProjectSessions(projectId).then(({ data }) => {
+      if (epoch === projectEpoch && projectId === activeProjectId.value) {
+        projectSessions.value = data;
+      }
+    }).catch(() => undefined);
     reactPlanSessionStates.value = {
       ...reactPlanSessionStates.value,
       [sessionId]: accepted.task.state,
@@ -2723,6 +3010,7 @@ onMounted(() => {
   void loadProjects();
 });
 onUnmounted(() => {
+  stopProjectLayoutResize();
   stopV2NaturalLanguagePolling();
   invalidateReactPlanStream();
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
@@ -2750,6 +3038,7 @@ onUnmounted(() => {
 .project-panel--files, .project-panel--main { overflow: hidden; }
 .project-panel--files { gap: 0; }
 .project-panel + .project-panel { border-left: 1px solid var(--yb-border); }
+.project-rail-resizer--column + .project-panel { border-left: 1px solid var(--yb-border); }
 .project-panel__title { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
 .project-panel__title > span, .project-panel__count { color: var(--yb-text-muted); font-family: ui-monospace, monospace; font-size: 10px; }
 .project-panel__title-actions { min-width: 0; }
@@ -2784,7 +3073,7 @@ onUnmounted(() => {
 .project-sidebar-section--projects .project-list,
 .project-sidebar-section--chats .project-conversation-history--sidebar { flex: 0 1 auto; max-height: 136px; }
 .project-list__item, .project-file-list__item, .project-search-results button, .project-candidate-list button { width: 100%; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; border-radius: 7px; }
-.project-list__item { min-height: 50px; display: grid; align-content: center; gap: 2px; padding: 7px 10px; line-height: 1.3; }
+.project-list__item { min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 8px 7px 10px; line-height: 1.3; }
 .project-list__item.active, .project-file-list__item.active, .project-candidate-list button.active { background: var(--yb-sidebar-active); }
 .project-list__item strong, .project-list__item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-list__item strong { font-size: 12px; font-weight: 600; line-height: 1.35; }
@@ -2805,6 +3094,12 @@ onUnmounted(() => {
 .project-search-results button { padding: 5px 6px; }
 .project-search-results strong, .project-search-results span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
 .project-search-results span { color: var(--yb-text-muted); margin-top: 2px; }
+.project-search-workspace { min-height: 220px; display: flex; flex-direction: column; gap: 12px; }
+.project-search-workspace__form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.project-search-results--wide { flex: 1 1 auto; max-height: 34dvh; gap: 4px; }
+.project-search-results--wide button { padding: 9px 10px; border-bottom: 1px solid var(--yb-border); border-radius: 4px; }
+.project-search-results--wide strong { font-size: 11px; }
+.project-search-results--wide span { margin-top: 4px; overflow: visible; white-space: normal; line-height: 1.5; }
 
 .project-tabs { flex: 0 0 auto; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--yb-border); }
 .project-tabs__title { flex: 0 0 auto; font-size: 12px; line-height: 26px; }
@@ -2851,6 +3146,8 @@ onUnmounted(() => {
 .v2-workbench__progress > article > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .v2-workbench__progress > article > div small { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 .v2-conversation { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 2px; }
+.project-conversation-shell { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 10px; overflow: hidden; }
+.project-conversation-shell > :deep(.chat-minimap-rail) { right: 2px; opacity: .62; }
 .v2-conversation__tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 3px; scrollbar-gutter: stable; }
 .reactplan-history-more { display: flex; justify-content: center; padding: 2px 0 4px; }
 .v2-task-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 12px; background: var(--yb-bg-elevated); }
@@ -3162,6 +3459,7 @@ onUnmounted(() => {
   .project-panel { min-height: 320px; }
   .project-panel--files, .project-panel--main { overflow: visible; }
   .project-panel + .project-panel { border-left: 0; border-top: 1px solid var(--yb-border); }
+  .project-rail-resizer--column + .project-panel { border-left: 0; border-top: 1px solid var(--yb-border); }
   .project-workspace__header { align-items: flex-start; flex-direction: column; }
   .project-sidebar-section { flex: none; }
   .project-sidebar-section--projects, .project-sidebar-section--chats, .project-sidebar-section--file-browser { min-height: 0; }
@@ -3177,6 +3475,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 620px) {
+  .project-conversation-shell { grid-template-columns: minmax(0, 1fr); }
+  .project-conversation-shell > :deep(.chat-minimap-rail) { display: none; }
   .project-execution-card__details > summary { grid-template-columns: 16px minmax(0, 1fr); align-items: start; }
   .project-execution-card__meta { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
   .project-result-layers { grid-template-columns: 1fr; }
@@ -3245,7 +3545,7 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-workspace__grid {
-  grid-template-columns: clamp(248px, 21vw, 290px) minmax(0, 1fr);
+  grid-template-columns: var(--project-context-width, 270px) 7px minmax(0, 1fr);
   border-color: var(--project-rule);
   border-radius: var(--project-radius-panel);
   background: var(--project-surface);
@@ -3253,7 +3553,7 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-workspace__grid--context-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
+  grid-template-columns: 0 0 minmax(0, 1fr);
 }
 
 .project-workspace--console .project-workspace__grid--context-collapsed .project-context-rail {
@@ -3271,9 +3571,54 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-context-rail {
+  display: grid;
   padding: 12px;
+  gap: 0;
   background: var(--project-canvas);
 }
+
+.project-workspace--console .project-context-rail .project-sidebar-section {
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  overflow: hidden;
+}
+
+.project-workspace--console .project-context-rail .project-sidebar-section--file-browser {
+  min-height: 0;
+}
+
+.project-rail-resizer {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  touch-action: none;
+}
+
+.project-rail-resizer::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+.project-rail-resizer:hover::after,
+.project-rail-resizer:focus-visible::after {
+  background: color-mix(in srgb, var(--project-accent) 62%, transparent);
+}
+
+.project-rail-resizer--column { cursor: col-resize; }
+.project-rail-resizer--column::after { inset: 0 2px; }
+.project-rail-resizer--row { cursor: row-resize; }
+.project-rail-resizer--row::after { inset: 2px 12px; }
+.project-rail-resizer:disabled { cursor: default; opacity: .28; }
+.project-workspace__grid--context-collapsed > .project-rail-resizer--column { visibility: hidden; }
+:global(.project-layout-resizing) { cursor: grabbing; user-select: none; }
 
 .project-workspace--console .project-panel + .project-panel,
 .project-workspace--console .project-sidebar-section + .project-sidebar-section .project-sidebar-section__toggle,
@@ -3334,7 +3679,7 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-list__item {
-  min-height: 54px;
+  min-height: 44px;
   padding: 8px 12px;
 }
 
@@ -3638,8 +3983,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1200px) {
-  .project-workspace--console .project-workspace__grid { grid-template-columns: 248px minmax(0, 1fr); }
-  .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+  .project-workspace--console .project-workspace__grid { grid-template-columns: var(--project-context-width, 248px) 7px minmax(0, 1fr); }
+  .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 0 0 minmax(0, 1fr); }
 }
 
 @media (max-width: 980px) {
@@ -3649,7 +3994,9 @@ onUnmounted(() => {
   .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 1fr; }
   .project-workspace--console .project-workspace__grid--context-collapsed .project-context-rail { display: none; }
   .project-workspace--console .project-panel { min-height: 0; padding: 12px; }
+  .project-workspace--console .project-rail-resizer { display: none; }
   .project-workspace--console .project-context-rail {
+    display: flex;
     flex-direction: row;
     gap: 0;
     padding: 0;

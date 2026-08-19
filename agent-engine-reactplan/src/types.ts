@@ -23,7 +23,10 @@ export interface TaskSubmission {
   taskId: string;
   requestDigest: string;
   authority: Authority;
-  context?: { longTermMemory: LongTermMemoryEnvelope };
+  context?: {
+    historicalContext?: HistoricalContextEnvelope;
+    longTermMemory: LongTermMemoryEnvelope;
+  };
   gateway: { taskGrant: string; expiresAt: string };
 }
 
@@ -111,8 +114,11 @@ export interface PendingCall extends ModelToolCall {
 export interface AcceptedAnswer { clientRequestId: string; questionId: string; answerDigest: string }
 
 export interface RecentConversationTurn {
+  intakeId?: number;
+  turnId?: number;
   instruction: string;
   conclusion: string;
+  state?: "succeeded" | "failed" | "cancelled";
   projectVersion: string;
   completedAt: string;
 }
@@ -126,6 +132,12 @@ export interface HistoricalContextEnvelope {
     continueOnlyWhenCurrentTaskRequestsIt: true;
     projectFactsRequireCurrentTaskEvidence: true;
   };
+  earlierSummary: {
+    text: string;
+    coveredThroughIntakeId: number;
+    coveredTurnCount: number;
+  } | null;
+  uncoveredEarlierTurns: RecentConversationTurn[];
   turns: RecentConversationTurn[];
 }
 

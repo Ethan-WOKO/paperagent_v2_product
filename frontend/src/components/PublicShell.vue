@@ -1,9 +1,11 @@
 <template>
   <div class="public-shell">
     <header class="public-shell__header">
-      <RouterLink class="public-shell__brand" to="/login" aria-label="PaperAgent">
-        <img src="/logo.png" alt="" />
-        <span>PaperAgent</span>
+      <RouterLink class="public-shell__brand" to="/login" aria-label="研伴">
+        <span class="public-shell__brand-mark" aria-hidden="true">
+          <img src="/logo.png" alt="" />
+        </span>
+        <span>研伴</span>
       </RouterLink>
       <div class="public-shell__tools">
         <LanguageToggle />

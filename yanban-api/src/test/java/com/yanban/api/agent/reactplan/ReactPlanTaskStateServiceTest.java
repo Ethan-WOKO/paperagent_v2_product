@@ -39,8 +39,11 @@ class ReactPlanTaskStateServiceTest {
     private final AgentEngineObservationReader observations = mock(AgentEngineObservationReader.class);
     private final UserQuotaService quotas = mock(UserQuotaService.class);
     private final ReactPlanTaskSchedulerService scheduler = mock(ReactPlanTaskSchedulerService.class);
+    private final org.springframework.context.ApplicationEventPublisher applicationEvents =
+            mock(org.springframework.context.ApplicationEventPublisher.class);
     private final ReactPlanTaskStateService service = new ReactPlanTaskStateService(
-            json, checkpoints, events, intakes, contexts, grants, observations, quotas, scheduler);
+            json, checkpoints, events, intakes, contexts, grants, observations, quotas,
+            scheduler, applicationEvents);
     private final String taskId = ReactPlanRuntimeService.taskId(7L, 42L);
 
     @BeforeEach
@@ -48,6 +51,7 @@ class ReactPlanTaskStateServiceTest {
         ReactPlanTurnIntakeEntity intake = new ReactPlanTurnIntakeEntity(
                 7L, 11L, "client.request", "a".repeat(64), 42L, 99L,
                 taskId, LocalDateTime.parse("2026-08-18T00:00:00"));
+        org.springframework.test.util.ReflectionTestUtils.setField(intake, "id", 1L);
         when(intakes.findByTaskId(taskId)).thenReturn(Optional.of(intake));
         when(contexts.resolve(7L, 42L)).thenReturn(new VerifiedAgentTurnProductContext(
                 new AgentRunIdentity("AGENT_TURN", "42", 7L, 11L, 88L),
@@ -157,6 +161,8 @@ class ReactPlanTaskStateServiceTest {
         assertThat(service.save(taskId, digest, 2L, succeeded, null)).isEqualTo(3L);
 
         verify(quotas, times(1)).recordTaskUsage(7L, "REACT_PLAN", 19L, 5L);
+        verify(applicationEvents, times(1)).publishEvent(
+                any(ReactPlanConversationSummaryRequested.class));
         assertThat(persisted.usageSettled()).isTrue();
         assertThat(persisted.settledPromptTokens()).isEqualTo(19L);
         assertThat(persisted.settledCompletionTokens()).isEqualTo(5L);

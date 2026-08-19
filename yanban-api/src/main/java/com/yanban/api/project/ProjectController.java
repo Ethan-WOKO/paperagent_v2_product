@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -132,6 +133,14 @@ public class ProjectController {
     @GetMapping
     public List<ProjectSummaryResponse> list(@AuthenticationPrincipal(expression = "id") Long userId) {
         return projectService.list(userId);
+    }
+
+    @PatchMapping("/{projectId}")
+    public ProjectSummaryResponse rename(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @Valid @RequestBody RenameProjectRequest request) {
+        return projectService.rename(userId, projectId, request.name());
     }
 
     /** Browser folder import: files are copied into server-owned storage and never mutate the source folder. */

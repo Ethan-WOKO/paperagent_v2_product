@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.api.agent.AgentToolPolicyEngine;
 import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
+import com.yanban.api.agent.reactplan.ReactPlanHistoryToolContract;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolCall;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
@@ -208,6 +209,55 @@ class AgentEngineRegisteredToolGatewayTest {
     }
 
     @Test
+    void exposesHistoryToolsAndInjectsUnforgeableTaskScope() {
+        ToolRegistry registry = new ToolRegistry()
+                .register(historyExecutor(ReactPlanHistoryToolContract.SEARCH_TASKS))
+                .register(historyExecutor(ReactPlanHistoryToolContract.GET_TASK))
+                .register(historyExecutor(ReactPlanHistoryToolContract.GET_TRACE));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(
+                new AgentToolPolicyEngine.Decision(List.of(), 0, 1, "test"));
+        AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
+                json, registry, policies, contexts(VERSION));
+
+        var catalog = gateway.catalog(authority());
+
+        assertThat(catalog.tools()).extracting(tool -> tool.function().name())
+                .containsExactly(ReactPlanHistoryToolContract.GET_TASK,
+                        ReactPlanHistoryToolContract.GET_TRACE,
+                        ReactPlanHistoryToolContract.SEARCH_TASKS);
+        assertThat(catalog.tools()).allSatisfy(tool ->
+                assertThat(tool.function().parameters().toString())
+                        .doesNotContain("_server", "userId", "projectId"));
+
+        ObjectNode arguments = json.createObjectNode().put("scope", "current_project");
+        String digest = ReactPlanCanonicalJson.digest(json,
+                Map.of("toolName", ReactPlanHistoryToolContract.SEARCH_TASKS,
+                        "arguments", arguments));
+        var result = gateway.invoke(authority(), new RegisteredToolCall(
+                "1.0", "call." + "f".repeat(40),
+                ReactPlanHistoryToolContract.SEARCH_TASKS, arguments, digest));
+        assertThat(result.output().path("arguments")
+                .path(ReactPlanHistoryToolContract.SERVER_TASK_ID).asText()).isEqualTo(TASK);
+        assertThat(result.output().path("arguments")
+                .path(ReactPlanHistoryToolContract.SERVER_SESSION_ID).asLong()).isEqualTo(13L);
+        assertThat(result.output().path("arguments")
+                .path(ReactPlanHistoryToolContract.SERVER_PROJECT_ID).asLong()).isEqualTo(14L);
+
+        ObjectNode forged = json.createObjectNode()
+                .put(ReactPlanHistoryToolContract.SERVER_PROJECT_ID, 999L);
+        String forgedDigest = ReactPlanCanonicalJson.digest(json,
+                Map.of("toolName", ReactPlanHistoryToolContract.GET_TASK,
+                        "arguments", forged));
+        assertThatThrownBy(() -> gateway.invoke(authority(), new RegisteredToolCall(
+                "1.0", "call." + "0".repeat(40),
+                ReactPlanHistoryToolContract.GET_TASK, forged, forgedDigest)))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo(
+                                "REGISTERED_TOOL_SERVER_ARGUMENT_FORBIDDEN"));
+    }
+
+    @Test
     void rejectsARegisteredToolResultFromAnotherProjectVersion() {
         ToolRegistry registry = new ToolRegistry().register(
                 executor("project_search", ToolDescriptor.SideEffectType.READ_ONLY));
@@ -315,6 +365,31 @@ class AgentEngineRegisteredToolGatewayTest {
                         List.of(ToolDescriptor.CapabilityProfile.PROJECT), List.of(), scopes,
                         sideEffect, ToolDescriptor.ConfirmationPolicy.NEVER, asyncMode,
                         idempotency, ToolDescriptor.RepeatPolicy.DENY_SAME_INPUT, true);
+            }
+
+            @Override
+            public ToolResult execute(ToolCall call) {
+                ObjectNode output = json.createObjectNode();
+                output.set("arguments", call.arguments());
+                return ToolResult.success(call.id(), name, output);
+            }
+        };
+    }
+
+    private ToolExecutor historyExecutor(String name) {
+        ObjectNode schema = json.createObjectNode();
+        schema.put("type", "object");
+        schema.putObject("properties").putObject("taskId").put("type", "string");
+        schema.put("additionalProperties", false);
+        return new ToolExecutor() {
+            @Override
+            public ToolDefinition definition() {
+                return new ToolDefinition(name, "test history " + name, schema);
+            }
+
+            @Override
+            public ToolDescriptor descriptor() {
+                return ReactPlanHistoryToolContract.descriptor(name);
             }
 
             @Override

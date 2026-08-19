@@ -3628,6 +3628,24 @@ body.theme-light .workbench-hero {
   background: rgba(245, 158, 11, 0.44);
 }
 
+.chat-minimap__item--queued,
+.chat-minimap__item--waiting_user {
+  background: rgba(217, 119, 6, 0.58);
+}
+
+.chat-minimap__item--running {
+  background: rgba(8, 145, 178, 0.68);
+}
+
+.chat-minimap__item--succeeded {
+  background: rgba(5, 150, 105, 0.56);
+}
+
+.chat-minimap__item--failed,
+.chat-minimap__item--cancelled {
+  background: rgba(220, 38, 38, 0.5);
+}
+
 .chat-minimap__item--active {
   background: rgba(15, 23, 42, 0.88);
 }
@@ -8369,11 +8387,10 @@ html:not(.canvas-scale-active) .chat-page.research-chat-page.research-chat-page-
 /* Locale controls and long-copy safeguards */
 .language-toggle {
   box-sizing: border-box;
-  width: 82px;
+  width: 32px;
   height: 32px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
+  grid-template-columns: 1fr;
   padding: 2px;
   border: 1px solid var(--yb-border);
   border-radius: 12px;
@@ -8381,6 +8398,7 @@ html:not(.canvas-scale-active) .chat-page.research-chat-page.research-chat-page-
 }
 
 .language-toggle button {
+  width: 26px;
   min-width: 0;
   height: 26px;
   padding: 0 5px;

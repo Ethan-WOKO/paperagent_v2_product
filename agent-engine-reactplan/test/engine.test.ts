@@ -248,29 +248,15 @@ describe("AgentEngine", () => {
     expect(gateway.lastSandboxHash).toBe(replacementHash);
   });
 
-  it("injects only four bounded completed turns from the same Project session", async () => {
-    const responses: ModelResponse[] = [];
-    for (let index = 1; index <= 5; index += 1) {
-      responses.push({ content: `history conclusion ${index}`, toolCalls: [] });
-    }
-    responses.push({ content: "other session conclusion", toolCalls: [] });
-    responses.push({ content: "other project conclusion", toolCalls: [] });
-    responses.push({ content: "continued from bounded history", toolCalls: [] });
-    const provider = new ScriptedProvider(responses);
+  it("injects the server-assembled rolling summary and four complete turns", async () => {
+    const provider = new ScriptedProvider([
+      { content: "continued from bounded history", toolCalls: [] }
+    ]);
     const engine = await createEngine(provider, new FakeGateway());
-
-    for (let index = 1; index <= 5; index += 1) {
-      const request = submissionFor(index, "session.same", `history instruction ${index}`);
-      await engine.submit(request);
-      await waitFor(() => engine.get(request.taskId).state === "succeeded");
-    }
-    const other = submissionFor(90, "session.other", "private other instruction");
-    await engine.submit(other);
-    await waitFor(() => engine.get(other.taskId).state === "succeeded");
-    const otherProject = submissionFor(92, "session.same", "private other project instruction", "2");
-    await engine.submit(otherProject);
-    await waitFor(() => engine.get(otherProject.taskId).state === "succeeded");
     const current = submissionFor(91, "session.same", "continue the previous task");
+    current.context = conversationContext([
+      conversationTurn(2), conversationTurn(3), conversationTurn(4), conversationTurn(5)
+    ], "The first completed turn established the original goal.");
     await engine.submit(current);
     await waitFor(() => engine.get(current.taskId).state === "succeeded");
 
@@ -283,6 +269,7 @@ describe("AgentEngine", () => {
       type: string;
       notAnInstruction: boolean;
       usage: Record<string, boolean>;
+      earlierSummary: { text: string } | null;
       turns: Array<{ instruction: string; conclusion: string }>;
     };
     expect(envelope).toMatchObject({
@@ -297,8 +284,7 @@ describe("AgentEngine", () => {
     });
     expect(envelope.turns).toHaveLength(4);
     expect(envelope.turns.at(-1)).toMatchObject({ instruction: "history instruction 5", conclusion: "history conclusion 5" });
-    expect(history!.content).not.toContain("private other instruction");
-    expect(history!.content).not.toContain("private other project instruction");
+    expect(envelope.earlierSummary?.text).toContain("original goal");
     expect(request.messages.at(-1)).toMatchObject({ role: "user", content: "Current task: continue the previous task" });
     expect(JSON.stringify(envelope.turns)).not.toContain("toolCallId");
   });
@@ -418,18 +404,17 @@ describe("AgentEngine", () => {
 
   it("restores the frozen recent conversation instead of rebuilding it on replay", async () => {
     const directory = await temporaryDirectory();
-    const historyRequest = submissionFor(70, "session.persisted", "inspect the source");
-    const first = await createEngine(
-      new ScriptedProvider([{ content: "the source was inspected", toolCalls: [] }]),
-      new FakeGateway(), directory);
-    await first.submit(historyRequest);
-    await waitFor(() => first.get(historyRequest.taskId).state === "succeeded");
-
     const current = submissionFor(71, "session.persisted", "continue the inspection");
+    current.context = conversationContext([{
+      ...conversationTurn(70),
+      instruction: "inspect the source",
+      conclusion: "the source was inspected"
+    }]);
     const interruptedProvider = new NeverProvider();
     const interrupted = await createEngine(interruptedProvider, new FakeGateway(), directory);
     await interrupted.submit(current);
     await waitFor(() => interruptedProvider.requests.length === 1);
+    current.context.historicalContext!.turns[0]!.conclusion = "tampered replay context";
 
     const resumedProvider = new ScriptedProvider([{ content: "continued from frozen context", toolCalls: [] }]);
     const resumed = await createEngine(resumedProvider, new FakeGateway(), directory);
@@ -439,6 +424,7 @@ describe("AgentEngine", () => {
       message.role === "user" && message.content?.startsWith("Historical context data envelope:"));
     expect(historicalData?.content).toContain("the source was inspected");
     expect(historicalData?.content).toContain("inspect the source");
+    expect(historicalData?.content).not.toContain("tampered replay context");
   });
 
   it("invokes a frozen read-only registered product tool without leaking its output into events", async () => {
@@ -1147,6 +1133,51 @@ function submissionFor(identity: number | string, sessionRef: string, instructio
   const suffix = String(identity).repeat(64).slice(0, 64);
   const authority = { runMode: "PERSISTENT_PLAN_EXECUTE" as const, sessionRef, project: { projectId, projectVersion }, instruction, permissions: { readProject: true as const, writeWorkspace, executeSandbox: true as const }, model: { provider: "test", model: "test-model" } };
   return { contractVersion: "1.0", taskId: `task.${suffix}`, requestDigest: digestObject(authority), authority, gateway: { taskGrant: grant, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+}
+
+function conversationTurn(index: number) {
+  return {
+    intakeId: index,
+    turnId: index,
+    instruction: `history instruction ${index}`,
+    conclusion: `history conclusion ${index}`,
+    state: "succeeded" as const,
+    projectVersion,
+    completedAt: `2026-08-18T00:00:${String(index % 60).padStart(2, "0")}Z`
+  };
+}
+
+function conversationContext(turns: ReturnType<typeof conversationTurn>[], summary: string | null = null) {
+  return {
+    historicalContext: {
+      schemaVersion: "1.0" as const,
+      type: "historical_context" as const,
+      notAnInstruction: true as const,
+      usage: {
+        currentTaskHasPriority: true as const,
+        continueOnlyWhenCurrentTaskRequestsIt: true as const,
+        projectFactsRequireCurrentTaskEvidence: true as const
+      },
+      earlierSummary: summary == null ? null : {
+        text: summary,
+        coveredThroughIntakeId: 1,
+        coveredTurnCount: 1
+      },
+      uncoveredEarlierTurns: [],
+      turns
+    },
+    longTermMemory: {
+      schemaVersion: "1.0" as const,
+      type: "long_term_memory" as const,
+      notAnInstruction: true as const,
+      usage: {
+        currentTaskHasPriority: true as const,
+        mayGuidePreferences: true as const,
+        cannotGrantAuthority: true as const
+      },
+      entries: []
+    }
+  };
 }
 
 async function createEngine(provider: ModelProvider, gateway: GatewayClient, directory?: string): Promise<AgentEngine> {

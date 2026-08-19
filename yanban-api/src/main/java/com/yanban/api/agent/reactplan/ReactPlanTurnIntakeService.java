@@ -3,6 +3,7 @@ package com.yanban.api.agent.reactplan;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yanban.api.agent.AgentSessionTitleGenerator;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.agent.AgentSessionRepository;
 import com.yanban.core.agent.AgentSessionScope;
@@ -21,16 +22,19 @@ final class ReactPlanTurnIntakeService {
     private final AgentSessionRepository sessions;
     private final ReactPlanTurnIntakeTransactions transactions;
     private final ReactPlanRuntimeService runtime;
+    private final AgentSessionTitleGenerator titleGenerator;
 
     ReactPlanTurnIntakeService(
             ObjectMapper json,
             AgentSessionRepository sessions,
             ReactPlanTurnIntakeTransactions transactions,
-            ReactPlanRuntimeService runtime) {
+            ReactPlanRuntimeService runtime,
+            AgentSessionTitleGenerator titleGenerator) {
         this.json = json;
         this.sessions = sessions;
         this.transactions = transactions;
         this.runtime = runtime;
+        this.titleGenerator = titleGenerator;
     }
 
     JsonNode start(long userId, long sessionId, ReactPlanSessionTaskRequest request) {
@@ -45,6 +49,15 @@ final class ReactPlanTurnIntakeService {
                         userId, sessionId, request.clientRequestId(), digest,
                         task.instruction()));
         ReactPlanTurnIntakeEntity intake = resolved.entity();
+        if (!resolved.replayed()
+                && transactions.shouldInitializeTitle(userId, sessionId, intake.taskId())) {
+            String title = titleGenerator.generate(
+                    sessions.findByIdAndUserId(sessionId, userId).orElseThrow(),
+                    userId,
+                    task.instruction());
+            transactions.initializeTitleIfStillEligible(
+                    userId, sessionId, intake.taskId(), title);
+        }
         JsonNode accepted = runtime.submit(userId, intake.turnId(), task);
         ObjectNode response = json.createObjectNode();
         response.put("contractVersion", "1.0");

@@ -118,6 +118,10 @@ public class Project {
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 
+    void rename(String name) {
+        this.name = name;
+    }
+
     void publishRevision(ProjectRevision revision) {
         if (revision == null || id == null || !id.equals(revision.getProjectId())
                 || !userId.equals(revision.getUserId()) || rootType != ProjectRootType.MINIO_OBJECTS) {

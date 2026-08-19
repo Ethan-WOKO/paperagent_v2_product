@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.api.agent.AgentToolPolicyEngine;
 import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
+import com.yanban.api.agent.reactplan.ReactPlanHistoryToolContract;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolCall;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolCatalog;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolFunction;
@@ -40,6 +41,8 @@ final class AgentEngineRegisteredToolGateway {
             "literature_search_result", "literature_search_cancel");
     private static final Set<String> PAPER_TASK_READ_TOOLS = Set.of(
             "paper_polish_status", "paper_polish_result");
+    private static final Set<String> HISTORY_TOOLS =
+            ReactPlanHistoryToolContract.TOOL_NAMES;
     private final ObjectMapper json;
     private final ToolRegistry registry;
     private final AgentToolPolicyEngine policies;
@@ -124,6 +127,7 @@ final class AgentEngineRegisteredToolGateway {
         policyNames.addAll(SYNCHRONOUS_RETRIEVAL_TOOLS);
         policyNames.addAll(LITERATURE_TASK_TOOLS);
         policyNames.addAll(PAPER_TASK_READ_TOOLS);
+        policyNames.addAll(HISTORY_TOOLS);
         return registry.listDefinitions().stream()
                 .filter(definition -> policyNames.contains(definition.name()))
                 .filter(definition -> registry.findDescriptor(definition.name())
@@ -172,6 +176,9 @@ final class AgentEngineRegisteredToolGateway {
     }
 
     private static boolean eligible(String name, ToolDescriptor descriptor) {
+        if (HISTORY_TOOLS.contains(name)) {
+            return eligibleHistory(name, descriptor);
+        }
         if (PAPER_TASK_READ_TOOLS.contains(name)) {
             return descriptor.modelVisible()
                     && descriptor.supportedProfiles().contains(
@@ -213,6 +220,27 @@ final class AgentEngineRegisteredToolGateway {
                             ToolDescriptor.ResourceScope.SESSION));
             default -> false;
         };
+    }
+
+    private static boolean eligibleHistory(String name, ToolDescriptor descriptor) {
+        return descriptor.name().equals(name)
+                && descriptor.version().equals("history-v1")
+                && descriptor.modelVisible()
+                && descriptor.capabilityDomain().equals("conversation-history")
+                && descriptor.supportedProfiles().equals(List.of(
+                        ToolDescriptor.CapabilityProfile.PROJECT))
+                && descriptor.requiredPermissions().equals(List.of("project:read"))
+                && descriptor.resourceScopes().equals(List.of(
+                        ToolDescriptor.ResourceScope.SESSION,
+                        ToolDescriptor.ResourceScope.PROJECT))
+                && descriptor.sideEffectType() == ToolDescriptor.SideEffectType.NONE
+                && descriptor.confirmationPolicy()
+                        == ToolDescriptor.ConfirmationPolicy.NEVER
+                && descriptor.asyncMode() == ToolDescriptor.AsyncMode.SYNC
+                && descriptor.idempotencyPolicy()
+                        == ToolDescriptor.IdempotencyPolicy.NONE
+                && descriptor.repeatPolicy()
+                        == ToolDescriptor.RepeatPolicy.ALLOW_LIMITED;
     }
 
     private static boolean eligibleLiteratureTask(
@@ -264,6 +292,19 @@ final class AgentEngineRegisteredToolGateway {
 
     private JsonNode executionArguments(
             EngineTaskAuthority authority, RegisteredToolCall request) {
+        if (HISTORY_TOOLS.contains(request.toolName())) {
+            for (String serverArgument : ReactPlanHistoryToolContract.SERVER_ARGUMENTS) {
+                if (request.arguments().has(serverArgument)) {
+                    throw EngineGatewayException.badRequest(
+                            "REGISTERED_TOOL_SERVER_ARGUMENT_FORBIDDEN");
+                }
+            }
+            ObjectNode enriched = request.arguments().deepCopy();
+            enriched.put(ReactPlanHistoryToolContract.SERVER_TASK_ID, authority.taskId());
+            enriched.put(ReactPlanHistoryToolContract.SERVER_SESSION_ID, authority.sessionId());
+            enriched.put(ReactPlanHistoryToolContract.SERVER_PROJECT_ID, authority.projectId());
+            return enriched;
+        }
         if (!"literature_search_start".equals(request.toolName())) {
             return request.arguments();
         }

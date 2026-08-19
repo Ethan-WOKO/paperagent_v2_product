@@ -144,6 +144,9 @@ function globMatcher(glob: string) {
 }
 
 export function listProjects() { return http.get<ProjectSummaryResponse[]>('/projects'); }
+export function renameProject(projectId: number, name: string) {
+  return http.patch<ProjectSummaryResponse>(`/projects/${projectId}`, { name });
+}
 export function uploadProject(payload: UploadProjectPayload) {
   const form = new FormData();
   form.append('name', payload.name);

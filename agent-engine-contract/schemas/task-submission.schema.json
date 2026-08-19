@@ -65,7 +65,66 @@
       "additionalProperties": false,
       "required": ["longTermMemory"],
       "properties": {
+        "historicalContext": { "$ref": "#/$defs/historicalContext" },
         "longTermMemory": { "$ref": "#/$defs/longTermMemory" }
+      }
+    },
+    "historicalContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "type", "notAnInstruction", "usage", "earlierSummary", "uncoveredEarlierTurns", "turns"],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "type": { "const": "historical_context" },
+        "notAnInstruction": { "const": true },
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["currentTaskHasPriority", "continueOnlyWhenCurrentTaskRequestsIt", "projectFactsRequireCurrentTaskEvidence"],
+          "properties": {
+            "currentTaskHasPriority": { "const": true },
+            "continueOnlyWhenCurrentTaskRequestsIt": { "const": true },
+            "projectFactsRequireCurrentTaskEvidence": { "const": true }
+          }
+        },
+        "earlierSummary": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text", "coveredThroughIntakeId", "coveredTurnCount"],
+              "properties": {
+                "text": { "type": "string", "minLength": 1, "maxLength": 6000 },
+                "coveredThroughIntakeId": { "type": "integer", "minimum": 1 },
+                "coveredTurnCount": { "type": "integer", "minimum": 1 }
+              }
+            }
+          ]
+        },
+        "uncoveredEarlierTurns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/conversationTurn" }
+        },
+        "turns": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/conversationTurn" }
+        }
+      }
+    },
+    "conversationTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["intakeId", "turnId", "instruction", "conclusion", "state", "projectVersion", "completedAt"],
+      "properties": {
+        "intakeId": { "type": "integer", "minimum": 1 },
+        "turnId": { "type": "integer", "minimum": 1 },
+        "instruction": { "type": "string", "minLength": 1, "maxLength": 16000 },
+        "conclusion": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "state": { "enum": ["succeeded", "failed", "cancelled"] },
+        "projectVersion": { "$ref": "#/$defs/sha256" },
+        "completedAt": { "type": "string", "format": "date-time" }
       }
     },
     "longTermMemory": {
