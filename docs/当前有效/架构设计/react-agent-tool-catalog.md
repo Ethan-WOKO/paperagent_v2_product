@@ -56,6 +56,28 @@ ReAct 目录还复用现有的 `literature_search_start`、
 `paper_task_cancel` 暂不进入目录，因为它的现有描述符要求副作用确认，而当前
 ReAct 工具网关没有对应的确定性确认边界。
 
+## 受控历史任务工具
+
+ReAct 目录提供三个只读历史工具：
+
+- `search_conversation_tasks`：在当前会话或当前 Project 的历史终态任务中按用户
+  指令检索；
+- `get_conversation_task`：读取一个历史任务的用户指令、最终交付、状态和耗时；
+- `get_task_execution_trace`：读取一个历史任务经过白名单投影的公开执行轨迹。
+
+这三个工具继续遵守目录优先规则：首轮只公开名称和说明，未经 `load_tool` 不得
+执行。模型只填写查询条件、opaque task ID、游标和数量上限。当前 task、session、
+Project 和用户身份由 Java 网关从任务凭证及认证上下文注入；模型提交同名隐藏字段
+时失败闭合。每次详情或轨迹读取都会重新校验历史 task、session、Project 和用户
+归属，不以模型提供的 ID 作为授权依据。
+
+输出 DTO 只允许任务/会话引用、终态、时间、用户可见指令和最终交付，以及公开
+工具名、状态和裁剪摘要。禁止输出任务凭证、隐藏提示词/reasoning、checkpoint、
+原始工具参数或结果、文件正文、stdout/stderr、异常堆栈和 Broker payload。查询按
+固定上限分页，每次调用只记录调用者、工具、结果数量和结果状态，不记录查询内容或
+返回内容。工具只读取现有权威表，不提供 SQL、数据库浏览、修改或跨用户/Project
+访问能力，也不会把完整历史轨迹自动注入每轮上下文。
+
 ## 非目标
 
 - 不开放 `paper_task_cancel`；
