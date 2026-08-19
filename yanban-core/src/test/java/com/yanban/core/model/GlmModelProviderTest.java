@@ -103,6 +103,46 @@ class GlmModelProviderTest {
         assertThat(attempts.get()).isEqualTo(2);
     }
 
+    @Test
+    void streamChatRequestsAndPreservesUsageOnlyChunk() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        startServer(exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] bytes = """
+                    data: {\"choices\":[{\"delta\":{\"content\":\"GLM\"}}]}
+
+                    data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}
+
+                    data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":3,\"total_tokens\":11}}
+
+                    data: [DONE]
+
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+        });
+
+        GlmModelProvider provider = new GlmModelProvider(
+                properties(),
+                org.springframework.web.reactive.function.client.WebClient.builder(),
+                new com.fasterxml.jackson.databind.ObjectMapper()
+        );
+
+        List<ChatChunk> chunks = provider.streamChat(new ChatRequest(
+                        "glm", "glm-4-flash", List.of(ChatMessage.user("hello")),
+                        null, 256, null, "glm-key"))
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        assertThat(chunks).isNotNull();
+        assertThat(chunks).anySatisfy(chunk -> {
+            assertThat(chunk.usage()).isNotNull();
+            assertThat(chunk.usage().totalTokens()).isEqualTo(11);
+        });
+        assertThat(requestBody.get()).contains("\"stream_options\":{\"include_usage\":true}");
+    }
+
     private GlmProperties properties() {
         GlmProperties properties = new GlmProperties();
         properties.setApiUrl("http://localhost:" + server.getAddress().getPort() + "/v4/chat/completions");

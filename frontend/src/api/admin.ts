@@ -26,7 +26,7 @@ export interface AdminUserDetail {
     model: string;
     createdAt: string;
     updatedAt: string;
-    messages: Array<{ id: number; role: string; content?: string | null; createdAt: string }>;
+    messages: Array<{ id: number; role: string; content?: string | null; createdAt: string; deletable: boolean }>;
   }>;
   papers: Array<{
     id: number;

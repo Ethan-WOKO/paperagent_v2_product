@@ -110,6 +110,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
                 .map(message -> new OpenAiMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()))
                 .toList();
         return new OpenAiChatRequest(request.model(), messages, request.temperature(), request.maxTokens(), stream,
+                stream ? new StreamOptions(true) : null,
                 request.tools(), request.responseFormat());
     }
 
@@ -169,13 +170,17 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
     private List<ChatChunk> parseSseData(String data) {
         try {
             JsonNode root = objectMapper.readTree(data);
+            List<ChatChunk> chunks = new ArrayList<>();
+            ChatResponse.Usage usage = parseUsage(root.path("usage"));
+            if (usage != null) {
+                chunks.add(ChatChunk.usage(usage));
+            }
             JsonNode choice = root.path("choices").isArray() && !root.path("choices").isEmpty()
                     ? root.path("choices").get(0)
                     : null;
             if (choice == null) {
-                return List.of();
+                return chunks;
             }
-            List<ChatChunk> chunks = new ArrayList<>();
             JsonNode delta = choice.path("delta");
             if (delta.hasNonNull("content")) {
                 String content = delta.path("content").asText();
@@ -191,6 +196,21 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
         } catch (Exception ex) {
             throw new ModelProviderException("Failed to parse OpenAI-compatible SSE chunk", ex);
         }
+    }
+
+    private ChatResponse.Usage parseUsage(JsonNode usageNode) {
+        if (usageNode == null || !usageNode.isObject()) {
+            return null;
+        }
+        return new ChatResponse.Usage(
+                jsonIntOrNull(usageNode.get("prompt_tokens")),
+                jsonIntOrNull(usageNode.get("completion_tokens")),
+                jsonIntOrNull(usageNode.get("total_tokens"))
+        );
+    }
+
+    private Integer jsonIntOrNull(JsonNode node) {
+        return node != null && node.isNumber() ? node.intValue() : null;
     }
 
     private List<ChatChunk> parseToolCallDeltas(JsonNode toolCallsNode) {
@@ -227,9 +247,13 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
             Double temperature,
             @JsonProperty("max_tokens") Integer maxTokens,
             Boolean stream,
+            @JsonProperty("stream_options") StreamOptions streamOptions,
             List<ToolSpec> tools,
             @JsonProperty("response_format") ChatRequest.ResponseFormat responseFormat
     ) {
+    }
+
+    private record StreamOptions(@JsonProperty("include_usage") boolean includeUsage) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

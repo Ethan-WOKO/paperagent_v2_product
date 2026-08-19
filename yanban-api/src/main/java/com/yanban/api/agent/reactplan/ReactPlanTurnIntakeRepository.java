@@ -14,6 +14,8 @@ interface ReactPlanTurnIntakeRepository
     Optional<ReactPlanTurnIntakeEntity> findByTaskId(String taskId);
     Optional<ReactPlanTurnIntakeEntity> findFirstByUserIdAndSessionIdOrderByIdAsc(
             Long userId, Long sessionId);
+    List<ReactPlanTurnIntakeEntity> findByUserIdAndSessionIdOrderByIdAsc(
+            Long userId, Long sessionId);
     List<ReactPlanTurnIntakeEntity> findByUserIdAndSessionIdOrderByIdDesc(
             Long userId, Long sessionId, Pageable pageable);
     List<ReactPlanTurnIntakeEntity> findByUserIdAndSessionIdAndIdLessThanOrderByIdDesc(

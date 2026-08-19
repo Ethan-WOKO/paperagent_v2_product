@@ -15,6 +15,8 @@ import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.agent.AgentSessionRepository;
 import com.yanban.api.agent.AgentMessageCacheService;
+import com.yanban.api.agent.reactplan.ReactPlanAdminConversationReader;
+import com.yanban.core.agent.AgentSessionScope;
 import com.yanban.paper.domain.PaperTaskRepository;
 import java.util.Comparator;
 import java.util.List;
@@ -39,6 +41,7 @@ public class AdminService {
     private final AiUsageRecordRepository usage;
     private final UserQuotaService quotaService;
     private final InviteCodeRepository inviteCodes;
+    private final ReactPlanAdminConversationReader reactPlanConversations;
 
     public AdminService(SysUserRepository users,
                         AgentSessionRepository sessions,
@@ -49,7 +52,8 @@ public class AdminService {
                         ProjectService projectService,
                         AiUsageRecordRepository usage,
                         UserQuotaService quotaService,
-                        InviteCodeRepository inviteCodes) {
+                        InviteCodeRepository inviteCodes,
+                        ReactPlanAdminConversationReader reactPlanConversations) {
         this.users = users;
         this.sessions = sessions;
         this.messages = messages;
@@ -60,6 +64,7 @@ public class AdminService {
         this.usage = usage;
         this.quotaService = quotaService;
         this.inviteCodes = inviteCodes;
+        this.reactPlanConversations = reactPlanConversations;
     }
 
     @Transactional(readOnly = true)
@@ -77,10 +82,7 @@ public class AdminService {
                 .map(session -> new AdminUserDetailResponse.ChatSession(
                         session.getId(), session.getTitle(), session.getScope().name(), session.getProjectId(),
                         session.getModelProviderSnapshot(), session.getModelSnapshot(), session.getCreatedAt(), session.getUpdatedAt(),
-                        messages.findBySessionIdOrderByCreatedAtAsc(session.getId()).stream()
-                                .map(message -> new AdminUserDetailResponse.ChatMessage(message.getId(), message.getRole(),
-                                        message.getContent(), message.getCreatedAt()))
-                                .toList()))
+                        adminMessages(userId, session)))
                 .toList();
         List<AdminUserDetailResponse.PaperTask> paperItems = papers.findByUserIdOrderByCreatedAtDesc(userId).stream()
                 .map(task -> new AdminUserDetailResponse.PaperTask(task.getId(), task.getTitle(), task.getSourceFilename(),
@@ -154,6 +156,21 @@ public class AdminService {
     private AdminUserDetailResponse.AiUsage usageResponse(AiUsageRecord record) {
         return new AdminUserDetailResponse.AiUsage(record.getId(), record.getFeature(), record.getPromptTokens(),
                 record.getCompletionTokens(), record.getTotalTokens(), record.getCreatedAt());
+    }
+
+    private List<AdminUserDetailResponse.ChatMessage> adminMessages(Long userId, AgentSession session) {
+        if (session.getScope() == AgentSessionScope.PROJECT) {
+            List<AdminUserDetailResponse.ChatMessage> projected = reactPlanConversations
+                    .read(userId, session.getId()).stream()
+                    .map(message -> new AdminUserDetailResponse.ChatMessage(
+                            message.id(), message.role(), message.content(), message.createdAt(), false))
+                    .toList();
+            if (!projected.isEmpty()) return projected;
+        }
+        return messages.findBySessionIdOrderByCreatedAtAsc(session.getId()).stream()
+                .map(message -> new AdminUserDetailResponse.ChatMessage(
+                        message.getId(), message.getRole(), message.getContent(), message.getCreatedAt(), true))
+                .toList();
     }
 
     private boolean isDemoUser(Long userId) {
