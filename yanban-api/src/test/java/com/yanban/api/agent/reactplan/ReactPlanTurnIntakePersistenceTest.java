@@ -12,6 +12,8 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
@@ -44,6 +46,32 @@ class ReactPlanTurnIntakePersistenceTest {
                     assertThat(replayed.turnId()).isEqualTo(created.turnId());
                     assertThat(replayed.taskId()).isEqualTo(created.taskId());
                 });
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void initializesOnlyTheFirstTaskAndNeverOverwritesAManualTitle() {
+        AgentSession session = sessions.saveAndFlush(new AgentSession(
+                7L, "新会话", "deepseek", "deepseek-chat", 8, true,
+                AgentSessionScope.PROJECT, 11L));
+        ReactPlanTurnIntakeEntity first = transactions.create(
+                7L, session.getId(), "request.first.0123456789", "a".repeat(64),
+                "检查 Sort.java");
+
+        assertThat(transactions.shouldInitializeTitle(
+                7L, session.getId(), first.taskId())).isTrue();
+        assertThat(transactions.initializeTitleIfStillEligible(
+                7L, session.getId(), first.taskId(), "检查 Sort.java")).isTrue();
+        assertThat(sessions.findById(session.getId()).orElseThrow().getTitle())
+                .isEqualTo("检查 Sort.java");
+
+        ReactPlanTurnIntakeEntity second = transactions.create(
+                7L, session.getId(), "request.second.0123456789", "b".repeat(64),
+                "第二个问题");
+        assertThat(transactions.shouldInitializeTitle(
+                7L, session.getId(), second.taskId())).isFalse();
+        assertThat(transactions.initializeTitleIfStillEligible(
+                7L, session.getId(), first.taskId(), "不应覆盖")).isFalse();
     }
 
     @Test

@@ -253,53 +253,12 @@
                 </template>
               </div>
             </div>
-            <div
-              v-if="minimapMessages.length > 0"
-              ref="chatMinimapRailRef"
-              class="chat-minimap-rail"
-              @mouseenter="cancelMinimapHoverClear"
-              @mouseleave="handleMinimapRailLeave"
-            >
-              <div ref="chatMinimapRef" class="chat-minimap" aria-label="当前会话导航条" @scroll="syncMinimapPreviewPosition">
-                <button
-                  v-for="(message, index) in minimapMessages"
-                  :key="'minimap-' + message.localId"
-                  :ref="(el) => setMinimapItemRef(el, message.localId)"
-                  type="button"
-                  class="chat-minimap__item"
-                  :class="[
-                    'chat-minimap__item--' + message.role,
-                    minimapWaveClass(index),
-                    { 'chat-minimap__item--active': activeMinimapMessageId === message.localId },
-                  ]"
-                  @mouseenter="setHoveredMinimapIndex(index)"
-                  @focus="setHoveredMinimapIndex(index)"
-                  @blur="scheduleMinimapHoverClear"
-                  @click="scrollToMessage(message.localId)"
-                />
-              </div>
-              <div
-                v-if="hoveredMinimapMessage"
-                ref="chatMinimapPreviewRef"
-                class="chat-minimap__preview"
-                :style="minimapPreviewStyle"
-                @mouseenter="keepHoveredMinimapIndex"
-                @mouseleave="scheduleMinimapHoverClear"
-              >
-                <div
-                  v-if="hoveredMinimapPreview.user"
-                  class="chat-minimap__preview-line chat-minimap__preview-line--user"
-                >
-                  {{ hoveredMinimapPreview.user }}
-                </div>
-                <div
-                  v-if="hoveredMinimapPreview.assistant"
-                  class="chat-minimap__preview-line chat-minimap__preview-line--assistant"
-                >
-                  {{ hoveredMinimapPreview.assistant }}
-                </div>
-              </div>
-            </div>
+            <ConversationQuestionRail
+              :items="chatNavigationItems"
+              :active-id="activeMinimapMessageId"
+              aria-label="当前会话导航条"
+              @select="scrollToMessage"
+            />
           </div>
 
           <div class="chat-composer" :class="{ 'chat-composer--has-attachments': chatAttachments.length || chatUploading }">
@@ -495,6 +454,7 @@ import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NPopover,
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
+import ConversationQuestionRail from '@/components/ConversationQuestionRail.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { downloadArtifact, getArtifact, saveArtifactToKnowledge } from '@/api/artifact';
 import { getDemoConfig } from '@/api/demo';
@@ -643,17 +603,8 @@ const currentProcessMessageSessionId = ref<number | null>(null);
 const messagesContainerRef = ref<HTMLElement | null>(null);
 const chatSidebarToggleRef = ref<HTMLButtonElement | null>(null);
 const chatFileInputRef = ref<HTMLInputElement | null>(null);
-const chatMinimapRailRef = ref<HTMLElement | null>(null);
-const chatMinimapRef = ref<HTMLElement | null>(null);
-const chatMinimapPreviewRef = ref<HTMLElement | null>(null);
 const messageRowRefs: Record<string, HTMLElement | null> = {};
-const minimapItemRefs: Record<string, HTMLElement | null> = {};
 const activeMinimapMessageId = ref<string | null>(null);
-const hoveredMinimapIndex = ref<number | null>(null);
-const pinnedMinimapIndex = ref<number | null>(null);
-const minimapViewportTop = ref(0);
-const minimapViewportHeight = ref(0.18);
-const minimapPreviewTopPx = ref(8);
 const sessionScrollPositions = ref<Record<number, number>>({});
 const renameModalVisible = ref(false);
 const renameSessionId = ref<number | null>(null);
@@ -699,7 +650,6 @@ const DEFAULT_GLM_MODEL = 'glm-5.2';
 const WS_ACK_TIMEOUT_MS = 4000;
 const WS_MAX_RETRIES = 3;
 const CHAT_UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024;
-let minimapHoverClearTimer: number | null = null;
 let minimapActiveLockUntil = 0;
 let messagesRequestSeq = 0;
 let compactChatMediaQuery: MediaQueryList | null = null;
@@ -766,27 +716,11 @@ const filteredMessages = computed(() => {
 });
 
 const minimapMessages = computed(() => filteredMessages.value.filter((message) => message.role === 'user'));
-
-const minimapViewportStyle = computed(() => ({
-  top: (minimapViewportTop.value * 100).toFixed(2) + '%',
-  height: Math.max(minimapViewportHeight.value * 100, 8).toFixed(2) + '%',
-}));
-
-const hoveredMinimapMessage = computed(() => {
-  const index = hoveredMinimapIndex.value;
-  if (index == null) {
-    return null;
-  }
-  return minimapMessages.value[index] || null;
-});
-
-const hoveredMinimapPreview = computed(() => buildMinimapPreview(hoveredMinimapMessage.value));
-
-const minimapPreviewStyle = computed(() => {
-  return {
-    top: minimapPreviewTopPx.value.toFixed(2) + 'px',
-  };
-});
+const chatNavigationItems = computed(() => minimapMessages.value.map((message) => ({
+  id: message.localId,
+  user: clampMinimapText(message.content),
+  assistant: clampMinimapText(findAssistantReplyForUser(message.localId)),
+})));
 
 const isDemoExperience = computed(() => route.query.demo === '1' || Boolean(authStore.currentUser?.demo));
 const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && demoQuestionPanelOpen.value);
@@ -847,15 +781,6 @@ watch(
   async () => {
     await nextTick();
     syncMinimapViewport();
-    syncMinimapPreviewPosition();
-  }
-);
-
-watch(
-  () => hoveredMinimapIndex.value,
-  async () => {
-    await nextTick();
-    syncMinimapPreviewPosition();
   }
 );
 
@@ -878,12 +803,8 @@ onBeforeUnmount(() => {
   literatureStartSequence += 1;
   currentSocket.value?.close();
   stopLiteraturePolling();
-  cancelMinimapHoverClear();
   Object.keys(messageRowRefs).forEach((key) => {
     delete messageRowRefs[key];
-  });
-  Object.keys(minimapItemRefs).forEach((key) => {
-    delete minimapItemRefs[key];
   });
 });
 
@@ -1971,26 +1892,11 @@ function setMessageRowRef(el: any, localId: string) {
   }
 }
 
-function setMinimapItemRef(el: any, localId: string) {
-  if (el instanceof HTMLElement) {
-    minimapItemRefs[localId] = el;
-    return;
-  }
-  if (!el && minimapItemRefs[localId]) {
-    delete minimapItemRefs[localId];
-  }
-}
-
 function pruneMessageRowRefs(currentMessages: ChatMessageView[]) {
   const validIds = new Set(currentMessages.map((message) => message.localId));
   Object.keys(messageRowRefs).forEach((localId) => {
     if (!validIds.has(localId)) {
       delete messageRowRefs[localId];
-    }
-  });
-  Object.keys(minimapItemRefs).forEach((localId) => {
-    if (!validIds.has(localId)) {
-      delete minimapItemRefs[localId];
     }
   });
 }
@@ -2003,38 +1909,13 @@ function handleMessagesScroll() {
   syncMinimapViewport();
 }
 
-function syncMinimapPreviewPosition() {
-  const hovered = hoveredMinimapMessage.value;
-  const railEl = chatMinimapRailRef.value;
-  const minimapEl = chatMinimapRef.value;
-  const previewEl = chatMinimapPreviewRef.value;
-  const itemEl = hovered ? minimapItemRefs[hovered.localId] : null;
-  if (!hovered || !railEl || !minimapEl || !previewEl || !itemEl) {
-    minimapPreviewTopPx.value = 8;
-    return;
-  }
-  const railRect = railEl.getBoundingClientRect();
-  const itemRect = itemEl.getBoundingClientRect();
-  const itemCenter = itemRect.top - railRect.top + itemRect.height / 2;
-  const previewHeight = previewEl.offsetHeight || 112;
-  const minTop = 8;
-  const maxTop = Math.max(minTop, railEl.clientHeight - previewHeight - 8);
-  const nextTop = Math.min(Math.max(itemCenter - previewHeight / 2, minTop), maxTop);
-  minimapPreviewTopPx.value = nextTop;
-}
-
 function syncMinimapViewport() {
   const container = messagesContainerRef.value;
   const visibleMessages = filteredMessages.value;
   if (!container || visibleMessages.length === 0) {
-    minimapViewportTop.value = 0;
-    minimapViewportHeight.value = 0.18;
     activeMinimapMessageId.value = null;
     return;
   }
-  const maxScroll = Math.max(container.scrollHeight - container.clientHeight, 1);
-  minimapViewportTop.value = Math.min(container.scrollTop / maxScroll, 1);
-  minimapViewportHeight.value = Math.min(container.clientHeight / Math.max(container.scrollHeight, 1), 1);
   if (Date.now() < minimapActiveLockUntil) {
     return;
   }
@@ -2061,11 +1942,6 @@ async function scrollToMessage(localId: string) {
   if (!container || !target) {
     return;
   }
-  const index = minimapMessages.value.findIndex((message) => message.localId === localId);
-  if (index >= 0) {
-    hoveredMinimapIndex.value = index;
-    pinnedMinimapIndex.value = index;
-  }
   minimapActiveLockUntil = Date.now() + 420;
   container.scrollTo({ top: Math.max(target.offsetTop - 70, 0), behavior: 'smooth' });
   activeMinimapMessageId.value = localId;
@@ -2091,81 +1967,6 @@ function resolveMinimapActiveId(localId: string | null) {
     }
   }
   return minimapMessages.value[0]?.localId || null;
-}
-
-function setHoveredMinimapIndex(index: number) {
-  cancelMinimapHoverClear();
-  hoveredMinimapIndex.value = index;
-  pinnedMinimapIndex.value = index;
-}
-
-function clearHoveredMinimapIndex() {
-  cancelMinimapHoverClear();
-  hoveredMinimapIndex.value = null;
-  pinnedMinimapIndex.value = null;
-}
-
-function keepHoveredMinimapIndex() {
-  cancelMinimapHoverClear();
-  if (pinnedMinimapIndex.value != null) {
-    hoveredMinimapIndex.value = pinnedMinimapIndex.value;
-  }
-}
-
-function cancelMinimapHoverClear() {
-  if (minimapHoverClearTimer !== null) {
-    window.clearTimeout(minimapHoverClearTimer);
-    minimapHoverClearTimer = null;
-  }
-}
-
-function scheduleMinimapHoverClear() {
-  cancelMinimapHoverClear();
-  minimapHoverClearTimer = window.setTimeout(() => {
-    hoveredMinimapIndex.value = null;
-    pinnedMinimapIndex.value = null;
-    minimapHoverClearTimer = null;
-  }, 90);
-}
-
-function handleMinimapRailLeave(event?: MouseEvent) {
-  const railEl = chatMinimapRailRef.value;
-  const nextTarget = event?.relatedTarget;
-  if (railEl && nextTarget instanceof Node && railEl.contains(nextTarget)) {
-    return;
-  }
-  scheduleMinimapHoverClear();
-}
-
-function minimapWaveClass(index: number) {
-  const hoveredIndex = hoveredMinimapIndex.value;
-  if (hoveredIndex == null) {
-    return '';
-  }
-  const distance = Math.abs(index - hoveredIndex);
-  if (distance === 0) {
-    return 'chat-minimap__item--wave-0';
-  }
-  if (distance === 1) {
-    return 'chat-minimap__item--wave-1';
-  }
-  if (distance === 2) {
-    return 'chat-minimap__item--wave-2';
-  }
-  if (distance === 3) {
-    return 'chat-minimap__item--wave-3';
-  }
-  return '';
-}
-
-function buildMinimapPreview(message: ChatMessageView | null) {
-  if (!message) {
-    return { user: '', assistant: '' };
-  }
-  return {
-    user: clampMinimapText(message.content),
-    assistant: '',
-  };
 }
 
 function findAssistantReplyForUser(localId: string) {

@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yanban.api.agent.AgentSessionTitleGenerator;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.agent.AgentSessionRepository;
 import com.yanban.core.agent.AgentSessionScope;
@@ -29,6 +30,7 @@ class ReactPlanTurnIntakeServiceTest {
     private AgentSessionRepository sessions;
     private ReactPlanTurnIntakeTransactions transactions;
     private ReactPlanRuntimeService runtime;
+    private AgentSessionTitleGenerator titleGenerator;
     private ReactPlanTurnIntakeService service;
 
     @BeforeEach
@@ -36,8 +38,9 @@ class ReactPlanTurnIntakeServiceTest {
         sessions = mock(AgentSessionRepository.class);
         transactions = mock(ReactPlanTurnIntakeTransactions.class);
         runtime = mock(ReactPlanRuntimeService.class);
+        titleGenerator = mock(AgentSessionTitleGenerator.class);
         service = new ReactPlanTurnIntakeService(
-                json, sessions, transactions, runtime);
+                json, sessions, transactions, runtime, titleGenerator);
         when(sessions.findByIdAndUserId(11L, 7L)).thenReturn(Optional.of(
                 new AgentSession(7L, "project", "deepseek", "deepseek-chat",
                         20, true, AgentSessionScope.PROJECT, 88L)));
@@ -49,6 +52,9 @@ class ReactPlanTurnIntakeServiceTest {
         when(transactions.create(anyLong(), anyLong(), any(), any(), any()))
                 .thenReturn(intake("a".repeat(64)));
         when(runtime.submit(anyLong(), anyLong(), any())).thenReturn(accepted(false));
+        when(transactions.shouldInitializeTitle(7L, 11L,
+                ReactPlanRuntimeService.taskId(7L, 42L))).thenReturn(true);
+        when(titleGenerator.generate(any(), anyLong(), any())).thenReturn("检查 Sort 编译");
 
         JsonNode result = service.start(7L, 11L, request("Compile Sort.java"));
 
@@ -62,6 +68,8 @@ class ReactPlanTurnIntakeServiceTest {
                 org.mockito.ArgumentMatchers.eq(42L), task.capture());
         assertNull(task.getValue().provider());
         assertNull(task.getValue().model());
+        verify(transactions).initializeTitleIfStillEligible(
+                7L, 11L, ReactPlanRuntimeService.taskId(7L, 42L), "检查 Sort 编译");
     }
 
     @Test

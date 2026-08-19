@@ -29,8 +29,8 @@
         <NEmpty :description="t('project.page.noProjects')" />
       </section>
 
-      <section v-else class="project-workspace__grid" :class="{ 'project-workspace__grid--context-collapsed': contextRailCollapsed }">
-        <aside class="project-panel project-panel--files project-context-rail">
+      <section v-else class="project-workspace__grid" :class="{ 'project-workspace__grid--context-collapsed': contextRailCollapsed }" :style="projectLayoutStyle">
+        <aside ref="projectContextRailRef" class="project-panel project-panel--files project-context-rail" :style="projectRailStyle">
           <section class="project-sidebar-section project-sidebar-section--projects" :class="{ 'project-sidebar-section--collapsed': sidebarSections.projects }">
             <div class="project-sidebar-section__toggle">
               <span>
@@ -48,6 +48,17 @@
               </button>
             </div>
           </section>
+
+          <button
+            type="button"
+            class="project-rail-resizer project-rail-resizer--row"
+            aria-label="调整项目列表高度"
+            title="拖动调整高度，双击恢复默认"
+            :disabled="sidebarSections.projects"
+            @pointerdown="startProjectLayoutResize('projects', $event)"
+            @keydown="handleProjectLayoutResizeKey('projects', $event)"
+            @dblclick="resetProjectLayout"
+          />
 
           <section class="project-sidebar-section project-sidebar-section--chats" :class="{ 'project-sidebar-section--collapsed': sidebarSections.conversations }">
             <div class="project-sidebar-section__toggle">
@@ -85,6 +96,17 @@
               <small v-if="loading.sessions">{{ t('project.page.loading') }}</small>
             </div>
           </section>
+
+          <button
+            type="button"
+            class="project-rail-resizer project-rail-resizer--row"
+            aria-label="调整会话列表高度"
+            title="拖动调整高度，双击恢复默认"
+            :disabled="sidebarSections.conversations"
+            @pointerdown="startProjectLayoutResize('conversations', $event)"
+            @keydown="handleProjectLayoutResizeKey('conversations', $event)"
+            @dblclick="resetProjectLayout"
+          />
 
           <section class="project-sidebar-section project-sidebar-section--file-browser" :class="{ 'project-sidebar-section--collapsed': sidebarSections.files }">
             <div class="project-sidebar-section__header">
@@ -148,6 +170,16 @@
             </div>
           </section>
         </aside>
+
+        <button
+          type="button"
+          class="project-rail-resizer project-rail-resizer--column"
+          aria-label="调整项目资料栏宽度"
+          title="拖动调整宽度，双击恢复默认"
+          @pointerdown="startProjectLayoutResize('width', $event)"
+          @keydown="handleProjectLayoutResizeKey('width', $event)"
+          @dblclick="resetProjectLayout"
+        />
 
         <section class="project-panel project-panel--main project-panel--v2">
           <div class="project-tabs project-command-bar">
@@ -416,7 +448,8 @@
           </section>
 
           <section class="v2-conversation">
-            <div class="v2-conversation__tasks" aria-live="polite" :aria-busy="reactPlanBusy">
+            <div class="project-conversation-shell">
+            <div ref="reactPlanTasksRef" class="v2-conversation__tasks" aria-live="polite" :aria-busy="reactPlanBusy" @scroll="syncReactPlanNavigation">
               <div v-if="reactPlanNextCursor" class="reactplan-history-more">
                 <NButton size="tiny" secondary :loading="reactPlanLoadingOlder" @click="loadEarlierReactPlanTasks">
                   加载更早任务
@@ -425,6 +458,7 @@
               <article
                 v-for="item in reactPlanTimeline"
                 :key="item.record.taskId"
+                :ref="(element) => setReactPlanTaskRef(element, item.record.taskId)"
                 class="v2-task-card reactplan-task-card"
                 :data-task-state="item.record.view.state"
               >
@@ -487,6 +521,13 @@
 
               </article>
               <NEmpty v-if="reactPlanTimeline.length === 0" description="尚无任务记录。输入任务后，这里会显示执行进度和最终结果。" />
+            </div>
+            <ConversationQuestionRail
+              :items="reactPlanNavigationItems"
+              :active-id="activeReactPlanNavigationId"
+              aria-label="当前项目会话问题导航"
+              @select="scrollToReactPlanTask"
+            />
             </div>
 
             <NAlert v-if="reactPlanError" type="error" :show-icon="false">{{ reactPlanError }}</NAlert>
@@ -672,6 +713,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
+import ConversationQuestionRail from '@/components/ConversationQuestionRail.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
 import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listReactPlanSessionTasks, startReactPlanTask, streamReactPlanEvents, type ReactPlanSessionTask, type ReactPlanTaskState } from '@/api/reactPlan';
@@ -797,6 +839,9 @@ const reactPlanCancelling = ref(false);
 const reactPlanAnswering = ref(false);
 const reactPlanClock = ref(Date.now());
 const reactPlanSubmissionStartedAt = ref<string | null>(null);
+const reactPlanTasksRef = ref<HTMLElement | null>(null);
+const reactPlanTaskRefs: Record<string, HTMLElement | null> = {};
+const activeReactPlanNavigationId = ref<string | null>(null);
 let reactPlanAbortController: AbortController | null = null;
 let reactPlanReconnectTimer: number | null = null;
 let reactPlanClockTimer: number | null = null;
@@ -814,6 +859,18 @@ const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => 
   tools: reactPlanToolEvents(record.events),
   delivery: reactPlanDelivery(record.events),
   question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
+})));
+const reactPlanNavigationItems = computed(() => reactPlanTimeline.value.map((item) => ({
+  id: item.record.taskId,
+  user: navigationPreviewText(item.record.instruction),
+  assistant: navigationPreviewText(
+    item.delivery?.conclusion
+      || item.question?.text
+      || (item.record.view.state === 'failed'
+        ? item.record.view.error?.message || '任务执行失败'
+        : reactPlanStateLabel(item.record.view.state)),
+  ),
+  state: item.record.view.state,
 })));
 const reactPlanExecutionActive = computed(() => (
   reactPlanRecord.value?.view.state === 'queued'
@@ -842,6 +899,10 @@ const reactPlanBusy = computed(() => (
   reactPlanSubmitting.value || reactPlanCancelling.value || reactPlanAnswering.value
     || reactPlanExecutionActive.value
 ));
+
+watch(reactPlanNavigationItems, () => {
+  void nextTick(syncReactPlanNavigation);
+}, { flush: 'post' });
 
 function reactPlanSessionState(sessionId: number) {
   return reactPlanSessionStates.value[sessionId];
@@ -914,12 +975,34 @@ const collapsedDirectories = ref<Set<string>>(new Set());
 const collapsedDirectoriesByProject = new Map<number, Set<string>>();
 const PROJECT_HEADER_COLLAPSED_KEY = 'yanban.project.headerCollapsed';
 const PROJECT_CONTEXT_COLLAPSED_KEY = 'yanban.project.contextCollapsed';
+const PROJECT_LAYOUT_KEY = 'yanban.project.contextLayout.v1';
+const DEFAULT_PROJECT_LAYOUT = Object.freeze({ width: 270, projects: 170, conversations: 190 });
+type ProjectLayoutAxis = 'width' | 'projects' | 'conversations';
+const projectContextRailRef = ref<HTMLElement | null>(null);
+const projectLayout = reactive(readStoredProjectLayout());
+let activeProjectLayoutDrag: {
+  axis: ProjectLayoutAxis;
+  startCoordinate: number;
+  startValue: number;
+} | null = null;
 const DEFAULT_SESSION_TITLE = '\u65b0\u4f1a\u8bdd';
 const projectHeaderCollapsed = ref(readStoredBoolean(PROJECT_HEADER_COLLAPSED_KEY, false));
 const contextRailCollapsed = ref(readStoredBoolean(
   PROJECT_CONTEXT_COLLAPSED_KEY,
   typeof window !== 'undefined' && window.innerWidth <= 980,
 ));
+const projectLayoutStyle = computed(() => ({
+  '--project-context-width': `${projectLayout.width}px`,
+}));
+const projectRailStyle = computed(() => ({
+  gridTemplateRows: [
+    sidebarSections.projects ? '34px' : `${projectLayout.projects}px`,
+    '7px',
+    sidebarSections.conversations ? '34px' : `${projectLayout.conversations}px`,
+    '7px',
+    sidebarSections.files ? '34px' : 'minmax(140px, 1fr)',
+  ].join(' '),
+}));
 const sessionMenuOptions = computed(() => [
   { label: isEnglish.value ? 'Rename' : '重命名', key: 'rename' },
   { label: isEnglish.value ? 'Delete' : '删除', key: 'delete' },
@@ -1008,6 +1091,90 @@ function readStoredBoolean(key: string, fallback: boolean) {
   if (typeof window === 'undefined') return fallback;
   const value = window.localStorage.getItem(key);
   return value == null ? fallback : value === 'true';
+}
+
+function clampProjectLayout(value: number, minimum: number, maximum: number) {
+  return Math.min(Math.max(Math.round(value), minimum), maximum);
+}
+
+function readStoredProjectLayout() {
+  if (typeof window === 'undefined') return { ...DEFAULT_PROJECT_LAYOUT };
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(PROJECT_LAYOUT_KEY) || '{}') as Partial<typeof DEFAULT_PROJECT_LAYOUT>;
+    return {
+      width: clampProjectLayout(Number(stored.width) || DEFAULT_PROJECT_LAYOUT.width, 220, 480),
+      projects: clampProjectLayout(Number(stored.projects) || DEFAULT_PROJECT_LAYOUT.projects, 72, 360),
+      conversations: clampProjectLayout(Number(stored.conversations) || DEFAULT_PROJECT_LAYOUT.conversations, 72, 420),
+    };
+  } catch {
+    return { ...DEFAULT_PROJECT_LAYOUT };
+  }
+}
+
+function persistProjectLayout() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(PROJECT_LAYOUT_KEY, JSON.stringify(projectLayout));
+  }
+}
+
+function projectLayoutMaximum(axis: ProjectLayoutAxis) {
+  if (axis === 'width') return Math.min(480, Math.max(220, window.innerWidth * .42));
+  const railHeight = projectContextRailRef.value?.clientHeight || window.innerHeight * .72;
+  const other = axis === 'projects'
+    ? (sidebarSections.conversations ? 34 : projectLayout.conversations)
+    : (sidebarSections.projects ? 34 : projectLayout.projects);
+  return Math.max(72, railHeight - other - 188);
+}
+
+function updateProjectLayout(axis: ProjectLayoutAxis, value: number) {
+  const minimum = axis === 'width' ? 220 : 72;
+  projectLayout[axis] = clampProjectLayout(value, minimum, projectLayoutMaximum(axis));
+}
+
+function startProjectLayoutResize(axis: ProjectLayoutAxis, event: PointerEvent) {
+  if (window.innerWidth <= 980 || contextRailCollapsed.value) return;
+  activeProjectLayoutDrag = {
+    axis,
+    startCoordinate: axis === 'width' ? event.clientX : event.clientY,
+    startValue: projectLayout[axis],
+  };
+  event.currentTarget instanceof HTMLElement && event.currentTarget.setPointerCapture(event.pointerId);
+  document.documentElement.classList.add('project-layout-resizing');
+  window.addEventListener('pointermove', handleProjectLayoutPointerMove);
+  window.addEventListener('pointerup', stopProjectLayoutResize, { once: true });
+  event.preventDefault();
+}
+
+function handleProjectLayoutPointerMove(event: PointerEvent) {
+  if (!activeProjectLayoutDrag) return;
+  const coordinate = activeProjectLayoutDrag.axis === 'width' ? event.clientX : event.clientY;
+  updateProjectLayout(
+    activeProjectLayoutDrag.axis,
+    activeProjectLayoutDrag.startValue + coordinate - activeProjectLayoutDrag.startCoordinate,
+  );
+}
+
+function stopProjectLayoutResize() {
+  if (!activeProjectLayoutDrag) return;
+  activeProjectLayoutDrag = null;
+  document.documentElement.classList.remove('project-layout-resizing');
+  window.removeEventListener('pointermove', handleProjectLayoutPointerMove);
+  persistProjectLayout();
+}
+
+function handleProjectLayoutResizeKey(axis: ProjectLayoutAxis, event: KeyboardEvent) {
+  if (window.innerWidth <= 980 || contextRailCollapsed.value) return;
+  const negative = axis === 'width' ? event.key === 'ArrowLeft' : event.key === 'ArrowUp';
+  const positive = axis === 'width' ? event.key === 'ArrowRight' : event.key === 'ArrowDown';
+  if (!negative && !positive) return;
+  event.preventDefault();
+  updateProjectLayout(axis, projectLayout[axis] + (positive ? 12 : -12));
+  persistProjectLayout();
+}
+
+function resetProjectLayout() {
+  Object.assign(projectLayout, DEFAULT_PROJECT_LAYOUT);
+  persistProjectLayout();
 }
 
 function setProjectHeaderCollapsed(collapsed: boolean) {
@@ -1738,6 +1905,47 @@ function resetReactPlanView() {
   reactPlanSubmissionStartedAt.value = null;
   reactPlanCancelling.value = false;
   reactPlanAnswering.value = false;
+  activeReactPlanNavigationId.value = null;
+  Object.keys(reactPlanTaskRefs).forEach((taskId) => delete reactPlanTaskRefs[taskId]);
+}
+
+function navigationPreviewText(value: string | null | undefined) {
+  const normalized = (value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > 100 ? `${normalized.slice(0, 100)}…` : normalized;
+}
+
+function setReactPlanTaskRef(element: unknown, taskId: string) {
+  if (element instanceof HTMLElement) reactPlanTaskRefs[taskId] = element;
+  else delete reactPlanTaskRefs[taskId];
+}
+
+function syncReactPlanNavigation() {
+  const container = reactPlanTasksRef.value;
+  if (!container || reactPlanTimeline.value.length === 0) {
+    activeReactPlanNavigationId.value = null;
+    return;
+  }
+  const threshold = container.getBoundingClientRect().top + 24;
+  let activeId = reactPlanTimeline.value[0]?.record.taskId ?? null;
+  for (const item of reactPlanTimeline.value) {
+    const card = reactPlanTaskRefs[item.record.taskId];
+    if (!card || card.getBoundingClientRect().top > threshold) break;
+    activeId = item.record.taskId;
+  }
+  activeReactPlanNavigationId.value = activeId;
+}
+
+async function scrollToReactPlanTask(taskId: string) {
+  await nextTick();
+  const container = reactPlanTasksRef.value;
+  const card = reactPlanTaskRefs[taskId];
+  if (!container || !card) return;
+  const containerTop = container.getBoundingClientRect().top;
+  const cardTop = card.getBoundingClientRect().top;
+  const targetTop = container.scrollTop + cardTop - containerTop - 8;
+  container.scrollTo({ top: Math.max(targetTop, 0), behavior: 'smooth' });
+  activeReactPlanNavigationId.value = taskId;
 }
 
 function isCurrentReactPlan(record: ReactPlanTaskRecord, epoch: number) {
@@ -1903,6 +2111,11 @@ async function submitReactPlanTask() {
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
     const clientRequestId = newReactPlanRequestId();
     const accepted = (await startReactPlanTask(sessionId, { clientRequestId, instruction }, controller.signal)).data;
+    void listProjectSessions(projectId).then(({ data }) => {
+      if (epoch === projectEpoch && projectId === activeProjectId.value) {
+        projectSessions.value = data;
+      }
+    }).catch(() => undefined);
     reactPlanSessionStates.value = {
       ...reactPlanSessionStates.value,
       [sessionId]: accepted.task.state,
@@ -2723,6 +2936,7 @@ onMounted(() => {
   void loadProjects();
 });
 onUnmounted(() => {
+  stopProjectLayoutResize();
   stopV2NaturalLanguagePolling();
   invalidateReactPlanStream();
   if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
@@ -2750,6 +2964,7 @@ onUnmounted(() => {
 .project-panel--files, .project-panel--main { overflow: hidden; }
 .project-panel--files { gap: 0; }
 .project-panel + .project-panel { border-left: 1px solid var(--yb-border); }
+.project-rail-resizer--column + .project-panel { border-left: 1px solid var(--yb-border); }
 .project-panel__title { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
 .project-panel__title > span, .project-panel__count { color: var(--yb-text-muted); font-family: ui-monospace, monospace; font-size: 10px; }
 .project-panel__title-actions { min-width: 0; }
@@ -2851,6 +3066,8 @@ onUnmounted(() => {
 .v2-workbench__progress > article > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .v2-workbench__progress > article > div small { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
 .v2-conversation { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 2px; }
+.project-conversation-shell { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 10px; overflow: hidden; }
+.project-conversation-shell > :deep(.chat-minimap-rail) { right: 2px; opacity: .62; }
 .v2-conversation__tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 3px; scrollbar-gutter: stable; }
 .reactplan-history-more { display: flex; justify-content: center; padding: 2px 0 4px; }
 .v2-task-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--yb-border); border-radius: 12px; background: var(--yb-bg-elevated); }
@@ -3162,6 +3379,7 @@ onUnmounted(() => {
   .project-panel { min-height: 320px; }
   .project-panel--files, .project-panel--main { overflow: visible; }
   .project-panel + .project-panel { border-left: 0; border-top: 1px solid var(--yb-border); }
+  .project-rail-resizer--column + .project-panel { border-left: 0; border-top: 1px solid var(--yb-border); }
   .project-workspace__header { align-items: flex-start; flex-direction: column; }
   .project-sidebar-section { flex: none; }
   .project-sidebar-section--projects, .project-sidebar-section--chats, .project-sidebar-section--file-browser { min-height: 0; }
@@ -3177,6 +3395,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 620px) {
+  .project-conversation-shell { grid-template-columns: minmax(0, 1fr); }
+  .project-conversation-shell > :deep(.chat-minimap-rail) { display: none; }
   .project-execution-card__details > summary { grid-template-columns: 16px minmax(0, 1fr); align-items: start; }
   .project-execution-card__meta { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
   .project-result-layers { grid-template-columns: 1fr; }
@@ -3245,7 +3465,7 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-workspace__grid {
-  grid-template-columns: clamp(248px, 21vw, 290px) minmax(0, 1fr);
+  grid-template-columns: var(--project-context-width, 270px) 7px minmax(0, 1fr);
   border-color: var(--project-rule);
   border-radius: var(--project-radius-panel);
   background: var(--project-surface);
@@ -3253,7 +3473,7 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-workspace__grid--context-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
+  grid-template-columns: 0 0 minmax(0, 1fr);
 }
 
 .project-workspace--console .project-workspace__grid--context-collapsed .project-context-rail {
@@ -3271,9 +3491,54 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-context-rail {
+  display: grid;
   padding: 12px;
+  gap: 0;
   background: var(--project-canvas);
 }
+
+.project-workspace--console .project-context-rail .project-sidebar-section {
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  overflow: hidden;
+}
+
+.project-workspace--console .project-context-rail .project-sidebar-section--file-browser {
+  min-height: 0;
+}
+
+.project-rail-resizer {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  touch-action: none;
+}
+
+.project-rail-resizer::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+.project-rail-resizer:hover::after,
+.project-rail-resizer:focus-visible::after {
+  background: color-mix(in srgb, var(--project-accent) 62%, transparent);
+}
+
+.project-rail-resizer--column { cursor: col-resize; }
+.project-rail-resizer--column::after { inset: 0 2px; }
+.project-rail-resizer--row { cursor: row-resize; }
+.project-rail-resizer--row::after { inset: 2px 12px; }
+.project-rail-resizer:disabled { cursor: default; opacity: .28; }
+.project-workspace__grid--context-collapsed > .project-rail-resizer--column { visibility: hidden; }
+:global(.project-layout-resizing) { cursor: grabbing; user-select: none; }
 
 .project-workspace--console .project-panel + .project-panel,
 .project-workspace--console .project-sidebar-section + .project-sidebar-section .project-sidebar-section__toggle,
@@ -3638,8 +3903,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1200px) {
-  .project-workspace--console .project-workspace__grid { grid-template-columns: 248px minmax(0, 1fr); }
-  .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+  .project-workspace--console .project-workspace__grid { grid-template-columns: var(--project-context-width, 248px) 7px minmax(0, 1fr); }
+  .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 0 0 minmax(0, 1fr); }
 }
 
 @media (max-width: 980px) {
@@ -3649,7 +3914,9 @@ onUnmounted(() => {
   .project-workspace--console .project-workspace__grid--context-collapsed { grid-template-columns: 1fr; }
   .project-workspace--console .project-workspace__grid--context-collapsed .project-context-rail { display: none; }
   .project-workspace--console .project-panel { min-height: 0; padding: 12px; }
+  .project-workspace--console .project-rail-resizer { display: none; }
   .project-workspace--console .project-context-rail {
+    display: flex;
     flex-direction: row;
     gap: 0;
     padding: 0;

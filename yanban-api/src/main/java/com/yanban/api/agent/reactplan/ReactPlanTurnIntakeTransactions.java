@@ -4,6 +4,9 @@ import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentTurn;
 import com.yanban.core.agent.AgentTurnRepository;
+import com.yanban.core.agent.AgentSession;
+import com.yanban.core.agent.AgentSessionRepository;
+import com.yanban.api.agent.AgentSessionTitleGenerator;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -16,14 +19,17 @@ class ReactPlanTurnIntakeTransactions {
     private final ReactPlanTurnIntakeRepository intakes;
     private final AgentMessageRepository messages;
     private final AgentTurnRepository turns;
+    private final AgentSessionRepository sessions;
 
     ReactPlanTurnIntakeTransactions(
             ReactPlanTurnIntakeRepository intakes,
             AgentMessageRepository messages,
-            AgentTurnRepository turns) {
+            AgentTurnRepository turns,
+            AgentSessionRepository sessions) {
         this.intakes = intakes;
         this.messages = messages;
         this.turns = turns;
+        this.sessions = sessions;
     }
 
     @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
@@ -46,5 +52,31 @@ class ReactPlanTurnIntakeTransactions {
                 userId, sessionId, clientRequestId, requestDigest,
                 turn.getId(), message.getId(), taskId,
                 LocalDateTime.now(ZoneOffset.UTC)));
+    }
+
+    @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
+    boolean shouldInitializeTitle(long userId, long sessionId, String taskId) {
+        AgentSession session = sessions.findByIdAndUserId(sessionId, userId).orElse(null);
+        return session != null
+                && AgentSessionTitleGenerator.isDefaultTitle(session.getTitle())
+                && intakes.findFirstByUserIdAndSessionIdOrderByIdAsc(userId, sessionId)
+                        .map(first -> first.taskId().equals(taskId))
+                        .orElse(false);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    boolean initializeTitleIfStillEligible(
+            long userId, long sessionId, String taskId, String generatedTitle) {
+        AgentSession session = sessions.findByIdAndUserId(sessionId, userId).orElse(null);
+        boolean firstTask = intakes.findFirstByUserIdAndSessionIdOrderByIdAsc(userId, sessionId)
+                .map(first -> first.taskId().equals(taskId))
+                .orElse(false);
+        if (session == null || !firstTask
+                || !AgentSessionTitleGenerator.isDefaultTitle(session.getTitle())) {
+            return false;
+        }
+        session.updateTitle(generatedTitle);
+        sessions.saveAndFlush(session);
+        return true;
     }
 }
