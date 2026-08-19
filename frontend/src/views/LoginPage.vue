@@ -1,11 +1,9 @@
 <template>
   <PublicAccessLayout>
     <template #intro>
-      <div class="public-access__eyebrow">RESEARCH WORKSPACE</div>
       <div class="public-access__intro-copy">
         <h1>{{ t('auth.welcome') }}</h1>
         <p>{{ t('auth.loginDescription') }}</p>
-        <span>PaperAgent · V2</span>
       </div>
     </template>
 

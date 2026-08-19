@@ -1,8 +1,8 @@
 ﻿<template>
   <div class="product-shell">
     <aside class="product-rail">
-      <button type="button" class="product-rail__brand" title="PaperAgent" @click="router.push('/chat')">
-        <img src="/logo.png" alt="PaperAgent" />
+      <button type="button" class="product-rail__brand" title="研伴" @click="router.push('/chat')">
+        <img src="/logo.png" alt="研伴" />
       </button>
 
       <nav class="product-rail__nav" :aria-label="t('nav.workspace')">
