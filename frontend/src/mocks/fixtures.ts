@@ -544,8 +544,8 @@ export const mockAdminDetail: AdminUserDetail = {
     id: 6401, title: '评审 V2 执行架构', scope: 'PROJECT', projectId: 64, modelProvider: 'deepseek',
     model: 'deepseek-v4-flash', createdAt: CREATED_AT, updatedAt: UPDATED_AT,
     messages: [
-      { id: 8401, role: 'user', content: '检查任务编排、证据链和验证机制。', createdAt: CREATED_AT },
-      { id: 8402, role: 'assistant', content: '模块边界清晰，仍需补强失败恢复验证。', createdAt: UPDATED_AT },
+      { id: 8401, role: 'user', content: '检查任务编排、证据链和验证机制。', createdAt: CREATED_AT, deletable: false },
+      { id: 8402, role: 'assistant', content: '模块边界清晰，仍需补强失败恢复验证。', createdAt: UPDATED_AT, deletable: false },
     ],
   }],
   papers: [{ id: 9001, title: '多智能体学术协作方法研究', sourceFilename: 'multi-agent-research.tex', status: 'COMPLETED', currentStage: 'ASSEMBLE', errorMessage: null, createdAt: mockPaperTask.createdAt, updatedAt: mockPaperTask.updatedAt }],

@@ -44,6 +44,17 @@ describe('admin console presentation contract', () => {
     expect(page).toContain("detail.user.accountType === 'DEMO'");
   });
 
+  it('separates workspace and project conversations without duplicating the data source', () => {
+    expect(page).toContain("chat.scope !== 'PROJECT'");
+    expect(page).toContain("chat.scope === 'PROJECT'");
+    expect(page).toContain('工作区对话');
+    expect(page).toContain('项目对话');
+    expect(page).toContain('projectNames.get(chat.projectId)');
+    expect(page).toContain('chat.messages.length');
+    expect(page).toContain('<details v-for="chat in group.chats"');
+    expect(page).toContain("detail.user.accountType === 'DEMO' && message.deletable");
+  });
+
   it('uses shared theme tokens and opts into true responsive layout', () => {
     expect(page).toContain('var(--pa-surface)');
     expect(page).toContain('var(--pa-line)');

@@ -835,6 +835,7 @@ class LangChain4jToolCallingStrategyTest {
                 .thenReturn(Flux.just(
                         ChatChunk.token("Hello"),
                         ChatChunk.token(" world"),
+                        ChatChunk.usage(new com.yanban.core.model.ChatResponse.Usage(9, 2, 11)),
                         ChatChunk.done("stop")
                 ));
         LangChain4jToolCallingStrategy strategy = new LangChain4jToolCallingStrategy(
@@ -849,6 +850,9 @@ class LangChain4jToolCallingStrategyTest {
         assertThat(result.success()).isTrue();
         assertThat(result.assistantContent()).isEqualTo("Hello world");
         assertThat(tokens).containsExactly("Hello", " world");
+        assertThat(result.promptTokens()).isEqualTo(9);
+        assertThat(result.completionTokens()).isEqualTo(2);
+        assertThat(result.totalTokens()).isEqualTo(11);
     }
 
     private AgentRuntimeRequest request(List<String> allowedTools, Integer maxToolCalls, Integer maxDuplicateToolCalls) {

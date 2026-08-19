@@ -6,10 +6,15 @@ public record ChatChunk(
         String content,
         boolean done,
         String finishReason,
-        List<ToolCallDelta> toolCallDeltas
+        List<ToolCallDelta> toolCallDeltas,
+        ChatResponse.Usage usage
 ) {
     public ChatChunk(String content, boolean done, String finishReason) {
-        this(content, done, finishReason, List.of());
+        this(content, done, finishReason, List.of(), null);
+    }
+
+    public ChatChunk(String content, boolean done, String finishReason, List<ToolCallDelta> toolCallDeltas) {
+        this(content, done, finishReason, toolCallDeltas, null);
     }
 
     public ChatChunk {
@@ -26,6 +31,10 @@ public record ChatChunk(
 
     public static ChatChunk done(String finishReason) {
         return new ChatChunk(null, true, finishReason);
+    }
+
+    public static ChatChunk usage(ChatResponse.Usage usage) {
+        return new ChatChunk(null, false, null, List.of(), usage);
     }
 
     public record ToolCallDelta(

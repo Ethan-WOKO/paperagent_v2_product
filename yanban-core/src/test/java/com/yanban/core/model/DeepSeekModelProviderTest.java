@@ -106,13 +106,17 @@ class DeepSeekModelProviderTest {
 
     @Test
     void streamChatParsesMultipleSseChunks() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
         startServer(exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] bytes = """
                     data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}
 
                     data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}
 
                     data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}
+
+                    data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}
 
                     data: [DONE]
 
@@ -130,11 +134,18 @@ class DeepSeekModelProviderTest {
 
         assertThat(chunks).isNotNull();
         String text = chunks.stream()
-                .filter(chunk -> !chunk.done())
+                .filter(chunk -> chunk.content() != null)
                 .map(ChatChunk::content)
                 .collect(Collectors.joining());
         assertThat(text).isEqualTo("你好");
         assertThat(chunks).anyMatch(ChatChunk::done);
+        assertThat(chunks).anySatisfy(chunk -> {
+            assertThat(chunk.usage()).isNotNull();
+            assertThat(chunk.usage().promptTokens()).isEqualTo(5);
+            assertThat(chunk.usage().completionTokens()).isEqualTo(2);
+            assertThat(chunk.usage().totalTokens()).isEqualTo(7);
+        });
+        assertThat(requestBody.get()).contains("\"stream_options\":{\"include_usage\":true}");
     }
 
     @Test

@@ -101,21 +101,55 @@
                 </div>
               </NTabPane>
               <NTabPane name="chat" tab="聊天">
-                <NEmpty v-if="detail.chats.length === 0" description="暂无聊天" />
+                <div class="admin-chat-scope" role="tablist" aria-label="对话类型">
+                  <button
+                    type="button"
+                    role="tab"
+                    :aria-selected="chatScope === 'WORKSPACE'"
+                    :class="{ 'admin-chat-scope__item--active': chatScope === 'WORKSPACE' }"
+                    class="admin-chat-scope__item"
+                    @click="chatScope = 'WORKSPACE'"
+                  >
+                    <span>工作区对话</span><strong>{{ workspaceChats.length }}</strong>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    :aria-selected="chatScope === 'PROJECT'"
+                    :class="{ 'admin-chat-scope__item--active': chatScope === 'PROJECT' }"
+                    class="admin-chat-scope__item"
+                    @click="chatScope = 'PROJECT'"
+                  >
+                    <span>项目对话</span><strong>{{ projectChats.length }}</strong>
+                  </button>
+                </div>
+
+                <NEmpty v-if="visibleChatCount === 0" :description="chatScope === 'WORKSPACE' ? '暂无工作区对话' : '暂无项目对话'" />
                 <div v-else class="admin-chat-list">
-                  <section v-for="chat in detail.chats" :key="chat.id" class="admin-chat-session">
-                    <header>
-                      <strong>{{ chat.title || '未命名会话' }}</strong>
-                      <small>{{ chat.modelProvider }} / {{ chat.model }} · {{ formatDate(chat.updatedAt) }}</small>
+                  <section v-for="group in visibleChatGroups" :key="group.key" class="admin-chat-group">
+                    <header v-if="chatScope === 'PROJECT'" class="admin-chat-group__header">
+                      <strong>{{ group.title }}</strong>
+                      <span>{{ group.chats.length }} 个会话</span>
                     </header>
-                    <article v-for="message in chat.messages" :key="message.id" class="admin-message">
-                      <div><NTag size="small" :type="message.role === 'user' ? 'info' : 'default'">{{ message.role }}</NTag><small>{{ formatDate(message.createdAt) }}</small></div>
-                      <p>{{ message.content || '（无文本内容）' }}</p>
-                      <NPopconfirm v-if="detail.user.accountType === 'DEMO'" @positive-click="removeDemoMessage(message.id)">
-                        <template #trigger><NButton size="tiny" tertiary type="error">删除此消息</NButton></template>
-                        确认删除这条游客聊天消息？
-                      </NPopconfirm>
-                    </article>
+                    <details v-for="chat in group.chats" :key="chat.id" class="admin-chat-session">
+                      <summary>
+                        <span class="admin-chat-session__identity">
+                          <strong>{{ chat.title || '未命名会话' }}</strong>
+                          <small>{{ chat.messages.length }} 条消息 · {{ chat.modelProvider }} / {{ chat.model }} · {{ formatDate(chat.updatedAt) }}</small>
+                        </span>
+                        <span class="admin-chat-session__toggle" aria-hidden="true">⌄</span>
+                      </summary>
+                      <div class="admin-chat-session__messages">
+                        <article v-for="message in chat.messages" :key="message.id" class="admin-message">
+                          <div><NTag size="small" :type="message.role === 'user' ? 'info' : 'default'">{{ message.role }}</NTag><small>{{ formatDate(message.createdAt) }}</small></div>
+                          <p>{{ message.content || '（无文本内容）' }}</p>
+                          <NPopconfirm v-if="detail.user.accountType === 'DEMO' && message.deletable" @positive-click="removeDemoMessage(message.id)">
+                            <template #trigger><NButton size="tiny" tertiary type="error">删除此消息</NButton></template>
+                            确认删除这条游客聊天消息？
+                          </NPopconfirm>
+                        </article>
+                      </div>
+                    </details>
                   </section>
                 </div>
               </NTabPane>
@@ -163,7 +197,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { NButton, NCard, NEmpty, NInputNumber, NPopconfirm, NSpin, NTabPane, NTag, NTabs } from 'naive-ui';
 import AppLayout from '@/components/AppLayout.vue';
 import {
@@ -189,9 +223,31 @@ const quotaTotal = ref<number | null>(null);
 const loading = ref(false);
 const detailLoading = ref(false);
 const quotaSaving = ref(false);
+const chatScope = ref<'WORKSPACE' | 'PROJECT'>('WORKSPACE');
 const ADMIN_USAGE_REFRESH_MS = 15_000;
 let usageRefreshTimer: number | null = null;
 let usageRefreshPending = false;
+
+type AdminChat = AdminUserDetail['chats'][number];
+
+const workspaceChats = computed(() => detail.value?.chats.filter((chat) => chat.scope !== 'PROJECT') ?? []);
+const projectChats = computed(() => detail.value?.chats.filter((chat) => chat.scope === 'PROJECT') ?? []);
+const visibleChatCount = computed(() => chatScope.value === 'PROJECT' ? projectChats.value.length : workspaceChats.value.length);
+const visibleChatGroups = computed(() => {
+  if (chatScope.value === 'WORKSPACE') {
+    return [{ key: 'workspace', title: '工作区对话', chats: workspaceChats.value }];
+  }
+  const projectNames = new Map(detail.value?.projects.map((project) => [project.id, project.name]) ?? []);
+  const groups = new Map<string, { key: string; title: string; chats: AdminChat[] }>();
+  for (const chat of projectChats.value) {
+    const key = chat.projectId == null ? 'project-unbound' : `project-${chat.projectId}`;
+    const title = chat.projectId == null ? '未关联项目' : (projectNames.get(chat.projectId) || '已删除项目');
+    const group = groups.get(key) ?? { key, title, chats: [] };
+    group.chats.push(chat);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+});
 
 function formatNumber(value: number) {
   return Number(value || 0).toLocaleString('zh-CN');
@@ -639,6 +695,50 @@ onUnmounted(() => {
   gap: 0;
 }
 
+.admin-chat-scope {
+  display: flex;
+  gap: 4px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--pa-line);
+}
+
+.admin-chat-scope__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--pa-radius-sm);
+  color: var(--pa-text-muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+.admin-chat-scope__item strong {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: inherit;
+  background: var(--pa-surface-muted);
+  font-size: 9px;
+  text-align: center;
+}
+
+.admin-chat-scope__item:hover,
+.admin-chat-scope__item--active {
+  border-color: var(--pa-line-strong);
+  color: var(--pa-text);
+  background: var(--pa-accent-soft);
+}
+
+.admin-chat-scope__item:focus-visible {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: 2px;
+}
+
 .admin-list__row {
   display: flex;
   align-items: center;
@@ -670,19 +770,79 @@ onUnmounted(() => {
   border-radius: 0;
 }
 
-.admin-chat-session > header {
+.admin-chat-group__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 9px 2px;
-  background: transparent;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--pa-line);
+  color: var(--pa-text-secondary);
+  background: var(--pa-surface-muted);
 }
 
-.admin-chat-session > header small,
+.admin-chat-group__header strong {
+  font-size: 11px;
+}
+
+.admin-chat-group__header span {
+  color: var(--pa-text-muted);
+  font-size: 9px;
+}
+
+.admin-chat-session > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 9px 2px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-chat-session > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-chat-session > summary:hover {
+  background: var(--pa-surface-muted);
+}
+
+.admin-chat-session__identity {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.admin-chat-session__identity strong {
+  overflow: hidden;
+  color: var(--pa-text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-chat-session__toggle {
+  flex: 0 0 auto;
+  color: var(--pa-text-muted);
+  font-size: 13px;
+  transition: transform 160ms ease;
+}
+
+.admin-chat-session[open] .admin-chat-session__toggle {
+  transform: rotate(180deg);
+}
+
+.admin-chat-session__identity small,
 .admin-message small {
   color: var(--pa-text-muted);
   font-size: 10px;
+}
+
+.admin-chat-session__messages {
+  border-top: 1px solid var(--pa-line);
 }
 
 .admin-message {
@@ -898,9 +1058,21 @@ onUnmounted(() => {
     white-space: normal;
   }
 
-  .admin-chat-session > header {
+  .admin-chat-scope {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-chat-scope__item {
+    justify-content: center;
+  }
+
+  .admin-chat-session > summary {
     align-items: flex-start;
-    flex-direction: column;
+  }
+
+  .admin-chat-session__identity small {
+    overflow-wrap: anywhere;
   }
 }
 </style>

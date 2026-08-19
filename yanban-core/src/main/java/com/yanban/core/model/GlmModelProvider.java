@@ -156,6 +156,7 @@ public class GlmModelProvider implements ChatModelProvider {
                 temperature,
                 maxTokens,
                 stream,
+                stream ? new StreamOptions(true) : null,
                 request.tools(),
                 request.responseFormat(),
                 request.thinking()
@@ -214,11 +215,15 @@ public class GlmModelProvider implements ChatModelProvider {
     private List<ChatChunk> parseSseData(String data) {
         try {
             JsonNode root = objectMapper.readTree(data);
+            List<ChatChunk> chunks = new ArrayList<>();
+            ChatResponse.Usage usage = parseUsage(root.path("usage"));
+            if (usage != null) {
+                chunks.add(ChatChunk.usage(usage));
+            }
             JsonNode choice = root.path("choices").isArray() && !root.path("choices").isEmpty() ? root.path("choices").get(0) : null;
             if (choice == null) {
-                return List.of();
+                return chunks;
             }
-            List<ChatChunk> chunks = new ArrayList<>();
             JsonNode delta = choice.path("delta");
             if (delta.hasNonNull("content")) {
                 String content = delta.path("content").asText();
@@ -234,6 +239,21 @@ public class GlmModelProvider implements ChatModelProvider {
         } catch (Exception ex) {
             throw new ModelProviderException("Failed to parse GLM SSE chunk", ex);
         }
+    }
+
+    private ChatResponse.Usage parseUsage(JsonNode usageNode) {
+        if (usageNode == null || !usageNode.isObject()) {
+            return null;
+        }
+        return new ChatResponse.Usage(
+                jsonIntOrNull(usageNode.get("prompt_tokens")),
+                jsonIntOrNull(usageNode.get("completion_tokens")),
+                jsonIntOrNull(usageNode.get("total_tokens"))
+        );
+    }
+
+    private Integer jsonIntOrNull(JsonNode node) {
+        return node != null && node.isNumber() ? node.intValue() : null;
     }
 
     private List<ChatChunk> parseToolCallDeltas(JsonNode toolCallsNode) {
@@ -269,9 +289,12 @@ public class GlmModelProvider implements ChatModelProvider {
                                   Double temperature,
                                   @JsonProperty("max_tokens") Integer maxTokens,
                                   Boolean stream,
+                                  @JsonProperty("stream_options") StreamOptions streamOptions,
                                   List<ToolSpec> tools,
                                   @JsonProperty("response_format") ChatRequest.ResponseFormat responseFormat,
                                   ChatRequest.Thinking thinking) {}
+
+    private record StreamOptions(@JsonProperty("include_usage") boolean includeUsage) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private record GlmMessage(String role, String content,

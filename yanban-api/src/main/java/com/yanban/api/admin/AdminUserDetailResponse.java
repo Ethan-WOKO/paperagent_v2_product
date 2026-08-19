@@ -20,7 +20,7 @@ public record AdminUserDetailResponse(AdminUserSummaryResponse user,
                               List<ChatMessage> messages) {
     }
 
-    public record ChatMessage(Long id, String role, String content, Instant createdAt) {
+    public record ChatMessage(Long id, String role, String content, Instant createdAt, boolean deletable) {
     }
 
     public record PaperTask(Long id,

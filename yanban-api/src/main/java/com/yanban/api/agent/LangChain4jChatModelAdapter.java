@@ -331,6 +331,9 @@ public class LangChain4jChatModelAdapter implements ChatModel {
                 )));
             }
         }
+        if (response.usage() != null) {
+            chunks.add(ChatChunk.usage(response.usage()));
+        }
         chunks.add(ChatChunk.done(defaultString(response.finishReason(), "stop")));
         return chunks;
     }

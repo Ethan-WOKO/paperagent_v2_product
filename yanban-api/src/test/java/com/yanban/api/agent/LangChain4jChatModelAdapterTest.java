@@ -36,7 +36,10 @@ class LangChain4jChatModelAdapterTest {
                         "DeepSeek API stream failed",
                         new RuntimeException("Connection prematurely closed DURING response"))));
         when(provider.chat(any()))
-                .thenReturn(new ChatResponse(ChatMessage.assistant("fallback answer"), "stop", null));
+                .thenReturn(new ChatResponse(
+                        ChatMessage.assistant("fallback answer"),
+                        "stop",
+                        new ChatResponse.Usage(12, 3, 15)));
         LangChain4jChatModelAdapter adapter = new LangChain4jChatModelAdapter(provider, new ObjectMapper());
 
         List<ChatChunk> chunks = adapter.stream(request(), runtimeRequest())
@@ -44,7 +47,11 @@ class LangChain4jChatModelAdapterTest {
                 .block();
 
         assertThat(chunks).extracting(ChatChunk::content)
-                .containsExactly("fallback answer", null);
+                .containsExactly("fallback answer", null, null);
+        assertThat(chunks).anySatisfy(chunk -> {
+            assertThat(chunk.usage()).isNotNull();
+            assertThat(chunk.usage().totalTokens()).isEqualTo(15);
+        });
         assertThat(chunks).last().matches(ChatChunk::done);
         verify(provider).chat(any());
     }

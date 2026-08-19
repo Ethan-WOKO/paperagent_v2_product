@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.yanban.api.agent.worker.ControlledWorkerExecutionScope;
 import com.yanban.core.model.ChatChunk;
 import com.yanban.core.model.ChatMessage;
+import com.yanban.core.model.ChatResponse;
 import com.yanban.core.tool.ToolDescriptor;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -691,6 +692,7 @@ public class LangChain4jToolCallingStrategy {
         return dev.langchain4j.model.chat.response.ChatResponse.builder()
                 .aiMessage(aiMessage)
                 .modelName(chatRequest == null ? null : chatRequest.modelName())
+                .tokenUsage(accumulator.tokenUsage())
                 .build();
     }
 
@@ -1091,6 +1093,7 @@ public class LangChain4jToolCallingStrategy {
         private final AgentRuntimeRequest request;
         private final StringBuilder content = new StringBuilder();
         private final Map<Integer, ToolCallBuilder> toolCalls = new TreeMap<>();
+        private TokenUsage tokenUsage;
         private StreamMode mode = StreamMode.UNDECIDED;
 
         private StreamAccumulator(AgentRuntimeRequest request) {
@@ -1100,6 +1103,14 @@ public class LangChain4jToolCallingStrategy {
         private void accept(ChatChunk chunk) {
             if (chunk == null) {
                 return;
+            }
+            if (chunk.usage() != null) {
+                ChatResponse.Usage usage = chunk.usage();
+                tokenUsage = new TokenUsage(
+                        usage.promptTokens(),
+                        usage.completionTokens(),
+                        usage.totalTokens()
+                );
             }
             if (!chunk.toolCallDeltas().isEmpty()) {
                 mode = StreamMode.TOOL_CALL;
@@ -1127,6 +1138,10 @@ public class LangChain4jToolCallingStrategy {
                 return AiMessage.from(content.toString(), requests);
             }
             return AiMessage.from(content.toString());
+        }
+
+        private TokenUsage tokenUsage() {
+            return tokenUsage;
         }
     }
 
