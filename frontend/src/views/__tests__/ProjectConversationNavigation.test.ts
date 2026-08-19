@@ -27,4 +27,13 @@ describe('shared conversation navigation and resizable Project context rail', ()
     expect(projectSource).toContain('void listProjectSessions(projectId).then(({ data }) =>');
     expect(projectSource).toContain('projectSessions.value = data');
   });
+
+  it('keeps project content search in the wide inspector and offers project rename', () => {
+    expect(projectSource).toContain("showInspector('search')");
+    expect(projectSource).toContain("inspectorTab === 'search'");
+    expect(projectSource).not.toContain('placeholder="搜索项目"');
+    expect(projectSource).toContain('handleProjectMenuSelect(key, project)');
+    expect(projectSource).toContain('confirmRenameProject');
+    expect(projectSource).not.toContain('#{{ project.id }} - {{ project.accessMode }}');
+  });
 });

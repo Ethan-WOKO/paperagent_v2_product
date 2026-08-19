@@ -283,10 +283,6 @@
                 </NTooltip>
               </div>
               <div class="chat-composer__quick-actions">
-                <span
-                  class="v2-availability-indicator"
-                  :data-status="v2LiteratureAvailable ? 'available' : 'unavailable'"
-                >{{ v2LiteratureAvailabilityLabel }}</span>
                 <button
                   type="button"
                   :aria-expanded="literatureFormOpen"

@@ -38,6 +38,20 @@ class ProjectServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final List<Path> fixtureLinks = new ArrayList<>();
 
+    @Test
+    void renameUpdatesOnlyAnOwnedProjectsDisplayName() {
+        Project project = new Project(7L, "Old name", ".", ".", "[]", "[]");
+        when(projects.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(project));
+        when(projects.saveAndFlush(project)).thenReturn(project);
+        ProjectService service = new ProjectService(projects, List.of(), properties, objectMapper);
+
+        ProjectSummaryResponse renamed = service.rename(7L, 42L, "  New name  ");
+
+        assertThat(renamed.name()).isEqualTo("New name");
+        assertThat(project.getName()).isEqualTo("New name");
+        verify(projects).saveAndFlush(project);
+    }
+
     @AfterEach
     void clearProperties() throws IOException {
         properties.setLocalServerRoot(null);

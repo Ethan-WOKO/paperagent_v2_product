@@ -42,10 +42,23 @@
               <span class="project-panel__count">{{ projects.length }}</span>
             </div>
             <div v-show="!sidebarSections.projects" class="project-list">
-              <button v-for="project in projects" :key="project.id" type="button" class="project-list__item" :class="{ active: project.id === activeProjectId }" :aria-current="project.id === activeProjectId ? 'page' : undefined" @click="selectProject(project.id)">
+              <div
+                v-for="project in projects"
+                :key="project.id"
+                role="button"
+                tabindex="0"
+                class="project-list__item"
+                :class="{ active: project.id === activeProjectId }"
+                :aria-current="project.id === activeProjectId ? 'page' : undefined"
+                :title="project.name"
+                @click="selectProject(project.id)"
+                @keydown.enter.prevent="selectProject(project.id)"
+              >
                 <strong>{{ project.name }}</strong>
-                <small>#{{ project.id }} - {{ project.accessMode }}</small>
-              </button>
+                <NDropdown trigger="click" :options="projectMenuOptions" @select="(key) => handleProjectMenuSelect(key, project)">
+                  <button type="button" class="project-conversation-item__more" aria-label="项目操作" @click.stop>...</button>
+                </NDropdown>
+              </div>
             </div>
           </section>
 
@@ -121,6 +134,7 @@
               <NSpace class="project-panel__title-actions" :size="4" align="center">
                 <span class="project-panel__count">{{ manifest?.files.length || 0 }}</span>
                 <template v-if="!sidebarSections.files">
+                  <NButton size="tiny" quaternary title="搜索当前项目的文件内容" @click="showInspector('search')">搜索内容</NButton>
                   <NButton
                     size="tiny"
                     quaternary
@@ -157,17 +171,6 @@
               <NEmpty v-if="manifest && manifest.files.length === 0" size="small" :description="t('project.page.noReadableFiles')" />
             </div>
 
-            <div v-show="!sidebarSections.files" class="project-search">
-              <NInput v-model:value="searchQuery" size="small" :placeholder="t('project.page.searchProject')" @keyup.enter="runSearch" />
-              <NButton size="small" secondary :loading="loading.search" :disabled="!activeProject" @click="runSearch">{{ t('project.page.search') }}</NButton>
-            </div>
-
-            <div v-if="!sidebarSections.files && searchResults.length" class="project-search-results">
-              <button v-for="hit in searchResults" :key="`${hit.path}:${hit.lineNumber}`" type="button" @click="openFile(hit.path)">
-                <strong>{{ hit.path }}:{{ hit.lineNumber }}</strong>
-                <span>{{ hit.line }}</span>
-              </button>
-            </div>
           </section>
         </aside>
 
@@ -202,12 +205,29 @@
 
           <section v-if="inspectorOpen" id="project-inspector" class="project-inspector">
             <div class="project-inspector__tabs">
-              <strong>任务详情</strong>
+              <strong>{{ inspectorTitle }}</strong>
               <button type="button" class="project-inspector__close" @click="inspectorOpen = false">收起</button>
             </div>
 
             <div class="project-inspector__body">
-              <template v-if="inspectorTab === 'preview'">
+              <template v-if="inspectorTab === 'search'">
+                <div class="project-search-workspace">
+                  <div class="project-search-workspace__form">
+                    <NInput v-model:value="searchQuery" clearable placeholder="搜索当前项目的文件内容" @keyup.enter="runSearch" />
+                    <NButton type="primary" :loading="loading.search" :disabled="!activeProject || !searchQuery.trim()" @click="runSearch">搜索</NButton>
+                  </div>
+                  <div v-if="searchResults.length" class="project-search-results project-search-results--wide">
+                    <button v-for="hit in searchResults" :key="`${hit.path}:${hit.lineNumber}`" type="button" @click="openFile(hit.path)">
+                      <strong>{{ hit.path }}:{{ hit.lineNumber }}</strong>
+                      <span>{{ hit.line }}</span>
+                    </button>
+                  </div>
+                  <NEmpty v-else-if="searchQuery.trim() && !loading.search" size="small" description="没有找到匹配内容。" />
+                  <NEmpty v-else-if="!loading.search" size="small" description="输入关键词，搜索当前项目中的文件内容。" />
+                </div>
+              </template>
+
+              <template v-else-if="inspectorTab === 'preview'">
                 <div class="project-preview project-preview--inline">
                   <div class="project-panel__title"><strong>{{ selectedFile?.path || '文件预览' }}</strong><span v-if="selectedFile">{{ shortHash(selectedFile.sha256) }}</span></div>
                   <NSpin v-if="loading.file" size="small" />
@@ -647,6 +667,22 @@
       </NSpace>
     </NModal>
 
+    <NModal v-model:show="renameProjectModalOpen" preset="card" title="重命名项目" :style="{ width: 'min(420px, calc(100vw - 32px))' }">
+      <NSpace vertical :size="14">
+        <NInput
+          v-model:value="renameProjectDraft"
+          maxlength="255"
+          show-count
+          placeholder="项目名称"
+          @keydown.enter.prevent="confirmRenameProject"
+        />
+        <NSpace justify="end">
+          <NButton secondary @click="renameProjectModalOpen = false">取消</NButton>
+          <NButton type="primary" :loading="loading.renameProject" :disabled="!renameProjectDraft.trim()" @click="confirmRenameProject">保存</NButton>
+        </NSpace>
+      </NSpace>
+    </NModal>
+
     <NModal v-model:show="renameSessionModalOpen" preset="card" title="Rename conversation" :style="{ width: 'min(420px, calc(100vw - 32px))' }">
       <NSpace vertical :size="14">
         <NInput
@@ -718,7 +754,7 @@ import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
 import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listReactPlanSessionTasks, startReactPlanTask, streamReactPlanEvents, type ReactPlanSessionTask, type ReactPlanTaskState } from '@/api/reactPlan';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, renameProject, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
 import {
@@ -756,7 +792,7 @@ import {
   type ReactPlanTaskRecord,
 } from '@/utils/reactPlanTask';
 
-type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
+type ProjectInspectorTab = 'search' | 'preview' | 'evidence' | 'changes' | 'versions';
 
 interface CandidateReviewItem {
   artifact: ArtifactResponse;
@@ -803,9 +839,19 @@ const revisionMessage = ref('');
 const revisionMessageType = ref<'success' | 'warning' | 'error'>('success');
 const inspectorTab = ref<ProjectInspectorTab>('preview');
 const inspectorOpen = ref(false);
+const inspectorTitle = computed(() => ({
+  search: '搜索项目内容',
+  preview: '文件预览',
+  evidence: '证据',
+  changes: '修改与验证',
+  versions: '项目版本',
+}[inspectorTab.value]));
 const error = ref('');
 const createModalOpen = ref(false);
 const deleteModalOpen = ref(false);
+const renameProjectModalOpen = ref(false);
+const renameProjectId = ref<number | null>(null);
+const renameProjectDraft = ref('');
 const renameSessionModalOpen = ref(false);
 const renameSessionId = ref<number | null>(null);
 const renameSessionDraft = ref('');
@@ -937,6 +983,7 @@ const loading = reactive({
   rollback: false,
   create: false,
   deleteProject: false,
+  renameProject: false,
   renameSession: false,
   v2History: false,
 });
@@ -1006,6 +1053,9 @@ const projectRailStyle = computed(() => ({
 const sessionMenuOptions = computed(() => [
   { label: isEnglish.value ? 'Rename' : '重命名', key: 'rename' },
   { label: isEnglish.value ? 'Delete' : '删除', key: 'delete' },
+]);
+const projectMenuOptions = computed(() => [
+  { label: isEnglish.value ? 'Rename project' : '重命名项目', key: 'rename' },
 ]);
 const projectUtilityMenuOptions = computed(() => [
   { label: isEnglish.value ? 'File preview' : '文件预览', key: 'preview' },
@@ -1314,6 +1364,30 @@ function toggleInspector(tab: ProjectInspectorTab) {
 function handleProjectUtilityMenuSelect(key: string | number) {
   if (key === 'preview' || key === 'evidence' || key === 'versions') {
     toggleInspector(key);
+  }
+}
+
+function handleProjectMenuSelect(key: string | number, project: ProjectSummaryResponse) {
+  if (key !== 'rename') return;
+  renameProjectId.value = project.id;
+  renameProjectDraft.value = project.name;
+  renameProjectModalOpen.value = true;
+}
+
+async function confirmRenameProject() {
+  const projectId = renameProjectId.value;
+  const name = renameProjectDraft.value.trim();
+  if (!projectId || !name) return;
+  loading.renameProject = true;
+  error.value = '';
+  try {
+    const { data } = await renameProject(projectId, name);
+    projects.value = projects.value.map((project) => project.id === data.id ? data : project);
+    renameProjectModalOpen.value = false;
+  } catch (cause) {
+    error.value = apiError(cause);
+  } finally {
+    loading.renameProject = false;
   }
 }
 
@@ -2999,7 +3073,7 @@ onUnmounted(() => {
 .project-sidebar-section--projects .project-list,
 .project-sidebar-section--chats .project-conversation-history--sidebar { flex: 0 1 auto; max-height: 136px; }
 .project-list__item, .project-file-list__item, .project-search-results button, .project-candidate-list button { width: 100%; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; border-radius: 7px; }
-.project-list__item { min-height: 50px; display: grid; align-content: center; gap: 2px; padding: 7px 10px; line-height: 1.3; }
+.project-list__item { min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 8px 7px 10px; line-height: 1.3; }
 .project-list__item.active, .project-file-list__item.active, .project-candidate-list button.active { background: var(--yb-sidebar-active); }
 .project-list__item strong, .project-list__item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-list__item strong { font-size: 12px; font-weight: 600; line-height: 1.35; }
@@ -3020,6 +3094,12 @@ onUnmounted(() => {
 .project-search-results button { padding: 5px 6px; }
 .project-search-results strong, .project-search-results span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
 .project-search-results span { color: var(--yb-text-muted); margin-top: 2px; }
+.project-search-workspace { min-height: 220px; display: flex; flex-direction: column; gap: 12px; }
+.project-search-workspace__form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.project-search-results--wide { flex: 1 1 auto; max-height: 34dvh; gap: 4px; }
+.project-search-results--wide button { padding: 9px 10px; border-bottom: 1px solid var(--yb-border); border-radius: 4px; }
+.project-search-results--wide strong { font-size: 11px; }
+.project-search-results--wide span { margin-top: 4px; overflow: visible; white-space: normal; line-height: 1.5; }
 
 .project-tabs { flex: 0 0 auto; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--yb-border); }
 .project-tabs__title { flex: 0 0 auto; font-size: 12px; line-height: 26px; }
@@ -3599,7 +3679,7 @@ onUnmounted(() => {
 }
 
 .project-workspace--console .project-list__item {
-  min-height: 54px;
+  min-height: 44px;
   padding: 8px 12px;
 }
 
