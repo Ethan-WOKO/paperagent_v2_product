@@ -25,6 +25,13 @@ describe('研伴公开页面品牌和语言切换', () => {
     expect(publicStyles).toContain('transform: scale(1.45);');
   });
 
+  it('shows the QQ support announcement on the login page', () => {
+    expect(loginSource).toContain('class="public-access__notice"');
+    expect(loginSource).toContain("t('auth.qqSupport')");
+    expect(loginSource).toContain('<strong>562720603</strong>');
+    expect(registerSource).not.toContain('public-access__notice');
+  });
+
   it('keeps one functional locale button without a reserved empty column', () => {
     expect(languageSource).toContain("locale === 'zh-CN' ? '中' : 'EN'");
     expect(languageSource).toContain('@click="toggleLocale"');

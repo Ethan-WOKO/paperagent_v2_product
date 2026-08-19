@@ -11,6 +11,10 @@
       <span>{{ t('auth.login') }}</span>
       <p>{{ t('auth.loginDescription') }}</p>
     </header>
+    <aside class="public-access__notice" role="note">
+      <span>{{ t('auth.notice') }}</span>
+      <p>{{ t('auth.qqSupport') }} <strong>562720603</strong></p>
+    </aside>
     <NForm :model="form" @submit.prevent="handleSubmit">
       <NFormItem :label="t('auth.username')">
         <NInput v-model:value="form.username" size="large" :placeholder="t('auth.usernamePlaceholder')" />

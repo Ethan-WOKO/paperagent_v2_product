@@ -207,6 +207,38 @@ html:not(.canvas-scale-active) #app:has(.public-shell) {
   line-height: 1.55;
 }
 
+.public-access__notice {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: -7px 0 18px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--pa-accent) 24%, var(--pa-line));
+  border-left: 2px solid var(--pa-accent);
+  border-radius: var(--pa-radius-sm);
+  color: var(--pa-text-secondary);
+  background: var(--pa-accent-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.public-access__notice > span {
+  flex: 0 0 auto;
+  color: var(--pa-accent);
+  font-weight: 700;
+}
+
+.public-access__notice p {
+  margin: 0;
+}
+
+.public-access__notice strong {
+  color: var(--pa-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .03em;
+}
+
 .public-access__form .n-form-item {
   margin-bottom: 13px;
 }
