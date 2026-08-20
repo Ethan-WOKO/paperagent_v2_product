@@ -1,5 +1,6 @@
 package com.yanban.knowledge.service;
 
+import com.yanban.knowledge.config.KnowledgeRetrievalProperties;
 import com.yanban.knowledge.domain.KbDocument;
 import com.yanban.knowledge.domain.KbDocumentRepository;
 import java.util.ArrayList;
@@ -11,24 +12,40 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Primary
 @Service
 public class HybridKnowledgeSearchService implements KnowledgeSearchService {
 
-    private static final int RRF_RANK_CONSTANT = 60;
+    private static final Logger log = LoggerFactory.getLogger(HybridKnowledgeSearchService.class);
+    private static final KnowledgeModelReranker NO_MODEL_RERANKER = new KnowledgeModelReranker() {
+        @Override
+        public boolean available() {
+            return false;
+        }
+
+        @Override
+        public List<KnowledgeSearchResult> rerank(
+                String query, List<KnowledgeSearchResult> candidates, int topK) {
+            return candidates.stream().limit(topK).toList();
+        }
+    };
 
     private final EmbeddingClient embeddingClient;
     private final KnowledgeSearchIndexClient indexClient;
     private final KbDocumentRepository documents;
     private final SimpleKnowledgeSearchService fallbackSearchService;
-    private final KnowledgeReranker reranker;
+    private final KnowledgeRetrievalProperties retrievalProperties;
+    private final KnowledgeModelReranker modelReranker;
 
     public HybridKnowledgeSearchService(EmbeddingClient embeddingClient,
                                         KnowledgeSearchIndexClient indexClient,
                                         KbDocumentRepository documents,
                                         SimpleKnowledgeSearchService fallbackSearchService) {
-        this(embeddingClient, indexClient, documents, fallbackSearchService, new KnowledgeReranker());
+        this(embeddingClient, indexClient, documents, fallbackSearchService,
+                new KnowledgeRetrievalProperties(), NO_MODEL_RERANKER);
     }
 
     @Autowired
@@ -36,12 +53,14 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
                                         KnowledgeSearchIndexClient indexClient,
                                         KbDocumentRepository documents,
                                         SimpleKnowledgeSearchService fallbackSearchService,
-                                        KnowledgeReranker reranker) {
+                                        KnowledgeRetrievalProperties retrievalProperties,
+                                        KnowledgeModelReranker modelReranker) {
         this.embeddingClient = embeddingClient;
         this.indexClient = indexClient;
         this.documents = documents;
         this.fallbackSearchService = fallbackSearchService;
-        this.reranker = reranker;
+        this.retrievalProperties = retrievalProperties;
+        this.modelReranker = modelReranker;
     }
 
     @Override
@@ -55,15 +74,25 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
             return List.of();
         }
         int topK = options.topK();
-        int candidateLimit = Math.max(topK, Math.min(50, topK * 4));
+        int candidateLimit = Math.max(topK, retrievalProperties.getCandidateLimit());
         RouteHits lexical = searchLexicalVariants(query, options, candidateLimit);
         RouteHits vector = searchVector(query, options, candidateLimit);
         List<KnowledgeSearchIndexHit> hits = reciprocalRankFusion(lexical.hits(), vector.hits(), candidateLimit);
         if (hits.isEmpty()) {
             return fallbackSearchService.search(query, options);
         }
-        List<KnowledgeSearchResult> results = toResults(query.trim(), hits, options);
-        return results.isEmpty() ? fallbackSearchService.search(query, options) : results;
+        List<KnowledgeSearchResult> results = toResults(hits, options);
+        if (results.isEmpty()) return fallbackSearchService.search(query, options);
+        if (!modelReranker.available()) return results.stream().limit(topK).toList();
+        try {
+            List<KnowledgeSearchResult> reranked = modelReranker.rerank(query.trim(), results, topK);
+            if (reranked == null) throw new IllegalStateException("Model reranker returned null");
+            return reranked;
+        } catch (RuntimeException failure) {
+            log.warn("Knowledge model rerank failed; using weighted RRF fallback: {}",
+                    failure.getClass().getSimpleName());
+            return results.stream().limit(topK).toList();
+        }
     }
 
     private RouteHits searchLexicalVariants(String query,
@@ -111,9 +140,9 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
                                                                List<KnowledgeSearchIndexHit> vector,
                                                                int candidateLimit) {
         Map<String, FusionCandidate> fused = new LinkedHashMap<>();
-        addRankedRoute(fused, lexical);
-        addRankedRoute(fused, vector);
-        double scale = RRF_RANK_CONSTANT + 1.0d;
+        addRankedRoute(fused, lexical, retrievalProperties.getLexicalWeight());
+        addRankedRoute(fused, vector, retrievalProperties.getVectorWeight());
+        double scale = retrievalProperties.getRrfRankConstant() + 1.0d;
         return fused.values().stream()
                 .sorted(Comparator.comparingDouble(FusionCandidate::score).reversed())
                 .limit(candidateLimit)
@@ -126,11 +155,14 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
                 .toList();
     }
 
-    private void addRankedRoute(Map<String, FusionCandidate> fused, List<KnowledgeSearchIndexHit> route) {
+    private void addRankedRoute(
+            Map<String, FusionCandidate> fused,
+            List<KnowledgeSearchIndexHit> route,
+            double weight) {
         for (int rank = 0; rank < route.size(); rank++) {
             KnowledgeSearchIndexHit hit = route.get(rank);
             String key = hit.documentId() + ":" + hit.chunkIndex();
-            double contribution = 1.0d / (RRF_RANK_CONSTANT + rank + 1.0d);
+            double contribution = weight / (retrievalProperties.getRrfRankConstant() + rank + 1.0d);
             FusionCandidate previous = fused.get(key);
             if (previous == null) {
                 fused.put(key, new FusionCandidate(hit, contribution));
@@ -140,7 +172,9 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
         }
     }
 
-    private List<KnowledgeSearchResult> toResults(String query, List<KnowledgeSearchIndexHit> hits, KnowledgeSearchOptions options) {
+    private List<KnowledgeSearchResult> toResults(
+            List<KnowledgeSearchIndexHit> hits,
+            KnowledgeSearchOptions options) {
         List<KnowledgeSearchResult> results = new ArrayList<>();
         for (KnowledgeSearchIndexHit hit : hits) {
             KbDocument document = documents.findById(hit.documentId()).orElse(null);
@@ -155,7 +189,7 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
             ));
         }
         results.sort(Comparator.comparingDouble(KnowledgeSearchResult::score).reversed());
-        return reranker.rerank(query, results, options.topK());
+        return List.copyOf(results);
     }
 
     private record RouteHits(List<KnowledgeSearchIndexHit> hits) {

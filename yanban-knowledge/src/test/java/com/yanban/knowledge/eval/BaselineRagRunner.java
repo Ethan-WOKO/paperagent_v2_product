@@ -15,6 +15,8 @@ import java.util.Set;
 
 public class BaselineRagRunner {
 
+    private static final List<Integer> RANK_CUTOFFS = List.of(1, 3, 5, 10, 20, 50);
+
     private final BaselineSearchBackend searchBackend;
     private final String runnerName;
 
@@ -30,7 +32,10 @@ public class BaselineRagRunner {
     public BaselineRagEvaluationResult run(List<RagSpikeEvalCase> cases) {
         List<BaselineRagEvaluationResult.CaseResult> results = new ArrayList<>();
         for (RagSpikeEvalCase evalCase : cases) {
-            results.add(evaluateCase(evalCase, searchBackend.search(evalCase)));
+            long startedAt = System.nanoTime();
+            List<BaselineRagHit> hits = searchBackend.search(evalCase);
+            double latencyMillis = (System.nanoTime() - startedAt) / 1_000_000.0d;
+            results.add(evaluateCase(evalCase, hits, latencyMillis));
         }
         return new BaselineRagEvaluationResult(
                 runnerName,
@@ -48,7 +53,10 @@ public class BaselineRagRunner {
         mapper.writeValue(outputPath.toFile(), result);
     }
 
-    private BaselineRagEvaluationResult.CaseResult evaluateCase(RagSpikeEvalCase evalCase, List<BaselineRagHit> hits) {
+    private BaselineRagEvaluationResult.CaseResult evaluateCase(
+            RagSpikeEvalCase evalCase,
+            List<BaselineRagHit> hits,
+            double latencyMillis) {
         List<Long> retrievedDocumentIds = hits.stream()
                 .map(BaselineRagHit::documentId)
                 .toList();
@@ -60,7 +68,11 @@ public class BaselineRagRunner {
         List<Long> forbiddenDocumentIdsHit = intersection(evalCase.forbiddenDocumentIds(), retrievedDocumentIds);
         List<String> missingExpectedCitationIds = missing(evalCase.expectedCitationIds(), retrievedCitationIds);
         Map<String, Boolean> rankingRuleResults = evaluateRankingRules(evalCase, retrievedDocumentIds);
-        double reciprocalRank = reciprocalRank(evalCase.expectedDocumentIds(), retrievedDocumentIds);
+        Map<Integer, Double> recallAtN = metricAtCutoffs(
+                cutoff -> recallAt(evalCase.expectedDocumentIds(), retrievedDocumentIds, cutoff));
+        Map<Integer, Double> ndcgAtN = metricAtCutoffs(
+                cutoff -> ndcgAt(evalCase.expectedDocumentIds(), retrievedDocumentIds, cutoff));
+        double reciprocalRank = reciprocalRank(evalCase.expectedDocumentIds(), retrievedDocumentIds, 10);
         boolean passed = missingExpectedDocumentIds.isEmpty()
                 && forbiddenDocumentIdsHit.isEmpty()
                 && missingExpectedCitationIds.isEmpty()
@@ -68,6 +80,7 @@ public class BaselineRagRunner {
         return new BaselineRagEvaluationResult.CaseResult(
                 evalCase.caseId(),
                 evalCase.area(),
+                evalCase.expectedDocumentIds() != null && !evalCase.expectedDocumentIds().isEmpty(),
                 passed,
                 retrievedDocumentIds,
                 retrievedCitationIds,
@@ -75,12 +88,18 @@ public class BaselineRagRunner {
                 forbiddenDocumentIdsHit,
                 missingExpectedCitationIds,
                 rankingRuleResults,
-                reciprocalRank
+                reciprocalRank,
+                recallAtN,
+                ndcgAtN,
+                latencyMillis
         );
     }
 
     private BaselineRagEvaluationResult.Summary summarize(List<BaselineRagEvaluationResult.CaseResult> results) {
         int total = results.size();
+        List<BaselineRagEvaluationResult.CaseResult> rankingEligible = results.stream()
+                .filter(BaselineRagEvaluationResult.CaseResult::rankingEligible)
+                .toList();
         int passed = (int) results.stream().filter(BaselineRagEvaluationResult.CaseResult::passed).count();
         int forbiddenHits = results.stream()
                 .mapToInt(result -> result.forbiddenDocumentIdsHit().size())
@@ -92,21 +111,32 @@ public class BaselineRagRunner {
                 .flatMap(result -> result.retrievedCitationIds().stream())
                 .filter(value -> value != null && !value.isBlank())
                 .count();
-        double recallAt5 = total == 0 ? 0.0d : results.stream()
-                .mapToDouble(result -> result.missingExpectedDocumentIds().isEmpty() ? 1.0d : 0.0d)
-                .average()
-                .orElse(0.0d);
-        double mrr = results.stream()
+        Map<Integer, Double> recallAtN = aggregateAtCutoffs(rankingEligible,
+                BaselineRagEvaluationResult.CaseResult::recallAtN);
+        Map<Integer, Double> ndcgAtN = aggregateAtCutoffs(rankingEligible,
+                BaselineRagEvaluationResult.CaseResult::ndcgAtN);
+        double recallAt5 = recallAtN.getOrDefault(5, 0.0d);
+        double mrr = rankingEligible.stream()
                 .mapToDouble(BaselineRagEvaluationResult.CaseResult::reciprocalRank)
                 .average()
                 .orElse(0.0d);
+        List<Double> latencies = results.stream()
+                .map(BaselineRagEvaluationResult.CaseResult::latencyMillis)
+                .sorted()
+                .toList();
         double metadataRate = metadataChecked == 0 ? 1.0d : metadataPresent / (double) metadataChecked;
         return new BaselineRagEvaluationResult.Summary(
                 total,
+                rankingEligible.size(),
                 passed,
                 total - passed,
                 recallAt5,
                 mrr,
+                recallAtN,
+                ndcgAtN,
+                mrr,
+                percentile(latencies, 0.50d),
+                percentile(latencies, 0.95d),
                 forbiddenHits,
                 metadataRate
         );
@@ -148,15 +178,65 @@ public class BaselineRagRunner {
         return results;
     }
 
-    private double reciprocalRank(List<Long> expectedDocumentIds, List<Long> retrievedDocumentIds) {
+    private Map<Integer, Double> metricAtCutoffs(java.util.function.IntToDoubleFunction metric) {
+        Map<Integer, Double> values = new LinkedHashMap<>();
+        for (int cutoff : RANK_CUTOFFS) values.put(cutoff, metric.applyAsDouble(cutoff));
+        return values;
+    }
+
+    private Map<Integer, Double> aggregateAtCutoffs(
+            List<BaselineRagEvaluationResult.CaseResult> results,
+            java.util.function.Function<BaselineRagEvaluationResult.CaseResult, Map<Integer, Double>> values) {
+        Map<Integer, Double> aggregated = new LinkedHashMap<>();
+        for (int cutoff : RANK_CUTOFFS) {
+            aggregated.put(cutoff, results.stream()
+                    .map(values)
+                    .mapToDouble(item -> item.getOrDefault(cutoff, 0.0d))
+                    .average().orElse(0.0d));
+        }
+        return aggregated;
+    }
+
+    private double recallAt(List<Long> expectedDocumentIds, List<Long> retrievedDocumentIds, int cutoff) {
+        if (expectedDocumentIds == null || expectedDocumentIds.isEmpty()) return 0.0d;
+        Set<Long> top = new LinkedHashSet<>(retrievedDocumentIds.stream().limit(cutoff).toList());
+        long recalled = expectedDocumentIds.stream().filter(top::contains).count();
+        return recalled / (double) new LinkedHashSet<>(expectedDocumentIds).size();
+    }
+
+    private double ndcgAt(List<Long> expectedDocumentIds, List<Long> retrievedDocumentIds, int cutoff) {
+        if (expectedDocumentIds == null || expectedDocumentIds.isEmpty()) return 0.0d;
+        Set<Long> relevant = new LinkedHashSet<>(expectedDocumentIds);
+        Set<Long> credited = new LinkedHashSet<>();
+        double dcg = 0.0d;
+        for (int index = 0; index < Math.min(cutoff, retrievedDocumentIds.size()); index++) {
+            Long documentId = retrievedDocumentIds.get(index);
+            if (relevant.contains(documentId) && credited.add(documentId)) {
+                dcg += 1.0d / (Math.log(index + 2.0d) / Math.log(2.0d));
+            }
+        }
+        double ideal = 0.0d;
+        for (int index = 0; index < Math.min(cutoff, relevant.size()); index++) {
+            ideal += 1.0d / (Math.log(index + 2.0d) / Math.log(2.0d));
+        }
+        return ideal == 0.0d ? 0.0d : dcg / ideal;
+    }
+
+    private double reciprocalRank(List<Long> expectedDocumentIds, List<Long> retrievedDocumentIds, int cutoff) {
         if (expectedDocumentIds == null || expectedDocumentIds.isEmpty()) {
             return 0.0d;
         }
-        for (int i = 0; i < retrievedDocumentIds.size(); i++) {
+        for (int i = 0; i < Math.min(cutoff, retrievedDocumentIds.size()); i++) {
             if (expectedDocumentIds.contains(retrievedDocumentIds.get(i))) {
                 return 1.0d / (i + 1);
             }
         }
         return 0.0d;
+    }
+
+    private double percentile(List<Double> sortedValues, double percentile) {
+        if (sortedValues.isEmpty()) return 0.0d;
+        int index = (int) Math.ceil(percentile * sortedValues.size()) - 1;
+        return sortedValues.get(Math.max(0, Math.min(index, sortedValues.size() - 1)));
     }
 }

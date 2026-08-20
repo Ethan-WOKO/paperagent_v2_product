@@ -23,6 +23,7 @@ import com.yanban.knowledge.service.KnowledgeSearchOptions;
 import com.yanban.knowledge.service.KnowledgeSearchResult;
 import com.yanban.knowledge.service.SimpleKnowledgeSearchService;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -96,9 +97,10 @@ class RealElasticsearchHybridRagE2eTest {
                     objectMapper,
                     provisioner
             );
+            ElasticsearchKnowledgeSearchIndexClient indexClient = new ElasticsearchKnowledgeSearchIndexClient(
+                    restClient, objectMapper, properties, provisioner);
             HybridKnowledgeSearchService searchService = new HybridKnowledgeSearchService(
-                    this::vectorFor,
-                    new ElasticsearchKnowledgeSearchIndexClient(restClient, objectMapper, properties, provisioner),
+                    this::vectorFor, indexClient,
                     documents,
                     new SimpleKnowledgeSearchService(chunks, documents)
             );
@@ -109,15 +111,40 @@ class RealElasticsearchHybridRagE2eTest {
             SeedResult finalSeed = seed;
             refreshIndex(restClient, indexName);
 
+            List<RagSpikeEvalCase> evaluationCases = loader.loadCases().stream()
+                    .map(evalCase -> remapCase(evalCase, finalSeed))
+                    .toList();
+            List<BaselineRagEvaluationResult> modeResults = Arrays.stream(RetrievalBaselineMode.values())
+                    .filter(mode -> !mode.requiresModelReranker())
+                    .map(mode -> new BaselineRagRunner(
+                            "real-es-" + mode.name().toLowerCase(Locale.ROOT).replace('_', '-'),
+                            new ElasticsearchRetrievalBaselineBackend(
+                                    mode, indexClient, this::vectorFor, documents))
+                            .run(evaluationCases))
+                    .toList();
+            RagModeComparisonEvaluationResult comparison = RagModeComparisonEvaluationResult.from(
+                    "real-es-retrieval-strategy-baseline", modeResults);
+            RagModeComparisonReportWriter.writeJson(
+                    comparison, Path.of("target", "rag-eval", "real-es-retrieval-baseline.json"));
+            RagModeComparisonReportWriter.writeMarkdown(
+                    comparison, Path.of("target", "rag-eval", "real-es-retrieval-baseline.md"));
+
             BaselineRagRunner runner = new BaselineRagRunner(
                     "real-elasticsearch-hybrid-rag-e2e",
                     new KnowledgeSearchServiceBaselineBackend(searchService)
             );
-            BaselineRagEvaluationResult result = runner.run(loader.loadCases().stream()
-                    .map(evalCase -> remapCase(evalCase, finalSeed))
-                    .toList());
+            BaselineRagEvaluationResult result = runner.run(evaluationCases);
             runner.writeJson(result, Path.of("target", "rag-eval", "real-es-hybrid-rag-e2e.json"));
 
+            assertThat(comparison.summary().totalModes()).isEqualTo(4);
+            assertThat(comparison.summary().totalCases()).isEqualTo(10);
+            assertThat(comparison.modeResults())
+                    .allSatisfy(mode -> {
+                        assertThat(mode.summary().rankingEligibleCases()).isEqualTo(7);
+                        assertThat(mode.summary().forbiddenHitCount()).isZero();
+                        assertThat(mode.summary().recallAtN()).containsKeys(1, 3, 5, 10, 20, 50);
+                        assertThat(mode.summary().ndcgAtN()).containsKeys(1, 3, 5, 10, 20, 50);
+                    });
             assertThat(result.summary().totalCases()).isEqualTo(10);
             assertThat(result.summary().forbiddenHitCount()).isZero();
             assertThat(result.summary().passedCases()).isGreaterThanOrEqualTo(8);

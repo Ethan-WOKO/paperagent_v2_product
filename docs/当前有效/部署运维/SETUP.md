@@ -24,8 +24,13 @@
 - `JWT_SECRET`：JWT 签名密钥，至少 32 字符
 - `DEEPSEEK_API_KEY`：DeepSeek 对话
 - `GLM_API_KEY`：智谱 GLM Provider
-- `DASHSCOPE_API_KEY`：DashScope Embedding
+- `DASHSCOPE_API_KEY`：DashScope Embedding 与知识库 `qwen3-rerank`
 - `GITHUB_TOKEN`：GitHub MCP（也可通过设置页写入）
+
+知识库生产检索默认使用训练集选出的加权 RRF（BM25 `0.5`、向量 `1.0`、rank constant
+`10`）生成最多 50 个候选，再将排名前 20 的候选交给 `qwen3-rerank`。未配置 `DASHSCOPE_API_KEY`、接口超时、
+限流或返回异常时会自动降级为加权 RRF，不会中断知识库搜索。可使用
+`YANBAN_KNOWLEDGE_RERANK_ENABLED=false` 临时关闭模型重排。
 
 参考模板：
 

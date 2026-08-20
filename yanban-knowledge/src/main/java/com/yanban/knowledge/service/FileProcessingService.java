@@ -21,14 +21,13 @@ import org.springframework.util.StringUtils;
 @Service
 public class FileProcessingService {
 
-    private static final int CHUNK_SIZE = 500;
-
     private final KbDocumentRepository documents;
     private final KbChunkRepository chunks;
     private final MinioClient minioClient;
     private final KnowledgeStorageProperties storageProperties;
     private final VectorizationService vectorizationService;
     private final OcrProvider ocrProvider;
+    private final KnowledgeTextChunker textChunker;
     private final Tika tika = new Tika();
 
     public FileProcessingService(KbDocumentRepository documents,
@@ -36,13 +35,15 @@ public class FileProcessingService {
                                  MinioClient minioClient,
                                  KnowledgeStorageProperties storageProperties,
                                  VectorizationService vectorizationService,
-                                 ObjectProvider<OcrProvider> ocrProvider) {
+                                 ObjectProvider<OcrProvider> ocrProvider,
+                                 KnowledgeTextChunker textChunker) {
         this.documents = documents;
         this.chunks = chunks;
         this.minioClient = minioClient;
         this.storageProperties = storageProperties;
         this.vectorizationService = vectorizationService;
         this.ocrProvider = ocrProvider.getIfAvailable();
+        this.textChunker = textChunker;
     }
 
     @Transactional
@@ -87,16 +88,10 @@ public class FileProcessingService {
     }
 
     List<KbChunk> splitText(Long documentId, String text) {
-        String normalized = text == null ? "" : text.replace("\r\n", "\n").trim();
         List<KbChunk> result = new ArrayList<>();
-        if (normalized.isEmpty()) {
-            result.add(new KbChunk(documentId, 0, ""));
-            return result;
-        }
         int index = 0;
-        for (int start = 0; start < normalized.length(); start += CHUNK_SIZE) {
-            int end = Math.min(normalized.length(), start + CHUNK_SIZE);
-            result.add(new KbChunk(documentId, index++, normalized.substring(start, end)));
+        for (String chunkText : textChunker.split(text)) {
+            result.add(new KbChunk(documentId, index++, chunkText));
         }
         return result;
     }

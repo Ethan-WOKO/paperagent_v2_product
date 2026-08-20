@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
 import com.yanban.knowledge.domain.KbDocument;
+import com.yanban.knowledge.config.KnowledgeRetrievalProperties;
 import com.yanban.knowledge.domain.KbDocumentRepository;
 import com.yanban.knowledge.domain.KbChunkRepository;
 import java.util.List;
@@ -24,10 +25,10 @@ class HybridKnowledgeSearchServiceTest {
 
         when(embeddingClient.embed("alpha")).thenReturn(List.of(0.1d, 0.2d));
         KnowledgeSearchOptions alphaOptions = KnowledgeSearchOptions.activeOnly(1001L, 3);
-        when(indexClient.searchLexical("alpha", alphaOptions, 12)).thenReturn(List.of(
+        when(indexClient.searchLexical("alpha", alphaOptions, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(1L, 0, "alpha content", 4.2d)
         ));
-        when(indexClient.searchVector(List.of(0.1d, 0.2d), alphaOptions, 12)).thenReturn(List.of(
+        when(indexClient.searchVector(List.of(0.1d, 0.2d), alphaOptions, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(1L, 0, "alpha content", 1.5d)
         ));
         when(documents.findById(1L)).thenReturn(java.util.Optional.of(new KbDocument(1001L, "paper.md", "READY", false)));
@@ -36,9 +37,8 @@ class HybridKnowledgeSearchServiceTest {
 
         assertThat(results).hasSize(1);
         assertThat(results.get(0).filename()).isEqualTo("paper.md");
-        assertThat(results.get(0).score()).isEqualTo(2.2d);
-        assertThat(results.get(0).rerankScore()).isNotNull();
-        assertThat(results.get(0).rerankReason()).contains("exact_phrase");
+        assertThat(results.get(0).score()).isEqualTo(1.7d);
+        assertThat(results.get(0).rerankScore()).isNull();
     }
 
     @Test
@@ -74,18 +74,18 @@ class HybridKnowledgeSearchServiceTest {
         List<Double> vector = List.of(0.1d, 0.2d);
         KnowledgeSearchOptions options = KnowledgeSearchOptions.activeOnly(1001L, 3);
         when(embeddingClient.embed(query)).thenReturn(vector);
-        when(indexClient.searchLexical(query.substring(0, query.length() - 1), options, 12)).thenReturn(List.of());
-        when(indexClient.searchLexical("mentor_lookup_deepseek", options, 12)).thenReturn(List.of(
+        when(indexClient.searchLexical(query.substring(0, query.length() - 1), options, 50)).thenReturn(List.of());
+        when(indexClient.searchLexical("mentor_lookup_deepseek", options, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(1L, 0, "mentor_lookup_deepseek-20260701 key: Zhang Mingyuan.", 1.1d)
         ));
-        when(indexClient.searchVector(vector, options, 12)).thenReturn(List.of());
+        when(indexClient.searchVector(vector, options, 50)).thenReturn(List.of());
         when(documents.findById(1L)).thenReturn(java.util.Optional.of(new KbDocument(1001L, "lab-notes.md", "READY", false)));
 
         List<KnowledgeSearchResult> results = service.search(query, options);
 
         assertThat(results).hasSize(1);
         assertThat(results.get(0).chunkText()).contains("Zhang Mingyuan");
-        assertThat(results.get(0).rerankReason()).contains("mentor_lookup_deepseek");
+        assertThat(results.get(0).rerankReason()).isNull();
     }
 
     @Test
@@ -146,10 +146,10 @@ class HybridKnowledgeSearchServiceTest {
 
         when(embeddingClient.embed("gamma")).thenReturn(List.of(0.1d, 0.2d));
         KnowledgeSearchOptions options = KnowledgeSearchOptions.activeOnly(3003L, 2);
-        when(indexClient.searchLexical("gamma", options, 8)).thenReturn(List.of(
+        when(indexClient.searchLexical("gamma", options, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(1L, 0, "gamma deleted", 3.0d)
         ));
-        when(indexClient.searchVector(List.of(0.1d, 0.2d), options, 8)).thenReturn(List.of(
+        when(indexClient.searchVector(List.of(0.1d, 0.2d), options, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(1L, 0, "gamma deleted", 2.0d)
         ));
         KbDocument deleted = new KbDocument(3003L, "deleted.md", "READY", false);
@@ -179,11 +179,11 @@ class HybridKnowledgeSearchServiceTest {
         List<Double> vector = List.of(0.2d, 0.8d);
 
         when(embeddingClient.embed("hybrid")).thenReturn(vector);
-        when(indexClient.searchLexical("hybrid", options, 12)).thenReturn(List.of(
+        when(indexClient.searchLexical("hybrid", options, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(1L, 0, "lexical only", 8.0d),
                 new KnowledgeSearchIndexHit(2L, 0, "shared hybrid", 7.0d)
         ));
-        when(indexClient.searchVector(vector, options, 12)).thenReturn(List.of(
+        when(indexClient.searchVector(vector, options, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(2L, 0, "shared hybrid", 0.95d),
                 new KnowledgeSearchIndexHit(3L, 0, "vector only", 0.90d)
         ));
@@ -208,7 +208,7 @@ class HybridKnowledgeSearchServiceTest {
         KnowledgeSearchOptions options = KnowledgeSearchOptions.activeOnly(8L, 2);
 
         when(embeddingClient.embed("bm25 only")).thenThrow(new IllegalStateException("embedding down"));
-        when(indexClient.searchLexical("bm25 only", options, 8)).thenReturn(List.of(
+        when(indexClient.searchLexical("bm25 only", options, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(4L, 0, "bm25 only answer", 5.0d)
         ));
         when(documents.findById(4L)).thenReturn(java.util.Optional.of(new KbDocument(8L, "bm25.md", "READY", false)));
@@ -229,9 +229,9 @@ class HybridKnowledgeSearchServiceTest {
         KnowledgeSearchOptions options = KnowledgeSearchOptions.activeOnly(9L, 2);
         List<Double> vector = List.of(0.4d, 0.6d);
 
-        when(indexClient.searchLexical("semantic only", options, 8)).thenThrow(new IllegalStateException("bm25 down"));
+        when(indexClient.searchLexical("semantic only", options, 50)).thenThrow(new IllegalStateException("bm25 down"));
         when(embeddingClient.embed("semantic only")).thenReturn(vector);
-        when(indexClient.searchVector(vector, options, 8)).thenReturn(List.of(
+        when(indexClient.searchVector(vector, options, 50)).thenReturn(List.of(
                 new KnowledgeSearchIndexHit(5L, 0, "semantic result", 0.9d)
         ));
         when(documents.findById(5L)).thenReturn(java.util.Optional.of(new KbDocument(9L, "vector.md", "READY", false)));
@@ -239,6 +239,76 @@ class HybridKnowledgeSearchServiceTest {
         assertThat(service.search("semantic only", options))
                 .extracting(KnowledgeSearchResult::filename)
                 .containsExactly("vector.md");
+    }
+
+    @Test
+    void availableModelRerankerOwnsTheFinalTopKOrder() {
+        EmbeddingClient embeddingClient = Mockito.mock(EmbeddingClient.class);
+        KnowledgeSearchIndexClient indexClient = Mockito.mock(KnowledgeSearchIndexClient.class);
+        KbDocumentRepository documents = Mockito.mock(KbDocumentRepository.class);
+        KbChunkRepository chunks = Mockito.mock(KbChunkRepository.class);
+        KnowledgeModelReranker modelReranker = Mockito.mock(KnowledgeModelReranker.class);
+        KnowledgeSearchOptions options = KnowledgeSearchOptions.activeOnly(10L, 1);
+        List<Double> vector = List.of(0.3d, 0.7d);
+        HybridKnowledgeSearchService service = new HybridKnowledgeSearchService(
+                embeddingClient, indexClient, documents,
+                new SimpleKnowledgeSearchService(chunks, documents),
+                new KnowledgeRetrievalProperties(), modelReranker);
+
+        when(embeddingClient.embed("model order")).thenReturn(vector);
+        when(indexClient.searchLexical("model order", options, 50)).thenReturn(List.of(
+                new KnowledgeSearchIndexHit(1L, 0, "first", 2.0d),
+                new KnowledgeSearchIndexHit(2L, 0, "second", 1.0d)));
+        when(indexClient.searchVector(vector, options, 50)).thenReturn(List.of(
+                new KnowledgeSearchIndexHit(1L, 0, "first", 0.9d),
+                new KnowledgeSearchIndexHit(2L, 0, "second", 0.8d)));
+        when(documents.findById(1L)).thenReturn(java.util.Optional.of(document(1L, 10L, "first.md")));
+        when(documents.findById(2L)).thenReturn(java.util.Optional.of(document(2L, 10L, "second.md")));
+        when(modelReranker.available()).thenReturn(true);
+        when(modelReranker.rerank(Mockito.eq("model order"), Mockito.anyList(), Mockito.eq(1)))
+                .thenAnswer(invocation -> {
+                    List<KnowledgeSearchResult> candidates = invocation.getArgument(1);
+                    return List.of(candidates.get(1).withRerank(0.99d, "qwen3-rerank:api_default"));
+                });
+
+        List<KnowledgeSearchResult> results = service.search("model order", options);
+
+        assertThat(results).extracting(KnowledgeSearchResult::filename).containsExactly("second.md");
+        assertThat(results.get(0).rerankReason()).isEqualTo("qwen3-rerank:api_default");
+    }
+
+    @Test
+    void modelFailureFallsBackToWeightedRrfOrder() {
+        EmbeddingClient embeddingClient = Mockito.mock(EmbeddingClient.class);
+        KnowledgeSearchIndexClient indexClient = Mockito.mock(KnowledgeSearchIndexClient.class);
+        KbDocumentRepository documents = Mockito.mock(KbDocumentRepository.class);
+        KbChunkRepository chunks = Mockito.mock(KbChunkRepository.class);
+        KnowledgeModelReranker modelReranker = Mockito.mock(KnowledgeModelReranker.class);
+        KnowledgeSearchOptions options = KnowledgeSearchOptions.activeOnly(11L, 2);
+        HybridKnowledgeSearchService service = new HybridKnowledgeSearchService(
+                embeddingClient, indexClient, documents,
+                new SimpleKnowledgeSearchService(chunks, documents),
+                new KnowledgeRetrievalProperties(), modelReranker);
+
+        when(embeddingClient.embed("fallback order")).thenReturn(List.of(1.0d));
+        when(indexClient.searchLexical("fallback order", options, 50)).thenReturn(List.of(
+                new KnowledgeSearchIndexHit(1L, 0, "shared", 2.0d),
+                new KnowledgeSearchIndexHit(2L, 0, "lexical", 1.0d)));
+        when(indexClient.searchVector(List.of(1.0d), options, 50)).thenReturn(List.of(
+                new KnowledgeSearchIndexHit(1L, 0, "shared", 0.9d),
+                new KnowledgeSearchIndexHit(3L, 0, "vector", 0.8d)));
+        when(documents.findById(1L)).thenReturn(java.util.Optional.of(document(1L, 11L, "shared.md")));
+        when(documents.findById(2L)).thenReturn(java.util.Optional.of(document(2L, 11L, "lexical.md")));
+        when(documents.findById(3L)).thenReturn(java.util.Optional.of(document(3L, 11L, "vector.md")));
+        when(modelReranker.available()).thenReturn(true);
+        when(modelReranker.rerank(Mockito.anyString(), Mockito.anyList(), Mockito.eq(2)))
+                .thenThrow(new IllegalStateException("rerank unavailable"));
+
+        List<KnowledgeSearchResult> results = service.search("fallback order", options);
+
+        assertThat(results).extracting(KnowledgeSearchResult::filename)
+                .containsExactly("shared.md", "vector.md");
+        assertThat(results).allSatisfy(result -> assertThat(result.rerankScore()).isNull());
     }
 
     private KbDocument document(Long id, Long userId, String filename) {
