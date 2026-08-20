@@ -10,7 +10,7 @@ spring:
   servlet:
     multipart:
       max-file-size: ${YANBAN_PROJECT_MAX_FILE_SIZE:20MB}
-      max-request-size: ${YANBAN_PROJECT_MAX_REQUEST_SIZE:128MB}
+      max-request-size: ${YANBAN_PROJECT_MAX_REQUEST_SIZE:256MB}
 
 server:
   port: 8080
