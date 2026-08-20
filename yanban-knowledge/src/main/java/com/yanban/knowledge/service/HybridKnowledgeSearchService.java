@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
@@ -16,6 +15,8 @@ import org.springframework.util.StringUtils;
 @Primary
 @Service
 public class HybridKnowledgeSearchService implements KnowledgeSearchService {
+
+    private static final int RRF_RANK_CONSTANT = 60;
 
     private final EmbeddingClient embeddingClient;
     private final KnowledgeSearchIndexClient indexClient;
@@ -54,39 +55,89 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
             return List.of();
         }
         int topK = options.topK();
-        try {
-            int candidateLimit = Math.max(topK, Math.min(50, topK * 4));
-            List<Double> queryVector = embeddingClient.embed(query.trim());
-            List<KnowledgeSearchIndexHit> hits = searchVariants(query, options, candidateLimit, queryVector);
-            if (hits.isEmpty()) {
-                return fallbackSearchService.search(query, options);
-            }
-            List<KnowledgeSearchResult> results = toResults(query.trim(), hits, options);
-            return results.isEmpty() ? fallbackSearchService.search(query, options) : results;
-        } catch (Exception ex) {
+        int candidateLimit = Math.max(topK, Math.min(50, topK * 4));
+        RouteHits lexical = searchLexicalVariants(query, options, candidateLimit);
+        RouteHits vector = searchVector(query, options, candidateLimit);
+        List<KnowledgeSearchIndexHit> hits = reciprocalRankFusion(lexical.hits(), vector.hits(), candidateLimit);
+        if (hits.isEmpty()) {
             return fallbackSearchService.search(query, options);
         }
+        List<KnowledgeSearchResult> results = toResults(query.trim(), hits, options);
+        return results.isEmpty() ? fallbackSearchService.search(query, options) : results;
     }
 
-    private List<KnowledgeSearchIndexHit> searchVariants(String query,
-                                                         KnowledgeSearchOptions options,
-                                                         int candidateLimit,
-                                                         List<Double> queryVector) {
+    private RouteHits searchLexicalVariants(String query,
+                                            KnowledgeSearchOptions options,
+                                            int candidateLimit) {
         Map<String, KnowledgeSearchIndexHit> deduped = new LinkedHashMap<>();
         for (String variant : KnowledgeQueryVariants.expand(query)) {
-            List<KnowledgeSearchIndexHit> variantHits = indexClient.search(variant, options, candidateLimit, queryVector);
+            List<KnowledgeSearchIndexHit> variantHits;
+            try {
+                variantHits = indexClient.searchLexical(variant, options, candidateLimit);
+            } catch (Exception ex) {
+                break;
+            }
             if (variantHits == null) {
                 continue;
             }
             for (KnowledgeSearchIndexHit hit : variantHits) {
                 String key = hit.documentId() + ":" + hit.chunkIndex();
                 KnowledgeSearchIndexHit previous = deduped.get(key);
-                if (previous == null || hit.vectorScore() > previous.vectorScore()) {
+                if (previous == null || hit.retrievalScore() > previous.retrievalScore()) {
                     deduped.put(key, hit);
                 }
             }
         }
-        return List.copyOf(deduped.values());
+        List<KnowledgeSearchIndexHit> ranked = deduped.values().stream()
+                .sorted(Comparator.comparingDouble(KnowledgeSearchIndexHit::retrievalScore).reversed())
+                .limit(candidateLimit)
+                .toList();
+        return new RouteHits(ranked);
+    }
+
+    private RouteHits searchVector(String query,
+                                   KnowledgeSearchOptions options,
+                                   int candidateLimit) {
+        try {
+            List<Double> queryVector = embeddingClient.embed(query.trim());
+            List<KnowledgeSearchIndexHit> hits = indexClient.searchVector(queryVector, options, candidateLimit);
+            return new RouteHits(hits == null ? List.of() : hits);
+        } catch (Exception ex) {
+            return new RouteHits(List.of());
+        }
+    }
+
+    private List<KnowledgeSearchIndexHit> reciprocalRankFusion(List<KnowledgeSearchIndexHit> lexical,
+                                                               List<KnowledgeSearchIndexHit> vector,
+                                                               int candidateLimit) {
+        Map<String, FusionCandidate> fused = new LinkedHashMap<>();
+        addRankedRoute(fused, lexical);
+        addRankedRoute(fused, vector);
+        double scale = RRF_RANK_CONSTANT + 1.0d;
+        return fused.values().stream()
+                .sorted(Comparator.comparingDouble(FusionCandidate::score).reversed())
+                .limit(candidateLimit)
+                .map(candidate -> new KnowledgeSearchIndexHit(
+                        candidate.hit().documentId(),
+                        candidate.hit().chunkIndex(),
+                        candidate.hit().chunkText(),
+                        candidate.score() * scale
+                ))
+                .toList();
+    }
+
+    private void addRankedRoute(Map<String, FusionCandidate> fused, List<KnowledgeSearchIndexHit> route) {
+        for (int rank = 0; rank < route.size(); rank++) {
+            KnowledgeSearchIndexHit hit = route.get(rank);
+            String key = hit.documentId() + ":" + hit.chunkIndex();
+            double contribution = 1.0d / (RRF_RANK_CONSTANT + rank + 1.0d);
+            FusionCandidate previous = fused.get(key);
+            if (previous == null) {
+                fused.put(key, new FusionCandidate(hit, contribution));
+            } else {
+                fused.put(key, new FusionCandidate(previous.hit(), previous.score() + contribution));
+            }
+        }
     }
 
     private List<KnowledgeSearchResult> toResults(String query, List<KnowledgeSearchIndexHit> hits, KnowledgeSearchOptions options) {
@@ -96,27 +147,20 @@ public class HybridKnowledgeSearchService implements KnowledgeSearchService {
             if (!KnowledgeDocumentSearchPolicy.canInject(document, options)) {
                 continue;
             }
-            double lexicalBonus = lexicalBonus(hit.chunkText(), query);
             results.add(KnowledgeDocumentSearchPolicy.toResult(
                     document,
                     hit.chunkIndex(),
                     hit.chunkText(),
-                    hit.vectorScore() + lexicalBonus
+                    hit.retrievalScore()
             ));
         }
         results.sort(Comparator.comparingDouble(KnowledgeSearchResult::score).reversed());
         return reranker.rerank(query, results, options.topK());
     }
 
-    private double lexicalBonus(String text, String query) {
-        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
-        String keyword = query.toLowerCase(Locale.ROOT);
-        int count = 0;
-        int from = 0;
-        while ((from = lower.indexOf(keyword, from)) >= 0) {
-            count++;
-            from += keyword.length();
-        }
-        return count * 0.1d;
+    private record RouteHits(List<KnowledgeSearchIndexHit> hits) {
+    }
+
+    private record FusionCandidate(KnowledgeSearchIndexHit hit, double score) {
     }
 }

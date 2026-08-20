@@ -66,7 +66,8 @@ class DemoControllerIntegrationTest {
     @BeforeEach
     void setUp() {
         when(embeddingClient.embed(any())).thenReturn(List.of(0.1d, 0.2d));
-        when(indexClient.search(any(), any(), anyInt(), any())).thenReturn(List.of());
+        when(indexClient.searchLexical(any(), any(), anyInt())).thenReturn(List.of());
+        when(indexClient.searchVector(any(), any(), anyInt())).thenReturn(List.of());
         when(knowledgeIndexService.indexChunk(any())).thenReturn("es-demo");
         doNothing().when(knowledgeIndexService).deleteByDocumentId(any());
     }

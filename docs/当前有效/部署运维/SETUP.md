@@ -78,7 +78,7 @@ curl http://localhost:9200/_cluster/health
 
 - Kafka topic：`file-processing`
 - MinIO bucket：`yanban-agent`
-- Elasticsearch 索引模板：`yanban-kb-chunks-v1`
+- Elasticsearch 索引模板：`yanban-kb-chunks-v2`（首次访问时自动创建，并从兼容的 `v1` 派生索引迁移）
 
 说明：
 

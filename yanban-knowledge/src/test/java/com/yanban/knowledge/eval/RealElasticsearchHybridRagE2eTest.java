@@ -8,12 +8,14 @@ import co.elastic.clients.json.jackson.JacksonJsonpMapper;
 import co.elastic.clients.transport.ElasticsearchTransport;
 import co.elastic.clients.transport.rest_client.RestClientTransport;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.yanban.knowledge.config.KnowledgeElasticsearchProperties;
 import com.yanban.knowledge.domain.KbChunk;
 import com.yanban.knowledge.domain.KbChunkRepository;
 import com.yanban.knowledge.domain.KbDocument;
 import com.yanban.knowledge.domain.KbDocumentRepository;
 import com.yanban.knowledge.service.ElasticsearchKnowledgeIndexService;
+import com.yanban.knowledge.service.ElasticsearchKnowledgeIndexProvisioner;
 import com.yanban.knowledge.service.ElasticsearchKnowledgeSearchIndexClient;
 import com.yanban.knowledge.service.HybridKnowledgeSearchService;
 import com.yanban.knowledge.service.IndexedChunkDocument;
@@ -46,7 +48,7 @@ import org.springframework.test.context.TestPropertySource;
 })
 class RealElasticsearchHybridRagE2eTest {
 
-    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "evaluation", "fixtures", "rag-spike");
+    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "测试资产", "测试样例", "rag-spike");
     private static final String DEFAULT_ENDPOINT = "http://localhost:9200";
     private static final int VECTOR_DIMENSIONS = 4;
 
@@ -78,21 +80,25 @@ class RealElasticsearchHybridRagE2eTest {
         properties.setEndpoint(endpoint);
         properties.setIndexName(indexName);
         properties.setVectorDimensions(VECTOR_DIMENSIONS);
+        properties.setMigrateLegacyIndex(false);
 
         try (RestClient restClient = RestClient.builder(HttpHost.create(endpoint)).build();
              ElasticsearchTransport transport = new RestClientTransport(restClient, new JacksonJsonpMapper())) {
-            createIndex(restClient, indexName);
+            ElasticsearchKnowledgeIndexProvisioner provisioner = new ElasticsearchKnowledgeIndexProvisioner(
+                    restClient, objectMapper, properties);
+            provisioner.ensureReady();
 
             ElasticsearchClient elasticsearchClient = new ElasticsearchClient(transport);
             ElasticsearchKnowledgeIndexService indexService = new ElasticsearchKnowledgeIndexService(
                     elasticsearchClient,
                     restClient,
                     properties,
-                    objectMapper
+                    objectMapper,
+                    provisioner
             );
             HybridKnowledgeSearchService searchService = new HybridKnowledgeSearchService(
                     this::vectorFor,
-                    new ElasticsearchKnowledgeSearchIndexClient(restClient, objectMapper, properties),
+                    new ElasticsearchKnowledgeSearchIndexClient(restClient, objectMapper, properties, provisioner),
                     documents,
                     new SimpleKnowledgeSearchService(chunks, documents)
             );
@@ -144,6 +150,54 @@ class RealElasticsearchHybridRagE2eTest {
                     .doesNotContain(seed.archivedDocumentId());
         } finally {
             deleteIndexQuietly(endpoint, indexName);
+        }
+    }
+
+    @Test
+    void provisionsDenseVectorIndexAndMigratesLegacyFloatArray() throws Exception {
+        assumeTrue(Boolean.getBoolean("yanban.real-es-e2e"),
+                "Set -Dyanban.real-es-e2e=true to run against a local Elasticsearch instance.");
+
+        String endpoint = System.getProperty("yanban.real-es-endpoint", DEFAULT_ENDPOINT);
+        long suffix = System.currentTimeMillis();
+        String legacyIndex = "yanban-kb-legacy-e2e-" + suffix;
+        String targetIndex = "yanban-kb-v2-e2e-" + suffix;
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        try (RestClient restClient = RestClient.builder(HttpHost.create(endpoint)).build()) {
+            Request legacyDocument = new Request("PUT", "/" + legacyIndex + "/_doc/legacy-1?refresh=true");
+            legacyDocument.setJsonEntity("""
+                    {
+                      "chunkId": 1,
+                      "documentId": 1,
+                      "userId": 101,
+                      "isPublic": false,
+                      "sourceType": "USER_UPLOAD",
+                      "versionStatus": "ACTIVE",
+                      "versionNo": 1,
+                      "chunkIndex": 0,
+                      "text": "legacy migration probe",
+                      "vector": [0.9, 0.1, 0.0, 0.0]
+                    }
+                    """);
+            EntityUtils.consumeQuietly(restClient.performRequest(legacyDocument).getEntity());
+
+            KnowledgeElasticsearchProperties properties = new KnowledgeElasticsearchProperties();
+            properties.setIndexName(targetIndex);
+            properties.setLegacyIndexName(legacyIndex);
+            properties.setVectorDimensions(VECTOR_DIMENSIONS);
+            properties.setMigrateLegacyIndex(true);
+            new ElasticsearchKnowledgeIndexProvisioner(restClient, objectMapper, properties).ensureReady();
+
+            JsonNode count = objectMapper.readTree(EntityUtils.toString(restClient.performRequest(
+                    new Request("GET", "/" + targetIndex + "/_count")).getEntity()));
+            assertThat(count.path("count").asInt()).isEqualTo(1);
+            JsonNode mapping = objectMapper.readTree(EntityUtils.toString(restClient.performRequest(
+                    new Request("GET", "/" + targetIndex + "/_mapping")).getEntity()));
+            assertThat(mapping.path(targetIndex).path("mappings").path("properties")
+                    .path("vector").path("type").asText()).isEqualTo("dense_vector");
+        } finally {
+            deleteIndexQuietly(endpoint, targetIndex);
+            deleteIndexQuietly(endpoint, legacyIndex);
         }
     }
 
@@ -263,37 +317,6 @@ class RealElasticsearchHybridRagE2eTest {
                 lower.contains("deadline") || lower.contains("2026-09-18") ? 0.85d : 0.05d,
                 lower.contains("recall@5") || lower.contains("citation coverage") ? 0.90d : 0.05d
         );
-    }
-
-    private void createIndex(RestClient restClient, String indexName) throws Exception {
-        Request request = new Request("PUT", "/" + indexName);
-        request.setJsonEntity("""
-                {
-                  "mappings": {
-                    "properties": {
-                      "chunkId": { "type": "long" },
-                      "documentId": { "type": "long" },
-                      "userId": { "type": "long" },
-                      "projectId": { "type": "long" },
-                      "isPublic": { "type": "boolean" },
-                      "sourceType": { "type": "keyword" },
-                      "versionStatus": { "type": "keyword" },
-                      "lineageId": { "type": "keyword" },
-                      "versionNo": { "type": "integer" },
-                      "canonicalKey": { "type": "keyword" },
-                      "chunkIndex": { "type": "integer" },
-                      "text": { "type": "text" },
-                      "vector": {
-                        "type": "dense_vector",
-                        "dims": 4,
-                        "index": true,
-                        "similarity": "cosine"
-                      }
-                    }
-                  }
-                }
-                """);
-        EntityUtils.consumeQuietly(restClient.performRequest(request).getEntity());
     }
 
     private void refreshIndex(RestClient restClient, String indexName) throws Exception {

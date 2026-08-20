@@ -59,7 +59,8 @@ class KnowledgeControllerIntegrationTest {
     @BeforeEach
     void setUp() {
         when(embeddingClient.embed(any())).thenReturn(List.of(0.1d, 0.2d));
-        when(indexClient.search(any(), any(), any(Integer.class), any())).thenReturn(List.of());
+        when(indexClient.searchLexical(any(), any(), any(Integer.class))).thenReturn(List.of());
+        when(indexClient.searchVector(any(), any(), any(Integer.class))).thenReturn(List.of());
         doNothing().when(knowledgeIndexService).deleteByDocumentId(any());
     }
 

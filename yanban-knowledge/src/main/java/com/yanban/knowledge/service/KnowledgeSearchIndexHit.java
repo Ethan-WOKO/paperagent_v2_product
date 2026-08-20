@@ -4,6 +4,6 @@ public record KnowledgeSearchIndexHit(
         Long documentId,
         Integer chunkIndex,
         String chunkText,
-        double vectorScore
+        double retrievalScore
 ) {
 }

@@ -19,20 +19,24 @@ public class ElasticsearchKnowledgeIndexService implements KnowledgeIndexService
     private final RestClient restClient;
     private final KnowledgeElasticsearchProperties properties;
     private final ObjectMapper objectMapper;
+    private final ElasticsearchKnowledgeIndexProvisioner indexProvisioner;
 
     public ElasticsearchKnowledgeIndexService(ElasticsearchClient elasticsearchClient,
                                               RestClient restClient,
                                               KnowledgeElasticsearchProperties properties,
-                                              ObjectMapper objectMapper) {
+                                              ObjectMapper objectMapper,
+                                              ElasticsearchKnowledgeIndexProvisioner indexProvisioner) {
         this.elasticsearchClient = elasticsearchClient;
         this.restClient = restClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.indexProvisioner = indexProvisioner;
     }
 
     @Override
     public String indexChunk(IndexedChunkDocument chunkDocument) {
         try {
+            indexProvisioner.ensureReady();
             Map<String, Object> document = new LinkedHashMap<>();
             document.put("chunkId", chunkDocument.chunkId());
             document.put("documentId", chunkDocument.documentId());
@@ -59,6 +63,7 @@ public class ElasticsearchKnowledgeIndexService implements KnowledgeIndexService
     @Override
     public void deleteByDocumentId(Long documentId) {
         try {
+            indexProvisioner.ensureReady();
             Request request = new Request("POST", "/" + properties.getIndexName() + "/_delete_by_query");
             request.setJsonEntity(objectMapper.writeValueAsString(Map.of(
                     "query", Map.of(

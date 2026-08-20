@@ -41,8 +41,10 @@ yanban:
   knowledge:
     elasticsearch:
       endpoint: ${YANBAN_ES_ENDPOINT:http://localhost:9200}
-      index-name: ${YANBAN_ES_INDEX:yanban-kb-chunks-v1}
+      index-name: ${YANBAN_ES_INDEX:yanban-kb-chunks-v2}
       vector-dimensions: ${YANBAN_ES_VECTOR_DIMS:1024}
+      legacy-index-name: ${YANBAN_ES_LEGACY_INDEX:yanban-kb-chunks-v1}
+      migrate-legacy-index: ${YANBAN_ES_MIGRATE_LEGACY_INDEX:true}
     embedding:
       api-url: ${YANBAN_EMBEDDING_API_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings}
       api-key: ${DASHSCOPE_API_KEY:}

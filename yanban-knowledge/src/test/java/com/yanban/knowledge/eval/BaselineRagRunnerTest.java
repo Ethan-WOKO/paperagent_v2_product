@@ -10,7 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class BaselineRagRunnerTest {
 
-    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "evaluation", "fixtures", "rag-spike");
+    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "测试资产", "测试样例", "rag-spike");
 
     @Test
     void loadsRagSpikeFixturesAndCases() throws Exception {
