@@ -48,3 +48,22 @@ Generated reports live under `.eval-results/` and are ignored by Git. The
 runner never includes access tokens or passwords in a report. Use a dedicated
 local test account: a full run uploads an isolated Project and mutation cases
 create immutable revisions in that Project.
+
+## Persistent Plan versus ReAct
+
+Run the same five fixed, read-only tasks through both production paths:
+
+```powershell
+$env:PAPERAGENT_EVAL_USERNAME = '...'
+$env:PAPERAGENT_EVAL_PASSWORD = '...'
+$env:PAPERAGENT_EVAL_PROJECT_ID = '95'
+npm run eval:compare
+```
+
+Override the case list with `PAPERAGENT_EVAL_COMPARE_CASES`. The comparison
+uses identical answer-content checks and reports wall time for both chains.
+ReAct token and model/tool-call totals come from its durable Trace. The legacy
+Plan chain never aggregated every planner, executor, verifier, reflection, and
+final-synthesis model call into one public metric, so its token total is
+reported as `null` with an explicit coverage reason instead of a misleading
+number.
