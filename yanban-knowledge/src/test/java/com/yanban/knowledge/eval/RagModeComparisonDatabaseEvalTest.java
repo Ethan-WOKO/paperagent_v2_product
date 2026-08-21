@@ -30,7 +30,7 @@ import org.springframework.test.context.TestPropertySource;
 })
 class RagModeComparisonDatabaseEvalTest {
 
-    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "evaluation", "fixtures", "rag-spike");
+    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "测试资产", "测试样例", "rag-spike");
     private static final Path OUTPUT_DIR = Path.of("target", "rag-eval");
 
     private final KbDocumentRepository documents;

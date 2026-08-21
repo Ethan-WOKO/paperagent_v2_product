@@ -573,6 +573,16 @@
                 @keydown="handleReactPlanKeydown"
               />
               <div class="reactplan-composer-actions">
+                <NSelect
+                  v-if="!reactPlanQuestion"
+                  v-model:value="selectedReactPlanSkillId"
+                  aria-label="ReAct task skill"
+                  class="reactplan-skill-select"
+                  clearable
+                  :options="reactPlanSkillOptions"
+                  :disabled="reactPlanBusy"
+                  placeholder="可选 Skill"
+                />
                 <NButton
                   v-if="reactPlanSubmitting"
                   class="project-send-button project-stop-button"
@@ -753,6 +763,7 @@ import ConversationQuestionRail from '@/components/ConversationQuestionRail.vue'
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
 import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listReactPlanSessionTasks, startReactPlanTask, streamReactPlanEvents, type ReactPlanSessionTask, type ReactPlanTaskState } from '@/api/reactPlan';
+import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, renameProject, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
@@ -873,6 +884,11 @@ let v2TurnSequence = 0;
 let v2TurnClientRequestId: string | null = null;
 const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.value);
 const reactPlanInput = ref('');
+const reactPlanSkills = ref<SkillListItemResponse[]>([]);
+const selectedReactPlanSkillId = ref<string | null>(null);
+const reactPlanSkillOptions = computed(() => reactPlanSkills.value
+  .filter((skill) => skill.enabled)
+  .map((skill) => ({ label: skill.name, value: skill.id })));
 const reactPlanRecord = ref<ReactPlanTaskRecord | null>(null);
 const reactPlanRecords = ref<ReactPlanTaskRecord[]>([]);
 const reactPlanSessionStates = ref<Record<number, ReactPlanTaskState | undefined>>({});
@@ -893,10 +909,11 @@ let reactPlanReconnectTimer: number | null = null;
 let reactPlanClockTimer: number | null = null;
 let reactPlanSessionPollTimer: number | null = null;
 let reactPlanSessionRefreshProjectId: number | null = null;
-const reactPlanQuestion = computed(() => latestReactPlanQuestion(
-  reactPlanRecord.value?.events ?? [],
-  reactPlanRecord.value?.view.pendingQuestionId,
-));
+const reactPlanQuestion = computed(() => {
+  const record = reactPlanRecord.value;
+  if (!record || record.view.state !== 'waiting_user') return null;
+  return latestReactPlanQuestion(record.events, record.view.pendingQuestionId);
+});
 const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => ({
   record,
   durationLabel: `${isReactPlanTerminal(record.view.state) ? '用时' : '已用时'} ${formatReactPlanDuration(
@@ -2184,7 +2201,11 @@ async function submitReactPlanTask() {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
     const clientRequestId = newReactPlanRequestId();
-    const accepted = (await startReactPlanTask(sessionId, { clientRequestId, instruction }, controller.signal)).data;
+    const accepted = (await startReactPlanTask(sessionId, {
+      clientRequestId,
+      instruction,
+      ...(selectedReactPlanSkillId.value ? { skillId: selectedReactPlanSkillId.value } : {}),
+    }, controller.signal)).data;
     void listProjectSessions(projectId).then(({ data }) => {
       if (epoch === projectEpoch && projectId === activeProjectId.value) {
         projectSessions.value = data;
@@ -2225,7 +2246,8 @@ async function answerCurrentReactPlanQuestion() {
   const record = reactPlanRecord.value;
   const question = reactPlanQuestion.value;
   const answer = reactPlanInput.value.trim();
-  if (!record || !question || !answer || reactPlanAnswering.value) return;
+  if (!record || record.view.state !== 'waiting_user'
+      || !question || !answer || reactPlanAnswering.value) return;
   const epoch = projectEpoch;
   reactPlanAnswering.value = true;
   reactPlanError.value = '';
@@ -2276,7 +2298,9 @@ async function cancelCurrentReactPlanTask() {
 }
 
 function sendReactPlanTask() {
-  if (reactPlanQuestion.value) void answerCurrentReactPlanQuestion();
+  if (reactPlanRecord.value?.view.state === 'waiting_user' && reactPlanQuestion.value) {
+    void answerCurrentReactPlanQuestion();
+  }
   else void submitReactPlanTask();
 }
 
@@ -3007,6 +3031,11 @@ onMounted(() => {
     void refreshReactPlanSessionSummaries(true);
   }, 4_000);
   void loadProductV2Availability();
+  void listSkills().then(({ data }) => {
+    reactPlanSkills.value = data;
+  }).catch(() => {
+    reactPlanSkills.value = [];
+  });
   void loadProjects();
 });
 onUnmounted(() => {
@@ -3209,6 +3238,7 @@ onUnmounted(() => {
 .v2-conversation__composer :deep(.n-input__border),
 .v2-conversation__composer :deep(.n-input__state-border) { display: none; }
 .reactplan-composer-actions { display: flex; align-items: center; gap: 6px; }
+.reactplan-skill-select { width: 180px; min-width: 140px; }
 .v2-conversation__composer .project-send-button {
   width: 72px;
   min-width: 72px;

@@ -103,7 +103,6 @@ cp .env.example .env
 
 - `GLM_API_KEY`
 - `DASHSCOPE_API_KEY`
-- `GITHUB_TOKEN`
 - `YANBAN_MCP_GITHUB_ENABLED=true`
 
 > 不要把真实 `.env` 提交到 Git。
@@ -184,8 +183,9 @@ npx -y @modelcontextprotocol/server-github
 - 用户设置中已配置 GitHub PAT
 - 开启 `YANBAN_MCP_GITHUB_ENABLED=true`
 
-运行时后端会把用户 GitHub PAT 注入为：
+运行时后端会把用户 GitHub PAT 注入为官方变量，并保留旧服务兼容别名：
 
+- `GITHUB_PERSONAL_ACCESS_TOKEN`
 - `GITHUB_TOKEN`
 
 ### 8.3 filesystem MCP

@@ -18,20 +18,35 @@ public class ElasticsearchKnowledgeSearchIndexClient implements KnowledgeSearchI
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final KnowledgeElasticsearchProperties properties;
+    private final ElasticsearchKnowledgeIndexProvisioner indexProvisioner;
 
     public ElasticsearchKnowledgeSearchIndexClient(RestClient restClient,
-                                                   ObjectMapper objectMapper,
-                                                   KnowledgeElasticsearchProperties properties) {
+                                                    ObjectMapper objectMapper,
+                                                    KnowledgeElasticsearchProperties properties,
+                                                    ElasticsearchKnowledgeIndexProvisioner indexProvisioner) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.indexProvisioner = indexProvisioner;
     }
 
     @Override
-    public List<KnowledgeSearchIndexHit> search(String query, KnowledgeSearchOptions options, int topK, List<Double> queryVector) {
+    public List<KnowledgeSearchIndexHit> searchLexical(String query, KnowledgeSearchOptions options, int topK) {
+        return execute(buildLexicalQueryJson(query, options, topK));
+    }
+
+    @Override
+    public List<KnowledgeSearchIndexHit> searchVector(List<Double> queryVector,
+                                                      KnowledgeSearchOptions options,
+                                                      int topK) {
+        return execute(buildVectorQueryJson(queryVector, options, topK));
+    }
+
+    private List<KnowledgeSearchIndexHit> execute(String requestBody) {
         try {
+            indexProvisioner.ensureReady();
             Request request = new Request("POST", "/" + properties.getIndexName() + "/_search");
-            request.setJsonEntity(buildQueryJson(query, options, topK, queryVector));
+            request.setJsonEntity(requestBody);
             Response response = restClient.performRequest(request);
             return parseResponse(EntityUtils.toString(response.getEntity()));
         } catch (IOException ex) {
@@ -39,9 +54,53 @@ public class ElasticsearchKnowledgeSearchIndexClient implements KnowledgeSearchI
         }
     }
 
-    String buildQueryJson(String query, KnowledgeSearchOptions options, int topK, List<Double> queryVector) throws IOException {
-        String escapedQuery = objectMapper.writeValueAsString(query);
-        String vectorJson = objectMapper.writeValueAsString(queryVector);
+    String buildLexicalQueryJson(String query, KnowledgeSearchOptions options, int topK) {
+        try {
+            String escapedQuery = objectMapper.writeValueAsString(query);
+            return """
+                    {
+                      "size": %d,
+                      "query": {
+                        "bool": {
+                          "filter": %s,
+                          "must": [
+                            { "match": { "text": { "query": %s } } }
+                          ]
+                        }
+                      }
+                    }
+                    """.formatted(topK, filterArrayJson(options), escapedQuery);
+        } catch (IOException ex) {
+            throw new IllegalStateException("构造 Elasticsearch BM25 查询失败", ex);
+        }
+    }
+
+    String buildVectorQueryJson(List<Double> queryVector, KnowledgeSearchOptions options, int topK) {
+        try {
+            String vectorJson = objectMapper.writeValueAsString(queryVector);
+            int numCandidates = Math.max(topK, Math.min(1000, topK * 4));
+            return """
+                    {
+                      "size": %d,
+                      "knn": {
+                        "field": "vector",
+                        "query_vector": %s,
+                        "k": %d,
+                        "num_candidates": %d,
+                        "filter": {
+                          "bool": {
+                            "filter": %s
+                          }
+                        }
+                      }
+                    }
+                    """.formatted(topK, vectorJson, topK, numCandidates, filterArrayJson(options));
+        } catch (IOException ex) {
+            throw new IllegalStateException("构造 Elasticsearch KNN 查询失败", ex);
+        }
+    }
+
+    private String filterArrayJson(KnowledgeSearchOptions options) {
         String versionStatuses = options.includeSuperseded()
                 ? "[\"ACTIVE\", \"SUPERSEDED\"]"
                 : "[\"ACTIVE\"]";
@@ -50,52 +109,30 @@ public class ElasticsearchKnowledgeSearchIndexClient implements KnowledgeSearchI
                 : """
                             ,
                             {
-                              \"bool\": {
-                                \"should\": [
-                                  { \"bool\": { \"must_not\": { \"exists\": { \"field\": \"projectId\" } } } },
-                                  { \"term\": { \"projectId\": %d } }
+                              "bool": {
+                                "should": [
+                                  { "bool": { "must_not": { "exists": { "field": "projectId" } } } },
+                                  { "term": { "projectId": %d } }
                                 ],
-                                \"minimum_should_match\": 1
+                                "minimum_should_match": 1
                               }
                             }
                   """.formatted(options.projectId());
         return """
-                {
-                  \"size\": %d,
-                  \"query\": {
-                    \"script_score\": {
-                      \"query\": {
-                        \"bool\": {
-                          \"filter\": [
-                            {
-                              \"bool\": {
-                                \"should\": [
-                                  { \"term\": { \"userId\": %d } },
-                                  { \"term\": { \"isPublic\": true } }
-                                ],
-                                \"minimum_should_match\": 1
-                              }
-                            },
-                            {
-                              \"terms\": { \"versionStatus\": %s }
-                            }
-                            %s
-                          ],
-                          \"should\": [
-                            { \"match\": { \"text\": %s } }
-                          ]
-                        }
-                      },
-                      \"script\": {
-                        \"source\": \"cosineSimilarity(params.queryVector, 'vector') + 1.0\",
-                        \"params\": {
-                          \"queryVector\": %s
-                        }
-                      }
+                [
+                  {
+                    "bool": {
+                      "should": [
+                        { "term": { "userId": %d } },
+                        { "term": { "isPublic": true } }
+                      ],
+                      "minimum_should_match": 1
                     }
-                  }
-                }
-                """.formatted(topK, options.userId(), versionStatuses, projectFilter, escapedQuery, vectorJson);
+                  },
+                  { "terms": { "versionStatus": %s } }
+                  %s
+                ]
+                """.formatted(options.userId(), versionStatuses, projectFilter).trim();
     }
 
     private List<KnowledgeSearchIndexHit> parseResponse(String json) throws IOException {

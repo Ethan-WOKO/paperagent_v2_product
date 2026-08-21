@@ -1,6 +1,6 @@
 name: code-review
-description: 使用 filesystem MCP 读取本地文件并进行结构化代码审查
+description: 读取当前 ProjectVersion 中的代码文件并进行结构化代码审查
 allowed_tools:
-  - mcp_fs__read_file
-  - mcp_fs__list_directory
-  - mcp_fs__read_multiple_files
+  - list_project_files
+  - read_project_file
+  - execute_in_sandbox

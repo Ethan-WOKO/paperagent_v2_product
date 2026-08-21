@@ -7,6 +7,7 @@ import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -20,11 +21,20 @@ public class AgentLlmRouter {
 
     private final ChatModelProvider modelProvider;
     private final ObjectMapper objectMapper;
+    private final AgentModelRoutingService modelRoutes;
 
     public AgentLlmRouter(@Qualifier("chatModelProvider") ChatModelProvider modelProvider,
                           ObjectMapper objectMapper) {
+        this(modelProvider, objectMapper, null);
+    }
+
+    @Autowired
+    public AgentLlmRouter(@Qualifier("chatModelProvider") ChatModelProvider modelProvider,
+                          ObjectMapper objectMapper,
+                          AgentModelRoutingService modelRoutes) {
         this.modelProvider = modelProvider;
         this.objectMapper = objectMapper;
+        this.modelRoutes = modelRoutes;
     }
 
     public RoutingResult route(AgentRuntimeRequest request, List<AgentStrategy> serverCandidates) {
@@ -38,7 +48,7 @@ public class AgentLlmRouter {
     private RoutingResult route(AgentRuntimeRequest request, String routerSystemPrompt) {
         ChatResponse response;
         try {
-            response = modelProvider.chat(new ChatRequest(
+            ChatRequest chatRequest = new ChatRequest(
                     request.provider(),
                     request.model(),
                     List.of(
@@ -52,8 +62,11 @@ public class AgentLlmRouter {
                     request.apiUrl(),
                     ChatRequest.ResponseFormat.jsonObject(),
                     ChatRequest.Thinking.disabled(),
-                    null
-            ));
+                    request.traceId()
+            );
+            response = modelRoutes == null
+                    ? modelProvider.chat(chatRequest)
+                    : modelRoutes.chat(request.userId(), chatRequest).response();
         } catch (RuntimeException ex) {
             return RoutingResult.failure(Failure.MODEL_UNAVAILABLE);
         }

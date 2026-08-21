@@ -1,6 +1,7 @@
 package com.yanban.api.agent.reactplan.gateway;
 
 import java.time.Instant;
+import java.util.List;
 
 public record EngineTaskAuthority(
         String taskId,
@@ -15,6 +16,7 @@ public record EngineTaskAuthority(
         boolean executeSandbox,
         String modelProvider,
         String modelName,
+        List<EngineModelRouteCandidate> modelFallbacks,
         Instant expiresAt) {
 
     public EngineTaskAuthority {
@@ -25,9 +27,11 @@ public record EngineTaskAuthority(
                 || !readProject || !executeSandbox
                 || modelProvider == null || modelProvider.isBlank() || modelProvider.length() > 120
                 || modelName == null || modelName.isBlank() || modelName.length() > 240
+                || modelFallbacks == null || modelFallbacks.size() > 7
                 || expiresAt == null) {
             throw new IllegalArgumentException("engine task authority is invalid");
         }
+        modelFallbacks = List.copyOf(modelFallbacks);
     }
 
     public EngineTaskAuthority(String taskId, String requestDigest, long userId, long turnId,
@@ -35,13 +39,23 @@ public record EngineTaskAuthority(
                                boolean readProject, boolean writeWorkspace,
                                boolean executeSandbox, Instant expiresAt) {
         this(taskId, requestDigest, userId, turnId, sessionId, projectId, projectVersion,
-                readProject, writeWorkspace, executeSandbox, "test", "test-model", expiresAt);
+                readProject, writeWorkspace, executeSandbox, "test", "test-model", List.of(), expiresAt);
     }
 
     public EngineTaskAuthority(String taskId, String requestDigest, long userId, long turnId,
                                long sessionId, long projectId, String projectVersion,
                                boolean readProject, boolean executeSandbox, Instant expiresAt) {
         this(taskId, requestDigest, userId, turnId, sessionId, projectId, projectVersion,
-                readProject, false, executeSandbox, "test", "test-model", expiresAt);
+                readProject, false, executeSandbox, "test", "test-model", List.of(), expiresAt);
+    }
+
+    public EngineTaskAuthority(String taskId, String requestDigest, long userId, long turnId,
+                               long sessionId, long projectId, String projectVersion,
+                               boolean readProject, boolean writeWorkspace,
+                               boolean executeSandbox, String modelProvider,
+                               String modelName, Instant expiresAt) {
+        this(taskId, requestDigest, userId, turnId, sessionId, projectId, projectVersion,
+                readProject, writeWorkspace, executeSandbox, modelProvider, modelName,
+                List.of(), expiresAt);
     }
 }

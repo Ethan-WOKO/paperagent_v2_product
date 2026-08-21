@@ -89,16 +89,24 @@ class ReactPlanTaskSchedulerService {
 
     @Transactional
     LeaseHeartbeat renew(String taskId, Lease lease) {
-        ReactPlanTaskCheckpointEntity checkpoint = locked(taskId);
         LocalDateTime now = databaseNow();
-        try {
-            checkpoint.renew(lease.owner(), lease.token(), lease.fence(),
-                    now.plusSeconds(properties.getTaskLeaseSeconds()), now);
-        } catch (IllegalStateException stale) {
+        int renewed = jdbc.update(
+                "update reactplan_task_checkpoints "
+                        + "set lease_expires_at=?, updated_at=? "
+                        + "where task_id=? and lease_owner=? and lease_token=? and lease_fence=? "
+                        + "and lease_expires_at>?",
+                now.plusSeconds(properties.getTaskLeaseSeconds()), now,
+                taskId, lease.owner(), lease.token(), lease.fence(), now);
+        if (renewed == 0) {
+            if (!checkpoints.existsById(taskId)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "TASK_NOT_FOUND");
+            }
             throw new ResponseStatusException(HttpStatus.CONFLICT, "TASK_LEASE_LOST");
         }
-        checkpoints.saveAndFlush(checkpoint);
-        return new LeaseHeartbeat(checkpoint.cancellationRequested());
+        Boolean cancellationRequested = jdbc.queryForObject(
+                "select cancellation_requested from reactplan_task_checkpoints where task_id=?",
+                Boolean.class, taskId);
+        return new LeaseHeartbeat(Boolean.TRUE.equals(cancellationRequested));
     }
 
     @Transactional
@@ -161,7 +169,8 @@ class ReactPlanTaskSchedulerService {
         JsonNode model = checkpoint.path("authority").path("model");
         EngineTaskGrant grant = grants.issue(
                 selected.taskId(), selected.requestDigest(), selected.userId(), selected.turnId(),
-                model.path("provider").asText(), model.path("model").asText());
+                model.path("provider").asText(), model.path("model").asText(),
+                ReactPlanCheckpointModelRoutes.fallbacks(model));
         return new ClaimedTask(
                 selected.checkpointRevision(), checkpoint,
                 new Lease(owner, token, selected.leaseFence()),

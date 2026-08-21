@@ -16,10 +16,10 @@ MySQL `kb_documents` 和 `kb_chunks` 仍是知识库事实源。Elasticsearch �
 当前配置默认：
 
 ```text
-yanban.knowledge.elasticsearch.index-name=yanban-kb-chunks-v1
+yanban.knowledge.elasticsearch.index-name=yanban-kb-chunks-v2
 ```
 
-本阶段不直接改默认索引名，避免运行环境突然失去旧索引。后续需要重建时，推荐创建新物理索引并切 alias。
+`v2` 使用显式 `dense_vector` Mapping。首次读写时如果 `v2` 不存在，服务会先创建正确 Mapping，再将旧的 `yanban-kb-chunks-v1` 数据通过 Elasticsearch `_reindex` 迁入；旧索引不会删除，可用于回滚。迁移失败时会删除未完成的 `v2`，后续请求可以安全重试。
 
 ## 3. 推荐 mapping
 
@@ -56,6 +56,15 @@ yanban.knowledge.elasticsearch.index-name=yanban-kb-chunks-v1
 
 ## 4. 查询过滤要求
 
+当前检索使用两条独立候选召回链路：
+
+1. `text` 字段上的 Elasticsearch BM25 `match` 查询；
+2. `vector` 字段上的原生近似 KNN 查询。
+
+服务端使用 Reciprocal Rank Fusion（RRF，`k=60`）融合两路排名，随后执行现有的确定性重排和 MySQL 权限复核。RRF 只使用名次，不直接相加 BM25 与向量分数。单路异常时保留另一条链路；两路都没有可用结果时才降级到数据库关键词检索。
+
+BM25 与 KNN 必须应用完全相同的粗过滤条件：
+
 默认查询：
 
 ```text
@@ -74,16 +83,16 @@ versionStatus IN ['ACTIVE', 'SUPERSEDED']
 
 ## 5. 重建策略
 
-推荐 alias 策略：
+后续更大规模的在线重建推荐 alias 策略：
 
 ```text
-yanban-kb-chunks-v1-20260704  <- physical index
-yanban-kb-chunks-v1           <- read/write alias
+yanban-kb-chunks-v3-20260820  <- physical index
+yanban-kb-chunks-v3           <- read/write alias
 ```
 
 重建步骤：
 
-1. 创建新物理索引，例如 `yanban-kb-chunks-v1-20260704`。
+1. 创建新物理索引，例如 `yanban-kb-chunks-v3-20260820`。
 2. 按推荐 mapping 创建字段。
 3. 从 MySQL 查询 `kb_documents.status='READY'` 的文档和 chunks。
 4. 对每个 chunk 重新计算 embedding，写入 ES，并携带本文档第 3 节 metadata。

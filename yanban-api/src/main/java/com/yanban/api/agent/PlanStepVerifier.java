@@ -21,6 +21,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -31,11 +32,20 @@ public class PlanStepVerifier {
 
     private final ChatModelProvider modelProvider;
     private final ObjectMapper objectMapper;
+    private final AgentModelRoutingService modelRoutes;
 
     public PlanStepVerifier(@Qualifier("chatModelProvider") ChatModelProvider modelProvider,
                             ObjectMapper objectMapper) {
+        this(modelProvider, objectMapper, null);
+    }
+
+    @Autowired
+    public PlanStepVerifier(@Qualifier("chatModelProvider") ChatModelProvider modelProvider,
+                            ObjectMapper objectMapper,
+                            AgentModelRoutingService modelRoutes) {
         this.modelProvider = modelProvider;
         this.objectMapper = objectMapper;
+        this.modelRoutes = modelRoutes;
     }
 
     public VerificationResult verify(VerificationRequest request) {
@@ -166,10 +176,13 @@ public class PlanStepVerifier {
     }
 
     private ChatResponse callVerifier(VerificationRequest request, List<ChatMessage> messages, int maxTokens) {
-        return modelProvider.chat(new ChatRequest(
+        ChatRequest chatRequest = new ChatRequest(
                 request.session().getModelProviderSnapshot(), request.session().getModelSnapshot(), messages,
                 0.0, maxTokens, null, request.apiKey(), request.apiUrl(), ChatRequest.ResponseFormat.jsonObject(),
-                ChatRequest.Thinking.disabled(), request.traceId()));
+                ChatRequest.Thinking.disabled(), request.traceId());
+        return modelRoutes == null
+                ? modelProvider.chat(chatRequest)
+                : modelRoutes.chat(request.plan().getUserId(), chatRequest).response();
     }
 
     private void logVerifierResponse(VerificationRequest request, ChatResponse response, String content, int attempt) {

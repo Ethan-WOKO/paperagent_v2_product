@@ -402,25 +402,10 @@ public class PlanAgentService {
         } else {
             UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                     userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
-            if (plannerContext != null && !plannerContext.isEmpty()) {
-                spec = planner.createPlan(request.content(), endpoint.providerKey(), endpoint.modelName(),
-                        endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
-                        planToolPolicy.allowedTools(), orchestrationRequirements, governedMemoryContext,
-                        plannerContext);
-            } else if (StringUtils.hasText(governedMemoryContext)) {
-                spec = planner.createPlan(request.content(), endpoint.providerKey(), endpoint.modelName(),
-                        endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
-                        planToolPolicy.allowedTools(), orchestrationRequirements, governedMemoryContext);
-            } else if (orchestrationRequirements == null
-                    || orchestrationRequirements.materialRequirements().isEmpty()) {
-                spec = planner.createPlan(request.content(), endpoint.providerKey(), endpoint.modelName(),
-                        endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
-                        planToolPolicy.allowedTools());
-            } else {
-                spec = planner.createPlan(request.content(), endpoint.providerKey(), endpoint.modelName(),
-                        endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
-                        planToolPolicy.allowedTools(), orchestrationRequirements);
-            }
+            spec = planner.createPlan(userId, request.content(), endpoint.providerKey(), endpoint.modelName(),
+                    endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
+                    planToolPolicy.allowedTools(), orchestrationRequirements, governedMemoryContext,
+                    plannerContext == null ? List.of() : plannerContext);
         }
         if (spec == null || spec.failureCode() != null) {
             PlannerFailureCode code = spec == null ? PlannerFailureCode.INVALID_PLAN : spec.failureCode();
@@ -1993,6 +1978,7 @@ public class PlanAgentService {
             UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                     plan.getUserId(), session.getModelProviderSnapshot(), session.getModelSnapshot());
             repairSpec = planner.createRecoveryPlan(
+                    plan.getUserId(),
                     plan.getGoal(),
                     buildRepairContext(plan, allSteps, failedStep, sandboxCodeRepair)
                             + governedMemoryRepairContext(plan),

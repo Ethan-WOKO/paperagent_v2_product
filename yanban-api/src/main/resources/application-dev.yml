@@ -41,13 +41,32 @@ yanban:
   knowledge:
     elasticsearch:
       endpoint: ${YANBAN_ES_ENDPOINT:http://localhost:9200}
-      index-name: ${YANBAN_ES_INDEX:yanban-kb-chunks-v1}
+      index-name: ${YANBAN_ES_INDEX:yanban-kb-chunks-v2}
       vector-dimensions: ${YANBAN_ES_VECTOR_DIMS:1024}
+      legacy-index-name: ${YANBAN_ES_LEGACY_INDEX:yanban-kb-chunks-v1}
+      migrate-legacy-index: ${YANBAN_ES_MIGRATE_LEGACY_INDEX:true}
     embedding:
       api-url: ${YANBAN_EMBEDDING_API_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings}
       api-key: ${DASHSCOPE_API_KEY:}
       model: ${YANBAN_EMBEDDING_MODEL:text-embedding-v4}
       timeout: 30s
+    chunking:
+      max-characters: ${YANBAN_KNOWLEDGE_CHUNK_MAX_CHARACTERS:800}
+      overlap-characters: ${YANBAN_KNOWLEDGE_CHUNK_OVERLAP_CHARACTERS:120}
+    retrieval:
+      candidate-limit: ${YANBAN_KNOWLEDGE_CANDIDATE_LIMIT:50}
+      lexical-weight: ${YANBAN_KNOWLEDGE_RRF_LEXICAL_WEIGHT:0.5}
+      vector-weight: ${YANBAN_KNOWLEDGE_RRF_VECTOR_WEIGHT:1.0}
+      rrf-rank-constant: ${YANBAN_KNOWLEDGE_RRF_RANK_CONSTANT:10}
+    rerank:
+      enabled: ${YANBAN_KNOWLEDGE_RERANK_ENABLED:true}
+      api-url: ${YANBAN_KNOWLEDGE_RERANK_API_URL:https://dashscope.aliyuncs.com/compatible-api/v1/reranks}
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: ${YANBAN_KNOWLEDGE_RERANK_MODEL:qwen3-rerank}
+      timeout: ${YANBAN_KNOWLEDGE_RERANK_TIMEOUT:8s}
+      candidate-limit: ${YANBAN_KNOWLEDGE_RERANK_CANDIDATE_LIMIT:20}
+      max-attempts: ${YANBAN_KNOWLEDGE_RERANK_MAX_ATTEMPTS:2}
+      retry-backoff: ${YANBAN_KNOWLEDGE_RERANK_RETRY_BACKOFF:100ms}
     minio:
       endpoint: ${YANBAN_MINIO_ENDPOINT:http://localhost:9000}
       access-key: ${MINIO_ROOT_USER:yanbanminio}

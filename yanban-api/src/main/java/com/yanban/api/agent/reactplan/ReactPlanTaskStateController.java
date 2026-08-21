@@ -60,8 +60,11 @@ final class ReactPlanTaskStateController {
         if (!"1.0".equals(request.contractVersion()) || request.event() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "EVENT_REQUEST_INVALID");
         }
-        state.appendEvent(request.event(), request.lease());
-        return new Accepted("1.0", true);
+        String taskId = request.event().path("taskId").asText("unknown");
+        return retryTransientDatabaseConflict(taskId, () -> {
+            state.appendEvent(request.event(), request.lease());
+            return new Accepted("1.0", true);
+        });
     }
 
     @GetMapping("/checkpoints")
@@ -118,7 +121,7 @@ final class ReactPlanTaskStateController {
             @RequestBody LeaseRequest request) {
         authenticate(authorization);
         validateLeaseRequest(request);
-        return scheduler.renew(taskId, request.lease());
+        return retryTransientDatabaseConflict(taskId, () -> scheduler.renew(taskId, request.lease()));
     }
 
     @PostMapping("/tasks/{taskId}/claim")

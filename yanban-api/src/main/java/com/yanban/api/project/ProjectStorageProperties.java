@@ -18,7 +18,7 @@ public class ProjectStorageProperties {
     private long maxFileBytes = 20L * 1024 * 1024;
     private int maxSearchResults = 100;
     private int maxFiles = 5_000;
-    private long maxTotalBytes = 100L * 1024 * 1024;
+    private long maxTotalBytes = 200L * 1024 * 1024;
     private int maxTraversalDepth = 20;
 
     public String getLocalServerRoot() { return localServerRoot; }

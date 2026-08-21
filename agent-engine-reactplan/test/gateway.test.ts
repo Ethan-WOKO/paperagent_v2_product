@@ -73,6 +73,74 @@ describe("HttpGatewayClient", () => {
     expect(requests[7]?.body).toEqual(sandbox);
     expect(requests[8]?.body).toEqual({ contractVersion: "1.0" });
   });
+
+  it("retries a retryable model gateway failure with the exact same idempotent request", async () => {
+    const requests: unknown[] = [];
+    let attempts = 0;
+    const server = createServer(async (request, response) => {
+      attempts += 1;
+      requests.push(await readBody(request));
+      response.setHeader("content-type", "application/json");
+      if (attempts < 3) {
+        response.statusCode = 502;
+        return response.end(JSON.stringify({
+          code: "MODEL_PROVIDER_FAILED", category: "model",
+          message: "temporary provider failure", retryable: true
+        }));
+      }
+      return response.end(JSON.stringify({
+        contractVersion: "1.0", clientRequestId: `model.${"c".repeat(64)}`,
+        requestDigest: hash, content: "done", toolCalls: [], finishReason: "stop",
+        usage: { promptTokens: 3, completionTokens: 1 }, replayed: false
+      }));
+    });
+    servers.push(server); await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const retries: Array<{ attempt: number; status: number | null }> = [];
+    const client = new HttpGatewayClient(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      { sleep: async () => undefined, onRetry: (event) => retries.push(event) }
+    );
+    const request = {
+      contractVersion: "1.0" as const, clientRequestId: `model.${"c".repeat(64)}`,
+      requestDigest: hash, provider: "deepseek", model: "deepseek-v4-flash",
+      messages: [{ role: "user" as const, content: "hello" }], tools: [], maxOutputTokens: 4096
+    };
+
+    await expect(client.completeModel!(taskId, grant, request, new AbortController().signal))
+      .resolves.toMatchObject({ content: "done" });
+
+    expect(attempts).toBe(3);
+    expect(requests).toEqual([request, request, request]);
+    expect(retries).toEqual([
+      { attempt: 1, maxAttempts: 3, status: 502, category: "model" },
+      { attempt: 2, maxAttempts: 3, status: 502, category: "model" }
+    ]);
+  });
+
+  it("does not retry a 4xx capacity response even when marked retryable", async () => {
+    let attempts = 0;
+    const server = createServer(async (request, response) => {
+      attempts += 1;
+      await readBody(request);
+      response.statusCode = 429;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        code: "MODEL_QUOTA_EXHAUSTED", category: "model",
+        message: "quota exhausted", retryable: true
+      }));
+    });
+    servers.push(server); await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const client = new HttpGatewayClient(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      { sleep: async () => undefined, onRetry: () => { throw new Error("must not retry"); } }
+    );
+
+    await expect(client.tools(taskId, grant, new AbortController().signal))
+      .rejects.toMatchObject({
+        status: 429, problem: { code: "MODEL_QUOTA_EXHAUSTED", retryable: true }
+      });
+    expect(attempts).toBe(1);
+  });
 });
 
 describe("HttpTaskStore", () => {

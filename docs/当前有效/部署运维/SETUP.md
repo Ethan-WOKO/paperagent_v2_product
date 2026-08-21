@@ -24,8 +24,12 @@
 - `JWT_SECRET`：JWT 签名密钥，至少 32 字符
 - `DEEPSEEK_API_KEY`：DeepSeek 对话
 - `GLM_API_KEY`：智谱 GLM Provider
-- `DASHSCOPE_API_KEY`：DashScope Embedding
-- `GITHUB_TOKEN`：GitHub MCP（也可通过设置页写入）
+- `DASHSCOPE_API_KEY`：DashScope Embedding 与知识库 `qwen3-rerank`
+
+知识库生产检索默认使用训练集选出的加权 RRF（BM25 `0.5`、向量 `1.0`、rank constant
+`10`）生成最多 50 个候选，再将排名前 20 的候选交给 `qwen3-rerank`。未配置 `DASHSCOPE_API_KEY`、接口超时、
+限流或返回异常时会自动降级为加权 RRF，不会中断知识库搜索。可使用
+`YANBAN_KNOWLEDGE_RERANK_ENABLED=false` 临时关闭模型重排。
 
 参考模板：
 
@@ -78,7 +82,7 @@ curl http://localhost:9200/_cluster/health
 
 - Kafka topic：`file-processing`
 - MinIO bucket：`yanban-agent`
-- Elasticsearch 索引模板：`yanban-kb-chunks-v1`
+- Elasticsearch 索引模板：`yanban-kb-chunks-v2`（首次访问时自动创建，并从兼容的 `v1` 派生索引迁移）
 
 说明：
 
@@ -147,7 +151,7 @@ npx -y @modelcontextprotocol/server-github
 说明：
 
 - GitHub PAT 可通过设置页写入后端加密保存。
-- 运行时后端会注入为 `GITHUB_TOKEN`。
+- 运行时后端会注入为官方变量 `GITHUB_PERSONAL_ACCESS_TOKEN`，并保留 `GITHUB_TOKEN` 兼容别名。
 - 后端会检查可执行命令是否落在 allowlist 中，防止任意命令注入。
 - 在 Windows + IDEA + Java `ProcessBuilder` 场景下，直接使用 `npx` 可能无法稳定拉起子进程，因此默认推荐使用 `cmd /c npx ...`。
 

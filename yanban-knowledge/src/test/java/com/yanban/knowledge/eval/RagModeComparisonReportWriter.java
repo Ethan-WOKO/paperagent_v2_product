@@ -43,17 +43,26 @@ public final class RagModeComparisonReportWriter {
         lines.add("");
         lines.add("## Summary");
         lines.add("");
-        lines.add("| Runner | Passed | Failed | Recall@5 | MRR | Forbidden Hits | Metadata Rate |");
-        lines.add("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        lines.add("Ranking metrics exclude no-answer cases. Latency is one local measurement per case and is not a production SLA.");
+        lines.add("");
+        lines.add("| Runner | Eligible | Passed | Recall@1 | Recall@3 | Recall@5 | Recall@10 | Recall@20 | Recall@50 | MRR@10 | nDCG@10 | P50 ms | P95 ms | Forbidden Hits |");
+        lines.add("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         for (BaselineRagEvaluationResult modeResult : result.modeResults()) {
             BaselineRagEvaluationResult.Summary summary = modeResult.summary();
             lines.add("| `" + modeResult.runner() + "` | "
+                    + summary.rankingEligibleCases() + " | "
                     + summary.passedCases() + " | "
-                    + summary.failedCases() + " | "
+                    + format(metric(summary.recallAtN(), 1)) + " | "
+                    + format(metric(summary.recallAtN(), 3)) + " | "
                     + format(summary.recallAt5()) + " | "
-                    + format(summary.meanReciprocalRank()) + " | "
-                    + summary.forbiddenHitCount() + " | "
-                    + format(summary.metadataPreservationRate()) + " |");
+                    + format(metric(summary.recallAtN(), 10)) + " | "
+                    + format(metric(summary.recallAtN(), 20)) + " | "
+                    + format(metric(summary.recallAtN(), 50)) + " | "
+                    + format(summary.meanReciprocalRankAt10()) + " | "
+                    + format(metric(summary.ndcgAtN(), 10)) + " | "
+                    + format(summary.latencyP50Millis()) + " | "
+                    + format(summary.latencyP95Millis()) + " | "
+                    + summary.forbiddenHitCount() + " |");
         }
         lines.add("");
         lines.add("## Case Differences");
@@ -88,5 +97,9 @@ public final class RagModeComparisonReportWriter {
 
     private static String format(double value) {
         return String.format(Locale.ROOT, "%.4f", value);
+    }
+
+    private static double metric(java.util.Map<Integer, Double> values, int cutoff) {
+        return values == null ? 0.0d : values.getOrDefault(cutoff, 0.0d);
     }
 }

@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "eval:react": "node eval/run.mjs",
+    "eval:compare": "node eval/compare.mjs",
     "eval:react:control": "node eval/control.mjs",
     "eval:react:browser": "node eval/browser.mjs",
     "test:eval": "node --test eval/*.test.mjs"

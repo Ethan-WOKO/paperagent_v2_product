@@ -28,6 +28,13 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).not.toContain('reactPlanFixedTool');
   });
 
+  it('允许为新任务选择 Skill 并只提交 Skill 标识', () => {
+    expect(source).toContain('aria-label="ReAct task skill"');
+    expect(source).toContain('v-model:value="selectedReactPlanSkillId"');
+    expect(source).toContain('void listSkills()');
+    expect(source).toContain('{ skillId: selectedReactPlanSkillId.value }');
+  });
+
   it('在同一会话中按时间线保留并恢复多轮 ReAct 任务', () => {
     expect(source).toContain('const reactPlanRecords = ref<ReactPlanTaskRecord[]>([])');
     expect(source).toContain('v-for="item in reactPlanTimeline"');
@@ -48,6 +55,16 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).toContain('@click="cancelCurrentReactPlanTask"');
     expect(source).not.toContain('tool.fileContent');
     expect(source).not.toContain('tool.rawOutput');
+  });
+
+  it('只有等待用户回答时才把输入发送到旧任务的 answer 接口', () => {
+    const question = source.match(/const reactPlanQuestion = computed[\s\S]*?\n}\);/)?.[0] ?? '';
+    const answer = source.match(/async function answerCurrentReactPlanQuestion[\s\S]*?\n}/)?.[0] ?? '';
+    const send = source.match(/function sendReactPlanTask[\s\S]*?\n}/)?.[0] ?? '';
+    expect(question).toContain("record.view.state !== 'waiting_user'");
+    expect(answer).toContain("record.view.state !== 'waiting_user'");
+    expect(send).toContain("reactPlanRecord.value?.view.state === 'waiting_user'");
+    expect(send).toContain('else void submitReactPlanTask();');
   });
 
   it('不向普通用户展示内部 Trace、模型次数或 Token 统计', () => {

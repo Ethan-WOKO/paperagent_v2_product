@@ -1,6 +1,7 @@
 package com.yanban.knowledge.service;
 
 import com.yanban.knowledge.config.KnowledgeStorageProperties;
+import com.yanban.knowledge.config.KnowledgeChunkingProperties;
 import com.yanban.knowledge.domain.KbDocument;
 import io.minio.MinioClient;
 import java.nio.charset.StandardCharsets;
@@ -24,7 +25,8 @@ class FileProcessingServiceTest {
                 mock(MinioClient.class),
                 new KnowledgeStorageProperties(),
                 mock(VectorizationService.class),
-                emptyOcrProvider()
+                emptyOcrProvider(),
+                new KnowledgeTextChunker(new KnowledgeChunkingProperties())
         );
         KbDocument document = new KbDocument(2L, "rag-eval-comprehensive-sample.md", "PROCESSING", false);
         document.setMimeType("text/markdown");
@@ -55,7 +57,8 @@ class FileProcessingServiceTest {
                 mock(MinioClient.class),
                 new KnowledgeStorageProperties(),
                 mock(VectorizationService.class),
-                emptyOcrProvider()
+                emptyOcrProvider(),
+                new KnowledgeTextChunker(new KnowledgeChunkingProperties())
         );
         KbDocument document = new KbDocument(2L, "sample.md", "PROCESSING", false);
 

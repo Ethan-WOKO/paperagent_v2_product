@@ -81,6 +81,7 @@ public class FinalSynthesisService {
     private final ObjectMapper json;
     private final long timeoutMillis;
     private final ExecutorService executor;
+    private final AgentModelRoutingService modelRoutes;
 
     @Autowired
     public FinalSynthesisService(@Qualifier("chatModelProvider") ChatModelProvider models,
@@ -110,6 +111,8 @@ public class FinalSynthesisService {
         this.json = json == null ? new ObjectMapper() : json;
         this.timeoutMillis = Math.max(1L, timeoutMillis);
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.modelRoutes = models == null || settings == null
+                ? null : new AgentModelRoutingService(models, settings);
     }
 
     public String synthesize(AgentPlan plan,
@@ -137,7 +140,9 @@ public class FinalSynthesisService {
                     ChatMessage.user(request.prompt())
             ), 0.0, MAX_MODEL_TOKENS, List.of(), endpoint.apiKey(), endpoint.apiUrl(), null,
                     ChatRequest.Thinking.disabled(), traceId);
-            Future<ChatResponse> future = executor.submit(() -> models.chat(chatRequest));
+            Future<ChatResponse> future = executor.submit(() -> modelRoutes == null
+                    ? models.chat(chatRequest)
+                    : modelRoutes.chat(plan.getUserId(), chatRequest).response());
             ChatResponse response;
             try {
                 response = future.get(timeoutMillis, TimeUnit.MILLISECONDS);

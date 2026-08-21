@@ -3,12 +3,16 @@ package com.yanban.api.agent.reactplan;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
+import com.yanban.api.agent.reactplan.gateway.EngineModelRouteCandidate;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -44,7 +48,7 @@ class ReactPlanTaskSchedulerServiceTest {
         jdbc.activeByUser.put(8L, 0);
         when(checkpoints.findClaimable(any(), any())).thenReturn(List.of(saturated, eligible));
         when(checkpoints.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
-        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any()))
+        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any(), anyList()))
                 .thenReturn(new EngineTaskGrant("g".repeat(40), Instant.parse("2026-08-18T00:05:00Z")));
 
         ReactPlanTaskSchedulerService.ClaimedTask claimed = scheduler.claimNext("engine.worker_one");
@@ -54,23 +58,43 @@ class ReactPlanTaskSchedulerServiceTest {
         assertThat(claimed.lease().fence()).isEqualTo(1L);
         assertThat(eligible.leaseOwner()).isEqualTo("engine.worker_one");
         assertThat(saturated.leaseOwner()).isNull();
+        verify(grants).issue(eq(eligible.taskId()), eq(eligible.requestDigest()),
+                eq(8L), eq(80L), eq("test"), eq("model"),
+                eq(List.of(new EngineModelRouteCandidate("backup", "backup-model"))));
     }
 
     @Test
     void staleWorkerCannotRenewAfterTheFenceChanges() {
         ReactPlanTaskCheckpointEntity task = task("c", 9L, 90L);
         when(checkpoints.findClaimable(any(), any())).thenReturn(List.of(task));
-        when(checkpoints.findLockedByTaskId(task.taskId())).thenReturn(java.util.Optional.of(task));
+        when(checkpoints.existsById(task.taskId())).thenReturn(true);
         when(checkpoints.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
-        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any()))
+        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any(), anyList()))
                 .thenReturn(new EngineTaskGrant("g".repeat(40), Instant.parse("2026-08-18T00:05:00Z")));
         ReactPlanTaskSchedulerService.ClaimedTask claimed = scheduler.claimNext("engine.worker_one");
 
         ReactPlanTaskSchedulerService.Lease stale = new ReactPlanTaskSchedulerService.Lease(
                 claimed.lease().owner(), claimed.lease().token(), claimed.lease().fence() - 1);
+        jdbc.renewUpdateCount = 0;
         assertThatThrownBy(() -> scheduler.renew(task.taskId(), stale))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("TASK_LEASE_LOST");
+    }
+
+    @Test
+    void renewsOnlyLeaseColumnsWithoutSavingTheCheckpointEntity() {
+        String taskId = "task." + "d".repeat(64);
+        ReactPlanTaskSchedulerService.Lease lease = new ReactPlanTaskSchedulerService.Lease(
+                "engine.worker_one", "lease-token", 3L);
+        jdbc.cancellationRequested = true;
+
+        ReactPlanTaskSchedulerService.LeaseHeartbeat heartbeat = scheduler.renew(taskId, lease);
+
+        assertThat(heartbeat.cancellationRequested()).isTrue();
+        assertThat(jdbc.lastUpdateSql).contains("set lease_expires_at=?, updated_at=?")
+                .doesNotContain("checkpoint_json");
+        assertThat(jdbc.lastUpdateArgs).contains(taskId, lease.owner(), lease.token(), lease.fence());
+        verify(checkpoints, org.mockito.Mockito.never()).saveAndFlush(any());
     }
 
     @Test
@@ -86,7 +110,8 @@ class ReactPlanTaskSchedulerServiceTest {
     private ReactPlanTaskCheckpointEntity task(String suffix, long userId, long turnId) {
         String taskId = "task." + suffix.repeat(64);
         String digest = suffix.repeat(64);
-        String checkpoint = "{\"authority\":{\"model\":{\"provider\":\"test\",\"model\":\"model\"}},"
+        String checkpoint = "{\"authority\":{\"model\":{\"provider\":\"test\",\"model\":\"model\","
+                + "\"fallbacks\":[{\"provider\":\"backup\",\"model\":\"backup-model\"}]}},"
                 + "\"view\":{\"taskId\":\"" + taskId + "\",\"requestDigest\":\"" + digest
                 + "\",\"state\":\"queued\",\"lastSequence\":0}}";
         return new ReactPlanTaskCheckpointEntity(taskId, digest, userId, userId, turnId,
@@ -95,6 +120,10 @@ class ReactPlanTaskSchedulerServiceTest {
 
     private static final class FakeJdbc extends JdbcTemplate {
         int globalActive;
+        int renewUpdateCount = 1;
+        boolean cancellationRequested;
+        String lastUpdateSql;
+        List<Object> lastUpdateArgs = List.of();
         final Map<Long, Integer> activeByUser = new HashMap<>();
         final Map<Long, Integer> admittedByUser = new HashMap<>();
 
@@ -109,6 +138,7 @@ class ReactPlanTaskSchedulerServiceTest {
 
         @Override
         public <T> T queryForObject(String sql, Class<T> type, Object... args) {
+            if (type == Boolean.class) return type.cast(cancellationRequested);
             int value;
             if (sql.contains("lease_expires_at") && args.length == 1) {
                 value = globalActive;
@@ -120,6 +150,13 @@ class ReactPlanTaskSchedulerServiceTest {
                         : activeByUser.getOrDefault(userId, 0);
             }
             return type.cast(value);
+        }
+
+        @Override
+        public int update(String sql, Object... args) {
+            lastUpdateSql = sql;
+            lastUpdateArgs = List.of(args);
+            return renewUpdateCount;
         }
     }
 }

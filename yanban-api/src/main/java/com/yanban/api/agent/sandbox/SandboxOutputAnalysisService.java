@@ -1,5 +1,6 @@
 package com.yanban.api.agent.sandbox;
 
+import com.yanban.api.agent.AgentModelRoutingService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.model.ChatMessage;
@@ -23,11 +24,13 @@ public class SandboxOutputAnalysisService {
 
     private final ChatModelProvider models;
     private final UserSettingsService settings;
+    private final AgentModelRoutingService modelRoutes;
 
     public SandboxOutputAnalysisService(@Qualifier("chatModelProvider") ChatModelProvider models,
                                         UserSettingsService settings) {
         this.models = models;
         this.settings = settings;
+        this.modelRoutes = new AgentModelRoutingService(models, settings);
     }
 
     public String analyze(long userId, AgentSession session, SandboxReceipt receipt, String traceId) {
@@ -43,7 +46,7 @@ public class SandboxOutputAnalysisService {
                         + receipt.exitCode() + ", timedOut=" + (receipt.status().name().equals("TIMED_OUT")) + ".\n\n" + output)),
                 0.0, 320, List.of(), endpoint.apiKey(), endpoint.apiUrl(), null,
                 ChatRequest.Thinking.disabled(), traceId);
-        ChatResponse response = models.chat(request);
+        ChatResponse response = modelRoutes.chat(userId, request).response();
         if (response == null || response.message() == null || !StringUtils.hasText(response.assistantText())
                 || (response.toolCalls() != null && !response.toolCalls().isEmpty())) return null;
         return boundedSummary(response.assistantText());

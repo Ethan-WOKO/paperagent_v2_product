@@ -5,10 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineObservationReader;
+import com.yanban.api.agent.reactplan.gateway.EngineModelRouteCandidate;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
-import com.yanban.api.quota.UserQuotaService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -45,7 +45,7 @@ class ReactPlanTaskStateService {
     private final AgentTurnProductContextResolver contexts;
     private final AgentEngineTaskGrantService grants;
     private final AgentEngineObservationReader observations;
-    private final UserQuotaService quotas;
+    private final ReactPlanUsageSettlementRepository usageSettlements;
     private final ReactPlanTaskSchedulerService scheduler;
     private final ApplicationEventPublisher applicationEvents;
 
@@ -56,7 +56,7 @@ class ReactPlanTaskStateService {
                               AgentTurnProductContextResolver contexts,
                               AgentEngineTaskGrantService grants,
                               AgentEngineObservationReader observations,
-                              UserQuotaService quotas,
+                              ReactPlanUsageSettlementRepository usageSettlements,
                               ReactPlanTaskSchedulerService scheduler,
                               ApplicationEventPublisher applicationEvents) {
         this.json = json;
@@ -66,7 +66,7 @@ class ReactPlanTaskStateService {
         this.contexts = contexts;
         this.grants = grants;
         this.observations = observations;
-        this.quotas = quotas;
+        this.usageSettlements = usageSettlements;
         this.scheduler = scheduler;
         this.applicationEvents = applicationEvents;
     }
@@ -130,9 +130,13 @@ class ReactPlanTaskStateService {
             promptTokens = safeAdd(promptTokens, model.promptTokens());
             completionTokens = safeAdd(completionTokens, model.completionTokens());
         }
-        quotas.recordTaskUsage(checkpoint.userId(), "REACT_PLAN", promptTokens, completionTokens);
         checkpoint.settleUsage(promptTokens, completionTokens);
-        log.info("reactplan_usage taskId={} traceId={} outcome=settled promptTokens={} completionTokens={}",
+        usageSettlements.save(new ReactPlanUsageSettlementEntity(
+                checkpoint.taskId(), checkpoint.userId(), promptTokens, completionTokens,
+                LocalDateTime.now(ZoneOffset.UTC)));
+        applicationEvents.publishEvent(new ReactPlanUsageSettlementRequested(
+                checkpoint.taskId()));
+        log.info("reactplan_usage taskId={} traceId={} outcome=queued promptTokens={} completionTokens={}",
                 checkpoint.taskId(), ReactPlanTraceIds.forTask(checkpoint.taskId()),
                 promptTokens, completionTokens);
         return true;
@@ -212,7 +216,7 @@ class ReactPlanTaskStateService {
                 taskId, requestDigest, parse(checkpoint.checkpointJson()));
         requireIdentity(identity, intake);
         return grants.issue(taskId, requestDigest, intake.userId(), intake.turnId(),
-                identity.modelProvider(), identity.modelName());
+                identity.modelProvider(), identity.modelName(), identity.modelFallbacks());
     }
 
     private CheckpointIdentity validateCheckpoint(
@@ -241,8 +245,10 @@ class ReactPlanTaskStateService {
         String projectVersion = requiredText(authority.path("project"), "projectVersion");
         String modelProvider = requiredText(authority.path("model"), "provider");
         String modelName = requiredText(authority.path("model"), "model");
+        var modelFallbacks = ReactPlanCheckpointModelRoutes.fallbacks(
+                authority.path("model"));
         return new CheckpointIdentity(state, sequence, sessionId, projectId, projectVersion,
-                modelProvider, modelName);
+                modelProvider, modelName, modelFallbacks);
     }
 
     private void requireIdentity(CheckpointIdentity identity, ReactPlanTurnIntakeEntity intake) {
@@ -321,5 +327,6 @@ class ReactPlanTaskStateService {
     record StoredCheckpoint(long checkpointRevision, JsonNode checkpoint) { }
     private record CheckpointIdentity(String state, long lastSequence, long sessionId,
                                       long projectId, String projectVersion,
-                                      String modelProvider, String modelName) { }
+                                      String modelProvider, String modelName,
+                                      List<EngineModelRouteCandidate> modelFallbacks) { }
 }

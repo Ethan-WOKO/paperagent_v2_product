@@ -15,7 +15,17 @@ export interface Authority {
   project: { projectId: string; projectVersion: string };
   instruction: string;
   permissions: { readProject: true; writeWorkspace: boolean; executeSandbox: true };
-  model: { provider: string; model: string };
+  model: {
+    provider: string;
+    model: string;
+    fallbacks?: Array<{ provider: string; model: string }>;
+  };
+  skill?: {
+    id: string;
+    prompt: string;
+    allowedTools: string[];
+    digest: string;
+  };
 }
 
 export interface TaskSubmission {
@@ -86,7 +96,15 @@ export interface RegisteredToolResult {
   evidenceRefs: string[];
   version: string | null;
 }
-export interface ModelResponse { content: string | null; toolCalls: ModelToolCall[]; finishReason?: string | null; usage?: { promptTokens: number; completionTokens: number } }
+export interface ModelResponse {
+  content: string | null;
+  toolCalls: ModelToolCall[];
+  finishReason?: string | null;
+  usage?: { promptTokens: number; completionTokens: number };
+  resolvedProvider?: string;
+  resolvedModel?: string;
+  fallbackUsed?: boolean;
+}
 export interface ModelRequest {
   provider: string;
   model: string;
@@ -204,6 +222,7 @@ export interface PersistedTask {
   publication?: PublicationFact;
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;
+  discoveredToolNames?: string[];
   loadedToolNames?: string[];
   cancellationRequested?: boolean;
   activeSandboxCallId?: string | null;

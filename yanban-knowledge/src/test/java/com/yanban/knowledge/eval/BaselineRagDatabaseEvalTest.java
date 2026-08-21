@@ -30,7 +30,7 @@ import org.springframework.test.context.TestPropertySource;
 })
 class BaselineRagDatabaseEvalTest {
 
-    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "evaluation", "fixtures", "rag-spike");
+    private static final Path FIXTURE_ROOT = Path.of("..", "docs", "测试资产", "测试样例", "rag-spike");
 
     private final KbDocumentRepository documents;
     private final KbChunkRepository chunks;
