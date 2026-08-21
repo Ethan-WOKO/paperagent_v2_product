@@ -71,7 +71,17 @@ public final class AgentEngineGatewayDtos {
     public record ModelCompletionResult(String contractVersion, String clientRequestId,
                                         String requestDigest, String content,
                                         List<ModelToolCall> toolCalls, String finishReason,
-                                        ModelUsage usage, boolean replayed) { }
+                                        ModelUsage usage, boolean replayed,
+                                        String resolvedProvider, String resolvedModel,
+                                        boolean fallbackUsed) {
+        public ModelCompletionResult(String contractVersion, String clientRequestId,
+                                     String requestDigest, String content,
+                                     List<ModelToolCall> toolCalls, String finishReason,
+                                     ModelUsage usage, boolean replayed) {
+            this(contractVersion, clientRequestId, requestDigest, content,
+                    toolCalls, finishReason, usage, replayed, null, null, false);
+        }
+    }
     public record Problem(String contractVersion, String code, String category,
                           String message, boolean retryable) { }
 }

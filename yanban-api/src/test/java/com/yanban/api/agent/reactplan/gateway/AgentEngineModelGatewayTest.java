@@ -20,6 +20,7 @@ import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatResponse;
+import com.yanban.core.model.ModelProviderException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -53,10 +54,40 @@ class AgentEngineModelGatewayTest {
 
         assertThat(result.content()).isEqualTo("done");
         assertThat(result.replayed()).isFalse();
+        assertThat(result.resolvedProvider()).isEqualTo("deepseek");
+        assertThat(result.resolvedModel()).isEqualTo("deepseek-v4-flash");
+        assertThat(result.fallbackUsed()).isFalse();
         verify(settings).resolveModelEndpoint(7L, "deepseek", "deepseek-v4-flash");
         verify(quotas).assertCanUseAi(7L);
         verify(transactions).succeed(eq(authority().taskId()), eq(request.clientRequestId()),
                 any(), eq(11), eq(4));
+    }
+
+    @Test
+    void fallsBackToNextFrozenConfiguredProviderWhenPreferredProviderFails() {
+        ModelCompletionRequest request = request("deepseek", "deepseek-v4-flash");
+        when(transactions.claim(any(), any(), any(), any(), any(), anyLong()))
+                .thenReturn(Optional.empty());
+        when(settings.resolveModelEndpoint(7L, "deepseek", "deepseek-v4-flash"))
+                .thenReturn(new UserSettingsService.ModelEndpoint(
+                        "deepseek", "deepseek-v4-flash", null, "secret", "builtin", "DeepSeek"));
+        when(settings.resolveModelEndpoint(7L, "glm", "glm-4.5-flash"))
+                .thenReturn(new UserSettingsService.ModelEndpoint(
+                        "glm", "glm-4.5-flash", null, "backup", "builtin", "GLM"));
+        when(models.chat(any()))
+                .thenThrow(new ModelProviderException("primary unavailable"))
+                .thenReturn(new ChatResponse(
+                        new ChatMessage("assistant", "backup result", List.of(), null), "stop",
+                        new ChatResponse.Usage(8, 3, 11)));
+
+        ModelCompletionResult result = gateway.complete(authorityWithFallback(), request);
+
+        assertThat(result.content()).isEqualTo("backup result");
+        assertThat(result.resolvedProvider()).isEqualTo("glm");
+        assertThat(result.resolvedModel()).isEqualTo("glm-4.5-flash");
+        assertThat(result.fallbackUsed()).isTrue();
+        verify(models, org.mockito.Mockito.times(2)).chat(any());
+        verify(quotas).assertCanUseAi(7L);
     }
 
     @Test
@@ -99,5 +130,13 @@ class AgentEngineModelGatewayTest {
         return new EngineTaskAuthority("task." + "a".repeat(64), "b".repeat(64),
                 7, 8, 9, 10, "d".repeat(64), true, true, true,
                 "deepseek", "deepseek-v4-flash", Instant.now().plusSeconds(60));
+    }
+
+    private EngineTaskAuthority authorityWithFallback() {
+        return new EngineTaskAuthority("task." + "a".repeat(64), "b".repeat(64),
+                7, 8, 9, 10, "d".repeat(64), true, true, true,
+                "deepseek", "deepseek-v4-flash",
+                List.of(new EngineModelRouteCandidate("glm", "glm-4.5-flash")),
+                Instant.now().plusSeconds(60));
     }
 }

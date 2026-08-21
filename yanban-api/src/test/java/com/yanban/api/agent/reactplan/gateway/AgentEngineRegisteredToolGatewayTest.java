@@ -126,6 +126,24 @@ class AgentEngineRegisteredToolGatewayTest {
     }
 
     @Test
+    void exposesReadOnlyMcpToolsWithoutAddingThemToTheProductPolicyList() {
+        ToolRegistry registry = new ToolRegistry()
+                .register(mcpExecutor("mcp_github__search_code",
+                        ToolDescriptor.SideEffectType.EXTERNAL_READ))
+                .register(mcpExecutor("mcp_fs__read_file",
+                        ToolDescriptor.SideEffectType.READ_ONLY));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(
+                new AgentToolPolicyEngine.Decision(List.of(), 0, 1, "test"));
+        AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
+                json, registry, policies, contexts(VERSION));
+
+        assertThat(gateway.catalog(authority()).tools())
+                .extracting(tool -> tool.function().name())
+                .containsExactly("mcp_fs__read_file", "mcp_github__search_code");
+    }
+
+    @Test
     void exposesLiteratureTaskBundleAndOwnsStartIdentityArguments() {
         ToolRegistry registry = new ToolRegistry()
                 .register(literatureTaskExecutor("literature_search_start",
@@ -337,6 +355,34 @@ class AgentEngineRegisteredToolGatewayTest {
                 output.put("observedUserId", ToolExecutionContext.getCurrentUserId());
                 output.put("observedProjectId", ToolExecutionContext.getCurrentProjectId());
                 return ToolResult.success(call.id(), name, output);
+            }
+        };
+    }
+
+    private ToolExecutor mcpExecutor(
+            String name, ToolDescriptor.SideEffectType sideEffect) {
+        ObjectNode schema = json.createObjectNode().put("type", "object");
+        return new ToolExecutor() {
+            @Override
+            public ToolDefinition definition() {
+                return new ToolDefinition(name, "test MCP tool", schema);
+            }
+
+            @Override
+            public ToolDescriptor descriptor() {
+                return new ToolDescriptor(name, "mcp-v1", "mcp-test",
+                        List.of(ToolDescriptor.CapabilityProfile.PROJECT),
+                        List.of("mcp:read"),
+                        List.of(ToolDescriptor.ResourceScope.EXTERNAL),
+                        sideEffect, ToolDescriptor.ConfirmationPolicy.NEVER,
+                        ToolDescriptor.AsyncMode.SYNC,
+                        ToolDescriptor.IdempotencyPolicy.NONE,
+                        ToolDescriptor.RepeatPolicy.ALLOW_LIMITED, true);
+            }
+
+            @Override
+            public ToolResult execute(ToolCall call) {
+                return ToolResult.success(call.id(), name, json.createObjectNode());
             }
         };
     }

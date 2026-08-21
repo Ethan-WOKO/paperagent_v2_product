@@ -30,7 +30,8 @@ class AgentEngineModelCompletionTransactionsTest {
         assertThat(value.promptTokens()).isEqualTo(3);
         assertThat(value.completionTokens()).isEqualTo(2);
         assertThat(transactions.claim("task." + "a".repeat(64),
-                "model." + "b".repeat(64), "c".repeat(64))).contains("{\"content\":\"ok\"}");
+                "model." + "b".repeat(64), "c".repeat(64)))
+                .contains("{\"content\":\"ok\"}");
     }
 
     @Test
@@ -42,6 +43,26 @@ class AgentEngineModelCompletionTransactionsTest {
         assertThatThrownBy(() -> transactions.claim("task." + "a".repeat(64),
                 "model." + "b".repeat(64), "d".repeat(64)))
                 .isInstanceOfSatisfying(EngineGatewayException.class,
-                        failure -> assertThat(failure.code()).isEqualTo("MODEL_REQUEST_DIGEST_CONFLICT"));
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("MODEL_REQUEST_DIGEST_CONFLICT"));
+    }
+
+    @Test
+    void reclaimsDurablePendingModelCallAfterEngineOrGatewayRestart() {
+        AgentEngineModelCompletionRepository pendingRepository =
+                mock(AgentEngineModelCompletionRepository.class);
+        AgentEngineModelCompletionEntity pending =
+                mock(AgentEngineModelCompletionEntity.class);
+        when(pendingRepository.lock("task", "model")).thenReturn(Optional.of(pending));
+        when(pending.requestDigest()).thenReturn("digest");
+        when(pending.state()).thenReturn("PENDING");
+        AgentEngineModelCompletionTransactions pendingTransactions =
+                new AgentEngineModelCompletionTransactions(pendingRepository);
+
+        assertThat(pendingTransactions.claim(
+                "task", "model", "digest", "deepseek", "model", 12)).isEmpty();
+
+        verify(pending).retry();
+        verify(pendingRepository).saveAndFlush(pending);
     }
 }

@@ -304,6 +304,18 @@ public class UserSettingsService {
                 um.getProviderLabel());
     }
 
+    public List<ModelReference> configuredModelReferences(Long userId) {
+        SysUserSettings settings = getOrCreate(userId);
+        List<ModelReference> references = new java.util.ArrayList<>();
+        references.add(new ModelReference(DEFAULT_PROVIDER,
+                resolveDeepseekModel(null, settings.getDeepseekModel())));
+        references.add(new ModelReference(PROVIDER_GLM, settings.getGlmModel()));
+        userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId).stream()
+                .map(value -> new ModelReference(value.getProviderKey(), value.getModelName()))
+                .forEach(references::add);
+        return references.stream().distinct().limit(8).toList();
+    }
+
     public String decryptDeepseekApiKey(SysUserSettings settings) {
         if (!StringUtils.hasText(settings.getDeepseekApiKeyEncrypted())) {
             return null;
@@ -504,6 +516,8 @@ public class UserSettingsService {
     }
 
     /** Resolved model endpoint for the agent harness. */
+    public record ModelReference(String providerKey, String modelName) { }
+
     public record ModelEndpoint(String providerKey,
                                 String modelName,
                                 String apiUrl,

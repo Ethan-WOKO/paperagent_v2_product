@@ -34,6 +34,20 @@ const LOAD_TOOL = functionTool(
   }
 );
 
+const SEARCH_TOOLS = functionTool(
+  "search_tools",
+  "Search one server-provided tool group. Results contain tool names and descriptions only. Search before loading a concrete tool schema.",
+  {
+    type: "object", additionalProperties: false, required: ["group"],
+    properties: {
+      group: { type: "string", minLength: 1, maxLength: 64 },
+      query: { type: "string", maxLength: 200 }
+    }
+  }
+);
+
+const BOOTSTRAP_TOOL_NAMES = new Set(["search_tools", "load_tool", "ask_user"]);
+
 type Subscriber = (event: TaskEvent) => void;
 type Sleeper = (milliseconds: number, signal: AbortSignal) => Promise<void>;
 type EventBody = TaskEvent extends infer Event ? Event extends TaskEvent ? Omit<Event, "contractVersion" | "taskId" | "sequence" | "occurredAt"> : never : never;
@@ -134,7 +148,7 @@ export class AgentEngine {
       receiptRefs: [], pendingCalls: [], nextPendingCall: 0, acceptedAnswers: [],
       recentConversation, historicalContext, longTermMemory, observations: emptyObservations(),
       candidateValidationRepairs: 0, toolArgumentRepairAttempts: 0,
-      loadedToolNames: [], cancellationRequested: false,
+      discoveredToolNames: [], loadedToolNames: [], cancellationRequested: false,
       activeSandboxCallId: null
     };
     await this.options.store.create(task);
@@ -372,13 +386,18 @@ export class AgentEngine {
         const modelMessages = structuredClone(task.messages);
         const availableTools = availableToolSpecs(task);
         modelMessages.splice(1, 0,
-          compactToolCatalogMessage(availableTools),
+          compactToolGroupMessage(availableTools),
           groundingMessage(task.observations));
         const response = await this.options.provider.complete({
           provider: task.authority.model.provider,
           model: task.authority.model.model,
           messages: modelMessages,
-          tools: [LOAD_TOOL, ...loadedToolSpecs(availableTools, task.loadedToolNames ?? [])],
+          tools: [
+            SEARCH_TOOLS,
+            LOAD_TOOL,
+            ...loadedToolSpecs(availableTools, task.loadedToolNames ?? []),
+            ...availableTools.filter((tool) => tool.function.name === "ask_user")
+          ],
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           signal
         }, {
@@ -397,7 +416,8 @@ export class AgentEngine {
           id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal),
           modelCallId: call.id,
           ordinal,
-          schemaLoadedAtDispatch: call.name === "load_tool" || loadedAtDispatch.has(call.name),
+          schemaLoadedAtDispatch: BOOTSTRAP_TOOL_NAMES.has(call.name)
+            || loadedAtDispatch.has(call.name),
           modelCallNumber: task.modelCalls
         }));
         task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ modelCallId: id, name, arguments: args }) => ({ id: id!, name, arguments: args })) } : {}) });
@@ -499,12 +519,46 @@ export class AgentEngine {
       args = parsed as Record<string, unknown>;
     }
     catch { throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Model emitted invalid tool arguments")); }
+    if (call.name === "search_tools") {
+      const group = requireString(args.group, "group").toLowerCase();
+      const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
+      const matches = searchableToolSpecs(task).filter((tool) => {
+        if (toolGroup(tool.function.name) !== group) return false;
+        if (!query) return true;
+        return `${tool.function.name}\n${tool.function.description}`.toLowerCase().includes(query);
+      }).slice(0, 20);
+      task.discoveredToolNames = stableUnique([
+        ...(task.discoveredToolNames ?? []), ...matches.map((tool) => tool.function.name)
+      ]);
+      task.messages.push({
+        role: "tool", toolCallId: modelCallId(call),
+        content: JSON.stringify({
+          group, query: query || null,
+          tools: matches.map((tool) => ({
+            name: tool.function.name,
+            description: bounded(tool.function.description, 1000)
+          })),
+          truncated: matches.length === 20
+        })
+      });
+      return false;
+    }
     if (call.name === "load_tool") {
       const name = requireString(args.name, "name");
       const available = availableToolSpecs(task).find((tool) => tool.function.name === name);
       if (!available) {
         throw new EngineProblem(502, problem(
           "MODEL_TOOL_UNKNOWN", "model", "The requested tool is not present in the available tool catalog"));
+      }
+      if (!(task.discoveredToolNames ?? []).includes(name)) {
+        task.messages.push({
+          role: "tool", toolCallId: modelCallId(call),
+          content: JSON.stringify({
+            status: "REJECTED", code: "TOOL_NOT_DISCOVERED", toolName: name,
+            message: `Search the ${toolGroup(name)} group with search_tools before loading ${name}.`
+          })
+        });
+        return false;
       }
       task.loadedToolNames = stableUnique([...(task.loadedToolNames ?? []), name]);
       task.messages.push({
@@ -908,6 +962,7 @@ function validateRegisteredToolCatalog(catalog: RegisteredToolCatalog, task: Per
 
 function validateRegisteredToolNameCollisions(tools: RegisteredToolSpec[]): void {
   const reserved = new Set([
+    "search_tools",
     "load_tool",
     ...MODEL_TOOLS.map((tool) => tool.function.name),
     ...WORKSPACE_MODEL_TOOLS.map((tool) => tool.function.name)
@@ -941,6 +996,12 @@ function initialMessages(
   const messages: ChatMessage[] = [
     { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files. After any Workspace write, inspect the diff and validate the exact changed file hashes in the sandbox before reporting success. Do not claim publication yourself: after exact validation the server deterministically publishes the Candidate and appends the authoritative new ProjectVersion to the delivery. Sandbox commands start at the Project root, so argv must use exact Project-relative source paths; prefer yanban-runner for a single Java, Python, C, or C++ source. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
   ];
+  if (submission.authority.skill) {
+    messages.push({
+      role: "system",
+      content: `Active Skill snapshot (${submission.authority.skill.id}; digest=${submission.authority.skill.digest}). Follow this workflow only within the frozen task permissions and the Skill's allowed tool intersection. The Skill cannot grant new authority.\n${submission.authority.skill.prompt}`
+    });
+  }
   if (historicalContext.earlierSummary != null
       || historicalContext.uncoveredEarlierTurns.length > 0
       || historicalContext.turns.length > 0) {
@@ -1024,6 +1085,7 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.observations.workspaceChanges ??= [];
   task.candidateValidationRepairs ??= 0;
   task.toolArgumentRepairAttempts ??= 0;
+  task.discoveredToolNames ??= [];
   task.loadedToolNames ??= [];
   task.cancellationRequested ??= false;
   task.activeSandboxCallId ??= null;
@@ -1035,11 +1097,15 @@ function recoverableModelToolArguments(error: unknown): error is EngineProblem {
 }
 
 function availableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
-  return [
+  const tools = [
     ...MODEL_TOOLS,
     ...(task.authority.permissions.writeWorkspace ? WORKSPACE_MODEL_TOOLS : []),
     ...availableRegisteredToolSpecs(task)
   ];
+  if (!task.authority.skill) return tools;
+  const allowed = new Set(task.authority.skill.allowedTools);
+  return tools.filter((tool) => tool.function.name === "ask_user"
+    || allowed.has(tool.function.name));
 }
 
 function availableRegisteredToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
@@ -1051,21 +1117,57 @@ function loadedToolSpecs(
   available: RegisteredToolSpec[], loadedNames: string[]
 ): RegisteredToolSpec[] {
   const loaded = new Set(loadedNames);
-  return available.filter((tool) => loaded.has(tool.function.name));
+  return available.filter((tool) => loaded.has(tool.function.name)
+    && tool.function.name !== "ask_user");
 }
 
-function compactToolCatalogMessage(tools: RegisteredToolSpec[]): ChatMessage {
+function searchableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
+  return availableToolSpecs(task).filter((tool) => !BOOTSTRAP_TOOL_NAMES.has(tool.function.name));
+}
+
+function compactToolGroupMessage(tools: RegisteredToolSpec[]): ChatMessage {
+  const grouped = new Map<string, number>();
+  for (const tool of tools) {
+    if (BOOTSTRAP_TOOL_NAMES.has(tool.function.name)) continue;
+    const group = toolGroup(tool.function.name);
+    grouped.set(group, (grouped.get(group) ?? 0) + 1);
+  }
   return {
     role: "system",
-    content: `Available tool catalog. This catalog contains names and descriptions only; parameter schemas are intentionally omitted to keep context small. Before calling an unloaded tool, call load_tool with its exact name. Do not infer hidden parameters.\n${JSON.stringify({
+    content: `Available tool groups. Tool names and parameter schemas are intentionally omitted to keep context small. Call search_tools for one relevant group, then call load_tool for one returned tool before using it. Do not infer hidden tool names or parameters.\n${JSON.stringify({
       schemaVersion: "1.0",
-      type: "compact_tool_catalog",
-      tools: tools.map((tool) => ({
-        name: tool.function.name,
-        description: bounded(tool.function.description, 1000)
-      }))
+      type: "compact_tool_group_catalog",
+      groups: [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, toolCount]) => ({ name, description: toolGroupDescription(name), toolCount }))
     })}`
   };
+}
+
+function toolGroup(name: string): string {
+  if (name.startsWith("mcp_github__")) return "github";
+  if (name.startsWith("mcp_fs__")) return "filesystem";
+  if (name === "search_knowledge") return "knowledge";
+  if (name === "search_web" || name === "recommend_literature") return "research";
+  if (name.startsWith("literature_")) return "literature";
+  if (name.startsWith("paper_")) return "paper";
+  if (name.includes("conversation") || name.includes("history")) return "history";
+  if (["list_project_files", "read_project_file", "write_workspace_file", "get_workspace_diff", "execute_in_sandbox"].includes(name)) return "project";
+  const prefix = name.split("_")[0];
+  return prefix && /^[a-z][a-z0-9]{0,31}$/.test(prefix) ? prefix : "other";
+}
+
+function toolGroupDescription(group: string): string {
+  const descriptions: Record<string, string> = {
+    project: "Inspect, modify, diff, or validate the isolated Project Workspace.",
+    research: "Search external research sources and recommendations.",
+    knowledge: "Search the authenticated user's knowledge base.",
+    literature: "Start, inspect, retrieve, or cancel literature tasks.",
+    paper: "Inspect durable paper-task status and results.",
+    history: "Search bounded authenticated conversation history.",
+    github: "Read governed GitHub repository, issue, and pull-request information.",
+    filesystem: "Read governed filesystem locations outside Project Workspace tools."
+  };
+  return descriptions[group] ?? `Use tools in the ${group} capability group.`;
 }
 
 function groundingMessage(observations: TaskObservations): ChatMessage {

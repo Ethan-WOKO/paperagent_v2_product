@@ -34,7 +34,9 @@ class AgentEngineModelCompletionTransactions {
             value.replayed(); repository.saveAndFlush(value);
             return Optional.of(value.responseJson());
         }
-        if ("PENDING".equals(value.state())) throw EngineGatewayException.conflict("MODEL_COMPLETION_IN_PROGRESS");
+        // A durable PENDING row can outlive the gateway process that owned the
+        // network call. Reclaim the same deterministic model request so a
+        // restarted Engine can continue instead of permanently failing.
         value.retry(); repository.saveAndFlush(value); return Optional.empty();
     }
 

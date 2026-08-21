@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -47,16 +48,28 @@ final class AgentEngineRegisteredToolGateway {
     private final ToolRegistry registry;
     private final AgentToolPolicyEngine policies;
     private final AgentTurnProductContextResolver contexts;
+    private final AgentEngineRegisteredToolTransactions transactions;
+
+    @Autowired
+    AgentEngineRegisteredToolGateway(
+            ObjectMapper json,
+            ToolRegistry registry,
+            AgentToolPolicyEngine policies,
+            AgentTurnProductContextResolver contexts,
+            AgentEngineRegisteredToolTransactions transactions) {
+        this.json = json;
+        this.registry = registry;
+        this.policies = policies;
+        this.contexts = contexts;
+        this.transactions = transactions;
+    }
 
     AgentEngineRegisteredToolGateway(
             ObjectMapper json,
             ToolRegistry registry,
             AgentToolPolicyEngine policies,
             AgentTurnProductContextResolver contexts) {
-        this.json = json;
-        this.registry = registry;
-        this.policies = policies;
-        this.contexts = contexts;
+        this(json, registry, policies, contexts, null);
     }
 
     RegisteredToolCatalog catalog(EngineTaskAuthority authority) {
@@ -84,6 +97,15 @@ final class AgentEngineRegisteredToolGateway {
         if (!expectedDigest.equals(request.requestDigest())) {
             throw EngineGatewayException.badRequest("REGISTERED_TOOL_DIGEST_INVALID");
         }
+        ToolDescriptor descriptor = registry.findDescriptor(request.toolName())
+                .orElseThrow(() -> EngineGatewayException.forbidden(
+                        "REGISTERED_TOOL_NOT_ALLOWED"));
+        if (transactions != null) {
+            var replay = transactions.claim(
+                    authority.taskId(), request.callId(), request.toolName(),
+                    request.requestDigest(), safelyReplayable(descriptor));
+            if (replay.isPresent()) return readResult(replay.orElseThrow());
+        }
         JsonNode executionArguments = executionArguments(authority, request);
         ToolResult result;
         try {
@@ -93,6 +115,9 @@ final class AgentEngineRegisteredToolGateway {
             result = registry.execute(new ToolCall(request.callId(), request.toolName(),
                     executionArguments), allowed);
         } catch (RuntimeException failure) {
+            if (transactions != null) transactions.fail(
+                    authority.taskId(), request.callId(),
+                    "REGISTERED_TOOL_EXECUTION_REJECTED");
             throw EngineGatewayException.badRequest("REGISTERED_TOOL_EXECUTION_REJECTED");
         } finally {
             ToolExecutionContext.clear();
@@ -113,12 +138,15 @@ final class AgentEngineRegisteredToolGateway {
         } catch (Exception impossible) {
             throw EngineGatewayException.conflict("REGISTERED_TOOL_RESULT_INVALID");
         }
-        return new RegisteredToolResult(
+        RegisteredToolResult response = new RegisteredToolResult(
                 "1.0", request.callId(), request.toolName(), request.requestDigest(),
                 result.success(), output,
                 result.errorCode() == null ? null : result.errorCode().name(),
                 bounded(result.errorMessage(), 2_000), result.retryable(),
                 result.evidenceRefs(), result.version());
+        if (transactions != null) transactions.complete(
+                authority.taskId(), request.callId(), writeResult(response));
+        return response;
     }
 
     private List<ToolDefinition> definitions(EngineTaskAuthority authority) {
@@ -129,7 +157,8 @@ final class AgentEngineRegisteredToolGateway {
         policyNames.addAll(PAPER_TASK_READ_TOOLS);
         policyNames.addAll(HISTORY_TOOLS);
         return registry.listDefinitions().stream()
-                .filter(definition -> policyNames.contains(definition.name()))
+                .filter(definition -> policyNames.contains(definition.name())
+                        || isMcpTool(definition.name()))
                 .filter(definition -> registry.findDescriptor(definition.name())
                         .map(descriptor -> eligible(definition.name(), descriptor))
                         .orElse(false))
@@ -175,7 +204,51 @@ final class AgentEngineRegisteredToolGateway {
                 == ToolDescriptor.ConfirmationPolicy.NEVER;
     }
 
+    private static boolean isMcpTool(String name) {
+        return name != null && (name.startsWith("mcp_github__")
+                || name.startsWith("mcp_fs__"));
+    }
+
+    private static boolean safelyReplayable(ToolDescriptor descriptor) {
+        return descriptor.sideEffectType() == ToolDescriptor.SideEffectType.NONE
+                || descriptor.sideEffectType() == ToolDescriptor.SideEffectType.READ_ONLY
+                || descriptor.sideEffectType() == ToolDescriptor.SideEffectType.EXTERNAL_READ
+                || descriptor.idempotencyPolicy()
+                == ToolDescriptor.IdempotencyPolicy.REQUIRED_KEY;
+    }
+
+    private RegisteredToolResult readResult(String value) {
+        try {
+            return json.readValue(value, RegisteredToolResult.class);
+        } catch (Exception corrupt) {
+            throw EngineGatewayException.conflict("REGISTERED_TOOL_REPLAY_INVALID");
+        }
+    }
+
+    private String writeResult(RegisteredToolResult value) {
+        try {
+            return json.writeValueAsString(value);
+        } catch (Exception impossible) {
+            throw EngineGatewayException.conflict("REGISTERED_TOOL_RESULT_INVALID");
+        }
+    }
+
     private static boolean eligible(String name, ToolDescriptor descriptor) {
+        if (isMcpTool(name)) {
+            return descriptor.modelVisible()
+                    && descriptor.supportedProfiles().contains(
+                            ToolDescriptor.CapabilityProfile.PROJECT)
+                    && descriptor.requiredPermissions().equals(List.of("mcp:read"))
+                    && descriptor.resourceScopes().equals(List.of(
+                            ToolDescriptor.ResourceScope.EXTERNAL))
+                    && (descriptor.sideEffectType()
+                            == ToolDescriptor.SideEffectType.READ_ONLY
+                    || descriptor.sideEffectType()
+                            == ToolDescriptor.SideEffectType.EXTERNAL_READ)
+                    && descriptor.confirmationPolicy()
+                            == ToolDescriptor.ConfirmationPolicy.NEVER
+                    && descriptor.asyncMode() == ToolDescriptor.AsyncMode.SYNC;
+        }
         if (HISTORY_TOOLS.contains(name)) {
             return eligibleHistory(name, descriptor);
         }

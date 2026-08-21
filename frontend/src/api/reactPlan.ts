@@ -69,7 +69,7 @@ export function listReactPlanSessionTasks(
 
 export function startReactPlanTask(
   sessionId: number,
-  payload: { clientRequestId: string; instruction: string; provider?: string; model?: string },
+  payload: { clientRequestId: string; instruction: string; provider?: string; model?: string; skillId?: string },
   signal?: AbortSignal,
 ) {
   return http.post<StartReactPlanTaskResponse>(
