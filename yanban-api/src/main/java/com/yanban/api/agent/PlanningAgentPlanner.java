@@ -18,6 +18,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -38,11 +39,20 @@ public class PlanningAgentPlanner {
     private static final int MAX_PLANNED_RUNTIME_STEPS_PER_STEP = 20;
     private final ChatModelProvider modelProvider;
     private final ObjectMapper objectMapper;
+    private final AgentModelRoutingService modelRoutes;
 
     public PlanningAgentPlanner(@Qualifier("chatModelProvider") ChatModelProvider modelProvider,
                                 ObjectMapper objectMapper) {
+        this(modelProvider, objectMapper, null);
+    }
+
+    @Autowired
+    public PlanningAgentPlanner(@Qualifier("chatModelProvider") ChatModelProvider modelProvider,
+                                ObjectMapper objectMapper,
+                                AgentModelRoutingService modelRoutes) {
         this.modelProvider = modelProvider;
         this.objectMapper = objectMapper;
+        this.modelRoutes = modelRoutes;
     }
 
     public PlanSpec createPlan(String goal,
@@ -91,10 +101,27 @@ public class PlanningAgentPlanner {
                                AgentOrchestrationRequirements orchestrationRequirements,
                                String governedMemoryContext,
                                List<ChatMessage> contextMessages) {
+        return createPlan(null, goal, provider, model, apiKey, apiUrl, skillPrompt, skillAllowedTools,
+                orchestrationRequirements, governedMemoryContext, contextMessages);
+    }
+
+    public PlanSpec createPlan(Long userId,
+                               String goal,
+                               String provider,
+                               String model,
+                               String apiKey,
+                               String apiUrl,
+                               String skillPrompt,
+                               List<String> skillAllowedTools,
+                               AgentOrchestrationRequirements orchestrationRequirements,
+                               String governedMemoryContext,
+                               List<ChatMessage> contextMessages) {
+        orchestrationRequirements = orchestrationRequirements == null
+                ? AgentOrchestrationRequirements.empty() : orchestrationRequirements;
         List<String> goalBoundTools = goalBoundTools(goal, skillAllowedTools);
         List<ChatMessage> plannerContext = contextMessages == null ? List.of() : List.copyOf(contextMessages);
         PlannerAttempt first = requestPlan(
-                goal, provider, model, apiKey, apiUrl,
+                userId, goal, provider, model, apiKey, apiUrl,
                 buildPlannerSystemPrompt(skillPrompt, goalBoundTools, orchestrationRequirements,
                         governedMemoryContext),
                 plannerContext,
@@ -105,7 +132,7 @@ public class PlanningAgentPlanner {
         }
 
         PlannerAttempt second = requestPlan(
-                goal, provider, model, apiKey, apiUrl,
+                userId, goal, provider, model, apiKey, apiUrl,
                 buildCompactRepairPrompt(skillPrompt, goalBoundTools, first.repairContext(),
                         orchestrationRequirements, governedMemoryContext),
                 plannerContext,
@@ -123,7 +150,8 @@ public class PlanningAgentPlanner {
         return PlanSpec.failure(finalCode, abbreviate(diagnostic, MAX_FAILURE_DIAGNOSTIC_LENGTH));
     }
 
-    private PlannerAttempt requestPlan(String goal,
+    private PlannerAttempt requestPlan(Long userId,
+                                       String goal,
                                        String provider,
                                        String model,
                                        String apiKey,
@@ -141,7 +169,7 @@ public class PlanningAgentPlanner {
             messages.add(ChatMessage.system(systemPrompt));
             if (contextMessages != null) messages.addAll(contextMessages);
             messages.add(ChatMessage.user(userPrompt));
-            response = modelProvider.chat(structuredJsonRequest(
+            ChatRequest request = structuredJsonRequest(
                     provider,
                     model,
                     List.copyOf(messages),
@@ -149,7 +177,10 @@ public class PlanningAgentPlanner {
                     maxTokens,
                     apiKey,
                     apiUrl
-            ));
+            );
+            response = modelRoutes == null
+                    ? modelProvider.chat(request)
+                    : modelRoutes.chat(userId, request).response();
         } catch (RuntimeException ex) {
             return failedAttempt(attemptLabel, PlannerFailureCode.MODEL_CALL_FAILED,
                     attemptLabel + " model call failed: " + abbreviate(ex.getMessage(), 300),
@@ -209,10 +240,23 @@ public class PlanningAgentPlanner {
                                        String apiUrl,
                                        String skillPrompt,
                                        List<String> skillAllowedTools) {
+        return createRecoveryPlan(null, goal, failedStepContext, provider, model, apiKey, apiUrl,
+                skillPrompt, skillAllowedTools);
+    }
+
+    public PlanSpec createRecoveryPlan(Long userId,
+                                       String goal,
+                                       String failedStepContext,
+                                       String provider,
+                                       String model,
+                                       String apiKey,
+                                       String apiUrl,
+                                       String skillPrompt,
+                                       List<String> skillAllowedTools) {
         List<String> goalBoundTools = goalBoundTools(goal, skillAllowedTools);
         ChatResponse response;
         try {
-            response = modelProvider.chat(structuredJsonRequest(
+            ChatRequest request = structuredJsonRequest(
                     provider,
                     model,
                     List.of(
@@ -223,7 +267,10 @@ public class PlanningAgentPlanner {
                     RECOVERY_PLANNER_MAX_TOKENS,
                     apiKey,
                     apiUrl
-            ));
+            );
+            response = modelRoutes == null
+                    ? modelProvider.chat(request)
+                    : modelRoutes.chat(userId, request).response();
         } catch (RuntimeException ex) {
             return PlanSpec.failure(PlannerFailureCode.MODEL_CALL_FAILED,
                     "Recovery planner model call failed: " + abbreviate(ex.getMessage(), 300));

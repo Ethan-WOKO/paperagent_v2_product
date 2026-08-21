@@ -21,16 +21,27 @@ public class AgentSessionTitleGenerator {
 
     private final ChatModelProvider modelProvider;
     private final UserSettingsService userSettings;
+    private final AgentModelRoutingService modelRoutes;
 
     public AgentSessionTitleGenerator(
             @Qualifier("chatModelProvider") ChatModelProvider modelProvider,
             UserSettingsService userSettings) {
         this.modelProvider = modelProvider;
         this.userSettings = userSettings;
+        this.modelRoutes = new AgentModelRoutingService(modelProvider, userSettings);
     }
 
     public String generate(AgentSession session, Long userId, String firstUserMessage) {
-        return generate(modelProvider, userSettings, session, userId, firstUserMessage);
+        return generate(modelRoutes, userSettings, session, userId, firstUserMessage);
+    }
+
+    private static String generate(
+            AgentModelRoutingService modelRoutes,
+            UserSettingsService userSettings,
+            AgentSession session,
+            Long userId,
+            String firstUserMessage) {
+        return generate(null, modelRoutes, userSettings, session, userId, firstUserMessage);
     }
 
     public static String generate(
@@ -39,10 +50,22 @@ public class AgentSessionTitleGenerator {
             AgentSession session,
             Long userId,
             String firstUserMessage) {
+        AgentModelRoutingService routes = modelProvider == null || userSettings == null
+                ? null : new AgentModelRoutingService(modelProvider, userSettings);
+        return generate(modelProvider, routes, userSettings, session, userId, firstUserMessage);
+    }
+
+    private static String generate(
+            ChatModelProvider modelProvider,
+            AgentModelRoutingService modelRoutes,
+            UserSettingsService userSettings,
+            AgentSession session,
+            Long userId,
+            String firstUserMessage) {
         try {
             UserSettingsService.ModelEndpoint endpoint = userSettings.resolveModelEndpoint(
                     userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
-            ChatResponse response = modelProvider.chat(new ChatRequest(
+            ChatRequest request = new ChatRequest(
                     endpoint.providerKey(),
                     endpoint.modelName(),
                     List.of(
@@ -57,7 +80,10 @@ public class AgentSessionTitleGenerator {
                     null,
                     null,
                     null
-            ));
+            );
+            ChatResponse response = modelRoutes == null
+                    ? modelProvider.chat(request)
+                    : modelRoutes.chat(userId, request).response();
             return sanitize(response == null || response.message() == null
                     ? null : response.message().content(), firstUserMessage);
         } catch (Exception ex) {

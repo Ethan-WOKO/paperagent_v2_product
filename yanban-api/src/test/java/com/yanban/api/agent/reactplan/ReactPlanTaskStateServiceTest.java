@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineObservationReader;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
+import com.yanban.api.agent.reactplan.gateway.EngineModelRouteCandidate;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.quota.UserQuotaService;
@@ -127,13 +128,15 @@ class ReactPlanTaskStateServiceTest {
                 taskId, digest, 7L, 11L, 42L, "running", 3,
                 checkpoint.toString(), LocalDateTime.now());
         when(checkpoints.findById(taskId)).thenReturn(Optional.of(persisted));
-        when(grants.issue(taskId, digest, 7L, 42L, "test", "test-model")).thenReturn(
+        List<EngineModelRouteCandidate> fallbacks = List.of(
+                new EngineModelRouteCandidate("backup", "backup-model"));
+        when(grants.issue(taskId, digest, 7L, 42L, "test", "test-model", fallbacks)).thenReturn(
                 new EngineTaskGrant("g".repeat(40), Instant.parse("2026-08-18T00:05:00Z")));
 
         EngineTaskGrant recovered = service.authorizeRecovery(taskId, digest);
 
         assertThat(recovered.value()).hasSize(40);
-        verify(grants).issue(taskId, digest, 7L, 42L, "test", "test-model");
+        verify(grants).issue(taskId, digest, 7L, 42L, "test", "test-model", fallbacks);
         assertThatThrownBy(() -> service.authorizeRecovery(taskId, "f".repeat(64)))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("TASK_DIGEST_CONFLICT");
@@ -176,7 +179,10 @@ class ReactPlanTaskStateServiceTest {
         authority.put("instruction", "inspect Sort.java");
         authority.putObject("permissions")
                 .put("readProject", true).put("writeWorkspace", true).put("executeSandbox", true);
-        authority.putObject("model").put("provider", "test").put("model", "test-model");
+        ObjectNode model = authority.putObject("model");
+        model.put("provider", "test").put("model", "test-model");
+        model.putArray("fallbacks").addObject()
+                .put("provider", "backup").put("model", "backup-model");
         String digest = ReactPlanCanonicalJson.digest(json, authority);
         ObjectNode checkpoint = json.createObjectNode();
         checkpoint.set("authority", authority);

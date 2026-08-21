@@ -161,7 +161,8 @@ class ReactPlanTaskSchedulerService {
         JsonNode model = checkpoint.path("authority").path("model");
         EngineTaskGrant grant = grants.issue(
                 selected.taskId(), selected.requestDigest(), selected.userId(), selected.turnId(),
-                model.path("provider").asText(), model.path("model").asText());
+                model.path("provider").asText(), model.path("model").asText(),
+                ReactPlanCheckpointModelRoutes.fallbacks(model));
         return new ClaimedTask(
                 selected.checkpointRevision(), checkpoint,
                 new Lease(owner, token, selected.leaseFence()),

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineObservationReader;
+import com.yanban.api.agent.reactplan.gateway.EngineModelRouteCandidate;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
@@ -212,7 +213,7 @@ class ReactPlanTaskStateService {
                 taskId, requestDigest, parse(checkpoint.checkpointJson()));
         requireIdentity(identity, intake);
         return grants.issue(taskId, requestDigest, intake.userId(), intake.turnId(),
-                identity.modelProvider(), identity.modelName());
+                identity.modelProvider(), identity.modelName(), identity.modelFallbacks());
     }
 
     private CheckpointIdentity validateCheckpoint(
@@ -241,8 +242,10 @@ class ReactPlanTaskStateService {
         String projectVersion = requiredText(authority.path("project"), "projectVersion");
         String modelProvider = requiredText(authority.path("model"), "provider");
         String modelName = requiredText(authority.path("model"), "model");
+        var modelFallbacks = ReactPlanCheckpointModelRoutes.fallbacks(
+                authority.path("model"));
         return new CheckpointIdentity(state, sequence, sessionId, projectId, projectVersion,
-                modelProvider, modelName);
+                modelProvider, modelName, modelFallbacks);
     }
 
     private void requireIdentity(CheckpointIdentity identity, ReactPlanTurnIntakeEntity intake) {
@@ -321,5 +324,6 @@ class ReactPlanTaskStateService {
     record StoredCheckpoint(long checkpointRevision, JsonNode checkpoint) { }
     private record CheckpointIdentity(String state, long lastSequence, long sessionId,
                                       long projectId, String projectVersion,
-                                      String modelProvider, String modelName) { }
+                                      String modelProvider, String modelName,
+                                      List<EngineModelRouteCandidate> modelFallbacks) { }
 }

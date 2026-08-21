@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
@@ -44,10 +45,19 @@ public class LangChain4jChatModelAdapter implements ChatModel {
 
     private final ChatModelProvider chatModelProvider;
     private final ObjectMapper objectMapper;
+    private final AgentModelRoutingService modelRoutes;
 
     public LangChain4jChatModelAdapter(ChatModelProvider chatModelProvider, ObjectMapper objectMapper) {
+        this(chatModelProvider, objectMapper, null);
+    }
+
+    @Autowired
+    public LangChain4jChatModelAdapter(ChatModelProvider chatModelProvider,
+                                      ObjectMapper objectMapper,
+                                      AgentModelRoutingService modelRoutes) {
         this.chatModelProvider = chatModelProvider;
         this.objectMapper = objectMapper;
+        this.modelRoutes = modelRoutes;
     }
 
     @Override
@@ -66,7 +76,11 @@ public class LangChain4jChatModelAdapter implements ChatModel {
     public dev.langchain4j.model.chat.response.ChatResponse chat(
             dev.langchain4j.model.chat.request.ChatRequest request,
             AgentRuntimeRequest runtimeRequest) {
-        return chat(request, invocationContext(runtimeRequest));
+        ChatRequest coreRequest = toCoreChatRequest(request, invocationContext(runtimeRequest));
+        ChatResponse response = modelRoutes == null
+                ? chatModelProvider.chat(coreRequest)
+                : modelRoutes.chat(runtimeRequest == null ? null : runtimeRequest.userId(), coreRequest).response();
+        return toLangChain4jResponse(request, response);
     }
 
     public Flux<ChatChunk> stream(dev.langchain4j.model.chat.request.ChatRequest request,
@@ -92,7 +106,30 @@ public class LangChain4jChatModelAdapter implements ChatModel {
     public Flux<ChatChunk> stream(
             dev.langchain4j.model.chat.request.ChatRequest request,
             AgentRuntimeRequest runtimeRequest) {
-        return stream(request, invocationContext(runtimeRequest));
+        ChatRequest coreRequest = toCoreChatRequest(request, invocationContext(runtimeRequest));
+        Flux<ChatChunk> stream = modelRoutes == null
+                ? chatModelProvider.streamChat(coreRequest)
+                : modelRoutes.stream(runtimeRequest == null ? null : runtimeRequest.userId(), coreRequest);
+        return fallbackToNonStreaming(stream, coreRequest,
+                runtimeRequest == null ? null : runtimeRequest.userId());
+    }
+
+    private Flux<ChatChunk> fallbackToNonStreaming(
+            Flux<ChatChunk> stream,
+            ChatRequest coreRequest,
+            Long userId) {
+        AtomicBoolean emitted = new AtomicBoolean(false);
+        return stream.doOnNext(chunk -> {
+                    if (chunk != null) emitted.set(true);
+                })
+                .onErrorResume(ex -> shouldFallbackToNonStreaming(ex) && !emitted.get(), ex -> {
+                    log.warn("Streaming chat failed before first chunk, falling back to non-streaming provider={} model={} errorType={}",
+                            coreRequest.provider(), coreRequest.model(), ex.getClass().getSimpleName());
+                    ChatResponse response = modelRoutes == null
+                            ? chatModelProvider.chat(coreRequest)
+                            : modelRoutes.chat(userId, coreRequest).response();
+                    return Flux.fromIterable(toFallbackChunks(response));
+                });
     }
 
     private ModelInvocationContext invocationContext(AgentRuntimeRequest runtimeRequest) {

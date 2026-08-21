@@ -2,6 +2,7 @@ package com.yanban.api.agent.reactplan.gateway;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.AgentModelRoutingService;
 import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
 import com.yanban.api.agent.reactplan.ReactPlanTraceIds;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ModelCompletionRequest;
@@ -14,7 +15,6 @@ import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
-import com.yanban.core.model.ModelProviderException;
 import com.yanban.core.model.ToolCall;
 import com.yanban.core.model.ToolSpec;
 import java.util.ArrayList;
@@ -36,16 +36,16 @@ final class AgentEngineModelGateway {
     private static final int MAX_TOOLS = 80;
     private static final int MAX_TOTAL_CHARACTERS = 300_000;
     private final ObjectMapper json;
-    private final UserSettingsService settings;
     private final UserQuotaService quotas;
-    private final ChatModelProvider models;
+    private final AgentModelRoutingService modelRoutes;
     private final AgentEngineModelCompletionTransactions transactions;
 
     AgentEngineModelGateway(ObjectMapper json, UserSettingsService settings, UserQuotaService quotas,
                             @Qualifier("chatModelProvider") ChatModelProvider models,
                             AgentEngineModelCompletionTransactions transactions) {
-        this.json = json; this.settings = settings; this.quotas = quotas;
-        this.models = models; this.transactions = transactions;
+        this.json = json; this.quotas = quotas;
+        this.transactions = transactions;
+        this.modelRoutes = new AgentModelRoutingService(models, settings);
     }
 
     ModelCompletionResult complete(EngineTaskAuthority authority, ModelCompletionRequest request) {
@@ -76,43 +76,27 @@ final class AgentEngineModelGateway {
         }
         try {
             quotas.assertCanUseAi(authority.userId());
-            List<EngineModelRouteCandidate> routes = new ArrayList<>();
-            routes.add(new EngineModelRouteCandidate(
+            List<UserSettingsService.ModelReference> routes = new ArrayList<>();
+            routes.add(new UserSettingsService.ModelReference(
                     authority.modelProvider(), authority.modelName()));
-            routes.addAll(authority.modelFallbacks());
-            ChatResponse response = null;
-            EngineModelRouteCandidate resolvedRoute = null;
-            for (EngineModelRouteCandidate route : routes) {
-                try {
-                    UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(
-                            authority.userId(), route.provider(), route.model());
-                    if (!endpoint.providerKey().equals(route.provider())
-                            || !endpoint.modelName().equals(route.model())) {
-                        log.warn("reactplan_model_route_changed taskId={} provider={} model={}",
-                                authority.taskId(), route.provider(), route.model());
-                        continue;
-                    }
-                    ChatResponse candidateResponse = callModel(authority, request, endpoint);
-                    if (candidateResponse == null || candidateResponse.message() == null) {
-                        throw new ModelProviderException("Model returned an invalid response");
-                    }
-                    response = candidateResponse;
-                    resolvedRoute = route;
-                    break;
-                } catch (ModelProviderException failure) {
-                    log.warn("reactplan_model_route_failed taskId={} provider={} model={} reason={}",
-                            authority.taskId(), route.provider(), route.model(),
-                            failure.getClass().getSimpleName());
-                } catch (ResponseStatusException failure) {
-                    if (failure.getStatusCode().value() == 429) throw failure;
-                    log.warn("reactplan_model_route_unavailable taskId={} provider={} model={} status={}",
-                            authority.taskId(), route.provider(), route.model(),
-                            failure.getStatusCode().value());
-                }
-            }
-            if (response == null || resolvedRoute == null) {
+            authority.modelFallbacks().stream()
+                    .map(route -> new UserSettingsService.ModelReference(route.provider(), route.model()))
+                    .forEach(routes::add);
+            AgentModelRoutingService.RoutedChatResponse routed;
+            try {
+                routed = modelRoutes.chatConfigured(
+                        authority.userId(), modelRequest(request), List.copyOf(routes));
+            } catch (RuntimeException exhausted) {
                 throw EngineGatewayException.badGateway("MODEL_PROVIDERS_EXHAUSTED");
             }
+            ChatResponse response = routed.response();
+            if (response == null || response.message() == null) {
+                throw EngineGatewayException.badGateway("MODEL_PROVIDERS_EXHAUSTED");
+            }
+            boolean fallbackUsed = routed.fallbackUsed();
+            log.info("reactplan_model_route_selected taskId={} requestedProvider={} requestedModel={} resolvedProvider={} resolvedModel={} fallbackUsed={}",
+                    authority.taskId(), authority.modelProvider(), authority.modelName(),
+                    routed.resolvedProvider(), routed.resolvedModel(), fallbackUsed);
             ChatResponse.Usage usage = response.usage();
             int prompt = usage == null || usage.promptTokens() == null ? 0 : Math.max(0, usage.promptTokens());
             int completion = usage == null || usage.completionTokens() == null ? 0 : Math.max(0, usage.completionTokens());
@@ -123,9 +107,8 @@ final class AgentEngineModelGateway {
                     "1.0", request.clientRequestId(), request.requestDigest(),
                     response.assistantText(), calls, response.finishReason(),
                     new ModelUsage(prompt, completion), false,
-                    resolvedRoute.provider(), resolvedRoute.model(),
-                    !resolvedRoute.provider().equals(authority.modelProvider())
-                            || !resolvedRoute.model().equals(authority.modelName()));
+                    routed.resolvedProvider(), routed.resolvedModel(),
+                    fallbackUsed);
             String serialized = write(result);
             transactions.succeed(authority.taskId(), request.clientRequestId(), serialized,
                     prompt, completion);
@@ -152,12 +135,9 @@ final class AgentEngineModelGateway {
         }
     }
 
-    private ChatResponse callModel(
-            EngineTaskAuthority authority,
-            ModelCompletionRequest request,
-            UserSettingsService.ModelEndpoint endpoint) {
-        return models.chat(new ChatRequest(
-                endpoint.providerKey(), endpoint.modelName(),
+    private ChatRequest modelRequest(ModelCompletionRequest request) {
+        return new ChatRequest(
+                request.provider(), request.model(),
                 request.messages().stream().map(message -> new ChatMessage(
                         message.role(), message.content(),
                         message.toolCalls() == null ? null : message.toolCalls().stream()
@@ -168,8 +148,8 @@ final class AgentEngineModelGateway {
                 request.tools().stream().map(tool -> new ToolSpec(tool.type(),
                         new ToolSpec.FunctionSpec(tool.function().name(),
                                 tool.function().description(), tool.function().parameters()))).toList(),
-                endpoint.apiKey(), endpoint.apiUrl(), null, null,
-                "reactplan:" + authority.taskId() + ":" + request.clientRequestId()));
+                null, null, null, null,
+                "reactplan:model:" + request.clientRequestId());
     }
 
     private void observe(EngineTaskAuthority authority, ModelCompletionRequest request,

@@ -19,6 +19,7 @@ import com.yanban.api.quota.UserQuotaService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
+import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ModelProviderException;
 import java.time.Instant;
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class AgentEngineModelGatewayTest {
     private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
@@ -65,7 +67,8 @@ class AgentEngineModelGatewayTest {
 
     @Test
     void fallsBackToNextFrozenConfiguredProviderWhenPreferredProviderFails() {
-        ModelCompletionRequest request = request("deepseek", "deepseek-v4-flash");
+        ModelCompletionRequest request = requestWithConfiguredIdentity(
+                "deepseek", "deepseek-v4-flash");
         when(transactions.claim(any(), any(), any(), any(), any(), anyLong()))
                 .thenReturn(Optional.empty());
         when(settings.resolveModelEndpoint(7L, "deepseek", "deepseek-v4-flash"))
@@ -86,7 +89,15 @@ class AgentEngineModelGatewayTest {
         assertThat(result.resolvedProvider()).isEqualTo("glm");
         assertThat(result.resolvedModel()).isEqualTo("glm-4.5-flash");
         assertThat(result.fallbackUsed()).isTrue();
-        verify(models, org.mockito.Mockito.times(2)).chat(any());
+        ArgumentCaptor<ChatRequest> routed = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(models, org.mockito.Mockito.times(2)).chat(routed.capture());
+        List<String> fallbackSystemMessages = routed.getAllValues().get(1).messages().stream()
+                .filter(message -> "system".equals(message.role()))
+                .map(ChatMessage::content).toList();
+        assertThat(fallbackSystemMessages)
+                .allMatch(message -> message.contains("provider=glm; model=glm-4.5-flash"))
+                .noneMatch(message -> message.contains(
+                        "provider=deepseek; model=deepseek-v4-flash"));
         verify(quotas).assertCanUseAi(7L);
     }
 
@@ -120,6 +131,27 @@ class AgentEngineModelGatewayTest {
                 "contractVersion", "1.0", "clientRequestId", id,
                 "provider", provider, "model", model,
                 "messages", List.of(Map.of("role", "user", "content", "hello")),
+                "tools", List.of(), "maxOutputTokens", 4096);
+        return new ModelCompletionRequest("1.0", id,
+                ReactPlanCanonicalJson.digest(json, semantic), provider, model,
+                messages, List.of(), 4096);
+    }
+
+    private ModelCompletionRequest requestWithConfiguredIdentity(
+            String provider, String model) {
+        String id = "model." + "c".repeat(64);
+        String identity = "You are PaperAgent's bounded ReAct executor running with provider="
+                + provider + "; model=" + model
+                + ". If asked what model you are, report these exact configured values.";
+        List<ModelMessage> messages = List.of(
+                new ModelMessage("system", identity, null, null),
+                new ModelMessage("user", "What model are you?", null, null));
+        Map<String, Object> semantic = Map.of(
+                "contractVersion", "1.0", "clientRequestId", id,
+                "provider", provider, "model", model,
+                "messages", List.of(
+                        Map.of("role", "system", "content", identity),
+                        Map.of("role", "user", "content", "What model are you?")),
                 "tools", List.of(), "maxOutputTokens", 4096);
         return new ModelCompletionRequest("1.0", id,
                 ReactPlanCanonicalJson.digest(json, semantic), provider, model,

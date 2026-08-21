@@ -107,6 +107,8 @@ final class ReactPlanRuntimeService {
         String model = endpoint.modelName();
         List<EngineModelRouteCandidate> modelFallbacks = modelFallbacks(
                 userId, provider, model);
+        log.info("reactplan_model_routes_frozen taskId={} primaryProvider={} primaryModel={} fallbacks={}",
+                taskId, provider, model, modelFallbacks);
         conversationSummaries.catchUp(userId, context.identity().sessionId());
         Map<String, Object> authority = authority(
                 context, request.instruction(), provider, model,

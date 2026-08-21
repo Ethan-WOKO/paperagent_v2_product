@@ -2,6 +2,7 @@ package com.yanban.api.agent.reactplan;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.AgentModelRoutingService;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
@@ -26,6 +27,7 @@ final class ReactPlanConversationSummaryWorker {
     private final ReactPlanConversationContextService contexts;
     private final UserSettingsService settings;
     private final ChatModelProvider models;
+    private final AgentModelRoutingService modelRoutes;
 
     ReactPlanConversationSummaryWorker(
             ObjectMapper json,
@@ -38,6 +40,7 @@ final class ReactPlanConversationSummaryWorker {
         this.contexts = contexts;
         this.settings = settings;
         this.models = models;
+        this.modelRoutes = new AgentModelRoutingService(models, settings);
     }
 
     @Scheduled(fixedDelayString = "${yanban.agent.reactplan.summary-scan-ms:2000}")
@@ -60,12 +63,12 @@ final class ReactPlanConversationSummaryWorker {
                     .limit(4).toList();
             UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(
                     work.userId(), null, null);
-            String summary = summarize(endpoint, work.existingSummary(), batch);
+            SummaryResult summary = summarize(work.userId(), endpoint, work.existingSummary(), batch);
             long covered = batch.get(batch.size() - 1).intakeId();
             int coveredCount = Math.min(eligibleCount,
                     Math.max(0, eligibleCount - additions.size()) + batch.size());
-            transactions.succeed(work, summary, covered, coveredCount,
-                    endpoint.providerKey(), endpoint.modelName(), additions.size() > batch.size());
+            transactions.succeed(work, summary.text(), covered, coveredCount,
+                    summary.resolvedProvider(), summary.resolvedModel(), additions.size() > batch.size());
             log.info("reactplan_context_summary sessionId={} userId={} coveredIntakeId={} addedTurns={} outcome=succeeded",
                     work.sessionId(), work.userId(), covered, batch.size());
         } catch (RuntimeException failure) {
@@ -75,14 +78,14 @@ final class ReactPlanConversationSummaryWorker {
         }
     }
 
-    private String summarize(UserSettingsService.ModelEndpoint endpoint, String existing,
-                             List<ReactPlanConversationContextService.ConversationTurn> additions) {
+    private SummaryResult summarize(Long userId, UserSettingsService.ModelEndpoint endpoint, String existing,
+                                    List<ReactPlanConversationContextService.ConversationTurn> additions) {
         String payload;
         try { payload = json.writeValueAsString(additions); }
         catch (JsonProcessingException impossible) { throw new IllegalStateException(impossible); }
         String previous = existing == null || existing.isBlank()
                 ? "(none)" : existing;
-        ChatResponse response = models.chat(new ChatRequest(
+        AgentModelRoutingService.RoutedChatResponse routed = modelRoutes.chat(userId, new ChatRequest(
                 endpoint.providerKey(), endpoint.modelName(), List.of(
                 new ChatMessage("system", "You maintain a compact conversation summary for a coding agent. "
                         + "Summarize only the supplied user requests and terminal outcomes. Preserve explicit decisions, "
@@ -93,12 +96,16 @@ final class ReactPlanConversationSummaryWorker {
                         + "\n\nNew completed turns (JSON data):\n" + payload, null, null)),
                 0.1, 1400, List.of(), endpoint.apiKey(), endpoint.apiUrl(),
                 null, null, "reactplan-summary:session." + additions.get(0).turnId()));
+        ChatResponse response = routed.response();
         String result = response == null ? null : response.assistantText();
         if (result == null || result.isBlank()) {
             throw new IllegalStateException("SUMMARY_RESPONSE_EMPTY");
         }
         String trimmed = result.trim();
-        return trimmed.length() <= MAX_SUMMARY_CHARACTERS
+        String bounded = trimmed.length() <= MAX_SUMMARY_CHARACTERS
                 ? trimmed : trimmed.substring(0, MAX_SUMMARY_CHARACTERS);
+        return new SummaryResult(bounded, routed.resolvedProvider(), routed.resolvedModel());
     }
+
+    private record SummaryResult(String text, String resolvedProvider, String resolvedModel) { }
 }
