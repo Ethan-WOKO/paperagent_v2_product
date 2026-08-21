@@ -8,6 +8,7 @@ import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -45,6 +46,14 @@ public final class AgentEngineTaskGrantService {
     public EngineTaskGrant issue(
             String taskId, String requestDigest, long authenticatedUserId, long turnId,
             String modelProvider, String modelName) {
+        return issue(taskId, requestDigest, authenticatedUserId, turnId,
+                modelProvider, modelName, List.of());
+    }
+
+    public EngineTaskGrant issue(
+            String taskId, String requestDigest, long authenticatedUserId, long turnId,
+            String modelProvider, String modelName,
+            List<EngineModelRouteCandidate> modelFallbacks) {
         VerifiedAgentTurnProductContext context = contexts.resolve(authenticatedUserId, turnId);
         if (!"AGENT_TURN".equals(context.identity().source())
                 || !String.valueOf(turnId).equals(context.identity().sourceId())
@@ -59,7 +68,7 @@ public final class AgentEngineTaskGrantService {
                 taskId, requestDigest, authenticatedUserId, turnId,
                 context.identity().sessionId(), context.identity().projectId(),
                 context.projectVersionId().orElseThrow(), true, true, true,
-                modelProvider, modelName, expiresAt);
+                modelProvider, modelName, modelFallbacks, expiresAt);
         byte[] payload = write(authority);
         String body = Base64.getUrlEncoder().withoutPadding().encodeToString(payload);
         String signature = Base64.getUrlEncoder().withoutPadding()

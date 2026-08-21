@@ -17,6 +17,7 @@ import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ModelProviderException;
 import com.yanban.core.model.ToolCall;
 import com.yanban.core.model.ToolSpec;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -71,32 +72,46 @@ final class AgentEngineModelGateway {
                 request.provider(), request.model(), requestBytes);
         if (replay.isPresent()) {
             observe(authority, request, "replayed", null, startedNanos, 0, 0);
-            return replay(replay.orElseThrow());
+            return replay(replay.orElseThrow(), authority);
         }
         try {
             quotas.assertCanUseAi(authority.userId());
-            UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(
-                    authority.userId(), authority.modelProvider(), authority.modelName());
-            if (!endpoint.providerKey().equals(authority.modelProvider())
-                    || !endpoint.modelName().equals(authority.modelName())) {
-                throw EngineGatewayException.forbidden("MODEL_AUTHORITY_MISMATCH");
+            List<EngineModelRouteCandidate> routes = new ArrayList<>();
+            routes.add(new EngineModelRouteCandidate(
+                    authority.modelProvider(), authority.modelName()));
+            routes.addAll(authority.modelFallbacks());
+            ChatResponse response = null;
+            EngineModelRouteCandidate resolvedRoute = null;
+            for (EngineModelRouteCandidate route : routes) {
+                try {
+                    UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(
+                            authority.userId(), route.provider(), route.model());
+                    if (!endpoint.providerKey().equals(route.provider())
+                            || !endpoint.modelName().equals(route.model())) {
+                        log.warn("reactplan_model_route_changed taskId={} provider={} model={}",
+                                authority.taskId(), route.provider(), route.model());
+                        continue;
+                    }
+                    ChatResponse candidateResponse = callModel(authority, request, endpoint);
+                    if (candidateResponse == null || candidateResponse.message() == null) {
+                        throw new ModelProviderException("Model returned an invalid response");
+                    }
+                    response = candidateResponse;
+                    resolvedRoute = route;
+                    break;
+                } catch (ModelProviderException failure) {
+                    log.warn("reactplan_model_route_failed taskId={} provider={} model={} reason={}",
+                            authority.taskId(), route.provider(), route.model(),
+                            failure.getClass().getSimpleName());
+                } catch (ResponseStatusException failure) {
+                    if (failure.getStatusCode().value() == 429) throw failure;
+                    log.warn("reactplan_model_route_unavailable taskId={} provider={} model={} status={}",
+                            authority.taskId(), route.provider(), route.model(),
+                            failure.getStatusCode().value());
+                }
             }
-            ChatResponse response = models.chat(new ChatRequest(
-                    endpoint.providerKey(), endpoint.modelName(),
-                    request.messages().stream().map(message -> new ChatMessage(
-                            message.role(), message.content(),
-                            message.toolCalls() == null ? null : message.toolCalls().stream()
-                                    .map(call -> new ToolCall(call.id(), "function",
-                                            new ToolCall.FunctionCall(call.name(), call.arguments())))
-                                    .toList(), message.toolCallId())).toList(),
-                    null, request.maxOutputTokens(),
-                    request.tools().stream().map(tool -> new ToolSpec(tool.type(),
-                            new ToolSpec.FunctionSpec(tool.function().name(),
-                                    tool.function().description(), tool.function().parameters()))).toList(),
-                    endpoint.apiKey(), endpoint.apiUrl(), null, null,
-                    "reactplan:" + authority.taskId() + ":" + request.clientRequestId()));
-            if (response == null || response.message() == null) {
-                throw EngineGatewayException.badGateway("MODEL_RESPONSE_INVALID");
+            if (response == null || resolvedRoute == null) {
+                throw EngineGatewayException.badGateway("MODEL_PROVIDERS_EXHAUSTED");
             }
             ChatResponse.Usage usage = response.usage();
             int prompt = usage == null || usage.promptTokens() == null ? 0 : Math.max(0, usage.promptTokens());
@@ -107,7 +122,10 @@ final class AgentEngineModelGateway {
             ModelCompletionResult result = new ModelCompletionResult(
                     "1.0", request.clientRequestId(), request.requestDigest(),
                     response.assistantText(), calls, response.finishReason(),
-                    new ModelUsage(prompt, completion), false);
+                    new ModelUsage(prompt, completion), false,
+                    resolvedRoute.provider(), resolvedRoute.model(),
+                    !resolvedRoute.provider().equals(authority.modelProvider())
+                            || !resolvedRoute.model().equals(authority.modelName()));
             String serialized = write(result);
             transactions.succeed(authority.taskId(), request.clientRequestId(), serialized,
                     prompt, completion);
@@ -127,15 +145,31 @@ final class AgentEngineModelGateway {
                 throw EngineGatewayException.tooManyRequests("MODEL_QUOTA_EXHAUSTED");
             }
             throw EngineGatewayException.badRequest("MODEL_CONFIGURATION_INVALID");
-        } catch (ModelProviderException failure) {
-            transactions.fail(authority.taskId(), request.clientRequestId(), "MODEL_PROVIDER_FAILED");
-            observe(authority, request, "failed", "MODEL_PROVIDER_FAILED", startedNanos, 0, 0);
-            throw EngineGatewayException.badGateway("MODEL_PROVIDER_FAILED");
         } catch (RuntimeException failure) {
             transactions.fail(authority.taskId(), request.clientRequestId(), "MODEL_GATEWAY_INTERNAL");
             observe(authority, request, "failed", "MODEL_GATEWAY_INTERNAL", startedNanos, 0, 0);
             throw failure;
         }
+    }
+
+    private ChatResponse callModel(
+            EngineTaskAuthority authority,
+            ModelCompletionRequest request,
+            UserSettingsService.ModelEndpoint endpoint) {
+        return models.chat(new ChatRequest(
+                endpoint.providerKey(), endpoint.modelName(),
+                request.messages().stream().map(message -> new ChatMessage(
+                        message.role(), message.content(),
+                        message.toolCalls() == null ? null : message.toolCalls().stream()
+                                .map(call -> new ToolCall(call.id(), "function",
+                                        new ToolCall.FunctionCall(call.name(), call.arguments())))
+                                .toList(), message.toolCallId())).toList(),
+                null, request.maxOutputTokens(),
+                request.tools().stream().map(tool -> new ToolSpec(tool.type(),
+                        new ToolSpec.FunctionSpec(tool.function().name(),
+                                tool.function().description(), tool.function().parameters()))).toList(),
+                endpoint.apiKey(), endpoint.apiUrl(), null, null,
+                "reactplan:" + authority.taskId() + ":" + request.clientRequestId()));
     }
 
     private void observe(EngineTaskAuthority authority, ModelCompletionRequest request,
@@ -194,12 +228,17 @@ final class AgentEngineModelGateway {
         try { return json.writeValueAsString(value); }
         catch (JsonProcessingException impossible) { throw new IllegalStateException(impossible); }
     }
-    private ModelCompletionResult replay(String value) {
+    private ModelCompletionResult replay(String value, EngineTaskAuthority authority) {
         try {
             ModelCompletionResult stored = json.readValue(value, ModelCompletionResult.class);
+            String resolvedProvider = stored.resolvedProvider() == null
+                    ? authority.modelProvider() : stored.resolvedProvider();
+            String resolvedModel = stored.resolvedModel() == null
+                    ? authority.modelName() : stored.resolvedModel();
             return new ModelCompletionResult(stored.contractVersion(), stored.clientRequestId(),
                     stored.requestDigest(), stored.content(), stored.toolCalls(), stored.finishReason(),
-                    stored.usage(), true);
+                    stored.usage(), true, resolvedProvider, resolvedModel,
+                    stored.fallbackUsed());
         } catch (JsonProcessingException corrupt) { throw new IllegalStateException("Stored model response is corrupt", corrupt); }
     }
 }

@@ -28,6 +28,13 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).not.toContain('reactPlanFixedTool');
   });
 
+  it('允许为新任务选择 Skill 并只提交 Skill 标识', () => {
+    expect(source).toContain('aria-label="ReAct task skill"');
+    expect(source).toContain('v-model:value="selectedReactPlanSkillId"');
+    expect(source).toContain('void listSkills()');
+    expect(source).toContain('{ skillId: selectedReactPlanSkillId.value }');
+  });
+
   it('在同一会话中按时间线保留并恢复多轮 ReAct 任务', () => {
     expect(source).toContain('const reactPlanRecords = ref<ReactPlanTaskRecord[]>([])');
     expect(source).toContain('v-for="item in reactPlanTimeline"');

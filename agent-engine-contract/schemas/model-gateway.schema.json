@@ -59,7 +59,7 @@
     },
     "response": {
       "type": "object", "additionalProperties": false,
-      "required": ["contractVersion", "clientRequestId", "requestDigest", "content", "toolCalls", "finishReason", "usage", "replayed"],
+      "required": ["contractVersion", "clientRequestId", "requestDigest", "content", "toolCalls", "finishReason", "usage", "replayed", "resolvedProvider", "resolvedModel", "fallbackUsed"],
       "properties": {
         "contractVersion": { "const": "1.0" },
         "clientRequestId": { "type": "string", "pattern": "^model\\.[a-f0-9]{64}$" },
@@ -75,7 +75,10 @@
             "completionTokens": { "type": "integer", "minimum": 0 }
           }
         },
-        "replayed": { "type": "boolean" }
+        "replayed": { "type": "boolean" },
+        "resolvedProvider": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "resolvedModel": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "fallbackUsed": { "type": "boolean" }
       }
     }
   }

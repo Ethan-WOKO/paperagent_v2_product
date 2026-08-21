@@ -4,12 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineTaskGrantService;
+import com.yanban.api.agent.reactplan.gateway.EngineModelRouteCandidate;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.memory.LongTermMemorySnapshot;
 import com.yanban.api.settings.UserSettingsService;
+import com.yanban.api.skills.ResolvedSkill;
+import com.yanban.api.skills.SkillsService;
 import io.paperagent.v2.contracts.BoundedExecutionHints;
 import io.paperagent.v2.contracts.Capability;
 import io.paperagent.v2.contracts.ExecutionProfile;
@@ -36,6 +39,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -54,6 +58,31 @@ final class ReactPlanRuntimeService {
     private final UserSettingsService settings;
     private final ReactPlanConversationContextService conversations;
     private final ReactPlanConversationSummaryQueue conversationSummaries;
+    private final SkillsService skills;
+
+    @Autowired
+    ReactPlanRuntimeService(
+            ObjectMapper json,
+            AgentTurnProductContextResolver contexts,
+            AuthenticatedReactPlanBootstrapComposer plans,
+            AgentEngineTaskGrantService grants,
+            ReactPlanEngineClient engine,
+            LongTermMemoryRetrievalService longTermMemories,
+            UserSettingsService settings,
+            ReactPlanConversationContextService conversations,
+            ReactPlanConversationSummaryQueue conversationSummaries,
+            SkillsService skills) {
+        this.json = json;
+        this.contexts = contexts;
+        this.plans = plans;
+        this.grants = grants;
+        this.engine = engine;
+        this.longTermMemories = longTermMemories;
+        this.settings = settings;
+        this.conversations = conversations;
+        this.conversationSummaries = conversationSummaries;
+        this.skills = skills;
+    }
 
     ReactPlanRuntimeService(
             ObjectMapper json,
@@ -65,15 +94,8 @@ final class ReactPlanRuntimeService {
             UserSettingsService settings,
             ReactPlanConversationContextService conversations,
             ReactPlanConversationSummaryQueue conversationSummaries) {
-        this.json = json;
-        this.contexts = contexts;
-        this.plans = plans;
-        this.grants = grants;
-        this.engine = engine;
-        this.longTermMemories = longTermMemories;
-        this.settings = settings;
-        this.conversations = conversations;
-        this.conversationSummaries = conversationSummaries;
+        this(json, contexts, plans, grants, engine, longTermMemories, settings,
+                conversations, conversationSummaries, null);
     }
 
     JsonNode submit(long userId, long turnId, ReactPlanTaskRequest request) {
@@ -83,8 +105,12 @@ final class ReactPlanRuntimeService {
                 userId, request.provider(), request.model());
         String provider = endpoint.providerKey();
         String model = endpoint.modelName();
+        List<EngineModelRouteCandidate> modelFallbacks = modelFallbacks(
+                userId, provider, model);
         conversationSummaries.catchUp(userId, context.identity().sessionId());
-        Map<String, Object> authority = authority(context, request.instruction(), provider, model);
+        Map<String, Object> authority = authority(
+                context, request.instruction(), provider, model,
+                modelFallbacks, skillSnapshot(userId, request.skillId()));
         String requestDigest = ReactPlanCanonicalJson.digest(json, authority);
 
         PersistenceResult<?> persisted = plans.bootstrap(
@@ -94,7 +120,8 @@ final class ReactPlanRuntimeService {
                     HttpStatus.CONFLICT, "The authenticated Turn is bound to another Plan request");
         }
         EngineTaskGrant grant = grants.issue(
-                taskId, requestDigest, userId, turnId, provider, model);
+                taskId, requestDigest, userId, turnId, provider, model,
+                modelFallbacks);
         ObjectNode submission = json.createObjectNode();
         submission.put("contractVersion", "1.0");
         submission.put("taskId", taskId);
@@ -197,7 +224,9 @@ final class ReactPlanRuntimeService {
             VerifiedAgentTurnProductContext context,
             String instruction,
             String provider,
-            String model) {
+            String model,
+            List<EngineModelRouteCandidate> modelFallbacks,
+            Map<String, Object> skill) {
         Map<String, Object> project = new LinkedHashMap<>();
         project.put("projectId", String.valueOf(context.identity().projectId()));
         project.put("projectVersion", context.projectVersionId().orElseThrow());
@@ -208,6 +237,8 @@ final class ReactPlanRuntimeService {
         Map<String, Object> selectedModel = new LinkedHashMap<>();
         selectedModel.put("provider", ReactPlanValues.text(provider, "provider"));
         selectedModel.put("model", ReactPlanValues.text(model, "model"));
+        selectedModel.put("fallbacks", modelFallbacks.stream().map(candidate -> Map.of(
+                "provider", candidate.provider(), "model", candidate.model())).toList());
         Map<String, Object> authority = new LinkedHashMap<>();
         authority.put("runMode", "PERSISTENT_PLAN_EXECUTE");
         authority.put("sessionRef", "session." + context.identity().sessionId());
@@ -215,7 +246,34 @@ final class ReactPlanRuntimeService {
         authority.put("instruction", instruction);
         authority.put("permissions", permissions);
         authority.put("model", selectedModel);
+        if (skill != null) authority.put("skill", skill);
         return authority;
+    }
+
+    private List<EngineModelRouteCandidate> modelFallbacks(
+            long userId, String primaryProvider, String primaryModel) {
+        return settings.configuredModelReferences(userId).stream()
+                .filter(reference -> !reference.providerKey().equals(primaryProvider)
+                        || !reference.modelName().equals(primaryModel))
+                .map(reference -> new EngineModelRouteCandidate(
+                        reference.providerKey(), reference.modelName()))
+                .distinct()
+                .limit(7)
+                .toList();
+    }
+
+    private Map<String, Object> skillSnapshot(long userId, String skillId) {
+        if (skillId == null) return null;
+        if (skills == null) throw new IllegalStateException("Skills service is unavailable");
+        ResolvedSkill resolved = skills.resolveEnabledSkill(userId, skillId);
+        List<String> allowedTools = resolved.allowedTools().stream().sorted().toList();
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("id", resolved.id());
+        semantics.put("prompt", resolved.prompt());
+        semantics.put("allowedTools", allowedTools);
+        Map<String, Object> snapshot = new LinkedHashMap<>(semantics);
+        snapshot.put("digest", ReactPlanCanonicalJson.digest(json, semantics));
+        return snapshot;
     }
 
     private static ReactPlanBootstrapCommand planCommand(

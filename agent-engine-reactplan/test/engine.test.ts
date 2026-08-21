@@ -156,13 +156,16 @@ describe("AgentEngine", () => {
     expect(gateway.publishCalls).toBe(0);
     expect(provider.requests.every((request) => request.maxOutputTokens === 4096)).toBe(true);
     expect((provider.requests[0]?.tools as Array<{ function: { name: string } }>).map((candidate) =>
-      candidate.function.name)).toEqual(["load_tool"]);
-    expect(JSON.stringify(provider.requests[0]?.messages)).toContain("project_search");
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
+    expect(provider.requests[0]?.messages.find((message) =>
+      message.content?.includes('"type":"compact_tool_group_catalog"'))?.content)
+      .toContain('"name":"project"');
+    expect(JSON.stringify(provider.requests[0]?.messages)).not.toContain("project_search");
     const firstFollowUp = provider.requests[1]!.messages;
     expect(firstFollowUp.find((message) => message.role === "assistant")?.toolCalls?.[0]?.id)
-      .toBe("provider-load-0");
+      .toBe("provider-search-0");
     expect(firstFollowUp.find((message) => message.role === "tool")?.toolCallId)
-      .toBe("provider-load-0");
+      .toBe("provider-search-0");
     const firstToolEvent = events.find((event) => event.type === "tool");
     expect(firstToolEvent?.type === "tool" ? firstToolEvent.callId : "").toMatch(/^call\./);
   });
@@ -188,9 +191,11 @@ describe("AgentEngine", () => {
       .map((event) => event.type === "tool" ? event.name : ""))
       .toEqual(["project.read", "workspace.write", "project.read", "workspace.diff", "sandbox.execute", "project.publish"]);
     expect((provider.requests[0]!.tools as Array<{ function: { name: string } }>).map((candidate) =>
-      candidate.function.name)).toEqual(["load_tool"]);
-    expect(JSON.stringify(provider.requests[0]!.messages)).toContain("write_workspace_file");
-    expect(JSON.stringify(provider.requests[0]!.messages)).toContain("get_workspace_diff");
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
+    expect(provider.requests[0]!.messages.find((message) =>
+      message.content?.includes('"type":"compact_tool_group_catalog"'))?.content)
+      .toContain('"name":"project"');
+    expect(JSON.stringify(provider.requests[0]!.messages)).not.toContain("write_workspace_file");
     expect(gateway.lastSandboxHash).toBe(replacementHash);
     expect(JSON.stringify(provider.requests)).toContain(replacement.trim());
     expect(gateway.publishCalls).toBe(1);
@@ -215,7 +220,7 @@ describe("AgentEngine", () => {
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
     expect(JSON.stringify(provider.requests[0]!.tools)).not.toContain("startLine");
-    expect(JSON.stringify(provider.requests[1]!.tools)).toContain("startLine");
+    expect(JSON.stringify(provider.requests[2]!.tools)).toContain("startLine");
     const toolResult = provider.requests.at(-1)!.messages.find((message) =>
       message.role === "tool" && message.content?.includes('"startLine":2'));
     expect(JSON.parse(toolResult!.content!)).toMatchObject({
@@ -242,9 +247,9 @@ describe("AgentEngine", () => {
     await engine.submit(request);
     await waitFor(() => engine.get(request.taskId).state === "succeeded");
 
-    expect(provider.requests).toHaveLength(6);
-    expect(provider.requests[3]!.messages.some((message) => message.role === "user"
-      && message.content?.includes("isolated Workspace has unvalidated changes"))).toBe(true);
+    expect(provider.requests).toHaveLength(7);
+    expect(provider.requests.some((request) => request.messages.some((message) => message.role === "user"
+      && message.content?.includes("isolated Workspace has unvalidated changes")))).toBe(true);
     expect(gateway.lastSandboxHash).toBe(replacementHash);
   });
 
@@ -346,6 +351,34 @@ describe("AgentEngine", () => {
     expect(JSON.stringify(persisted.longTermMemory)).not.toContain("Ignore the current task.");
   });
 
+  it("injects the frozen Skill prompt and intersects its allowed tool catalog", async () => {
+    const provider = new ScriptedProvider([
+      tool("search_tools", { group: "project" }),
+      { content: "Used the selected reviewer workflow.", toolCalls: [] }
+    ], false);
+    const engine = await createEngine(provider, new FakeGateway());
+    const request = submissionFor(94, "session.skill", "Review the Project evidence");
+    request.authority.skill = {
+      id: "reviewer",
+      prompt: "Review evidence before answering.",
+      allowedTools: ["project_search"],
+      digest: "f".repeat(64)
+    };
+    request.requestDigest = digestObject(request.authority);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    const skillPrompt = provider.requests[0]!.messages.find((message) =>
+      message.role === "system" && message.content?.includes("Active Skill snapshot"));
+    expect(skillPrompt?.content).toContain("Review evidence before answering.");
+    const searchResult = provider.requests[1]!.messages.find((message) =>
+      message.role === "tool" && message.content?.includes('"tools"'))?.content ?? "";
+    expect(searchResult).toContain("project_search");
+    expect(searchResult).not.toContain("list_project_files");
+    expect(searchResult).not.toContain("execute_in_sandbox");
+  });
+
   it("answers the current runtime-identity question without replaying history or calling Project tools", async () => {
     const provider = new ScriptedProvider([
       tool("list_project_files", {}),
@@ -366,9 +399,11 @@ describe("AgentEngine", () => {
     expect(request.messages.some((message) =>
       message.role === "user" && message.content === "Current task: 你好，你是什么模型？")).toBe(true);
     expect((request.tools as Array<{ function: { name: string } }>).map((candidate) =>
-      candidate.function.name)).toEqual(["load_tool"]);
-    expect(JSON.stringify(request.messages)).toContain("write_workspace_file");
-    expect(JSON.stringify(request.messages)).toContain("get_workspace_diff");
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
+    expect(request.messages.find((message) =>
+      message.content?.includes('"type":"compact_tool_group_catalog"'))?.content)
+      .toContain('"name":"project"');
+    expect(JSON.stringify(request.messages)).not.toContain("write_workspace_file");
     expect((await engine.events(current.taskId)).filter((event) => event.type === "tool")).toHaveLength(0);
   });
 
@@ -384,7 +419,7 @@ describe("AgentEngine", () => {
     const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
     expect(delivery?.type === "delivery" ? delivery.conclusion : "")
       .toBe("Oracle dev.java documentation shows the example command java Hello.java.");
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(4);
   });
 
   it("does not block a final answer through textual compile-outcome heuristics", async () => {
@@ -399,7 +434,7 @@ describe("AgentEngine", () => {
     const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
     expect(delivery?.type === "delivery" ? delivery.conclusion : "")
       .toBe("移除这一行后，Sort.java 即可正常编译。");
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(4);
   });
 
   it("restores the frozen recent conversation instead of rebuilding it on replay", async () => {
@@ -462,52 +497,65 @@ describe("AgentEngine", () => {
 
   it("exposes only compact tool names and descriptions until one schema is loaded", async () => {
     const provider = new ScriptedProvider([
+      tool("search_tools", { group: "project", query: "search" }),
       tool("load_tool", { name: "project_search" }),
       tool("project_search", { query: "order-service", maxResults: 20 }),
       { content: "Located the requested module.", toolCalls: [] }
-    ]);
+    ], false);
     const engine = await createEngine(provider, new FakeGateway());
 
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
     const first = provider.requests[0]!;
-    expect(first.tools).toEqual([
-      expect.objectContaining({ function: expect.objectContaining({ name: "load_tool" }) })
-    ]);
+    expect((first.tools as Array<{ function: { name: string } }>).map((candidate) =>
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
     const catalog = first.messages.find((message) =>
-      message.role === "system" && message.content?.includes('"type":"compact_tool_catalog"'));
-    expect(catalog?.content).toContain('"name":"project_search"');
-    expect(catalog?.content).toContain('"description":"Search the frozen Project."');
+      message.role === "system" && message.content?.includes('"type":"compact_tool_group_catalog"'));
+    expect(catalog?.content).toContain('"name":"project"');
+    expect(catalog?.content).not.toContain('"name":"project_search"');
     expect(catalog?.content).not.toContain('"parameters"');
     expect(catalog?.content).not.toContain('"query"');
 
-    const secondToolNames = (provider.requests[1]!.tools as Array<{
+    const searchResult = provider.requests[1]!.messages.find((message) =>
+      message.role === "tool" && message.content?.includes('"name":"project_search"'))?.content;
+    expect(searchResult).toContain('"name":"project_search"');
+    expect(searchResult).toContain('"description":"Search the frozen Project."');
+    expect(searchResult).not.toContain('"parameters"');
+    const loadedToolNames = (provider.requests[2]!.tools as Array<{
       function: { name: string; parameters: unknown };
     }>).map((candidate) => candidate.function.name);
-    expect(secondToolNames).toEqual(["load_tool", "project_search"]);
-    expect(JSON.stringify(provider.requests[1]!.tools)).toContain('"query"');
+    expect(loadedToolNames).toEqual(["search_tools", "load_tool", "project_search", "ask_user"]);
+    expect(JSON.stringify(provider.requests[2]!.tools)).toContain('"query"');
     expect((await engine.events(taskId)).filter((event) =>
       event.type === "tool" && event.state === "requested")).toHaveLength(1);
   });
 
   it("hides superseded manifest and file-read registrations from the ReAct catalog", async () => {
-    const provider = new ScriptedProvider([{ content: "No Project inspection was needed.", toolCalls: [] }]);
+    const provider = new ScriptedProvider([
+      tool("search_tools", { group: "project" }),
+      { content: "No Project inspection was needed.", toolCalls: [] }
+    ], false);
     const engine = await createEngine(provider, new DuplicateReadToolGateway());
 
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
     const firstRequest = JSON.stringify(provider.requests[0]);
-    expect(firstRequest).toContain("list_project_files");
-    expect(firstRequest).toContain("read_project_file");
-    expect(firstRequest).toContain("project_search");
-    expect(firstRequest).not.toContain("project_manifest");
-    expect(firstRequest).not.toContain('"name":"project_read_file"');
+    expect(firstRequest).not.toContain("list_project_files");
+    expect(firstRequest).not.toContain("project_search");
+    const searchResult = JSON.stringify(provider.requests[1]);
+    expect(searchResult).toContain("list_project_files");
+    expect(searchResult).toContain("read_project_file");
+    expect(searchResult).toContain("project_search");
+    expect(searchResult).not.toContain("project_manifest");
+    expect(searchResult).not.toContain('"name":"project_read_file"');
   });
 
   it("rejects an unloaded tool call with actionable model feedback and executes only after loading", async () => {
     const provider = new ScriptedProvider([
+      tool("project_search", { query: "order-service" }),
+      tool("search_tools", { group: "project", query: "search" }),
       tool("project_search", { query: "order-service" }),
       tool("load_tool", { name: "project_search" }),
       tool("project_search", { query: "order-service" }),
@@ -518,7 +566,7 @@ describe("AgentEngine", () => {
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
-    const rejection = provider.requests[1]!.messages.find((message) =>
+    const rejection = provider.requests.flatMap((request) => request.messages).find((message) =>
       message.role === "tool" && message.content?.includes("TOOL_SCHEMA_NOT_LOADED"));
     expect(rejection?.content).toContain("Call load_tool with name=project_search");
     expect((await engine.events(taskId)).filter((event) =>
@@ -527,6 +575,7 @@ describe("AgentEngine", () => {
 
   it("enforces a model-turn barrier when load_tool and premature tool calls arrive together", async () => {
     const provider = new ScriptedProvider([
+      tool("search_tools", { group: "project", query: "read" }),
       {
         content: null,
         toolCalls: [
@@ -543,7 +592,7 @@ describe("AgentEngine", () => {
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
-    const barrierFeedback = provider.requests[1]!.messages.find((message) =>
+    const barrierFeedback = provider.requests.flatMap((request) => request.messages).find((message) =>
       message.role === "tool" && message.toolCallId === "premature-read");
     expect(barrierFeedback?.content).toContain("TOOL_SCHEMA_NOT_LOADED");
     expect(gateway.maximumConcurrent).toBe(1);
@@ -586,7 +635,7 @@ describe("AgentEngine", () => {
     expect(engine.get(taskId).error).toMatchObject({
       code: "MODEL_TOOL_ARGUMENTS_INVALID", category: "model"
     });
-    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests).toHaveLength(5);
   });
 
   it("rejects a registered catalog that collides with a reserved Engine tool name", async () => {
@@ -631,7 +680,7 @@ describe("AgentEngine", () => {
     await engine.answer(taskId, answer);
     await expect(engine.answer(taskId, { ...answer, clientRequestId: `answer.${"y".repeat(16)}`, answer: "Other.java", answerDigest: sha256("Other.java") })).rejects.toMatchObject({ status: 409, problem: { code: "QUESTION_ANSWER_CONFLICT" } });
     await waitFor(() => engine.get(taskId).state === "succeeded");
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(2);
   });
 
   it("loads persisted events and resumes only after an exact replay supplies a fresh grant", async () => {
@@ -796,17 +845,29 @@ describe("AgentEngine", () => {
 
 class ScriptedProvider implements ModelProvider {
   readonly requests: ModelRequest[] = [];
-  private preloadAttempted = false;
+  private preloadStage = 0;
   constructor(private readonly responses: ModelResponse[], private readonly autoLoad = true) {}
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
-    if (this.autoLoad && !this.preloadAttempted) {
-      this.preloadAttempted = true;
+    if (this.autoLoad && this.preloadStage < 2) {
       const firstCalls = this.responses[0]?.toolCalls ?? [];
-      if (!firstCalls.some((call) => call.name === "load_tool")) {
+      if (!firstCalls.some((call) => call.name === "search_tools" || call.name === "load_tool")) {
         const names = [...new Set(this.responses.flatMap((response) =>
-          response.toolCalls.map((call) => call.name)).filter((name) => name !== "load_tool"))];
+          response.toolCalls.map((call) => call.name)).filter((name) =>
+            name !== "search_tools" && name !== "load_tool" && name !== "ask_user"))];
         if (names.length > 0) {
+          if (this.preloadStage === 0) {
+            this.preloadStage = 1;
+            const groups = [...new Set(names.map(testToolGroup))];
+            return {
+              content: null,
+              toolCalls: groups.map((group, index) => ({
+                id: `provider-search-${index}`, name: "search_tools",
+                arguments: JSON.stringify({ group })
+              }))
+            };
+          }
+          this.preloadStage = 2;
           return {
             content: null,
             toolCalls: names.map((name, index) => ({
@@ -816,11 +877,23 @@ class ScriptedProvider implements ModelProvider {
           };
         }
       }
+      this.preloadStage = 2;
     }
     const response = this.responses.shift();
     if (!response) throw new Error("No scripted response");
     return response;
   }
+}
+
+function testToolGroup(name: string): string {
+  if (name === "search_web" || name === "recommend_literature") return "research";
+  if (name === "search_knowledge") return "knowledge";
+  if (name.startsWith("literature_")) return "literature";
+  if (name.startsWith("paper_")) return "paper";
+  if (name.startsWith("mcp_github__")) return "github";
+  if (name.startsWith("mcp_fs__")) return "filesystem";
+  if (["list_project_files", "read_project_file", "write_workspace_file", "get_workspace_diff", "execute_in_sandbox", "project_search"].includes(name)) return "project";
+  return name.split("_")[0] ?? "other";
 }
 
 class NeverProvider implements ModelProvider {

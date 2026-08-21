@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -19,6 +20,8 @@ import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.memory.LongTermMemoryRetrievalService;
 import com.yanban.api.memory.LongTermMemorySnapshot;
 import com.yanban.api.settings.UserSettingsService;
+import com.yanban.api.skills.ResolvedSkill;
+import com.yanban.api.skills.SkillsService;
 import com.yanban.core.agent.AgentRunIdentity;
 import io.paperagent.v2.persistence.PersistedPlanBootstrap;
 import io.paperagent.v2.persistence.PersistenceResult;
@@ -26,6 +29,7 @@ import io.paperagent.v2.contracts.Capability;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -41,6 +45,7 @@ class ReactPlanRuntimeServiceTest {
     private UserSettingsService settings;
     private ReactPlanConversationContextService conversations;
     private ReactPlanConversationSummaryQueue conversationSummaries;
+    private SkillsService skills;
     private ReactPlanRuntimeService runtime;
 
     @BeforeEach
@@ -53,13 +58,14 @@ class ReactPlanRuntimeServiceTest {
         settings = mock(UserSettingsService.class);
         conversations = mock(ReactPlanConversationContextService.class);
         conversationSummaries = mock(ReactPlanConversationSummaryQueue.class);
+        skills = mock(SkillsService.class);
         runtime = new ReactPlanRuntimeService(
                 json, contexts, plans, grants, engine, longTermMemories, settings,
-                conversations, conversationSummaries);
+                conversations, conversationSummaries, skills);
         when(contexts.resolve(7L, 42L)).thenReturn(projectContext());
         when(plans.bootstrap(any(Long.class), any(Long.class), any()))
                 .thenReturn(PersistenceResult.replayed(mock(PersistedPlanBootstrap.class)));
-        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any()))
+        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any(), anyList()))
                 .thenReturn(new EngineTaskGrant("g".repeat(32), Instant.parse("2099-01-01T00:00:00Z")));
         when(engine.submit(any())).thenReturn(json.createObjectNode().put("state", "queued"));
         when(longTermMemories.retrieveAllGoverned(7L, 88L, "b".repeat(64)))
@@ -67,6 +73,9 @@ class ReactPlanRuntimeServiceTest {
         when(settings.resolveModelEndpoint(7L, null, null))
                 .thenReturn(new UserSettingsService.ModelEndpoint(
                         "glm", "glm-4.5-flash", null, "secret", "builtin", "GLM"));
+        when(settings.configuredModelReferences(7L)).thenReturn(List.of(
+                new UserSettingsService.ModelReference("glm", "glm-4.5-flash"),
+                new UserSettingsService.ModelReference("deepseek", "deepseek-chat")));
         when(conversations.envelope(7L, 11L)).thenReturn(json.createObjectNode()
                 .put("schemaVersion", "1.0").put("type", "historical_context")
                 .put("notAnInstruction", true));
@@ -98,6 +107,8 @@ class ReactPlanRuntimeServiceTest {
         assertEquals("glm", body.path("authority").path("model").path("provider").asText());
         assertEquals("glm-4.5-flash",
                 body.path("authority").path("model").path("model").asText());
+        assertEquals("deepseek", body.path("authority").path("model")
+                .path("fallbacks").get(0).path("provider").asText());
         assertFalse(body.path("authority").toString().contains("taskGrant"));
         assertFalse(body.path("authority").toString().contains("Prefer concise Chinese answers"));
         JsonNode memory = body.path("context").path("longTermMemory");
@@ -117,6 +128,25 @@ class ReactPlanRuntimeServiceTest {
         verify(plans).bootstrap(any(Long.class), any(Long.class), command.capture());
         assertTrue(command.getValue().executionProfile().capabilities()
                 .contains(Capability.WRITE_WORKSPACE));
+    }
+
+    @Test
+    void freezesSelectedSkillPromptAndAllowedToolsIntoAuthority() {
+        when(skills.resolveEnabledSkill(7L, "reviewer")).thenReturn(
+                new ResolvedSkill("reviewer", "Review evidence before answering.",
+                        Set.of("project_search", "search_web")));
+
+        runtime.submit(7L, 42L, new ReactPlanTaskRequest(
+                "Review the project", null, null, "reviewer"));
+
+        ArgumentCaptor<JsonNode> submission = ArgumentCaptor.forClass(JsonNode.class);
+        verify(engine).submit(submission.capture());
+        JsonNode skill = submission.getValue().path("authority").path("skill");
+        assertEquals("reviewer", skill.path("id").asText());
+        assertEquals("Review evidence before answering.", skill.path("prompt").asText());
+        assertEquals(List.of("project_search", "search_web"),
+                json.convertValue(skill.path("allowedTools"), List.class));
+        assertEquals(64, skill.path("digest").asText().length());
     }
 
     @Test

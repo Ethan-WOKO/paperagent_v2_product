@@ -4,7 +4,8 @@ public record ReactPlanSessionTaskRequest(
         String clientRequestId,
         String instruction,
         String provider,
-        String model) {
+        String model,
+        String skillId) {
 
     public ReactPlanSessionTaskRequest {
         if (clientRequestId == null
@@ -15,6 +16,11 @@ public record ReactPlanSessionTaskRequest(
     }
 
     ReactPlanTaskRequest taskRequest() {
-        return new ReactPlanTaskRequest(instruction, provider, model);
+        return new ReactPlanTaskRequest(instruction, provider, model, skillId);
+    }
+
+    public ReactPlanSessionTaskRequest(String clientRequestId, String instruction,
+                                       String provider, String model) {
+        this(clientRequestId, instruction, provider, model, null);
     }
 }
