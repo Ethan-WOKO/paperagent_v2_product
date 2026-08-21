@@ -67,7 +67,7 @@ class ReactPlanTaskSchedulerServiceTest {
     void staleWorkerCannotRenewAfterTheFenceChanges() {
         ReactPlanTaskCheckpointEntity task = task("c", 9L, 90L);
         when(checkpoints.findClaimable(any(), any())).thenReturn(List.of(task));
-        when(checkpoints.findLockedByTaskId(task.taskId())).thenReturn(java.util.Optional.of(task));
+        when(checkpoints.existsById(task.taskId())).thenReturn(true);
         when(checkpoints.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any(), anyList()))
                 .thenReturn(new EngineTaskGrant("g".repeat(40), Instant.parse("2026-08-18T00:05:00Z")));
@@ -75,9 +75,26 @@ class ReactPlanTaskSchedulerServiceTest {
 
         ReactPlanTaskSchedulerService.Lease stale = new ReactPlanTaskSchedulerService.Lease(
                 claimed.lease().owner(), claimed.lease().token(), claimed.lease().fence() - 1);
+        jdbc.renewUpdateCount = 0;
         assertThatThrownBy(() -> scheduler.renew(task.taskId(), stale))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("TASK_LEASE_LOST");
+    }
+
+    @Test
+    void renewsOnlyLeaseColumnsWithoutSavingTheCheckpointEntity() {
+        String taskId = "task." + "d".repeat(64);
+        ReactPlanTaskSchedulerService.Lease lease = new ReactPlanTaskSchedulerService.Lease(
+                "engine.worker_one", "lease-token", 3L);
+        jdbc.cancellationRequested = true;
+
+        ReactPlanTaskSchedulerService.LeaseHeartbeat heartbeat = scheduler.renew(taskId, lease);
+
+        assertThat(heartbeat.cancellationRequested()).isTrue();
+        assertThat(jdbc.lastUpdateSql).contains("set lease_expires_at=?, updated_at=?")
+                .doesNotContain("checkpoint_json");
+        assertThat(jdbc.lastUpdateArgs).contains(taskId, lease.owner(), lease.token(), lease.fence());
+        verify(checkpoints, org.mockito.Mockito.never()).saveAndFlush(any());
     }
 
     @Test
@@ -103,6 +120,10 @@ class ReactPlanTaskSchedulerServiceTest {
 
     private static final class FakeJdbc extends JdbcTemplate {
         int globalActive;
+        int renewUpdateCount = 1;
+        boolean cancellationRequested;
+        String lastUpdateSql;
+        List<Object> lastUpdateArgs = List.of();
         final Map<Long, Integer> activeByUser = new HashMap<>();
         final Map<Long, Integer> admittedByUser = new HashMap<>();
 
@@ -117,6 +138,7 @@ class ReactPlanTaskSchedulerServiceTest {
 
         @Override
         public <T> T queryForObject(String sql, Class<T> type, Object... args) {
+            if (type == Boolean.class) return type.cast(cancellationRequested);
             int value;
             if (sql.contains("lease_expires_at") && args.length == 1) {
                 value = globalActive;
@@ -128,6 +150,13 @@ class ReactPlanTaskSchedulerServiceTest {
                         : activeByUser.getOrDefault(userId, 0);
             }
             return type.cast(value);
+        }
+
+        @Override
+        public int update(String sql, Object... args) {
+            lastUpdateSql = sql;
+            lastUpdateArgs = List.of(args);
+            return renewUpdateCount;
         }
     }
 }

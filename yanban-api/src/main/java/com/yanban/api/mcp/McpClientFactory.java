@@ -31,13 +31,14 @@ public class McpClientFactory {
         return new DefaultMcpStdioClient(toConfig(kind, settings));
     }
 
-    private McpServerProcessConfig toConfig(McpServerKind kind, SysUserSettings settings) {
+    McpServerProcessConfig toConfig(McpServerKind kind, SysUserSettings settings) {
         McpProperties.ServerProperties source = kind == McpServerKind.GITHUB ? properties.getGithub() : properties.getFilesystem();
         List<String> command = new ArrayList<>(source.getCommand());
         Map<String, String> environment = new HashMap<>(source.getEnvironment());
         if (kind == McpServerKind.GITHUB && settings != null) {
             String pat = userSettingsService.decryptGithubPat(settings);
             if (pat != null && !pat.isBlank()) {
+                environment.put("GITHUB_PERSONAL_ACCESS_TOKEN", pat);
                 environment.put("GITHUB_TOKEN", pat);
             }
         }

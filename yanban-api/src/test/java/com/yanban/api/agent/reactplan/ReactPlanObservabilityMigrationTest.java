@@ -28,4 +28,16 @@ class ReactPlanObservabilityMigrationTest {
         assertThat(sql).contains("usage_settled", "settled_prompt_tokens",
                 "settled_completion_tokens", "update reactplan_task_checkpoints");
     }
+
+    @Test
+    void v97MovesQuotaChargingBehindADurableIdempotentTaskBoundary() throws Exception {
+        String sql;
+        try (var stream = getClass().getResourceAsStream(
+                "/db/migration/V97__create_reactplan_usage_settlements.sql")) {
+            sql = new String(stream.readAllBytes(), StandardCharsets.UTF_8).toLowerCase();
+        }
+        assertThat(sql).contains("create table reactplan_usage_settlements",
+                "primary key (task_id)", "state in ('pending','settled')");
+        assertThat(sql).doesNotContain("foreign key");
+    }
 }

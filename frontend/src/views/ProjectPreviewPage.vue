@@ -909,10 +909,11 @@ let reactPlanReconnectTimer: number | null = null;
 let reactPlanClockTimer: number | null = null;
 let reactPlanSessionPollTimer: number | null = null;
 let reactPlanSessionRefreshProjectId: number | null = null;
-const reactPlanQuestion = computed(() => latestReactPlanQuestion(
-  reactPlanRecord.value?.events ?? [],
-  reactPlanRecord.value?.view.pendingQuestionId,
-));
+const reactPlanQuestion = computed(() => {
+  const record = reactPlanRecord.value;
+  if (!record || record.view.state !== 'waiting_user') return null;
+  return latestReactPlanQuestion(record.events, record.view.pendingQuestionId);
+});
 const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => ({
   record,
   durationLabel: `${isReactPlanTerminal(record.view.state) ? '用时' : '已用时'} ${formatReactPlanDuration(
@@ -2245,7 +2246,8 @@ async function answerCurrentReactPlanQuestion() {
   const record = reactPlanRecord.value;
   const question = reactPlanQuestion.value;
   const answer = reactPlanInput.value.trim();
-  if (!record || !question || !answer || reactPlanAnswering.value) return;
+  if (!record || record.view.state !== 'waiting_user'
+      || !question || !answer || reactPlanAnswering.value) return;
   const epoch = projectEpoch;
   reactPlanAnswering.value = true;
   reactPlanError.value = '';
@@ -2296,7 +2298,9 @@ async function cancelCurrentReactPlanTask() {
 }
 
 function sendReactPlanTask() {
-  if (reactPlanQuestion.value) void answerCurrentReactPlanQuestion();
+  if (reactPlanRecord.value?.view.state === 'waiting_user' && reactPlanQuestion.value) {
+    void answerCurrentReactPlanQuestion();
+  }
   else void submitReactPlanTask();
 }
 

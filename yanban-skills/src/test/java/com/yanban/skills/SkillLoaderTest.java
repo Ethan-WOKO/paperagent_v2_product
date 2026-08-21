@@ -14,8 +14,12 @@ class SkillLoaderTest {
                 .findFirst()
                 .orElseThrow();
 
-        assertThat(skill.prompt()).contains("专注于代码审查");
-        assertThat(skill.allowedTools()).contains("mcp_fs__read_file");
+        assertThat(skill.prompt())
+                .contains("专注于代码审查")
+                .contains("search_tools")
+                .contains("不得调用任何 `mcp_fs__*` 工具");
+        assertThat(skill.allowedTools()).containsExactly(
+                "list_project_files", "read_project_file", "execute_in_sandbox");
         assertThat(skill.builtin()).isTrue();
     }
 }

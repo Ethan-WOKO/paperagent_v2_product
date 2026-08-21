@@ -25,7 +25,6 @@
 - `DEEPSEEK_API_KEY`：DeepSeek 对话
 - `GLM_API_KEY`：智谱 GLM Provider
 - `DASHSCOPE_API_KEY`：DashScope Embedding 与知识库 `qwen3-rerank`
-- `GITHUB_TOKEN`：GitHub MCP（也可通过设置页写入）
 
 知识库生产检索默认使用训练集选出的加权 RRF（BM25 `0.5`、向量 `1.0`、rank constant
 `10`）生成最多 50 个候选，再将排名前 20 的候选交给 `qwen3-rerank`。未配置 `DASHSCOPE_API_KEY`、接口超时、
@@ -152,7 +151,7 @@ npx -y @modelcontextprotocol/server-github
 说明：
 
 - GitHub PAT 可通过设置页写入后端加密保存。
-- 运行时后端会注入为 `GITHUB_TOKEN`。
+- 运行时后端会注入为官方变量 `GITHUB_PERSONAL_ACCESS_TOKEN`，并保留 `GITHUB_TOKEN` 兼容别名。
 - 后端会检查可执行命令是否落在 allowlist 中，防止任意命令注入。
 - 在 Windows + IDEA + Java `ProcessBuilder` 场景下，直接使用 `npx` 可能无法稳定拉起子进程，因此默认推荐使用 `cmd /c npx ...`。
 

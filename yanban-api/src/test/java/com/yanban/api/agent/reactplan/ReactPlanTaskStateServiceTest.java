@@ -17,7 +17,6 @@ import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.reactplan.gateway.EngineModelRouteCandidate;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
-import com.yanban.api.quota.UserQuotaService;
 import com.yanban.core.agent.AgentRunIdentity;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -38,12 +37,14 @@ class ReactPlanTaskStateServiceTest {
     private final AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
     private final AgentEngineTaskGrantService grants = mock(AgentEngineTaskGrantService.class);
     private final AgentEngineObservationReader observations = mock(AgentEngineObservationReader.class);
-    private final UserQuotaService quotas = mock(UserQuotaService.class);
+    private final ReactPlanUsageSettlementRepository usageSettlements =
+            mock(ReactPlanUsageSettlementRepository.class);
     private final ReactPlanTaskSchedulerService scheduler = mock(ReactPlanTaskSchedulerService.class);
     private final org.springframework.context.ApplicationEventPublisher applicationEvents =
             mock(org.springframework.context.ApplicationEventPublisher.class);
     private final ReactPlanTaskStateService service = new ReactPlanTaskStateService(
-            json, checkpoints, events, intakes, contexts, grants, observations, quotas,
+            json, checkpoints, events, intakes, contexts, grants, observations,
+            usageSettlements,
             scheduler, applicationEvents);
     private final String taskId = ReactPlanRuntimeService.taskId(7L, 42L);
 
@@ -163,7 +164,10 @@ class ReactPlanTaskStateServiceTest {
         assertThat(service.save(taskId, digest, 1L, succeeded, null)).isEqualTo(2L);
         assertThat(service.save(taskId, digest, 2L, succeeded, null)).isEqualTo(3L);
 
-        verify(quotas, times(1)).recordTaskUsage(7L, "REACT_PLAN", 19L, 5L);
+        verify(usageSettlements, times(1)).save(
+                any(ReactPlanUsageSettlementEntity.class));
+        verify(applicationEvents, times(1)).publishEvent(
+                any(ReactPlanUsageSettlementRequested.class));
         verify(applicationEvents, times(1)).publishEvent(
                 any(ReactPlanConversationSummaryRequested.class));
         assertThat(persisted.usageSettled()).isTrue();

@@ -9,7 +9,6 @@ import com.yanban.api.agent.reactplan.gateway.EngineModelRouteCandidate;
 import com.yanban.api.agent.reactplan.gateway.EngineTaskGrant;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
-import com.yanban.api.quota.UserQuotaService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -46,7 +45,7 @@ class ReactPlanTaskStateService {
     private final AgentTurnProductContextResolver contexts;
     private final AgentEngineTaskGrantService grants;
     private final AgentEngineObservationReader observations;
-    private final UserQuotaService quotas;
+    private final ReactPlanUsageSettlementRepository usageSettlements;
     private final ReactPlanTaskSchedulerService scheduler;
     private final ApplicationEventPublisher applicationEvents;
 
@@ -57,7 +56,7 @@ class ReactPlanTaskStateService {
                               AgentTurnProductContextResolver contexts,
                               AgentEngineTaskGrantService grants,
                               AgentEngineObservationReader observations,
-                              UserQuotaService quotas,
+                              ReactPlanUsageSettlementRepository usageSettlements,
                               ReactPlanTaskSchedulerService scheduler,
                               ApplicationEventPublisher applicationEvents) {
         this.json = json;
@@ -67,7 +66,7 @@ class ReactPlanTaskStateService {
         this.contexts = contexts;
         this.grants = grants;
         this.observations = observations;
-        this.quotas = quotas;
+        this.usageSettlements = usageSettlements;
         this.scheduler = scheduler;
         this.applicationEvents = applicationEvents;
     }
@@ -131,9 +130,13 @@ class ReactPlanTaskStateService {
             promptTokens = safeAdd(promptTokens, model.promptTokens());
             completionTokens = safeAdd(completionTokens, model.completionTokens());
         }
-        quotas.recordTaskUsage(checkpoint.userId(), "REACT_PLAN", promptTokens, completionTokens);
         checkpoint.settleUsage(promptTokens, completionTokens);
-        log.info("reactplan_usage taskId={} traceId={} outcome=settled promptTokens={} completionTokens={}",
+        usageSettlements.save(new ReactPlanUsageSettlementEntity(
+                checkpoint.taskId(), checkpoint.userId(), promptTokens, completionTokens,
+                LocalDateTime.now(ZoneOffset.UTC)));
+        applicationEvents.publishEvent(new ReactPlanUsageSettlementRequested(
+                checkpoint.taskId()));
+        log.info("reactplan_usage taskId={} traceId={} outcome=queued promptTokens={} completionTokens={}",
                 checkpoint.taskId(), ReactPlanTraceIds.forTask(checkpoint.taskId()),
                 promptTokens, completionTokens);
         return true;
