@@ -135,6 +135,33 @@ public class PaperPreviewService {
         return saved;
     }
 
+    @Transactional
+    public List<PaperSection> updateSectionRevisionStatuses(Long userId,
+                                                            Long taskId,
+                                                            List<Long> sectionIds,
+                                                            String status) {
+        PaperTask task = assertOwned(userId, taskId);
+        String normalized = normalizeRevisionStatus(status);
+        Set<Long> requestedIds = sectionIds == null ? Set.of() : sectionIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (requestedIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "section ids are required");
+        }
+        List<PaperSection> taskSections = sections.findByTaskIdOrderByOrderIndexAsc(taskId);
+        Map<Long, PaperSection> byId = taskSections.stream()
+                .filter(section -> section.getId() != null)
+                .collect(Collectors.toMap(PaperSection::getId, section -> section));
+        if (!byId.keySet().containsAll(requestedIds)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "one or more paper sections were not found");
+        }
+        List<PaperSection> changed = requestedIds.stream().map(byId::get).toList();
+        changed.forEach(section -> section.setRevisionStatus(normalized));
+        List<PaperSection> saved = sections.saveAll(changed);
+        refreshArtifacts(task, true);
+        return saved;
+    }
+
     @Transactional(readOnly = true)
     public List<PaperTaskArtifact> listArtifacts(Long userId, Long taskId) {
         assertOwned(userId, taskId);

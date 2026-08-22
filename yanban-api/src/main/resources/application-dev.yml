@@ -100,6 +100,9 @@ yanban:
       model: ${YANBAN_PAPER_MODEL:}
       api-url: ${YANBAN_PAPER_MODEL_API_URL:}
       api-key: ${YANBAN_PAPER_MODEL_API_KEY:}
+      timeout: ${YANBAN_PAPER_MODEL_TIMEOUT:180s}
+    polish:
+      concurrency: ${YANBAN_PAPER_POLISH_CONCURRENCY:2}
     storage:
       bucket: ${YANBAN_PAPER_BUCKET:${YANBAN_MINIO_BUCKET:yanban-agent}}
       object-prefix: ${YANBAN_PAPER_OBJECT_PREFIX:paper/originals}

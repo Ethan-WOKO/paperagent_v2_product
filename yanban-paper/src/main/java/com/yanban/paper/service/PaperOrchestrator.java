@@ -28,8 +28,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -75,6 +77,7 @@ public class PaperOrchestrator {
     private final PaperCitationClosureService citationClosureService;
     private final PaperGlobalReviewService globalReviewService;
     private final Executor paperTaskExecutor;
+    private final Executor paperSectionPolishExecutor;
     private final AgentTaskEventRecorder taskEvents;
     private final AgentTaskRegistry agentTaskRegistry;
     private final Map<Long, ControlState> controlStates = new ConcurrentHashMap<>();
@@ -117,6 +120,7 @@ public class PaperOrchestrator {
                 null,
                 null,
                 paperTaskExecutor,
+                Runnable::run,
                 taskEvents,
                 null);
     }
@@ -143,7 +147,7 @@ public class PaperOrchestrator {
         this(tasks, rounds, sections, artifacts, clarifications, eventStreamService, paperStorageService,
                 latexParserService, roleRecognitionService, clarificationService, researchProfileService,
                 introductionAnalysisService, literatureService, gapAnalysisService, sectionPolishService,
-                assembleService, null, null, paperTaskExecutor, taskEvents, agentTaskRegistry);
+                assembleService, null, null, paperTaskExecutor, Runnable::run, taskEvents, agentTaskRegistry);
     }
 
     @Autowired
@@ -166,6 +170,7 @@ public class PaperOrchestrator {
                              PaperCitationClosureService citationClosureService,
                              PaperGlobalReviewService globalReviewService,
                              @Qualifier("paperTaskExecutor") Executor paperTaskExecutor,
+                             @Qualifier("paperSectionPolishExecutor") Executor paperSectionPolishExecutor,
                              AgentTaskEventRecorder taskEvents,
                              AgentTaskRegistry agentTaskRegistry) {
         this.tasks = tasks;
@@ -187,6 +192,7 @@ public class PaperOrchestrator {
         this.citationClosureService = citationClosureService;
         this.globalReviewService = globalReviewService;
         this.paperTaskExecutor = paperTaskExecutor;
+        this.paperSectionPolishExecutor = paperSectionPolishExecutor;
         this.taskEvents = taskEvents;
         this.agentTaskRegistry = agentTaskRegistry;
     }
@@ -365,6 +371,9 @@ public class PaperOrchestrator {
             publishProgress("gap_start", taskId, "开始生成 Gap 分析与建议", "GAP_ANALYSIS", 0, 1, null, null, null, 72);
             List<GapSuggestionResult> gapSuggestions = gapAnalysisService.generateAndSave(
                     taskId, structureSummary(document, roles), task.getTargetLanguage(), document);
+            if (gapSuggestions.isEmpty() && gapAnalysisService.isDegradedWithoutSuggestions(taskId)) {
+                throw new IllegalStateException("Gap analysis returned no usable model response after retry; selected literature was preserved for retry.");
+            }
             LatexDocument markedDocument = gapAnalysisService.markCitationSlots(document, gapSuggestions);
             if (markedDocument != null) document = markedDocument;
             checkpoint(taskId);
@@ -414,7 +423,7 @@ public class PaperOrchestrator {
             }
         } catch (TaskStoppedException ex) {
             transitionCancelled(taskId, ex.getMessage());
-        } catch (Exception ex) {
+        } catch (Exception | LinkageError ex) {
             if (isCancellationRequested(taskId)) {
                 transitionCancelled(taskId, "任务已取消");
                 return;
@@ -487,30 +496,50 @@ public class PaperOrchestrator {
     }
 
     private int polishSections(PaperTask task, LatexDocument document) {
-        int processed = 0;
         Long taskId = task.getId();
         int total = document.sections().size();
         int scoreThreshold = scoreThreshold(task);
         int maxRounds = maxRounds(task);
         int innerMaxAttempts = innerMaxAttempts(task);
+        AtomicInteger completed = new AtomicInteger();
+        List<CompletableFuture<Void>> futures = new java.util.ArrayList<>(total);
         for (LatexSection section : document.sections()) {
-            checkpoint(taskId);
-            SectionPolishResult sectionResult = null;
-            publishProgress("section_polish_start", taskId, "润色章节：" + section.title(), "POLISH", processed, total, section.title(), 0, maxRounds, null);
-            try {
-                sectionPolishService.setSectionContext(sectionContext(document, section));
-                sectionResult = sectionPolishService.polishSection(taskId, section, task.getTargetLanguage(),
-                        scoreThreshold, maxRounds, innerMaxAttempts);
-            } catch (Exception ex) {
-                log.warn("Skip polishing section {} of task {} due to error", section.title(), taskId, ex);
-                markSectionFailed(task, section, ex, maxRounds, innerMaxAttempts);
-                publishProgress("section_polish_skipped", taskId, "章节润色失败，已保留原文：" + section.title(), "POLISH", processed, total, section.title(), maxRounds, maxRounds, null);
-            }
-            processed++;
-            int completedAttempts = sectionResult == null ? maxRounds : sectionResult.attempts();
-            publishProgress("section_polish_complete", taskId, "章节处理完成：" + section.title(), "POLISH", processed, total, section.title(), completedAttempts, maxRounds, null);
+            PaperSectionPolishService.SectionContext context = sectionContext(document, section);
+            futures.add(CompletableFuture.runAsync(
+                    () -> polishSection(task, section, context, scoreThreshold, maxRounds,
+                            innerMaxAttempts, completed, total),
+                    paperSectionPolishExecutor));
         }
-        return processed;
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+        return completed.get();
+    }
+
+    private void polishSection(PaperTask task,
+                               LatexSection section,
+                               PaperSectionPolishService.SectionContext context,
+                               int scoreThreshold,
+                               int maxRounds,
+                               int innerMaxAttempts,
+                               AtomicInteger completed,
+                               int total) {
+        Long taskId = task.getId();
+        checkpoint(taskId);
+        publishProgress("section_polish_start", taskId, "润色章节：" + section.title(), "POLISH",
+                completed.get(), total, section.title(), 0, maxRounds, null);
+        SectionPolishResult sectionResult = null;
+        try (PaperModelExecutionContext.Scope ignored = PaperModelExecutionContext.open(task.getUserId())) {
+            sectionResult = sectionPolishService.polishSection(taskId, section, task.getTargetLanguage(),
+                    scoreThreshold, maxRounds, innerMaxAttempts, context);
+        } catch (Exception ex) {
+            log.warn("Skip polishing section {} of task {} due to error", section.title(), taskId, ex);
+            markSectionFailed(task, section, ex, maxRounds, innerMaxAttempts);
+            publishProgress("section_polish_skipped", taskId, "章节润色失败，已保留原文：" + section.title(),
+                    "POLISH", completed.get(), total, section.title(), maxRounds, maxRounds, null);
+        }
+        int processed = completed.incrementAndGet();
+        int completedAttempts = sectionResult == null ? maxRounds : sectionResult.attempts();
+        publishProgress("section_polish_complete", taskId, "章节处理完成：" + section.title(), "POLISH",
+                processed, total, section.title(), completedAttempts, maxRounds, null);
     }
 
     private PaperSectionPolishService.SectionContext sectionContext(LatexDocument document, LatexSection current) {
@@ -518,7 +547,7 @@ public class PaperOrchestrator {
                 .map(section -> section.orderIndex() + ": " + section.title() + " [" + section.role() + "]")
                 .collect(Collectors.joining("\n"));
         int index = document.sections().indexOf(current);
-        String previous = index > 0 ? truncate(document.sections().get(index - 1).rawText(), 900) : "None (first section).";
+        String previous = index > 0 ? truncateEnding(document.sections().get(index - 1).rawText(), 900) : "None (first section).";
         String next = index >= 0 && index + 1 < document.sections().size()
                 ? truncate(document.sections().get(index + 1).rawText(), 900) : "None (last section).";
         return new PaperSectionPolishService.SectionContext(outline, previous, next,
@@ -530,6 +559,14 @@ public class PaperOrchestrator {
         if (value == null) return "";
         String normalized = value.replaceAll("\\s+", " ").trim();
         return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength) + " ...";
+    }
+
+    private String truncateEnding(String value, int maxLength) {
+        if (value == null) return "";
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= maxLength
+                ? normalized
+                : "... " + normalized.substring(normalized.length() - maxLength);
     }
 
     private int scoreThreshold(PaperTask task) {

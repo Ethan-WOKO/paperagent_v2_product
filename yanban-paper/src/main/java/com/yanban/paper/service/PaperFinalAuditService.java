@@ -22,6 +22,8 @@ public class PaperFinalAuditService {
     private static final Pattern LABEL = Pattern.compile("\\\\label\\s*\\{([^{}]+)}");
     private static final Pattern REF = Pattern.compile("\\\\(?:ref|eqref|cref|Cref|autoref|pageref)\\*?\\s*\\{([^{}]+)}");
     private static final Pattern SLOT = Pattern.compile("\\\\yanbancitationslot\\s*\\{\\d+}");
+    private static final Pattern GRAPHICS = Pattern.compile("\\\\includegraphics(?:\\s*\\[[^]]*])?\\s*\\{([^{}]+)}");
+    private static final Pattern INPUT = Pattern.compile("\\\\(?:input|include)\\s*\\{([^{}]+)}");
     private static final Pattern COMMENT_LINE = Pattern.compile("(?m)^\\s*%.*$");
     private static final String RECOMMENDED_BEGIN = "% === YANBAN_RECOMMENDED_BEGIN ===";
     private static final String RECOMMENDED_END = "% === YANBAN_RECOMMENDED_END ===";
@@ -29,6 +31,13 @@ public class PaperFinalAuditService {
     public AuditResult audit(String tex,
                              String bib,
                              PaperCitationApplyService.CitationApplyResult citationResult) {
+        return audit(tex, bib, citationResult, null);
+    }
+
+    public AuditResult audit(String tex,
+                             String bib,
+                             PaperCitationApplyService.CitationApplyResult citationResult,
+                             Set<String> availableResources) {
         String finalTex = tex == null ? "" : tex;
         String finalBib = bib == null ? "" : bib;
         String activeTex = COMMENT_LINE.matcher(finalTex).replaceAll("");
@@ -85,9 +94,13 @@ public class PaperFinalAuditService {
         validateRecommendedBlocks(finalBib, issues);
         validateAppliedPatches(activeTex, citationResult, issues);
         validateBibliographyFilename(activeTex, citationResult, issues);
+        validateExternalResources(activeTex, availableResources, issues);
+        issues.add(new AuditIssue("COMPILATION_NOT_EXECUTED", "partial",
+                "This is a static audit only; a successful isolated LaTeX compilation has not been proven."));
 
         String status = issues.stream().anyMatch(issue -> "blocker".equals(issue.severity()) || "major".equals(issue.severity()))
                 ? "FAIL"
+                : issues.stream().anyMatch(issue -> "partial".equals(issue.severity())) ? "PARTIAL"
                 : issues.isEmpty() ? "PASS" : "WARN";
         Map<String, Object> counts = new LinkedHashMap<>();
         counts.put("citationKeyCount", citationKeys.size());
@@ -99,6 +112,41 @@ public class PaperFinalAuditService {
         counts.put("citationLocationUpdateCount", citationResult == null ? 0 : citationResult.changedCitationLocationCount());
         counts.put("verifiedExistingCitationLocationCount", citationResult == null ? 0 : citationResult.verifiedExistingCitationLocationCount());
         return new AuditResult(status, List.copyOf(issues), Map.copyOf(counts));
+    }
+
+    private void validateExternalResources(String tex,
+                                           Set<String> availableResources,
+                                           List<AuditIssue> issues) {
+        if (availableResources == null) return;
+        Set<String> normalized = availableResources.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(this::normalizeResource)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        for (String resource : listValues(GRAPHICS, tex)) {
+            if (!resourceExists(normalized, resource, List.of(".pdf", ".png", ".jpg", ".jpeg", ".eps"))) {
+                issues.add(new AuditIssue("MISSING_GRAPHICS_RESOURCE", "partial",
+                        "Referenced graphics resource was not uploaded with the manuscript: " + resource));
+            }
+        }
+        for (String resource : listValues(INPUT, tex)) {
+            if (!resourceExists(normalized, resource, List.of(".tex"))) {
+                issues.add(new AuditIssue("MISSING_TEX_RESOURCE", "partial",
+                        "Referenced TeX resource was not uploaded with the manuscript: " + resource));
+            }
+        }
+    }
+
+    private boolean resourceExists(Set<String> available, String reference, List<String> defaultExtensions) {
+        String normalized = normalizeResource(reference);
+        if (available.contains(normalized)) return true;
+        if (normalized.lastIndexOf('.') > normalized.lastIndexOf('/')) return false;
+        return defaultExtensions.stream().anyMatch(extension -> available.contains(normalized + extension));
+    }
+
+    private String normalizeResource(String value) {
+        String normalized = value == null ? "" : value.trim().replace('\\', '/').toLowerCase(java.util.Locale.ROOT);
+        while (normalized.startsWith("./")) normalized = normalized.substring(2);
+        return normalized;
     }
 
     private void validateRecommendedBlocks(String bib, List<AuditIssue> issues) {

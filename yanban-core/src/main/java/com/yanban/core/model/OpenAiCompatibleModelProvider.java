@@ -58,7 +58,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
                             .flatMap(body -> Mono.error(new ModelProviderException(
                                     "OpenAI-compatible API error: HTTP " + clientResponse.statusCode().value() + " " + body))))
                     .bodyToMono(OpenAiChatResponse.class)
-                    .block(timeout);
+                    .block(request.timeout() == null ? timeout : request.timeout());
             return fromResponse(response);
         } catch (WebClientResponseException ex) {
             throw new ModelProviderException("OpenAI-compatible API error: HTTP " + ex.getStatusCode().value() + " " + ex.getResponseBodyAsString(), ex);

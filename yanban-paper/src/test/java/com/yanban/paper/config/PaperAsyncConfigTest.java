@@ -28,4 +28,22 @@ class PaperAsyncConfigTest {
         assertThat(executor.getMaxPoolSize()).isEqualTo(6);
         assertThat(executor.getQueueCapacity()).isEqualTo(50);
     }
+
+    @Test
+    void paperSectionPolishExecutorUsesBoundedConfiguredConcurrency() {
+        ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) config.paperSectionPolishExecutor(3);
+
+        assertThat(executor.getThreadNamePrefix()).isEqualTo("yanban-paper-polish-");
+        assertThat(executor.getCorePoolSize()).isEqualTo(3);
+        assertThat(executor.getMaxPoolSize()).isEqualTo(3);
+        assertThat(executor.getQueueCapacity()).isEqualTo(200);
+    }
+
+    @Test
+    void paperSectionPolishExecutorClampsConcurrencyToSafeRange() {
+        ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) config.paperSectionPolishExecutor(20);
+
+        assertThat(executor.getCorePoolSize()).isEqualTo(3);
+        assertThat(executor.getMaxPoolSize()).isEqualTo(3);
+    }
 }

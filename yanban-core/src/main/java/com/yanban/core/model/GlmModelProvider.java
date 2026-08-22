@@ -61,7 +61,7 @@ public class GlmModelProvider implements ChatModelProvider {
                                     "GLM API error: HTTP " + clientResponse.statusCode().value() + " " + body))))
                     .bodyToMono(GlmChatResponse.class)
                     .retryWhen(transportRetrySpec())
-                    .block(properties.getTimeout());
+                    .block(request.timeout() == null ? properties.getTimeout() : request.timeout());
             return fromGlmResponse(response);
         } catch (WebClientResponseException ex) {
             throw new ModelProviderException("GLM API error: HTTP " + ex.getStatusCode().value() + " " + ex.getResponseBodyAsString(), ex);

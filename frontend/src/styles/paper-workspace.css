@@ -716,6 +716,15 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
   box-shadow: none;
 }
 
+.paper-page--redesign .paper-preview-toolbar,
+.paper-page--redesign .paper-diff-card__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .paper-page--redesign .paper-code-preview {
   border-color: var(--pa-line);
   color: var(--pa-text-secondary);

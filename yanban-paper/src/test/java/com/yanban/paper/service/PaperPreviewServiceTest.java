@@ -104,6 +104,25 @@ class PaperPreviewServiceTest {
     }
 
     @Test
+    void batchRevisionUpdateChangesSelectedSectionsAndRebuildsOnlyOnce() {
+        PaperTask task = task();
+        PaperSection first = new PaperSection(task.getId(), "main.tex", 0, 2, "Introduction", "INTRO", 1.0, "test", 0, 80);
+        PaperSection second = new PaperSection(task.getId(), "main.tex", 1, 2, "Method", "METHOD", 1.0, "test", 81, 160);
+        assignId(first, 31L);
+        assignId(second, 32L);
+        when(tasks.findByIdAndUserId(7L, 11L)).thenReturn(Optional.of(task));
+        when(sections.findByTaskIdOrderByOrderIndexAsc(7L)).thenReturn(List.of(first, second));
+        when(sections.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        mockDocument(task);
+
+        List<PaperSection> saved = service.updateSectionRevisionStatuses(11L, 7L, List.of(31L, 32L), "accepted");
+
+        assertThat(saved).extracting(PaperSection::getRevisionStatus)
+                .containsOnly(PaperSection.REVISION_ACCEPTED);
+        verify(assemble).assemble(eq(7L), any(LatexDocument.class), eq(true));
+    }
+
+    @Test
     void updateSuggestionStatusDoesNotAssembleWaitingInputTask() {
         PaperTask task = task("WAITING_INPUT", "CLARIFY");
         Suggestion suggestion = new Suggestion(7L, "ADVOCACY", "RelatedWork", "Use evidence.");

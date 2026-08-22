@@ -7,6 +7,7 @@ import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
+import com.yanban.core.model.ModelProviderException;
 import com.yanban.core.model.ToolCall;
 import com.yanban.core.model.ToolSpec;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -155,8 +156,9 @@ public class LangChain4jChatModelAdapter implements ChatModel {
                 context == null ? null : context.apiKey(),
                 context == null ? null : context.apiUrl(),
                 null,
-                null,
-                context == null ? null : context.traceId()
+                context != null && context.thinkingDisabled() ? ChatRequest.Thinking.disabled() : null,
+                context == null ? null : context.traceId(),
+                context == null ? null : context.timeout()
         );
     }
 
@@ -164,6 +166,19 @@ public class LangChain4jChatModelAdapter implements ChatModel {
             dev.langchain4j.model.chat.request.ChatRequest request,
             ChatResponse response) {
         com.yanban.core.model.ChatMessage message = response == null ? null : response.message();
+        if (message == null || (!StringUtils.hasText(message.content())
+                && (message.toolCalls() == null || message.toolCalls().isEmpty()))) {
+            ChatResponse.Usage usage = response == null ? null : response.usage();
+            String finishReason = response == null ? null : response.finishReason();
+            log.warn("Model returned empty response model={} finishReason={} promptTokens={} completionTokens={} totalTokens={}",
+                    request == null ? null : request.modelName(),
+                    finishReason,
+                    usage == null ? null : usage.promptTokens(),
+                    usage == null ? null : usage.completionTokens(),
+                    usage == null ? null : usage.totalTokens());
+            throw new ModelProviderException("Model returned an empty response without tool calls"
+                    + " (finishReason=" + finishReason + ")");
+        }
         AiMessage aiMessage = toAiMessage(message);
         ChatResponse.Usage usage = response == null ? null : response.usage();
         return dev.langchain4j.model.chat.response.ChatResponse.builder()

@@ -25,6 +25,8 @@ Evaluation rules:
 - Mark as blocker if it introduces unsupported claims, new experiments, new numerical results, new citations, new contribution bullets, new variables, new equations, or new optimization problems.
 - Mark as blocker if it changes LaTeX structure, labels, refs, cites, equations, figures, tables, algorithms, or bibliography commands.
 - Mark as major if it is repetitive, over-expanded, AI-like, or substantially longer without clear benefit.
+- Mark as major if it unjustifiably strengthens certainty, severity, causality, novelty, or generality.
+- Mark as major when changes are mostly synonym substitution or mechanical academic phrasing without a concrete clarity, precision, concision, or flow benefit.
 - Reward clear academic style, concise logic, terminology consistency, and conservative claim narrowing.
 - Do not rewrite the section. Do not invent citations, experiments, or data.
 

@@ -110,6 +110,7 @@ class PaperSectionPolishServiceTest {
         assertThat(result.attempts()).isEqualTo(2);
         assertThat(result.reviewScore()).isEqualTo(88);
         assertThat(result.polishedText()).contains("\\cite{rag2020}");
+        assertThat(modelClient.userPrompts.get(1)).contains("Missing placeholders", "[[YANBAN_CITE_0001]]");
         PaperSection saved = sections.findById(stored.getId()).orElseThrow();
         assertThat(saved.getPolishStatus()).isEqualTo("POLISHED");
         assertThat(saved.getReviewJson()).contains("88", "attempts", "reasonCode", "maxRounds", "innerMaxAttempts");
@@ -199,6 +200,22 @@ class PaperSectionPolishServiceTest {
     }
 
     @Test
+    void whitespaceOnlyCandidateIsRecordedAsUnchanged() {
+        modelClient.customPolishOutput = "\\section{Introduction}\n\nThis   paper uses RAG.";
+        PaperTask task = tasks.save(new PaperTask(1L, "Demo", "main.tex", "paper/main.tex", "RUNNING", "en", "POLISH", null));
+        PaperSection stored = sections.save(new PaperSection(task.getId(), "main.tex", 0, 2, "Introduction", "INTRO", 1.0, "test", 0, 80));
+        LatexSection latexSection = new LatexSection(0, 2, "section", true, "Introduction", LatexSectionRole.INTRO, 0, 80,
+                "\\section{Introduction}\nThis paper uses RAG.");
+
+        SectionPolishResult result = polishService.polishSection(task.getId(), latexSection, "en", 80, 1, 1);
+
+        assertThat(result.status()).isEqualTo("UNCHANGED");
+        assertThat(result.polishedText()).isEqualTo(latexSection.rawText());
+        assertThat(sections.findById(stored.getId()).orElseThrow().getReviewJson())
+                .contains("no_substantive_change");
+    }
+
+    @Test
     void newlyIntroducedFragmentLintBlockerIsStillRejected() {
         modelClient.alwaysPassReview = true;
         modelClient.customPolishOutput = "\\section{CONCLUSION}\nThe revised conclusion.\\begin{quote}\n"
@@ -246,6 +263,7 @@ class PaperSectionPolishServiceTest {
         private boolean returnRatioScore;
         private boolean failPolishCall;
         private String customPolishOutput;
+        private final java.util.List<String> userPrompts = new java.util.ArrayList<>();
         private int finalReviewScore = 88;
 
         void reset() {
@@ -257,11 +275,13 @@ class PaperSectionPolishServiceTest {
             returnRatioScore = false;
             failPolishCall = false;
             customPolishOutput = null;
+            userPrompts.clear();
             finalReviewScore = 88;
         }
 
         @Override
         public String complete(String systemPrompt, String userPrompt, Double temperature, Integer maxTokens) {
+            userPrompts.add(userPrompt);
             if (userPrompt.contains("Return strict JSON only")) {
                 reviewCalls++;
                 if (returnRatioScore) {
