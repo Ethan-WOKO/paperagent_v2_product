@@ -76,7 +76,9 @@ public class RecommendLiteratureToolExecutor implements ToolExecutor {
                 text(args, "existingBibtex"),
                 integer(args, "analysisLimit")
         );
-        RecommendationResult result = recommendationService.recommend(request);
+        RecommendationResult result = recommendationService.recommendWithProgress(
+                request,
+                (stage, message) -> ToolExecutionProgressScope.emit(message));
         return ToolResult.success(call.id(), definition.name(), objectMapper.valueToTree(result));
     }
 

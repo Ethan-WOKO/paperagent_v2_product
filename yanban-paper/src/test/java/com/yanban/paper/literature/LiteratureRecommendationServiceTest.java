@@ -14,6 +14,7 @@ import com.yanban.paper.config.PaperLiteratureProperties;
 import com.yanban.paper.domain.LiteratureCard;
 import com.yanban.paper.service.PaperModelClient;
 import java.util.List;
+import java.util.ArrayList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -99,6 +100,27 @@ class LiteratureRecommendationServiceTest {
         });
         verify(catalog, times(2)).upsertCard(any());
         verify(cardAnalysis).analyzeTopCandidates(any(), eq(7));
+    }
+
+    @Test
+    void recommendWithProgressReportsPlanningRetrievalRankingAndCompletion() {
+        when(localSearch.search(any(), anyInt(), any())).thenReturn(List.of(localCandidate()));
+        when(source.search(any(), anyInt())).thenReturn(List.of(strongerExternal()));
+        List<String> stages = new ArrayList<>();
+        List<String> messages = new ArrayList<>();
+
+        LiteratureRecommendationService.RecommendationResult result = service.recommendWithProgress(
+                new LiteratureRecommendationService.RecommendationRequest(
+                        "hybrid RAG", null, null, null, 2, 5, 1, false, null, 0),
+                (stage, message) -> {
+                    stages.add(stage);
+                    messages.add(message);
+                });
+
+        assertThat(result.items()).isNotEmpty();
+        assertThat(stages).contains("planning", "retrieval", "ranking", "reranking", "completed");
+        assertThat(messages).anyMatch(message -> message.contains("1/2"));
+        assertThat(messages).anyMatch(message -> message.contains("2/2"));
     }
 
     @Test

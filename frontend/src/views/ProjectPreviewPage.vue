@@ -2121,7 +2121,19 @@ async function connectReactPlanTask(record: ReactPlanTaskRecord, epoch = project
     reactPlanError.value = '';
   } catch (cause) {
     if (controller.signal.aborted || !isCurrentReactPlan(record, epoch)) return;
-    reactPlanError.value = apiError(cause);
+    const current = reactPlanRecord.value;
+    if (current && !isReactPlanTerminal(current.view.state)) {
+      // A dropped SSE connection is recoverable: durable events are replayed
+      // from the last accepted sequence on the scheduled reconnect.
+      reactPlanError.value = '';
+      console.warn('[react-plan] event stream interrupted; reconnecting', {
+        taskId: record.taskId,
+        afterSequence: current.events.length ? current.events[current.events.length - 1].sequence : 0,
+        error: apiError(cause),
+      });
+    } else {
+      reactPlanError.value = apiError(cause);
+    }
   } finally {
     if (reactPlanAbortController === controller) reactPlanAbortController = null;
     if (isCurrentReactPlan(record, epoch)) {

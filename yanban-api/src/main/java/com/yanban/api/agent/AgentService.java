@@ -333,6 +333,8 @@ public class AgentService {
                 userId,
                 sessionId,
                 request.clientRequestId(),
+                processConsumer == null ? null : () -> processConsumer.accept(
+                        "检测到相同请求仍在执行，已连接原任务并等待结果。"),
                 () -> sendMessageInternal(userId, sessionId, request, tokenConsumer, processConsumer, null, List.of())
         );
     }

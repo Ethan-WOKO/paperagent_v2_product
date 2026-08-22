@@ -61,11 +61,24 @@ public class LiteratureRecommendationService {
     }
 
     public RecommendationResult recommend(RecommendationRequest request) {
-        return recommend(request, LiteratureCardAnalysisService.ProgressListener.NOOP);
+        return recommendInternal(request, LiteratureCardAnalysisService.ProgressListener.NOOP,
+                RecommendationProgressListener.NOOP);
     }
 
     public RecommendationResult recommend(RecommendationRequest request,
                                           LiteratureCardAnalysisService.ProgressListener progressListener) {
+        return recommendInternal(request, progressListener, RecommendationProgressListener.NOOP);
+    }
+
+    public RecommendationResult recommendWithProgress(RecommendationRequest request,
+                                                       RecommendationProgressListener progressListener) {
+        return recommendInternal(request, LiteratureCardAnalysisService.ProgressListener.NOOP,
+                progressListener == null ? RecommendationProgressListener.NOOP : progressListener);
+    }
+
+    private RecommendationResult recommendInternal(RecommendationRequest request,
+                                                    LiteratureCardAnalysisService.ProgressListener progressListener,
+                                                    RecommendationProgressListener recommendationProgress) {
         long totalStart = System.nanoTime();
         RecommendationRequest normalizedRequest = normalize(request);
         log.info("LiteratureRecommendation start query={} goal={} yearFrom={} topK={} candidateK={} maxQueries={} analysisLimit={} includeBibtex={}",
@@ -82,6 +95,7 @@ public class LiteratureRecommendationService {
             return RecommendationResult.empty("empty_query");
         }
 
+        recommendationProgress.onProgress("planning", "正在生成检索词并规划文献来源…");
         long planStart = System.nanoTime();
         SearchPlan searchPlan = buildSearchPlan(normalizedRequest);
         List<String> queries = searchPlan.queries();
@@ -90,14 +104,16 @@ public class LiteratureRecommendationService {
                 searchPlan.llmPlanned(),
                 queries.size(),
                 queries);
+        recommendationProgress.onProgress("retrieval", "检索计划已生成，正在从本地文献库、OpenAlex 和 arXiv 检索…");
         long retrieveStart = System.nanoTime();
-        RetrievalPool pool = retrieve(queries, normalizedRequest);
+        RetrievalPool pool = retrieve(queries, normalizedRequest, recommendationProgress);
         log.info("LiteratureRecommendation retrieve elapsedMs={} rawCandidates={} uniqueCandidates={} sourceAttempts={} failures={}",
                 elapsedMs(retrieveStart),
                 pool.rawCandidateCount(),
                 pool.uniqueCandidates().size(),
                 pool.sourceAttempts(),
                 pool.sourceFailures().size());
+        recommendationProgress.onProgress("ranking", "已获得 " + pool.uniqueCandidates().size() + " 篇去重候选，正在排序和分析…");
         long rankStart = System.nanoTime();
         List<LiteratureSearchResult> ranked = rank(pool.uniqueCandidates().values(), normalizedRequest, searchPlan);
         log.info("LiteratureRecommendation rank elapsedMs={} rankedCount={}", elapsedMs(rankStart), ranked.size());
@@ -116,6 +132,7 @@ public class LiteratureRecommendationService {
         long analysisRerankStart = System.nanoTime();
         ranked = rerankWithCardAnalysis(ranked, normalizedRequest);
         log.info("LiteratureRecommendation analysisRerank elapsedMs={} rankedCount={}", elapsedMs(analysisRerankStart), ranked.size());
+        recommendationProgress.onProgress("reranking", "候选分析完成，正在进行最终相关性重排…");
         long llmRerankStart = System.nanoTime();
         LlmRerankResult llmRerank = llmRerank(normalizedRequest, ranked);
         log.info("LiteratureRecommendation llmRerank elapsedMs={} selectedByLlm={} intent={} preferences={}",
@@ -141,6 +158,8 @@ public class LiteratureRecommendationService {
                 ranked.size(),
                 items.size(),
                 !llmRerank.selectedIds().isEmpty());
+        recommendationProgress.onProgress("completed", "文献检索完成：从 " + pool.rawCandidateCount()
+                + " 条结果中去重并选出 " + items.size() + " 篇。");
         return new RecommendationResult(
                 normalizedRequest.query(),
                 normalizedRequest.goal(),
@@ -432,7 +451,8 @@ public class LiteratureRecommendationService {
         return false;
     }
 
-    private RetrievalPool retrieve(List<String> queries, RecommendationRequest request) {
+    private RetrievalPool retrieve(List<String> queries, RecommendationRequest request,
+                                   RecommendationProgressListener progressListener) {
         Map<String, LiteratureCandidate> unique = new LinkedHashMap<>();
         Map<String, String> keyAliases = new LinkedHashMap<>();
         Map<String, LinkedHashSet<String>> duplicateSources = new LinkedHashMap<>();
@@ -442,6 +462,8 @@ public class LiteratureRecommendationService {
         int rawCount = 0;
         int sourceAttempts = 0;
         int localLimit = Math.max(request.topK(), Math.min(12, request.candidateK()));
+        int totalAttempts = queries.size() * (sources.size() + 1);
+        int completedAttempts = 0;
 
         for (String query : queries) {
             List<LiteratureCandidate> localCandidates;
@@ -472,6 +494,9 @@ public class LiteratureRecommendationService {
                     unique.size(),
                     abbreviate(localMessage, 120));
             diagnostics.add(new RetrievalDiagnosticItem(query, "local_card", localCandidates.size(), localAccepted, localFailed, localMessage));
+            completedAttempts++;
+            progressListener.onProgress("retrieval", "文献检索进度 " + completedAttempts + "/" + totalAttempts
+                    + "：本地文献库已返回 " + localCandidates.size() + " 条。");
             for (LiteratureSource source : sources) {
                 sourceAttempts++;
                 List<LiteratureCandidate> candidates;
@@ -506,11 +531,21 @@ public class LiteratureRecommendationService {
                         unique.size(),
                         abbreviate(message, 120));
                 diagnostics.add(new RetrievalDiagnosticItem(query, source.name(), safeCandidates.size(), accepted, failed, message));
+                completedAttempts++;
+                progressListener.onProgress("retrieval", "文献检索进度 " + completedAttempts + "/" + totalAttempts
+                        + "：" + source.name() + " 已返回 " + safeCandidates.size() + " 条。");
             }
         }
         Map<String, List<String>> duplicateSourcesByKey = new LinkedHashMap<>();
         duplicateSources.forEach((key, values) -> duplicateSourcesByKey.put(key, List.copyOf(values)));
         return new RetrievalPool(unique, rawCount, sourceAttempts, failures, diagnostics, duplicateSourcesByKey, Map.copyOf(duplicateMergeCounts));
+    }
+
+    @FunctionalInterface
+    public interface RecommendationProgressListener {
+        RecommendationProgressListener NOOP = (stage, message) -> { };
+
+        void onProgress(String stage, String message);
     }
 
     private void putUniqueCandidate(Map<String, LiteratureCandidate> unique,

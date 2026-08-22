@@ -69,6 +69,40 @@ class AgentRequestDedupServiceTest {
         assertThat(invocations.get()).isEqualTo(1);
     }
 
+    @Test
+    void reportsWhenAStreamingRetryJoinsTheInFlightRequest() throws Exception {
+        AgentRequestDedupService service = new AgentRequestDedupService();
+        AtomicInteger duplicateWaits = new AtomicInteger();
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<SendMessageResponse> first = executor.submit(() -> service.execute(1L, 2L, "req-3", () -> {
+                started.countDown();
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(ex);
+                }
+                return successResponse("original");
+            }));
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+            Future<SendMessageResponse> retry = executor.submit(() -> service.execute(
+                    1L, 2L, "req-3", duplicateWaits::incrementAndGet,
+                    () -> successResponse("duplicate")));
+            release.countDown();
+
+            assertThat(first.get(5, TimeUnit.SECONDS).assistantContent()).isEqualTo("original");
+            assertThat(retry.get(5, TimeUnit.SECONDS).assistantContent()).isEqualTo("original");
+            assertThat(duplicateWaits.get()).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     private SendMessageResponse successResponse(String content) {
         return new SendMessageResponse(true, content, 1, null, null, List.of(), null);
     }

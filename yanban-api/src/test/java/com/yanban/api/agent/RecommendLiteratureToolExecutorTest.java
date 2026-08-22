@@ -24,7 +24,7 @@ class RecommendLiteratureToolExecutorTest {
     @Test
     void executeAcceptsStringBooleanArgumentsFromLlm() {
         LiteratureRecommendationService recommendationService = mock(LiteratureRecommendationService.class);
-        when(recommendationService.recommend(any())).thenReturn(RecommendationResult.empty("ok"));
+        when(recommendationService.recommendWithProgress(any(), any())).thenReturn(RecommendationResult.empty("ok"));
         RecommendLiteratureToolExecutor executor = new RecommendLiteratureToolExecutor(recommendationService, objectMapper);
 
         ObjectNode args = objectMapper.createObjectNode();
@@ -34,7 +34,7 @@ class RecommendLiteratureToolExecutorTest {
         ToolResult result = executor.execute(new ToolCall("call-1", "recommend_literature", args));
 
         ArgumentCaptor<RecommendationRequest> captor = ArgumentCaptor.forClass(RecommendationRequest.class);
-        verify(recommendationService).recommend(captor.capture());
+        verify(recommendationService).recommendWithProgress(captor.capture(), any());
         assertThat(result.success()).isTrue();
         assertThat(captor.getValue().includeBibtex()).isTrue();
     }
@@ -43,7 +43,7 @@ class RecommendLiteratureToolExecutorTest {
     void executeReturnsLiteratureBaseProtocolFields() {
         LiteratureRecommendationService recommendationService = mock(LiteratureRecommendationService.class);
         RecommendLiteratureToolExecutor executor = new RecommendLiteratureToolExecutor(recommendationService, objectMapper);
-        when(recommendationService.recommend(any())).thenReturn(new RecommendationResult(
+        when(recommendationService.recommendWithProgress(any(), any())).thenReturn(new RecommendationResult(
                 "hybrid RAG",
                 "topic search",
                 List.of("hybrid RAG"),

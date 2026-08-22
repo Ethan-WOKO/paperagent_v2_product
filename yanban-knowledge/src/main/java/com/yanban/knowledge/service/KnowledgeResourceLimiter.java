@@ -26,7 +26,10 @@ public class KnowledgeResourceLimiter {
         embeddingsPerUser = properties.getMaxConcurrentEmbeddingBatchesPerUser();
     }
 
-    public Permit upload(long userId) { return acquire(uploads, userUploads, uploadsPerUser, userId, "KNOWLEDGE_UPLOAD_LIMIT"); }
+    public Permit upload(long userId) {
+        return acquireWaiting(uploads, userUploads, uploadsPerUser, userId,
+                "KNOWLEDGE_UPLOAD_INTERRUPTED");
+    }
     public Permit processing(long userId) {
         return acquireWaiting(processing, userProcessing, processingPerUser, userId,
                 "KNOWLEDGE_PROCESSING_INTERRUPTED");
@@ -34,17 +37,6 @@ public class KnowledgeResourceLimiter {
     public Permit embedding(long userId) {
         return acquireWaiting(embeddings, userEmbeddings, embeddingsPerUser, userId,
                 "KNOWLEDGE_EMBEDDING_INTERRUPTED");
-    }
-
-    private Permit acquire(Semaphore global, ConcurrentHashMap<Long, Semaphore> users,
-                           int perUser, long userId, String code) {
-        Semaphore user = users.computeIfAbsent(userId, ignored -> new Semaphore(perUser, true));
-        if (!global.tryAcquire()) throw new KnowledgeCapacityException(code + ": global capacity exhausted");
-        if (!user.tryAcquire()) {
-            global.release();
-            throw new KnowledgeCapacityException(code + ": user capacity exhausted");
-        }
-        return new Permit(global, user);
     }
 
     private Permit acquireWaiting(Semaphore global, ConcurrentHashMap<Long, Semaphore> users,

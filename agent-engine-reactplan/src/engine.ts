@@ -16,7 +16,7 @@ const TASK_LEASE_LOST = Symbol("TASK_LEASE_LOST");
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the current isolated Workspace manifest. It initially equals the frozen ProjectVersion and reflects later isolated Candidate writes without publishing them.", { type: "object", additionalProperties: false, properties: {} }),
   functionTool("read_project_file", "Read all or a 1-based inclusive line range from one file in the current isolated Workspace using its current manifest hash. This can observe Candidate bytes after an isolated write.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" }, startLine: { type: "integer", minimum: 1, description: "Optional 1-based inclusive first line; defaults to 1." }, endLine: { type: "integer", minimum: 1, description: "Optional 1-based inclusive last line; defaults to the end of the file and must be >= startLine." } } }),
-  functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Commands start at the Project root; every source path in argv must use its exact Project-relative input path. For a Java source in any subdirectory, prefer ['yanban-runner','java','path/to/File.java']. Use this to validate code before concluding.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
+  functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Commands start at the Project root. First inspect the manifest and relevant source/import or dependency files. Maven allows test or verify only, for example ['mvn','-o','test'] or ['mvn','-o','verify']; compile/package/install are not allowed. Maven preparation downloads dependencies before the offline validation command. For a standalone source, use exactly ['yanban-runner','java','path.java'], ['yanban-runner','python','path.py'], ['yanban-runner','c','path.c'], or ['yanban-runner','cpp','path.cpp']; do not add a 'run' subcommand. Add only exact pinned non-standard Java/Python dependencies as --dependency=group:artifact:version or --dependency=package==version. For documentation/config-only changes, use ['git','diff','--check']. Never add or upgrade a dependency merely to make validation pass. Every changed path must be present in inputs. An identical successful argv/input run is reused automatically.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
   functionTool("ask_user", "Pause and ask one necessary, concrete question.", { type: "object", additionalProperties: false, required: ["question"], properties: { question: { type: "string", minLength: 1, maxLength: 4000 } } })
 ];
 
@@ -47,6 +47,10 @@ const SEARCH_TOOLS = functionTool(
 );
 
 const BOOTSTRAP_TOOL_NAMES = new Set(["search_tools", "load_tool", "ask_user"]);
+// These two small, read-only schemas are used by nearly every Project task.
+// Preloading them removes four discovery turns (search/load for each tool)
+// without broadening authority or exposing mutation/execution tools.
+const PRELOADED_PROJECT_TOOL_NAMES = new Set(["list_project_files", "read_project_file"]);
 
 type Subscriber = (event: TaskEvent) => void;
 type Sleeper = (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -417,6 +421,7 @@ export class AgentEngine {
           modelCallId: call.id,
           ordinal,
           schemaLoadedAtDispatch: BOOTSTRAP_TOOL_NAMES.has(call.name)
+            || PRELOADED_PROJECT_TOOL_NAMES.has(call.name)
             || loadedAtDispatch.has(call.name),
           modelCallNumber: task.modelCalls
         }));
@@ -434,7 +439,7 @@ export class AgentEngine {
             }
             task.messages.push({
               role: "user",
-              content: "Server validation feedback: the isolated Workspace has unvalidated changes. Inspect the current Workspace diff, then run the sandbox over every changed path using its exact current afterSha256. Do not claim publication yourself; after exact validation the server performs deterministic automatic publication."
+              content: candidateValidationFeedback(task.observations)
             });
             await this.options.store.save(task);
             continue;
@@ -522,11 +527,8 @@ export class AgentEngine {
     if (call.name === "search_tools") {
       const group = requireString(args.group, "group").toLowerCase();
       const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
-      const matches = searchableToolSpecs(task).filter((tool) => {
-        if (toolGroup(tool.function.name) !== group) return false;
-        if (!query) return true;
-        return `${tool.function.name}\n${tool.function.description}`.toLowerCase().includes(query);
-      }).slice(0, 20);
+      const matches = rankToolSearch(searchableToolSpecs(task).filter(
+        (tool) => toolGroup(tool.function.name) === group), query).slice(0, 20);
       task.discoveredToolNames = stableUnique([
         ...(task.discoveredToolNames ?? []), ...matches.map((tool) => tool.function.name)
       ]);
@@ -676,6 +678,29 @@ export class AgentEngine {
     if (call.name === "execute_in_sandbox") {
       const request = sandboxRequest(call.id, args);
       const summary = `argv=${JSON.stringify(request.argv).slice(0, 700)}; inputs=${request.inputs.map((input) => `${input.path}@${input.sha256}`).join(",").slice(0, 250)}; timeoutMillis=${request.timeoutMillis}`;
+      const commandRepair = sandboxCommandRepair(request.argv);
+      if (commandRepair) {
+        await this.tool(task, call.id, "sandbox.execute", summary, "failed",
+          `request rejected locally; code=SANDBOX_COMMAND_DENIED`, null);
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
+          status: "REJECTED", code: "SANDBOX_COMMAND_DENIED", message: commandRepair
+        }) });
+        return false;
+      }
+      const reusableRun = reusableSandboxRun(task.observations, request);
+      if (reusableRun) {
+        await this.tool(task, call.id, "sandbox.execute", summary, "requested", null, reusableRun.receiptRef);
+        await this.tool(task, call.id, "sandbox.execute", summary, "succeeded",
+          `reused=true; status=SUCCEEDED; receiptRef=${reusableRun.receiptRef}`, reusableRun.receiptRef);
+        task.lastSandboxStatus = "SUCCEEDED";
+        task.messages.push({
+          role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
+            status: "SUCCEEDED", replayed: true, receiptRef: reusableRun.receiptRef,
+            argv: reusableRun.argv, inputs: reusableRun.inputs
+          })
+        });
+        return false;
+      }
       let view;
       if (task.activeSandboxCallId === call.id) {
         // Submission intent is checkpointed before the broker call. After a
@@ -888,8 +913,22 @@ function sandboxRequest(callId: string, args: Record<string, unknown>): SandboxR
   const argv = args.argv; const inputs = args.inputs; const timeoutMillis = args.timeoutMillis;
   if (!Array.isArray(argv) || !argv.every((item) => typeof item === "string") || !Array.isArray(inputs) || !Number.isInteger(timeoutMillis)) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Sandbox tool arguments are invalid"));
   const normalizedInputs = inputs.map((item) => { const input = item as Record<string, unknown>; return { path: requireString(input.path, "inputs.path"), sha256: requireString(input.sha256, "inputs.sha256") }; });
-  const semantics = { argv, inputs: normalizedInputs, timeoutMillis };
-  return { contractVersion: "1.0", clientRequestId: callId, requestDigest: digestObject(semantics), argv, inputs: normalizedInputs, timeoutMillis: timeoutMillis as number };
+  const normalizedArgv = normalizeRunnerArgv(argv);
+  const semantics = { argv: normalizedArgv, inputs: normalizedInputs, timeoutMillis };
+  return { contractVersion: "1.0", clientRequestId: callId, requestDigest: digestObject(semantics), argv: normalizedArgv, inputs: normalizedInputs, timeoutMillis: timeoutMillis as number };
+}
+
+function normalizeRunnerArgv(argv: string[]): string[] {
+  if (argv[0] !== "yanban-runner") return argv;
+  const sourceIndex = argv[1] === "run" ? 2 : 1;
+  const source = argv[sourceIndex];
+  const language = source?.endsWith(".java") ? "java"
+    : source?.endsWith(".py") ? "python"
+      : source?.endsWith(".c") ? "c"
+        : source?.endsWith(".cc") || source?.endsWith(".cpp") || source?.endsWith(".cxx") ? "cpp"
+          : undefined;
+  if (!language || !source) return argv;
+  return ["yanban-runner", language, source, ...argv.slice(sourceIndex + 1)];
 }
 
 function workspaceWriteRequest(callId: string, args: Record<string, unknown>): WorkspaceWriteRequest {
@@ -994,7 +1033,7 @@ function initialMessages(
 ): ChatMessage[] {
   const runtimeIdentity = `provider=${submission.authority.model.provider}; model=${submission.authority.model.model}`;
   const messages: ChatMessage[] = [
-    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files. After any Workspace write, inspect the diff and validate the exact changed file hashes in the sandbox before reporting success. Do not claim publication yourself: after exact validation the server deterministically publishes the Candidate and appends the authoritative new ProjectVersion to the delivery. Sandbox commands start at the Project root, so argv must use exact Project-relative source paths; prefer yanban-runner for a single Java, Python, C, or C++ source. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
+    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files. After any Workspace write, inspect the diff and validate every exact changed file hash before reporting success. Choose validation from observed Project structure: Maven test/verify when pom.xml exists; a source runner for a genuinely standalone supported source; bounded git diff checks for documentation/config-only edits. Read relevant imports and dependency descriptors before the first execution. Standalone Java/Python runs may declare exact pinned dependencies using the sandbox tool syntax, but never invent, add, or upgrade dependencies merely to pass validation. If the observed build system is unsupported, perform the strongest allowed content check and clearly say the full build was not verified. Do not rerun an unchanged successful command: the server reuses identical argv and input hashes. Do not claim publication yourself: after exact validation the server deterministically publishes the Candidate and appends the authoritative new ProjectVersion to the delivery. Sandbox commands start at the Project root, so argv must use exact Project-relative paths. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
   ];
   if (submission.authority.skill) {
     messages.push({
@@ -1117,12 +1156,24 @@ function loadedToolSpecs(
   available: RegisteredToolSpec[], loadedNames: string[]
 ): RegisteredToolSpec[] {
   const loaded = new Set(loadedNames);
-  return available.filter((tool) => loaded.has(tool.function.name)
+  return available.filter((tool) => (loaded.has(tool.function.name)
+      || PRELOADED_PROJECT_TOOL_NAMES.has(tool.function.name))
     && tool.function.name !== "ask_user");
 }
 
 function searchableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
   return availableToolSpecs(task).filter((tool) => !BOOTSTRAP_TOOL_NAMES.has(tool.function.name));
+}
+
+function rankToolSearch(tools: RegisteredToolSpec[], query: string): RegisteredToolSpec[] {
+  const terms = [...new Set(query.split(/[^\p{L}\p{N}]+/u).filter(Boolean))];
+  if (terms.length === 0) return tools;
+  return tools.map((tool, index) => {
+    const searchable = `${tool.function.name}\n${tool.function.description}`.toLowerCase();
+    return { tool, index, score: terms.filter((term) => searchable.includes(term)).length };
+  }).filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((candidate) => candidate.tool);
 }
 
 function compactToolGroupMessage(tools: RegisteredToolSpec[]): ChatMessage {
@@ -1134,7 +1185,7 @@ function compactToolGroupMessage(tools: RegisteredToolSpec[]): ChatMessage {
   }
   return {
     role: "system",
-    content: `Available tool groups. Tool names and parameter schemas are intentionally omitted to keep context small. Call search_tools for one relevant group, then call load_tool for one returned tool before using it. Do not infer hidden tool names or parameters.\n${JSON.stringify({
+    content: `Available tool groups. Most tool names and parameter schemas are intentionally omitted to keep context small. Any tool schema already supplied with this request may be called directly. For other tools, call search_tools for one relevant group, then call load_tool for one returned tool before using it. Do not infer hidden tool names or parameters.\n${JSON.stringify({
       schemaVersion: "1.0",
       type: "compact_tool_group_catalog",
       groups: [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right))
@@ -1179,6 +1230,7 @@ function groundingMessage(observations: TaskObservations): ChatMessage {
   const ledger = {
     manifestObserved: observations.manifestPaths.length > 0,
     manifestFileCount: observations.manifestPaths.length,
+    validationHint: validationHint(observations.manifestPaths),
     selectedPaths,
     readFiles: observations.readFiles,
     sandboxRuns: observations.sandboxRuns.map(({ receiptRef: _receiptRef, ...run }) => run),
@@ -1224,16 +1276,59 @@ function candidateWorkspaceValidated(observations: TaskObservations): boolean {
   return observations.workspaceChanges.length === 0 || validatedCandidateRun(observations) !== undefined;
 }
 
-function validatedCandidateRun(observations: TaskObservations): TaskObservations["sandboxRuns"][number] | undefined {
-  if (observations.workspaceDiffObservedRevision !== observations.workspaceRevision) return undefined;
+function candidateValidationFeedback(observations: TaskObservations): string {
+  const hasCurrentSuccessfulRun = currentCandidateSandboxRun(observations) !== undefined;
+  if (observations.workspaceDiffObservedRevision !== observations.workspaceRevision && hasCurrentSuccessfulRun) {
+    return "Server validation feedback: the exact current Candidate already has a successful sandbox receipt. Inspect the current Workspace diff only; do not rerun the unchanged sandbox command. After the diff is observed, the server will reuse the existing proof and publish deterministically.";
+  }
+  if (observations.workspaceDiffObservedRevision === observations.workspaceRevision) {
+    return "Server validation feedback: the current Workspace diff is observed, but its exact changed hashes lack a successful sandbox proof. Choose the validation profile from the observed manifest and run it once over every changed path. Do not claim publication yourself.";
+  }
+  return "Server validation feedback: the isolated Workspace has unvalidated changes. Inspect the current Workspace diff, then choose the validation profile from the observed manifest and run it once over every changed path using exact current afterSha256 values. Do not claim publication yourself.";
+}
+
+function currentCandidateSandboxRun(observations: TaskObservations): TaskObservations["sandboxRuns"][number] | undefined {
   for (let index = observations.sandboxRuns.length - 1; index >= 0; index -= 1) {
     const run = observations.sandboxRuns[index]!;
     if (run.status !== "SUCCEEDED" || run.workspaceRevision !== observations.workspaceRevision) continue;
     const inputs = new Map(run.inputs.map((input) => [input.path, input.sha256]));
-    if (observations.workspaceChanges.every((change) =>
-      inputs.get(change.path) === change.afterSha256) && run.receiptRef.length > 0) return run;
+    if (observations.workspaceChanges.every((change) => inputs.get(change.path) === change.afterSha256)
+        && run.receiptRef.length > 0) return run;
   }
   return undefined;
+}
+
+function reusableSandboxRun(
+  observations: TaskObservations, request: SandboxRequest
+): TaskObservations["sandboxRuns"][number] | undefined {
+  const expectedInputs = [...request.inputs]
+    .map((input) => `${input.path}@${input.sha256}`).sort().join("\n");
+  for (let index = observations.sandboxRuns.length - 1; index >= 0; index -= 1) {
+    const run = observations.sandboxRuns[index]!;
+    if (run.status !== "SUCCEEDED" || run.workspaceRevision !== observations.workspaceRevision) continue;
+    const runInputs = [...run.inputs].map((input) => `${input.path}@${input.sha256}`).sort().join("\n");
+    if (JSON.stringify(run.argv) === JSON.stringify(request.argv) && runInputs === expectedInputs) return run;
+  }
+  return undefined;
+}
+
+function validationHint(paths: string[]): string {
+  const lower = paths.map((path) => path.toLowerCase());
+  if (lower.some((path) => path === "pom.xml" || path.endsWith("/pom.xml"))) {
+    return "Maven descriptor observed: read the relevant pom.xml and prefer mvn -o test or mvn -o verify with required exact project inputs.";
+  }
+  if (lower.some((path) => /(^|\/)(build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?)$/.test(path))) {
+    return "Gradle descriptor observed but no Gradle command profile is available: inspect it, use the strongest allowed bounded check, and report that a full Gradle build was not verified.";
+  }
+  if (lower.some((path) => /(^|\/)(package\.json|pyproject\.toml|requirements[^/]*\.txt|cargo\.toml)$/.test(path))) {
+    return "A dependency descriptor was observed: inspect it before execution; use only supported pinned standalone profiles, otherwise use a bounded content check and report the unsupported full build.";
+  }
+  return "No supported build descriptor is observed: inspect relevant imports, use a standalone runner for supported source files, or git diff --check for documentation/config-only changes.";
+}
+
+function validatedCandidateRun(observations: TaskObservations): TaskObservations["sandboxRuns"][number] | undefined {
+  if (observations.workspaceDiffObservedRevision !== observations.workspaceRevision) return undefined;
+  return currentCandidateSandboxRun(observations);
 }
 
 function workspacePublishRequest(
@@ -1268,10 +1363,20 @@ function stableUnique(values: string[]): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
+function sandboxCommandRepair(argv: string[]): string | undefined {
+  if (argv[0] !== "mvn") return undefined;
+  if (argv.includes("compile") || argv.includes("package") || argv.includes("install")) {
+    return "This Maven goal is outside the product allowlist. Retry with ['mvn','-o','test'] or ['mvn','-o','verify']; do not use compile, package, or install.";
+  }
+  return undefined;
+}
+
 function recoverableToolRejection(error: unknown): error is EngineProblem {
   return error instanceof EngineProblem
     && [400, 404, 409, 413].includes(error.status)
-    && error.problem.category === "request";
+    && (error.problem.category === "request"
+      || (error.problem.category === "sandbox_system"
+        && error.problem.code === "SANDBOX_COMMAND_DENIED"));
 }
 
 function abortableSleep(milliseconds: number, signal: AbortSignal): Promise<void> {
