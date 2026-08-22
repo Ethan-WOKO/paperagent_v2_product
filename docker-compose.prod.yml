@@ -146,6 +146,10 @@ services:
       YANBAN_ES_ENDPOINT: http://elasticsearch:9200
       YANBAN_MINIO_ENDPOINT: http://minio:9000
       YANBAN_MINIO_SECURE: "false"
+      YANBAN_MCP_GITHUB_ENABLED: ${YANBAN_MCP_GITHUB_ENABLED:-true}
+      YANBAN_MCP_GITHUB_COMMAND: "npx,-y,@modelcontextprotocol/server-github"
+      YANBAN_MCP_GITHUB_ALLOWED_COMMANDS: "npx,node"
+      YANBAN_MCP_FILESYSTEM_ENABLED: "false"
       YANBAN_SANDBOX_BROKER_URL: ${YANBAN_SANDBOX_BROKER_URL:-http://sandbox-broker:8091}
       YANBAN_AGENT_REACTPLAN_ENABLED: ${YANBAN_AGENT_REACTPLAN_ENABLED:-true}
       YANBAN_AGENT_REACTPLAN_ENGINE_ORIGIN: http://agent-engine-reactplan:8092

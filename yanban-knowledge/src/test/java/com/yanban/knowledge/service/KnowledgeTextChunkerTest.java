@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.yanban.knowledge.config.KnowledgeChunkingProperties;
 import java.util.List;
+import java.io.StringReader;
 import org.junit.jupiter.api.Test;
 
 class KnowledgeTextChunkerTest {
@@ -66,6 +67,19 @@ class KnowledgeTextChunkerTest {
         assertThat(properties.getMaxCharacters()).isEqualTo(800);
         assertThat(properties.getOverlapCharacters()).isEqualTo(120);
         assertThat(properties.isOverlapValid()).isTrue();
+    }
+
+    @Test
+    void streamsLargeInputWithoutChangingChunkLimits() throws Exception {
+        KnowledgeTextChunker chunker = chunker(80, 15);
+        List<String> chunks = new java.util.ArrayList<>();
+
+        chunker.forEachChunk(new StringReader(("一段较长文本。" + "x".repeat(90) + "\r\n").repeat(200)),
+                chunks::add);
+
+        assertThat(chunks).hasSizeGreaterThan(200);
+        assertThat(chunks).allSatisfy(chunk -> assertThat(chunk.length()).isLessThanOrEqualTo(80));
+        assertThat(chunks).noneMatch(String::isBlank);
     }
 
     private KnowledgeTextChunker chunker(int maxCharacters, int overlapCharacters) {

@@ -31,6 +31,9 @@ public class KbChunk {
     @Column(name = "es_doc_id", length = 255)
     private String esDocId;
 
+    @Column(name = "content_digest", length = 64)
+    private String contentDigest;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -59,4 +62,6 @@ public class KbChunk {
     public Instant getCreatedAt() { return createdAt; }
     public String getEsDocId() { return esDocId; }
     public void setEsDocId(String esDocId) { this.esDocId = esDocId; }
+    public String getContentDigest() { return contentDigest; }
+    public void setContentDigest(String contentDigest) { this.contentDigest = contentDigest; }
 }

@@ -39,6 +39,24 @@ yanban:
       api-url: ${OPENROUTER_API_URL:https://openrouter.ai/api/v1/chat/completions}
       api-key: ${OPENROUTER_API_KEY:}
   knowledge:
+    upload:
+      processing-topic: ${YANBAN_KNOWLEDGE_PROCESSING_TOPIC:file-processing}
+      processing-partitions: ${YANBAN_KNOWLEDGE_PROCESSING_PARTITIONS:8}
+      consumer-concurrency: ${YANBAN_KNOWLEDGE_CONSUMER_CONCURRENCY:4}
+      retry-backoff-millis: ${YANBAN_KNOWLEDGE_RETRY_BACKOFF_MILLIS:2000}
+      max-processing-attempts: ${YANBAN_KNOWLEDGE_MAX_PROCESSING_ATTEMPTS:4}
+      outbox-batch-size: ${YANBAN_KNOWLEDGE_OUTBOX_BATCH_SIZE:50}
+      outbox-max-attempts: ${YANBAN_KNOWLEDGE_OUTBOX_MAX_ATTEMPTS:10}
+      processing-batch-size: ${YANBAN_KNOWLEDGE_PROCESSING_BATCH_SIZE:32}
+      embedding-batch-size: ${YANBAN_KNOWLEDGE_EMBEDDING_BATCH_SIZE:10}
+      max-concurrent-uploads: ${YANBAN_KNOWLEDGE_MAX_CONCURRENT_UPLOADS:12}
+      max-concurrent-uploads-per-user: ${YANBAN_KNOWLEDGE_MAX_CONCURRENT_UPLOADS_PER_USER:2}
+      max-concurrent-processing: ${YANBAN_KNOWLEDGE_MAX_CONCURRENT_PROCESSING:8}
+      max-concurrent-processing-per-user: ${YANBAN_KNOWLEDGE_MAX_CONCURRENT_PROCESSING_PER_USER:2}
+      max-concurrent-embedding-batches: ${YANBAN_KNOWLEDGE_MAX_CONCURRENT_EMBEDDING_BATCHES:4}
+      max-concurrent-embedding-batches-per-user: ${YANBAN_KNOWLEDGE_MAX_CONCURRENT_EMBEDDING_BATCHES_PER_USER:1}
+      ocr-max-bytes: ${YANBAN_KNOWLEDGE_OCR_MAX_BYTES:26214400}
+      reconciliation-delay-millis: ${YANBAN_KNOWLEDGE_RECONCILIATION_DELAY_MILLIS:60000}
     elasticsearch:
       endpoint: ${YANBAN_ES_ENDPOINT:http://localhost:9200}
       index-name: ${YANBAN_ES_INDEX:yanban-kb-chunks-v2}

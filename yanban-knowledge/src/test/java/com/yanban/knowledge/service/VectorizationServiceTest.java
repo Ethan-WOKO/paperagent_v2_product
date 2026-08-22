@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.yanban.knowledge.config.KnowledgeElasticsearchProperties;
+import com.yanban.knowledge.config.KnowledgeUploadProperties;
 import com.yanban.knowledge.domain.KbChunk;
 import com.yanban.knowledge.domain.KbChunkRepository;
 import com.yanban.knowledge.domain.KbDocument;
@@ -23,7 +24,9 @@ class VectorizationServiceTest {
         KbChunkRepository chunkRepository = Mockito.mock(KbChunkRepository.class);
         KnowledgeElasticsearchProperties properties = new KnowledgeElasticsearchProperties();
         properties.setVectorDimensions(3);
-        VectorizationService service = new VectorizationService(embeddingClient, indexService, properties, chunkRepository);
+        KnowledgeUploadProperties upload = new KnowledgeUploadProperties();
+        VectorizationService service = new VectorizationService(embeddingClient, indexService, properties,
+                chunkRepository, upload, new KnowledgeResourceLimiter(upload));
 
         KbDocument document = new KbDocument(1L, "paper.md", "PROCESSING", false);
         document.setProjectId(99L);
@@ -33,21 +36,23 @@ class VectorizationServiceTest {
         document.setVersionNo(2);
         document.setCanonicalKey("paper-1-polished");
         KbChunk chunk = new KbChunk(10L, 0, "alpha content");
-        when(embeddingClient.embed("alpha content")).thenReturn(java.util.List.of(0.1d, 0.2d, 0.3d));
-        when(indexService.indexChunk(any())).thenReturn("es-123");
-        when(chunkRepository.save(any(KbChunk.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(embeddingClient.embedAll(any())).thenReturn(java.util.List.of(java.util.List.of(0.1d, 0.2d, 0.3d)));
+        when(indexService.indexChunks(any())).thenReturn(java.util.List.of("es-123"));
+        when(chunkRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         service.vectorizeDocument(document, Collections.singletonList(chunk));
 
         assertThat(chunk.getEsDocId()).isEqualTo("es-123");
-        ArgumentCaptor<IndexedChunkDocument> indexedChunk = ArgumentCaptor.forClass(IndexedChunkDocument.class);
-        verify(indexService).indexChunk(indexedChunk.capture());
-        assertThat(indexedChunk.getValue().projectId()).isEqualTo(99L);
-        assertThat(indexedChunk.getValue().sourceType()).isEqualTo("PAPER_POLISHED");
-        assertThat(indexedChunk.getValue().versionStatus()).isEqualTo("ACTIVE");
-        assertThat(indexedChunk.getValue().lineageId()).isEqualTo("paper-1");
-        assertThat(indexedChunk.getValue().versionNo()).isEqualTo(2);
-        assertThat(indexedChunk.getValue().canonicalKey()).isEqualTo("paper-1-polished");
-        verify(chunkRepository).save(chunk);
+        @SuppressWarnings("unchecked") ArgumentCaptor<java.util.List<IndexedChunkDocument>> indexedChunks =
+                ArgumentCaptor.forClass(java.util.List.class);
+        verify(indexService).indexChunks(indexedChunks.capture());
+        IndexedChunkDocument indexedChunk = indexedChunks.getValue().get(0);
+        assertThat(indexedChunk.projectId()).isEqualTo(99L);
+        assertThat(indexedChunk.sourceType()).isEqualTo("PAPER_POLISHED");
+        assertThat(indexedChunk.versionStatus()).isEqualTo("ACTIVE");
+        assertThat(indexedChunk.lineageId()).isEqualTo("paper-1");
+        assertThat(indexedChunk.versionNo()).isEqualTo(2);
+        assertThat(indexedChunk.canonicalKey()).isEqualTo("paper-1-polished");
+        verify(chunkRepository).saveAll(any());
     }
 }

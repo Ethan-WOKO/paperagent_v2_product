@@ -3,6 +3,9 @@ package com.yanban.knowledge.service;
 import com.yanban.knowledge.config.KnowledgeChunkingProperties;
 import java.util.ArrayList;
 import java.util.List;
+import java.io.IOException;
+import java.io.Reader;
+import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -47,6 +50,52 @@ public class KnowledgeTextChunker {
             start = safeStart(normalized, nextStart);
         }
         return chunks.isEmpty() ? List.of("") : List.copyOf(chunks);
+    }
+
+    public void forEachChunk(Reader reader, Consumer<String> consumer) throws IOException {
+        int maxCharacters = properties.getMaxCharacters();
+        int overlapCharacters = properties.getOverlapCharacters();
+        StringBuilder pending = new StringBuilder(maxCharacters * 2);
+        char[] input = new char[Math.max(1024, maxCharacters)];
+        boolean previousCarriageReturn = false;
+        int read;
+        while ((read = reader.read(input)) >= 0) {
+            for (int i = 0; i < read; i++) {
+                char value = input[i];
+                if (value == '\r') {
+                    pending.append('\n');
+                    previousCarriageReturn = true;
+                } else {
+                    if (value == '\n' && previousCarriageReturn) {
+                        previousCarriageReturn = false;
+                        continue;
+                    }
+                    previousCarriageReturn = false;
+                    pending.append(value);
+                }
+            }
+            emitAvailable(pending, maxCharacters, overlapCharacters, consumer, false);
+        }
+        emitAvailable(pending, maxCharacters, overlapCharacters, consumer, true);
+    }
+
+    private void emitAvailable(StringBuilder pending, int maxCharacters, int overlapCharacters,
+                               Consumer<String> consumer, boolean endOfInput) {
+        while (pending.length() >= maxCharacters || endOfInput && !pending.isEmpty()) {
+            int hardEnd = safeBoundary(pending.toString(), Math.min(pending.length(), maxCharacters));
+            int end = hardEnd == pending.length() ? hardEnd
+                    : preferredEnd(pending.toString(), 0, hardEnd, maxCharacters);
+            if (end <= 0) end = hardEnd;
+            String chunk = pending.substring(0, end).trim();
+            if (!chunk.isEmpty()) consumer.accept(chunk.startsWith("\uFEFF") ? chunk.substring(1) : chunk);
+            if (end >= pending.length()) {
+                pending.setLength(0);
+                break;
+            }
+            int retainFrom = safeStart(pending.toString(), Math.max(0, end - overlapCharacters));
+            pending.delete(0, retainFrom);
+            if (!endOfInput && pending.length() < maxCharacters) break;
+        }
     }
 
     private int preferredEnd(String text, int start, int hardEnd, int maxCharacters) {

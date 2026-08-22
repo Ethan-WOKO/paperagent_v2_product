@@ -2,6 +2,7 @@ package com.yanban.knowledge.service;
 
 import com.yanban.knowledge.config.KnowledgeStorageProperties;
 import com.yanban.knowledge.config.KnowledgeChunkingProperties;
+import com.yanban.knowledge.config.KnowledgeUploadProperties;
 import com.yanban.knowledge.domain.KbDocument;
 import io.minio.MinioClient;
 import java.nio.charset.StandardCharsets;
@@ -26,7 +27,8 @@ class FileProcessingServiceTest {
                 new KnowledgeStorageProperties(),
                 mock(VectorizationService.class),
                 emptyOcrProvider(),
-                new KnowledgeTextChunker(new KnowledgeChunkingProperties())
+                new KnowledgeTextChunker(new KnowledgeChunkingProperties()),
+                uploadProperties(), new KnowledgeResourceLimiter(uploadProperties())
         );
         KbDocument document = new KbDocument(2L, "rag-eval-comprehensive-sample.md", "PROCESSING", false);
         document.setMimeType("text/markdown");
@@ -58,7 +60,8 @@ class FileProcessingServiceTest {
                 new KnowledgeStorageProperties(),
                 mock(VectorizationService.class),
                 emptyOcrProvider(),
-                new KnowledgeTextChunker(new KnowledgeChunkingProperties())
+                new KnowledgeTextChunker(new KnowledgeChunkingProperties()),
+                uploadProperties(), new KnowledgeResourceLimiter(uploadProperties())
         );
         KbDocument document = new KbDocument(2L, "sample.md", "PROCESSING", false);
 
@@ -90,4 +93,6 @@ class FileProcessingServiceTest {
             }
         };
     }
+
+    private KnowledgeUploadProperties uploadProperties() { return new KnowledgeUploadProperties(); }
 }
