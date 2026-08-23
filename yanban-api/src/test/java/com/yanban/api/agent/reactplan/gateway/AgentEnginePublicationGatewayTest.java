@@ -22,11 +22,15 @@ import com.yanban.api.project.ProjectRevisionOperation;
 import com.yanban.api.project.ProjectRevisionOperationResponse;
 import com.yanban.api.project.ProjectRevisionWorkflowService;
 import java.time.Instant;
+import java.io.ByteArrayOutputStream;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 
 class AgentEnginePublicationGatewayTest {
     private static final String TASK = "task." + "1".repeat(64);
@@ -145,6 +149,41 @@ class AgentEnginePublicationGatewayTest {
                 anyLong(), anyLong(), anyString(), anyString(), anyString(), any());
     }
 
+    @Test
+    void publishesServerGeneratedDocxWithExactLocalIntegrityProof()
+            throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        AgentEngineWorkspaceGateway workspaces = mock(AgentEngineWorkspaceGateway.class);
+        AgentEngineSandboxGateway sandboxes = mock(AgentEngineSandboxGateway.class);
+        ProjectRevisionWorkflowService revisions = mock(ProjectRevisionWorkflowService.class);
+        byte[] bytes = docx("完整论文");
+        String after = sha256(bytes);
+        WorkspaceDiffEntry entry = new WorkspaceDiffEntry(
+                "ADD", "完整论文.docx", null, after);
+        when(workspaces.publicationChanges(any(), any())).thenReturn(List.of(
+                AutomaticProjectFileChange.generatedDocx(
+                        "ADD", "完整论文.docx", null, after, bytes,
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "docx-generation." + after)));
+        when(revisions.applyWorkspaceAutomatically(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ProjectRevisionOperationResponse(
+                        43L, ProjectRevisionOperation.Type.APPLICATION,
+                        ProjectRevisionOperation.Outcome.SUCCEEDED,
+                        7L, VERSION, 8L, "6".repeat(64), null,
+                        "7".repeat(64), List.of(0), List.of(), Instant.now()));
+        AgentEnginePublicationGateway gateway = new AgentEnginePublicationGateway(
+                workspaces, sandboxes, revisions, json);
+
+        var result = gateway.publish(
+                authority(), documentRequest(json, List.of(entry)));
+
+        assertThat(result.receiptRef()).startsWith("document-integrity.");
+        verify(sandboxes, never()).requireSuccessfulReceipt(any(), anyString());
+        verify(revisions).applyWorkspaceAutomatically(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), any());
+    }
+
     private static WorkspacePublishRequest request(
             ObjectMapper json, List<WorkspaceDiffEntry> entries) {
         Map<String, Object> semantics = new LinkedHashMap<>();
@@ -174,6 +213,20 @@ class AgentEnginePublicationGatewayTest {
                 empty, empty, "8".repeat(64),
                 List.of(new ReceiptInput("Sort.java", inputHash, 7)),
                 Instant.now(), Instant.now());
+    }
+
+    private static byte[] docx(String text) throws Exception {
+        try (XWPFDocument document = new XWPFDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.createParagraph().createRun().setText(text);
+            document.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static String sha256(byte[] content) throws Exception {
+        return HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(content));
     }
 
     private static EngineTaskAuthority authority() {

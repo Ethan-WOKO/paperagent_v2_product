@@ -171,6 +171,7 @@ class ProjectServiceTest {
         try (XWPFDocument document = new XWPFDocument();
                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             document.createParagraph().createRun().setText("Preview paragraph");
+            document.createParagraph().createRun().setText("Later paragraph");
             document.write(output);
             documentBytes = output.toByteArray();
         }
@@ -180,8 +181,18 @@ class ProjectServiceTest {
 
         assertThatThrownBy(() -> service.readFile(7L, 42L, "notes.docx"))
                 .isInstanceOf(ResponseStatusException.class);
-        assertThat(service.previewFile(7L, 42L, "notes.docx").content())
-                .contains("project.document.extract", "Preview paragraph");
+        String firstPage = service.previewFile(
+                7L, 42L, "notes.docx", null, 1).content();
+        String cursor = objectMapper.readTree(firstPage).path("summary")
+                .path("nextCursor").asText();
+        String secondPage = service.previewFile(
+                7L, 42L, "notes.docx", cursor, 1).content();
+        assertThat(firstPage)
+                .contains("project.document.extract", "Preview paragraph")
+                .doesNotContain("Later paragraph");
+        assertThat(secondPage)
+                .contains("Later paragraph")
+                .doesNotContain("Preview paragraph");
         assertThat(service.readRawFile(7L, 42L, "notes.docx").content())
                 .isEqualTo(documentBytes);
     }

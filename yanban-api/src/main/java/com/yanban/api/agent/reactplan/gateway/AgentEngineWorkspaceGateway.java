@@ -10,6 +10,8 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.ReceiptInpu
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxInput;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteResult;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDocxCreateRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDocxCreateResult;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnProjectVersionSourceFactory;
@@ -50,6 +52,7 @@ import org.springframework.stereotype.Service;
 @ConditionalOnProperty(prefix = "yanban.agent.engine.gateway", name = "enabled", havingValue = "true")
 final class AgentEngineWorkspaceGateway {
     private static final int CONTRACT_MAX_FILES = 4096;
+    private static final int MAX_ACTIVE_DOCX_DRAFTS = 128;
     private final AgentTurnProductContextResolver contexts;
     private final AuthenticatedAgentTurnProjectVersionSourceFactory sources;
     private final ProjectStorageProperties storage;
@@ -59,6 +62,11 @@ final class AgentEngineWorkspaceGateway {
     private final Path root;
     private final ConcurrentMap<String, BoundWorkspace> active = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, WriteFact> writes = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, GeneratedDocumentFact> generatedDocuments =
+            new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, DocxDraft> docxDrafts = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, DocxCallFact> docxCalls = new ConcurrentHashMap<>();
+    private final AgentEngineDocxGenerator docxGenerator = new AgentEngineDocxGenerator();
 
     AgentEngineWorkspaceGateway(
             AgentTurnProductContextResolver contexts,
@@ -94,7 +102,11 @@ final class AgentEngineWorkspaceGateway {
     FileRead read(EngineTaskAuthority authority, FileReadRequest request) {
         if (request == null || !"1.0".equals(request.contractVersion())
                 || request.path() == null || request.expectedSha256() == null
-                || !request.expectedSha256().matches("[a-f0-9]{64}")) {
+                || !request.expectedSha256().matches("[a-f0-9]{64}")
+                || (request.maxLocations() != null
+                && (request.maxLocations() < 1
+                || request.maxLocations()
+                > V2ProjectStructuredReadFacade.MAX_DOCUMENT_LOCATIONS))) {
             throw EngineGatewayException.badRequest("WORKSPACE_READ_INVALID");
         }
         final ProjectPath path;
@@ -102,6 +114,11 @@ final class AgentEngineWorkspaceGateway {
             path = new ProjectPath(request.path());
         } catch (RuntimeException invalid) {
             throw EngineGatewayException.badRequest("WORKSPACE_PATH_INVALID");
+        }
+        if ((request.documentCursor() != null
+                || request.maxLocations() != null)
+                && !structuredReads.supports(path.value())) {
+            throw EngineGatewayException.badRequest("WORKSPACE_READ_INVALID");
         }
         BoundWorkspace bound = bind(authority);
         WorkspaceFileStat stat = stats(bound).stream()
@@ -118,9 +135,16 @@ final class AgentEngineWorkspaceGateway {
             throw EngineGatewayException.conflict("WORKSPACE_FILE_CHANGED");
         }
         if (structuredReads.supports(path.value())) {
+            if (request.documentCursor() != null
+                    && !structuredReads.supportsCursor(path.value())) {
+                throw EngineGatewayException.badRequest(
+                        "WORKSPACE_READ_INVALID");
+            }
             try {
                 var result = structuredReads.read(
-                        bound.port(), bound.materialized().workspace(), path.value());
+                        bound.port(), bound.materialized().workspace(),
+                        path.value(), request.documentCursor(),
+                        request.maxLocations());
                 return new FileRead("1.0", path.value(), bytes.length,
                         stat.hash().value(), mediaType(path.value()), "utf-8",
                         result.content(), result.truncated());
@@ -153,6 +177,9 @@ final class AgentEngineWorkspaceGateway {
             path = new ProjectPath(request.path());
         } catch (RuntimeException invalid) {
             throw EngineGatewayException.badRequest("WORKSPACE_PATH_INVALID");
+        }
+        if (readOnlyBinaryPath(path.value())) {
+            throw EngineGatewayException.badRequest("WORKSPACE_BINARY_WRITE_REJECTED");
         }
         Map<String, Object> semantics = new LinkedHashMap<>();
         semantics.put("operation", request.operation());
@@ -209,6 +236,125 @@ final class AgentEngineWorkspaceGateway {
         return result;
     }
 
+    synchronized WorkspaceDocxCreateResult createDocx(
+            EngineTaskAuthority authority, WorkspaceDocxCreateRequest request) {
+        validateDocxCreate(request);
+        String key = authority.taskId() + "\0" + request.clientRequestId();
+        DocxCallFact replay = docxCalls.get(key);
+        if (replay != null) {
+            if (!replay.requestDigest().equals(request.requestDigest())) {
+                throw EngineGatewayException.conflict("WORKSPACE_WRITE_DIGEST_CONFLICT");
+            }
+            WorkspaceDocxCreateResult value = replay.result();
+            return new WorkspaceDocxCreateResult(
+                    value.contractVersion(), value.clientRequestId(),
+                    value.requestDigest(), true, value.state(), value.path(),
+                    value.totalBlocks(), value.operation(), value.beforeSha256(),
+                    value.afterSha256(), value.sizeBytes());
+        }
+        final ProjectPath path;
+        try {
+            path = new ProjectPath(request.path());
+        } catch (RuntimeException invalid) {
+            throw EngineGatewayException.badRequest("WORKSPACE_PATH_INVALID");
+        }
+        if (!path.value().toLowerCase(Locale.ROOT).endsWith(".docx")) {
+            throw EngineGatewayException.badRequest("WORKSPACE_DOCX_PATH_INVALID");
+        }
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("mode", request.mode());
+        semantics.put("path", request.path());
+        semantics.put("title", request.title());
+        semantics.put("author", request.author());
+        semantics.put("styleProfile", request.styleProfile());
+        semantics.put("blocks", request.blocks());
+        if (!ReactPlanCanonicalJson.digest(json, semantics).equals(request.requestDigest())) {
+            throw EngineGatewayException.badRequest("WORKSPACE_WRITE_DIGEST_INVALID");
+        }
+        String draftKey = authority.taskId() + "\0" + path.value();
+        String mode = request.mode();
+        if ("START".equals(mode)) {
+            Instant expiresBefore = Instant.now().minusSeconds(2 * 60 * 60);
+            docxDrafts.entrySet().removeIf(entry ->
+                    entry.getValue().createdAt().isBefore(expiresBefore));
+            if (docxDrafts.size() >= MAX_ACTIVE_DOCX_DRAFTS) {
+                throw EngineGatewayException.tooLarge(
+                        "WORKSPACE_DOCX_DRAFT_LIMIT_EXCEEDED");
+            }
+            BoundWorkspace bound = bind(authority);
+            if (stats(bound).stream().anyMatch(value -> value.path().equals(path))
+                    || docxDrafts.containsKey(draftKey)) {
+                throw EngineGatewayException.conflict("WORKSPACE_ADD_TARGET_EXISTS");
+            }
+            DocxDraft draft = new DocxDraft(path.value(), request.title(),
+                    request.author(), request.styleProfile(),
+                    new ArrayList<>(request.blocks()), Instant.now());
+            validateDraft(draft);
+            docxDrafts.put(draftKey, draft);
+            WorkspaceDocxCreateResult result = draftingResult(request, draft);
+            docxCalls.put(key, new DocxCallFact(request.requestDigest(), result));
+            return result;
+        }
+        if ("APPEND".equals(mode)) {
+            DocxDraft draft = requireDraft(docxDrafts.get(draftKey));
+            draft.blocks().addAll(request.blocks());
+            try {
+                validateDraft(draft);
+            } catch (RuntimeException invalid) {
+                draft.blocks().subList(draft.blocks().size() - request.blocks().size(),
+                        draft.blocks().size()).clear();
+                throw invalid;
+            }
+            WorkspaceDocxCreateResult result = draftingResult(request, draft);
+            docxCalls.put(key, new DocxCallFact(request.requestDigest(), result));
+            return result;
+        }
+        DocxDraft draft = "FINALIZE".equals(mode)
+                ? requireDraft(docxDrafts.get(draftKey))
+                : new DocxDraft(path.value(), request.title(), request.author(),
+                request.styleProfile(), new ArrayList<>(), Instant.now());
+        if (request.blocks() != null) draft.blocks().addAll(request.blocks());
+        validateDraft(draft);
+        WorkspaceDocxCreateRequest complete = new WorkspaceDocxCreateRequest(
+                "1.0", request.clientRequestId(), request.requestDigest(),
+                "CREATE", draft.path(), draft.title(), draft.author(),
+                draft.styleProfile(), List.copyOf(draft.blocks()));
+        BoundWorkspace bound = bind(authority);
+        if (stats(bound).stream().anyMatch(value -> value.path().equals(path))) {
+            throw EngineGatewayException.conflict("WORKSPACE_ADD_TARGET_EXISTS");
+        }
+        final AgentEngineDocxGenerator.GeneratedDocx generated;
+        try {
+            generated = docxGenerator.generate(complete);
+        } catch (AgentEngineDocxGenerator.AgentEngineDocxException failure) {
+            throw EngineGatewayException.badRequest(failure.code());
+        }
+        byte[] content = generated.bytes();
+        if (content.length > properties.getMaxReadBytes()) {
+            throw EngineGatewayException.tooLarge("WORKSPACE_FILE_TOO_LARGE");
+        }
+        String after = sha256(content);
+        try {
+            bound.port().create(bound.materialized().workspace(), path, content);
+        } catch (RuntimeException failure) {
+            throw EngineGatewayException.conflict("WORKSPACE_WRITE_REJECTED");
+        }
+        WorkspaceFileStat written = bound.port().stat(bound.materialized().workspace(), path);
+        if (!written.hash().value().equals(after) || written.size() != content.length) {
+            throw EngineGatewayException.conflict("WORKSPACE_WRITE_ATTESTATION_FAILED");
+        }
+        WorkspaceDocxCreateResult result = new WorkspaceDocxCreateResult(
+                "1.0", request.clientRequestId(), request.requestDigest(), false,
+                "COMPLETED", path.value(), draft.blocks().size(), "ADD",
+                null, after, (long) content.length);
+        generatedDocuments.put(authority.taskId() + "\0" + path.value(),
+                new GeneratedDocumentFact(after, generated.mediaType(),
+                        "docx-generation." + after));
+        if ("FINALIZE".equals(mode)) docxDrafts.remove(draftKey);
+        docxCalls.put(key, new DocxCallFact(request.requestDigest(), result));
+        return result;
+    }
+
     AgentEngineGatewayDtos.WorkspaceDiff diff(EngineTaskAuthority authority) {
         BoundWorkspace bound = bind(authority);
         var source = bound.port().diff(bound.materialized().workspace(),
@@ -250,9 +396,18 @@ final class AgentEngineWorkspaceGateway {
             if (bytes.length != stat.size() || !sha256(bytes).equals(entry.afterSha256())) {
                 throw EngineGatewayException.conflict("WORKSPACE_PUBLICATION_FILE_CHANGED");
             }
-            changes.add(new AutomaticProjectFileChange(
-                    entry.operation(), entry.path(), entry.beforeSha256(),
-                    entry.afterSha256(), utf8(bytes)));
+            GeneratedDocumentFact generated = generatedDocuments.get(
+                    authority.taskId() + "\0" + entry.path());
+            if (generated != null && generated.sha256().equals(entry.afterSha256())) {
+                changes.add(AutomaticProjectFileChange.generatedDocx(
+                        entry.operation(), entry.path(), entry.beforeSha256(),
+                        entry.afterSha256(), bytes, generated.mediaType(),
+                        generated.attestationRef()));
+            } else {
+                changes.add(new AutomaticProjectFileChange(
+                        entry.operation(), entry.path(), entry.beforeSha256(),
+                        entry.afterSha256(), utf8(bytes)));
+            }
         }
         return List.copyOf(changes);
     }
@@ -353,6 +508,58 @@ final class AgentEngineWorkspaceGateway {
         }
     }
 
+    private static void validateDocxCreate(WorkspaceDocxCreateRequest request) {
+        if (request == null || !"1.0".equals(request.contractVersion())
+                || request.clientRequestId() == null
+                || !request.clientRequestId().matches("call\\.[A-Za-z0-9_-]{16,120}")
+                || request.requestDigest() == null
+                || !request.requestDigest().matches("[a-f0-9]{64}")
+                || !("CREATE".equals(request.mode()) || "START".equals(request.mode())
+                || "APPEND".equals(request.mode()) || "FINALIZE".equals(request.mode()))
+                || request.path() == null
+                || (("CREATE".equals(request.mode()) || "START".equals(request.mode())
+                || "APPEND".equals(request.mode()))
+                && (request.blocks() == null || request.blocks().isEmpty()))
+                || ("FINALIZE".equals(request.mode()) && request.blocks() == null)
+                || (("CREATE".equals(request.mode()) || "START".equals(request.mode()))
+                && request.styleProfile() == null)
+                || (("APPEND".equals(request.mode()) || "FINALIZE".equals(request.mode()))
+                && (request.title() != null || request.author() != null
+                || request.styleProfile() != null))) {
+            throw EngineGatewayException.badRequest("WORKSPACE_DOCX_INVALID");
+        }
+    }
+
+    private void validateDraft(DocxDraft draft) {
+        try {
+            docxGenerator.validate(new WorkspaceDocxCreateRequest(
+                    "1.0", "call." + "v".repeat(16), "0".repeat(64),
+                    "CREATE", draft.path(), draft.title(), draft.author(),
+                    draft.styleProfile(), List.copyOf(draft.blocks())));
+        } catch (AgentEngineDocxGenerator.AgentEngineDocxException failure) {
+            throw EngineGatewayException.badRequest(failure.code());
+        }
+    }
+
+    private static DocxDraft requireDraft(DocxDraft draft) {
+        if (draft == null) {
+            throw EngineGatewayException.conflict("WORKSPACE_DOCX_DRAFT_NOT_FOUND");
+        }
+        return draft;
+    }
+
+    private static WorkspaceDocxCreateResult draftingResult(
+            WorkspaceDocxCreateRequest request, DocxDraft draft) {
+        return new WorkspaceDocxCreateResult(
+                "1.0", request.clientRequestId(), request.requestDigest(), false,
+                "DRAFTING", draft.path(), draft.blocks().size(), null,
+                null, null, null);
+    }
+
+    private static boolean readOnlyBinaryPath(String path) {
+        return path.toLowerCase(Locale.ROOT).matches(".*\\.(pdf|doc|docx|xlsx)$");
+    }
+
     private static String mediaType(String path) {
         String lower = path.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".java")) return "text/x-java-source";
@@ -361,6 +568,7 @@ final class AgentEngineWorkspaceGateway {
         if (lower.endsWith(".md")) return "text/markdown";
         if (lower.endsWith(".tex")) return "application/x-tex";
         if (lower.endsWith(".pdf")) return "application/pdf";
+        if (lower.endsWith(".doc")) return "application/msword";
         if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
         return "text/plain";
@@ -384,6 +592,14 @@ final class AgentEngineWorkspaceGateway {
     record ResolvedInputs(Map<String, String> files, List<ReceiptInput> inputs,
                           String inputFingerprint) { }
     private record WriteFact(String requestDigest, WorkspaceWriteResult result) { }
+    private record GeneratedDocumentFact(
+            String sha256, String mediaType, String attestationRef) { }
+    private record DocxCallFact(
+            String requestDigest, WorkspaceDocxCreateResult result) { }
+    private record DocxDraft(String path, String title, String author,
+                             String styleProfile,
+                             List<AgentEngineGatewayDtos.DocxBlock> blocks,
+                             Instant createdAt) { }
     private record BoundWorkspace(WorkspacePort port,
                                   VerifiedWorkspaceMaterialization materialized) { }
 }

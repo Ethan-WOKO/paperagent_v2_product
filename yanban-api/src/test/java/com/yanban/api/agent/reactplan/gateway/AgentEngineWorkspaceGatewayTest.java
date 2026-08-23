@@ -7,6 +7,8 @@ import static org.mockito.Mockito.when;
 
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.DocxBlock;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDocxCreateRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDiffEntry;
 import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -93,6 +95,31 @@ class AgentEngineWorkspaceGatewayTest {
     }
 
     @Test
+    void continuesStructuredDocumentReadsWithAnOpaqueCursor()
+            throws Exception {
+        byte[] content = pdf("first page", "second page");
+        String hash = sha256(content);
+        AgentEngineWorkspaceGateway gateway = gateway(
+                "notes.pdf", content, hash);
+        var first = gateway.read(authority(), new FileReadRequest(
+                "1.0", "notes.pdf", hash, null, 1));
+        var firstJson = new ObjectMapper().readTree(first.content());
+        String cursor = firstJson.path("summary")
+                .path("nextCursor").asText();
+
+        var second = gateway.read(authority(), new FileReadRequest(
+                "1.0", "notes.pdf", hash, cursor, 1));
+        var secondJson = new ObjectMapper().readTree(second.content());
+
+        assertThat(firstJson.path("locations").toString())
+                .contains("first page").doesNotContain("second page");
+        assertThat(secondJson.path("locations").toString())
+                .contains("second page").doesNotContain("first page");
+        assertThat(secondJson.path("summary").path("hasMore").asBoolean())
+                .isFalse();
+    }
+
+    @Test
     void replacesAndAddsOnlyWithExactHashesAndReportsWorkspaceDiff() {
         byte[] content = "class Sort {}\n".getBytes(StandardCharsets.UTF_8);
         String hash = sha256(content);
@@ -147,6 +174,101 @@ class AgentEngineWorkspaceGatewayTest {
                                 .isEqualTo("WORKSPACE_PUBLICATION_DIFF_CONFLICT"));
     }
 
+    @Test
+    void createsOnlyNewVerifiedDocxAndCarriesBinaryPublicationAttestation() {
+        byte[] content = "base\n".getBytes(StandardCharsets.UTF_8);
+        AgentEngineWorkspaceGateway gateway = gateway(content, sha256(content));
+        ObjectMapper json = new ObjectMapper();
+        List<DocxBlock> blocks = List.of(new DocxBlock(
+                "PARAGRAPH", "生成的正文", null, null, null, null,
+                true, null, null));
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("mode", "CREATE");
+        semantics.put("path", "生成结果.docx");
+        semantics.put("title", "结果");
+        semantics.put("author", "研伴");
+        semantics.put("styleProfile", "CHINESE_ACADEMIC");
+        semantics.put("blocks", blocks);
+        WorkspaceDocxCreateRequest request = new WorkspaceDocxCreateRequest(
+                "1.0", "call." + "d".repeat(40),
+                ReactPlanCanonicalJson.digest(json, semantics),
+                "CREATE", "生成结果.docx", "结果", "研伴", "CHINESE_ACADEMIC", blocks);
+
+        var written = gateway.createDocx(writableAuthority(), request);
+        var changes = gateway.publicationChanges(
+                writableAuthority(), gateway.diff(writableAuthority()).entries());
+
+        assertThat(written.operation()).isEqualTo("ADD");
+        assertThat(changes).singleElement().satisfies(change -> {
+            assertThat(change.serverGeneratedDocx()).isTrue();
+            assertThat(change.content()).isNull();
+            assertThat(change.bytes()).startsWith((byte) 0x50, (byte) 0x4b);
+            assertThat(change.afterSha256()).isEqualTo(written.afterSha256());
+        });
+        assertThat(gateway.createDocx(writableAuthority(), request).replayed())
+                .isTrue();
+    }
+
+    @Test
+    void genericUtf8WriterCannotCreateBinaryDocumentExtensions() {
+        AgentEngineWorkspaceGateway gateway = gateway(
+                "base".getBytes(StandardCharsets.UTF_8),
+                sha256("base".getBytes(StandardCharsets.UTF_8)));
+
+        assertThatThrownBy(() -> gateway.write(writableAuthority(),
+                writeRequest(new ObjectMapper(), "call." + "e".repeat(40),
+                        "ADD", "unsafe.docx", null, "not a docx")))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("WORKSPACE_BINARY_WRITE_REJECTED"));
+    }
+
+    @Test
+    void accumulatesLongDocxInDraftWithoutWorkspaceChangesUntilFinalize() {
+        byte[] base = "base".getBytes(StandardCharsets.UTF_8);
+        AgentEngineWorkspaceGateway gateway = gateway(base, sha256(base));
+        ObjectMapper json = new ObjectMapper();
+        var first = List.of(new DocxBlock("HEADING", "第一章", 1,
+                null, null, null, null, null, null));
+        var second = List.of(new DocxBlock("PARAGRAPH", "第二段正文", null,
+                null, null, null, true, null, null));
+
+        var started = gateway.createDocx(writableAuthority(), docxRequest(json,
+                "call." + "f".repeat(40), "START", "long.docx",
+                "长文档", "研伴", "CHINESE_ACADEMIC", first));
+        var appended = gateway.createDocx(writableAuthority(), docxRequest(json,
+                "call." + "g".repeat(40), "APPEND", "long.docx",
+                null, null, null, second));
+
+        assertThat(started.state()).isEqualTo("DRAFTING");
+        assertThat(appended.totalBlocks()).isEqualTo(2);
+        assertThat(gateway.diff(writableAuthority()).changed()).isFalse();
+
+        var completed = gateway.createDocx(writableAuthority(), docxRequest(json,
+                "call." + "h".repeat(40), "FINALIZE", "long.docx",
+                null, null, null, List.of()));
+        assertThat(completed.state()).isEqualTo("COMPLETED");
+        assertThat(completed.totalBlocks()).isEqualTo(2);
+        assertThat(gateway.diff(writableAuthority()).entries())
+                .extracting(WorkspaceDiffEntry::path).containsExactly("long.docx");
+    }
+
+    @Test
+    void acceptsEngineCanonicalDigestWhenOptionalBlockFieldsAreNull() {
+        byte[] base = "base".getBytes(StandardCharsets.UTF_8);
+        AgentEngineWorkspaceGateway gateway = gateway(base, sha256(base));
+        var request = new WorkspaceDocxCreateRequest(
+                "1.0", "call." + "i".repeat(40),
+                "ace37716ee33dcda265b7d9b240f4a5ed6026c644b652256218628dd1513aa5c",
+                "CREATE", "test_doc.docx", "test", null,
+                "CHINESE_ACADEMIC", List.of(new DocxBlock(
+                "PARAGRAPH", "test", null, null, null, null,
+                null, null, null)));
+
+        assertThat(gateway.createDocx(writableAuthority(), request).state())
+                .isEqualTo("COMPLETED");
+    }
+
     private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {
         return gateway("Sort.java", content, hash);
     }
@@ -182,17 +304,20 @@ class AgentEngineWorkspaceGatewayTest {
         assertThat(result.sha256()).isEqualTo(hash);
     }
 
-    private static byte[] pdf(String text) throws Exception {
+    private static byte[] pdf(String... texts) throws Exception {
         try (PDDocument document = new PDDocument();
                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            PDPage page = new PDPage();
-            document.addPage(page);
-            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
-                content.beginText();
-                content.setFont(PDType1Font.HELVETICA, 12);
-                content.newLineAtOffset(72, 720);
-                content.showText(text);
-                content.endText();
+            for (String text : texts) {
+                PDPage page = new PDPage();
+                document.addPage(page);
+                try (PDPageContentStream content =
+                        new PDPageContentStream(document, page)) {
+                    content.beginText();
+                    content.setFont(PDType1Font.HELVETICA, 12);
+                    content.newLineAtOffset(72, 720);
+                    content.showText(text);
+                    content.endText();
+                }
             }
             document.save(output);
             return output.toByteArray();
@@ -242,6 +367,22 @@ class AgentEngineWorkspaceGatewayTest {
         return new WorkspaceWriteRequest("1.0", callId,
                 ReactPlanCanonicalJson.digest(json, semantics), operation, path,
                 baseSha256, content);
+    }
+
+    private static WorkspaceDocxCreateRequest docxRequest(
+            ObjectMapper json, String callId, String mode, String path,
+            String title, String author, String styleProfile,
+            List<DocxBlock> blocks) {
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("mode", mode);
+        semantics.put("path", path);
+        semantics.put("title", title);
+        semantics.put("author", author);
+        semantics.put("styleProfile", styleProfile);
+        semantics.put("blocks", blocks);
+        return new WorkspaceDocxCreateRequest("1.0", callId,
+                ReactPlanCanonicalJson.digest(json, semantics), mode, path,
+                title, author, styleProfile, blocks);
     }
 
     private static String sha256(byte[] value) {

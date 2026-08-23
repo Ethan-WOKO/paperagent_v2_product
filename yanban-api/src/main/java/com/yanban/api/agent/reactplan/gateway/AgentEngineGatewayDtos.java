@@ -10,12 +10,35 @@ public final class AgentEngineGatewayDtos {
     public record FileEntry(String path, long sizeBytes, String sha256, String mediaType) { }
     public record FileList(String contractVersion, String taskId, String projectVersion,
                            List<FileEntry> files) { }
-    public record FileReadRequest(String contractVersion, String path, String expectedSha256) { }
+    public record FileReadRequest(
+            String contractVersion,
+            String path,
+            String expectedSha256,
+            String documentCursor,
+            Integer maxLocations) {
+        public FileReadRequest(
+                String contractVersion, String path, String expectedSha256) {
+            this(contractVersion, path, expectedSha256, null, null);
+        }
+    }
     public record FileRead(String contractVersion, String path, long sizeBytes, String sha256,
                            String mediaType, String encoding, String content, boolean truncated) { }
     public record WorkspaceWriteRequest(String contractVersion, String clientRequestId,
                                         String requestDigest, String operation, String path,
                                         String baseSha256, String content) { }
+    public record DocxBlock(String type, String text, Integer level,
+                            String alignment, Boolean bold, Integer fontSize,
+                            Boolean firstLineIndent, Boolean headerRow,
+                            List<List<String>> rows) { }
+    public record WorkspaceDocxCreateRequest(
+            String contractVersion, String clientRequestId, String requestDigest,
+            String mode, String path, String title, String author, String styleProfile,
+            List<DocxBlock> blocks) { }
+    public record WorkspaceDocxCreateResult(
+            String contractVersion, String clientRequestId, String requestDigest,
+            boolean replayed, String state, String path, int totalBlocks,
+            String operation, String beforeSha256, String afterSha256,
+            Long sizeBytes) { }
     public record WorkspaceWriteResult(String contractVersion, String clientRequestId,
                                        String requestDigest, boolean replayed, String operation,
                                        String path, String beforeSha256, String afterSha256,

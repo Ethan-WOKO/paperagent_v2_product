@@ -60,6 +60,18 @@ final class V2ProjectBinaryAssetFixtures {
         }
     }
 
+    static byte[] docxParagraphs(int count) throws Exception {
+        try (XWPFDocument document = new XWPFDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            for (int index = 1; index <= count; index++) {
+                document.createParagraph().createRun()
+                        .setText("paragraph-" + index);
+            }
+            document.write(output);
+            return output.toByteArray();
+        }
+    }
+
     static byte[] xlsx() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook();
                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {

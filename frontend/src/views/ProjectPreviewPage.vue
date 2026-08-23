@@ -237,6 +237,7 @@
                       <strong>{{ documentLocationLabel(location) }}</strong>
                       <p>{{ location.text }}</p>
                     </article>
+                    <NButton v-if="documentPreviewNextCursor" secondary size="small" :loading="documentPreviewLoadingMore" @click="loadMoreDocumentPreview">加载更多</NButton>
                   </div>
                   <div v-else-if="selectedFileType === 'xlsx' && spreadsheetPreviewSheets.length" class="project-preview__spreadsheet">
                     <section v-for="sheet in spreadsheetPreviewSheets" :key="sheet.name">
@@ -895,7 +896,7 @@ const codeValidationProfileOptions: Array<{ label: string; value: CandidateValid
 const selectedFileType = computed(() => {
   const path = selectedFile.value?.path.toLowerCase() || '';
   if (path.endsWith('.pdf')) return 'pdf';
-  if (path.endsWith('.docx')) return 'docx';
+  if (path.endsWith('.docx') || path.endsWith('.doc')) return 'docx';
   if (path.endsWith('.xlsx')) return 'xlsx';
   return 'text';
 });
@@ -915,6 +916,8 @@ const documentPreviewLocations = computed<DocumentPreviewLocation[]>(() => {
   const locations = structuredFilePreview.value?.locations;
   return Array.isArray(locations) ? locations as DocumentPreviewLocation[] : [];
 });
+const documentPreviewNextCursor = ref('');
+const documentPreviewLoadingMore = ref(false);
 
 const spreadsheetPreviewSheets = computed<SpreadsheetPreviewSheet[]>(() => {
   const sheets = structuredFilePreview.value?.sheets;
@@ -2806,6 +2809,8 @@ async function openFile(path: string) {
   if (!projectId) return;
   revealFileInTree(path);
   clearPdfPreview();
+  documentPreviewNextCursor.value = '';
+  documentPreviewLoadingMore.value = false;
   loading.file = true;
   try {
     let value: ProjectFileResponse;
@@ -2821,13 +2826,15 @@ async function openFile(path: string) {
       }
       value = { ...entry, content: extracted };
       pdfPreviewUrl.value = URL.createObjectURL(raw);
-    } else if (/\.(?:docx|xlsx)$/i.test(path)) {
+    } else if (/\.(?:doc|docx|xlsx)$/i.test(path)) {
       value = (await previewProjectFile(projectId, path)).data;
     } else {
       value = (await readProjectFile(projectId, path)).data;
     }
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
       selectedFile.value = value;
+      documentPreviewNextCursor.value = /\.(?:doc|docx)$/i.test(path)
+        ? nextDocumentCursor(value.content) : '';
       showInspector('preview');
     } else {
       clearPdfPreview();
@@ -2837,6 +2844,47 @@ async function openFile(path: string) {
   } finally {
     if (epoch === projectEpoch) loading.file = false;
   }
+}
+
+async function loadMoreDocumentPreview() {
+  const projectId = activeProjectId.value;
+  const current = selectedFile.value;
+  const cursor = documentPreviewNextCursor.value;
+  const epoch = projectEpoch;
+  if (!projectId || !current || !cursor || documentPreviewLoadingMore.value) return;
+  documentPreviewLoadingMore.value = true;
+  try {
+    const page = (await previewProjectFile(
+      projectId, current.path, cursor)).data;
+    const merged = mergeDocumentPreviewPages(current.content, page.content);
+    if (epoch === projectEpoch && projectId === activeProjectId.value
+        && selectedFile.value?.path === current.path) {
+      selectedFile.value = { ...page, content: JSON.stringify(merged) };
+      documentPreviewNextCursor.value = nextDocumentCursor(page.content);
+    }
+  } catch (cause) {
+    if (epoch === projectEpoch) error.value = apiError(cause);
+  } finally {
+    if (epoch === projectEpoch) documentPreviewLoadingMore.value = false;
+  }
+}
+
+function nextDocumentCursor(content: string) {
+  try {
+    const parsed = JSON.parse(content) as { summary?: { nextCursor?: unknown } };
+    return typeof parsed.summary?.nextCursor === 'string'
+      ? parsed.summary.nextCursor : '';
+  } catch {
+    return '';
+  }
+}
+
+function mergeDocumentPreviewPages(current: string, next: string) {
+  const first = JSON.parse(current) as Record<string, unknown>;
+  const page = JSON.parse(next) as Record<string, unknown>;
+  const firstLocations = Array.isArray(first.locations) ? first.locations : [];
+  const pageLocations = Array.isArray(page.locations) ? page.locations : [];
+  return { ...first, ...page, locations: [...firstLocations, ...pageLocations] };
 }
 
 function clearPdfPreview() {

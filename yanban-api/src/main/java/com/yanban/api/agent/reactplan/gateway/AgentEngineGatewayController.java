@@ -3,6 +3,7 @@ package com.yanban.api.agent.reactplan.gateway;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileList;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileRead;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDocxCreateRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.Receipt;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxCancelRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxSubmit;
@@ -91,6 +92,15 @@ final class AgentEngineGatewayController {
             @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
             @RequestBody WorkspaceWriteRequest request) {
         return workspaces.write(grants.verifyWorkspaceWrite(authorization, taskId), request);
+    }
+
+    @PostMapping("/workspace/docx")
+    AgentEngineGatewayDtos.WorkspaceDocxCreateResult createDocx(
+            @PathVariable String taskId,
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestBody WorkspaceDocxCreateRequest request) {
+        return workspaces.createDocx(
+                grants.verifyWorkspaceWrite(authorization, taskId), request);
     }
 
     @GetMapping("/workspace/diff")

@@ -1360,9 +1360,10 @@ orchestration, or legacy Agent execution path.
 
 The product Project manifest and the authenticated V2 source adapter now share
 one narrow read-only asset policy. Existing admitted text files remain
-unchanged. Valid bounded PDF, DOCX, and XLSX bytes may additionally enter the
-same immutable Project cut; arbitrary binary formats and files whose extension
-does not match their signature or OOXML package structure remain excluded.
+unchanged. Valid bounded PDF, DOC, DOCX, and XLSX bytes may additionally enter
+the same immutable Project cut; arbitrary binary formats and files whose
+extension does not match their signature or container structure remain
+excluded.
 
 The ProjectVersion identity continues to derive from normalized relative path,
 exact size, and SHA-256 for every admitted entry. Both local and MinIO-backed
@@ -1387,10 +1388,23 @@ inspection are layered later as read-only tools over this frozen Workspace.
 
 The natural-language V2 product catalog adds two read-only Project tools over
 the authenticated exact-byte Workspace source. `project.document.extract`
-accepts one exact PDF or DOCX path and returns bounded parser metadata plus PDF
-page or DOCX paragraph/table-cell locations. `project.spreadsheet.inspect`
+accepts one exact PDF, DOC, or DOCX path and returns bounded parser metadata plus
+PDF page or Word paragraph/table-cell locations. `project.spreadsheet.inspect`
 accepts one exact XLSX path and returns bounded sheet metadata, dimensions,
 headers, typed samples, and formula-presence observations.
+
+Document locations are not UTF-8 line numbers. PDF, DOC, and DOCX reads expose
+an opaque continuation cursor when a bounded page has more content; callers
+must pass that cursor back unchanged to the same read operation. Ordinary text
+and source files retain their existing inclusive line-range contract, while
+XLSX remains a single bounded structured observation. A document page returns
+at most 20,000 text characters and 200 structural locations. Legacy DOC table
+paragraphs are represented only through table-cell locations rather than being
+duplicated as ordinary paragraphs.
+
+The ReactPlan product model gateway requests disabled provider thinking by
+default. This leaves the existing 4,096-token visible completion budget,
+provider routing, fallback, and bounded empty-response handling unchanged.
 
 Both tools execute only after the existing authenticated turn, persistent
 Plan, ACTIVE Step, ToolCall, fenced lease, frozen ProjectVersion, confirmed
@@ -1398,13 +1412,13 @@ Workspace, and effect-claim checks agree. Model arguments provide only paths
 and parser budgets. Parser output becomes the existing immutable structured
 Receipt, and exact claim replay does not parse Workspace bytes again.
 
-PDF parsing uses no OCR or external resource. OOXML relationship and macro
-signals are inspected without resolving targets. Spreadsheet formulas are
-never evaluated, macros are never executed, and external links are never
-resolved. Input bytes, locations, characters, sheets, rows, columns, cells,
-and output capture are bounded; success reports explicit partial and truncated
-state while malformed or unavailable assets produce sanitized tool-specific
-failure Receipts.
+PDF parsing uses no OCR or external resource. Legacy Word OLE structure and
+OOXML relationship and macro signals are inspected without resolving targets.
+Spreadsheet formulas are never evaluated, macros are never executed, and
+external links are never resolved. Input bytes, locations, characters, sheets,
+rows, columns, cells, and output capture are bounded; success reports explicit
+partial and truncated state while malformed or unavailable assets produce
+sanitized tool-specific failure Receipts.
 
 Catalog descriptions now distinguish ordinary literal `project.search` from
 cross-file proof via `project.cross-material.search`, and distinguish LaTeX

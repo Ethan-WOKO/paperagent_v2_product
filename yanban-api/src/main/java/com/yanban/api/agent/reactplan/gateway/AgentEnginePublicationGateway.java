@@ -108,10 +108,20 @@ final class AgentEnginePublicationGateway {
                     "WORKSPACE_PUBLICATION_DOCUMENT_PROOF_MISMATCH");
         }
         if (changes.isEmpty() || changes.stream().anyMatch(change ->
-                !documentPath(change.path()) || change.content().indexOf('\0') >= 0)) {
+                !validDocumentIntegrityChange(change))) {
             throw EngineGatewayException.conflict(
                     "WORKSPACE_PUBLICATION_DOCUMENT_INTEGRITY_REJECTED");
         }
+    }
+
+    private static boolean validDocumentIntegrityChange(
+            AutomaticProjectFileChange change) {
+        if (change.serverGeneratedDocx()) {
+            return change.path().toLowerCase(java.util.Locale.ROOT)
+                    .endsWith(".docx");
+        }
+        return documentPath(change.path()) && change.content() != null
+                && change.content().indexOf('\0') < 0;
     }
 
     private static boolean documentPath(String path) {

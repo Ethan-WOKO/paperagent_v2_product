@@ -284,8 +284,11 @@ public class ProjectController {
     public ProjectFileResponse preview(
             @AuthenticationPrincipal(expression = "id") Long userId,
             @PathVariable Long projectId,
-            @RequestParam String path) {
-        return projectService.previewFile(userId, projectId, path);
+            @RequestParam String path,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) Integer maxLocations) {
+        return projectService.previewFile(
+                userId, projectId, path, cursor, maxLocations);
     }
 
     @GetMapping("/{projectId}/files/raw")

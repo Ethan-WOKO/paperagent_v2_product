@@ -93,10 +93,15 @@ describe('Project page presentation contract', () => {
     expect(source).toContain('class="project-utility-chip project-context-toggle"');
   });
 
-  it('previews PDF, DOCX, and XLSX without treating them as plain UTF-8 files', () => {
+  it('previews PDF, DOC, DOCX, and XLSX without treating them as plain UTF-8 files', () => {
     expect(source).toContain("readProjectRawFile(projectId, path)");
     expect(source).toContain("selectedFileType === 'pdf' && pdfPreviewUrl");
     expect(source).toContain("selectedFileType === 'docx' && documentPreviewLocations.length");
+    expect(source).toContain("path.endsWith('.docx') || path.endsWith('.doc')");
+    expect(source).toContain('/\\.(?:doc|docx|xlsx)$/i.test(path)');
+    expect(source).toContain('v-if="documentPreviewNextCursor"');
+    expect(source).toContain('nextDocumentCursor(page.content)');
+    expect(source).toContain('mergeDocumentPreviewPages(current.content, page.content)');
     expect(source).toContain("selectedFileType === 'xlsx' && spreadsheetPreviewSheets.length");
     expect(source).toContain('URL.revokeObjectURL(pdfPreviewUrl.value)');
   });

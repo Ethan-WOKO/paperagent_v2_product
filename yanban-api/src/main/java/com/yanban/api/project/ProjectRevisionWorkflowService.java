@@ -147,7 +147,8 @@ public class ProjectRevisionWorkflowService {
                     || !canonicalProjectPath(change.path())
                     || !paths.add(change.path())
                     || !folded.add(change.path().toLowerCase(java.util.Locale.ROOT))
-                    || ProjectAssetAdmissionPolicy.readOnlyBinaryPath(change.path())) {
+                    || (ProjectAssetAdmissionPolicy.readOnlyBinaryPath(change.path())
+                    && !change.serverGeneratedDocx())) {
                 throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                         "Automatic Workspace changes are invalid");
             }
@@ -444,7 +445,7 @@ public class ProjectRevisionWorkflowService {
             }
             byte[] content = change == null
                     ? storage.readFile(basePrefix, entry.path(), properties.getMaxFileBytes())
-                    : change.content().getBytes(StandardCharsets.UTF_8);
+                    : change.bytes();
             if (change == null && (content.length != entry.sizeBytes()
                     || !sha256(content).equals(entry.sha256()))) {
                 throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
@@ -458,7 +459,7 @@ public class ProjectRevisionWorkflowService {
                         "Workspace MODIFY target no longer exists in the current Project");
             }
             result.add(storeChecked(resultPrefix, change.path(),
-                    change.content().getBytes(StandardCharsets.UTF_8)));
+                    change.bytes(), change.mediaType()));
         }
         result.sort(Comparator.comparing(ProjectObjectEntry::path));
         TrustedManifest expected = validateManifest(result);
@@ -474,11 +475,16 @@ public class ProjectRevisionWorkflowService {
     }
 
     private ProjectObjectEntry storeChecked(String prefix, String path, byte[] content) {
+        return storeChecked(prefix, path, content, "text/plain; charset=utf-8");
+    }
+
+    private ProjectObjectEntry storeChecked(
+            String prefix, String path, byte[] content, String mediaType) {
         if (content.length > properties.getMaxFileBytes()) {
             throw new ProjectTraversalLimitException("Project revision file budget exceeded");
         }
-        ProjectObjectEntry stored = storage.storeBytes(prefix, new ProjectRelativePath(path).value(), content,
-                "text/plain; charset=utf-8");
+        ProjectObjectEntry stored = storage.storeBytes(prefix,
+                new ProjectRelativePath(path).value(), content, mediaType);
         String hash = sha256(content);
         if (stored.sizeBytes() != content.length || !hash.equals(stored.sha256())) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Project revision object verification failed");

@@ -1,5 +1,5 @@
 import type { AcceptedAnswer, ChatMessage, HistoricalContextEnvelope, LongTermMemoryEnvelope, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RecentConversationTurn, RegisteredToolCatalog, RegisteredToolResult, RegisteredToolSpec, TaskEvent, TaskObservations, TaskSubmission, TaskView, ToolName, WorkspaceWriteResult } from "./types.js";
-import type { GatewayClient, SandboxRequest, WorkspacePublishRequest, WorkspaceWriteRequest } from "./gateway.js";
+import type { DocxBlock, GatewayClient, SandboxRequest, WorkspaceDocxCreateRequest, WorkspacePublishRequest, WorkspaceWriteRequest } from "./gateway.js";
 import { ContractValidator } from "./validation.js";
 import { reconcileTask, type TaskPersistence } from "./store.js";
 import { bounded, digestObject, EngineProblem, problem, sha256, terminal } from "./util.js";
@@ -15,13 +15,14 @@ const TASK_LEASE_LOST = Symbol("TASK_LEASE_LOST");
 
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the current isolated Workspace manifest. It initially equals the frozen ProjectVersion and reflects later isolated Candidate writes without publishing them.", { type: "object", additionalProperties: false, properties: {} }),
-  functionTool("read_project_file", "Read one file in the current isolated Workspace using its current manifest hash. UTF-8 text and source files return text with optional 1-based inclusive line ranges. PDF and DOCX return bounded document text with page, paragraph, and table-cell locations; XLSX returns bounded sheet and cell observations. Binary document parsing is automatic, so do not choose another read tool. This can observe Candidate text bytes after an isolated write.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" }, startLine: { type: "integer", minimum: 1, description: "Optional for text files only: 1-based inclusive first line; defaults to 1." }, endLine: { type: "integer", minimum: 1, description: "Optional for text files only: 1-based inclusive last line; defaults to the end of the file and must be >= startLine." } } }),
+  functionTool("read_project_file", "Read one file in the current isolated Workspace using its current manifest hash. UTF-8 text and source files use optional 1-based inclusive startLine/endLine. PDF, DOC, and DOCX return bounded page, paragraph, and table-cell locations; when hasMore is true, call this same tool again with nextDocumentCursor as documentCursor. XLSX returns bounded sheet and cell observations. Never use text line ranges for binary documents. Binary parsing is automatic, so do not choose another read tool. This can observe Candidate text bytes after an isolated write.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" }, startLine: { type: "integer", minimum: 1, description: "Optional for UTF-8 text/source files only: 1-based inclusive first line; defaults to 1." }, endLine: { type: "integer", minimum: 1, description: "Optional for UTF-8 text/source files only: 1-based inclusive last line; defaults to the end and must be >= startLine." }, documentCursor: { type: "string", pattern: "^v1:[0-9]{1,7}:[0-9]{1,8}$", description: "Optional for PDF/DOC/DOCX only. Use the exact nextDocumentCursor returned by the preceding page; omit for the first page." } } }),
   functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Commands start at the Project root. First inspect the manifest and relevant source/import or dependency files. Maven allows test or verify only, for example ['mvn','-o','test'] or ['mvn','-o','verify']; compile/package/install are not allowed. Maven preparation downloads dependencies before the offline validation command. For a standalone source, use exactly ['yanban-runner','java','path.java'], ['yanban-runner','python','path.py'], ['yanban-runner','c','path.c'], or ['yanban-runner','cpp','path.cpp']; do not add a 'run' subcommand. Add only exact pinned non-standard Java/Python dependencies as --dependency=group:artifact:version or --dependency=package==version. Do not invoke this tool when every changed file is a plain document: after the Workspace diff is inspected, the server validates and publishes that Candidate locally. Never add or upgrade a dependency merely to make validation pass. Every changed code path must be present in inputs. An identical successful argv/input run is reused automatically.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
   functionTool("ask_user", "Pause and ask one necessary, concrete question.", { type: "object", additionalProperties: false, required: ["question"], properties: { question: { type: "string", minLength: 1, maxLength: 4000 } } })
 ];
 
 const WORKSPACE_MODEL_TOOLS = [
-  functionTool("write_workspace_file", "Create or fully replace one UTF-8 file in the isolated task Workspace. Use only when the current user explicitly asks to change the Project. MODIFY requires the exact current workspace hash; ADD requires baseSha256=null. This does not publish or alter the ProjectVersion.", { type: "object", additionalProperties: false, required: ["operation", "path", "baseSha256", "content"], properties: { operation: { enum: ["ADD", "MODIFY"] }, path: { type: "string" }, baseSha256: { type: ["string", "null"] }, content: { type: "string" } } }),
+  functionTool("write_workspace_file", "Create or fully replace one UTF-8 text/source file in the isolated task Workspace. Binary document formats are rejected. Use only when the current user explicitly asks to change the Project. MODIFY requires the exact current workspace hash; ADD requires baseSha256=null. This does not publish or alter the ProjectVersion.", { type: "object", additionalProperties: false, required: ["operation", "path", "baseSha256", "content"], properties: { operation: { enum: ["ADD", "MODIFY"] }, path: { type: "string" }, baseSha256: { type: ["string", "null"] }, content: { type: "string" } } }),
+  functionTool("create_workspace_docx", "Generate one new DOCX from ordered HEADING, PARAGRAPH, TABLE, and PAGE_BREAK blocks. Existing DOC/DOCX files are never edited or replaced. For a short document use one CREATE call. For a long document use START with metadata and the first blocks, one or more APPEND calls with the same path, then FINALIZE with blocks=[]; keep every call comfortably below the model output limit. Only CREATE or FINALIZE writes the verified DOCX into the Workspace.", { type: "object", additionalProperties: false, required: ["mode", "path", "blocks"], properties: { mode: { enum: ["CREATE", "START", "APPEND", "FINALIZE"] }, path: { type: "string", pattern: "\\.docx$" }, title: { type: "string", maxLength: 500 }, author: { type: "string", maxLength: 200 }, styleProfile: { enum: ["GENERAL", "CHINESE_ACADEMIC"] }, blocks: { type: "array", maxItems: 200, items: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { enum: ["HEADING", "PARAGRAPH", "TABLE", "PAGE_BREAK"] }, text: { type: "string", maxLength: 20000 }, level: { type: "integer", minimum: 1, maximum: 3 }, alignment: { enum: ["LEFT", "CENTER", "RIGHT", "JUSTIFY"] }, bold: { type: "boolean" }, fontSize: { type: "integer", minimum: 8, maximum: 36 }, firstLineIndent: { type: "boolean" }, headerRow: { type: "boolean" }, rows: { type: "array", minItems: 1, maxItems: 100, items: { type: "array", minItems: 1, maxItems: 20, items: { type: "string", maxLength: 10000 } } } } } } } }),
   functionTool("get_workspace_diff", "Inspect the authoritative ADD/MODIFY diff currently present in the isolated task Workspace. This never publishes changes.", { type: "object", additionalProperties: false, properties: {} })
 ];
 
@@ -151,7 +152,8 @@ export class AgentEngine {
       metrics: { startedAt: now, promptTokens: 0, completionTokens: 0 },
       receiptRefs: [], pendingCalls: [], nextPendingCall: 0, acceptedAnswers: [],
       recentConversation, historicalContext, longTermMemory, observations: emptyObservations(),
-      candidateValidationRepairs: 0, toolArgumentRepairAttempts: 0,
+      candidateValidationRepairs: 0, emptyModelResponseRepairs: 0,
+      toolArgumentRepairAttempts: 0,
       discoveredToolNames: [], loadedToolNames: [], cancellationRequested: false,
       activeSandboxCallId: null
     };
@@ -434,7 +436,19 @@ export class AgentEngine {
         }
         if (calls.length === 0) {
           const conclusion = bounded(response.content?.trim() ?? "", 16000);
-          if (!conclusion) throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls"));
+          if (!conclusion) {
+            task.emptyModelResponseRepairs =
+              (task.emptyModelResponseRepairs ?? 0) + 1;
+            if (task.emptyModelResponseRepairs <= 1) {
+              task.messages.push({
+                role: "user",
+                content: "Your previous response contained neither answer text nor a tool call. Continue from the existing verified tool results. Return either one valid tool call or a concise final answer; do not repeat a failed document line-range request."
+              });
+              await this.options.store.save(task);
+              continue;
+            }
+            throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls after one repair attempt"));
+          }
           if (task.observations.workspaceChanges.length > 0
               && !candidateWorkspaceValidated(task.observations)) {
             task.candidateValidationRepairs += 1;
@@ -611,12 +625,24 @@ export class AgentEngine {
     }
     if (call.name === "read_project_file") {
       const path = requireString(args.path, "path"); const expectedSha256 = requireString(args.expectedSha256, "expectedSha256");
-      const requestedRange = requestedLineRange(args);
+      const requestedSelection = requestedReadSelection(args);
       await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "requested", null, null);
+      if (requestedSelection.documentCursor !== undefined
+          && !/\.(pdf|doc|docx)$/i.test(path)) {
+        await this.tool(task, call.id, "project.read",
+          `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`,
+          "failed", "document cursor is not valid for this file type", null);
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
+          status: "REJECTED", code: "PROJECT_DOCUMENT_CURSOR_INVALID",
+          message: "documentCursor is available only for PDF, DOC, and DOCX files."
+        }) });
+        return false;
+      }
       let result;
       try {
         result = await this.options.gateway.read(
-          task.view.taskId, grant, path, expectedSha256, signal);
+          task.view.taskId, grant, path, expectedSha256, signal,
+          requestedSelection.documentCursor);
       } catch (error) {
         if (!recoverableToolRejection(error)) throw error;
         await this.tool(task, call.id, "project.read",
@@ -632,7 +658,52 @@ export class AgentEngine {
         return false;
       }
       this.options.validator.validate("gateway-fileRead", result);
-      const selected = selectLineRange(result.content, requestedRange);
+      const structured = isStructuredDocumentMediaType(result.mediaType);
+      if (structured && (requestedSelection.startLine !== undefined
+          || requestedSelection.endLine !== undefined)) {
+        await this.tool(task, call.id, "project.read",
+          `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`,
+          "failed", "text line ranges are not valid for structured documents", null);
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
+          status: "REJECTED", code: "PROJECT_DOCUMENT_LINE_RANGE_INVALID",
+          message: "PDF, DOC, DOCX, and XLSX do not use text line ranges. For PDF/DOC/DOCX, omit startLine/endLine and pass the exact nextDocumentCursor returned by the preceding page."
+        }) });
+        return false;
+      }
+      if (!isPagedDocumentMediaType(result.mediaType)
+          && requestedSelection.documentCursor !== undefined) {
+        await this.tool(task, call.id, "project.read",
+          `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`,
+          "failed", "document cursor is not valid for this file type", null);
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
+          status: "REJECTED", code: "PROJECT_DOCUMENT_CURSOR_INVALID",
+          message: "documentCursor is available only for PDF, DOC, and DOCX files."
+        }) });
+        return false;
+      }
+      if (structured) {
+        const page = structuredDocumentPage(
+          result.content, isPagedDocumentMediaType(result.mediaType));
+        upsertRead(task.observations, result.path, result.sha256);
+        await this.tool(task, call.id, "project.read",
+          `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`,
+          "succeeded", page.hasMore
+            ? `read structured document page; nextDocumentCursor=${page.nextCursor}`
+            : "read final structured document page", null);
+        task.messages.push({
+          role: "tool", toolCallId: modelCallId(call),
+          content: JSON.stringify({
+            path: result.path, sizeBytes: result.sizeBytes,
+            sha256: result.sha256, mediaType: result.mediaType,
+            encoding: result.encoding, content: page.content,
+            documentCursor: requestedSelection.documentCursor ?? null,
+            nextDocumentCursor: page.nextCursor,
+            hasMore: page.hasMore, truncated: page.hasMore
+          })
+        });
+        return false;
+      }
+      const selected = selectLineRange(result.content, requestedSelection);
       if (!selected) {
         await this.tool(task, call.id, "project.read", `path=${bounded(path, 512)}; expectedSha256=${expectedSha256}`, "failed", "requested line range is outside the file", null);
         task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
@@ -679,6 +750,48 @@ export class AgentEngine {
       upsertRead(task.observations, result.path, result.afterSha256);
       await this.tool(task, call.id, "workspace.write", summary, "succeeded",
         `operation=${result.operation}; path=${result.path}; afterSha256=${result.afterSha256}; sizeBytes=${result.sizeBytes}; replayed=${result.replayed}`, null);
+      task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify(result) });
+      return false;
+    }
+    if (call.name === "create_workspace_docx") {
+      if (!task.authority.permissions.writeWorkspace) {
+        throw new EngineProblem(403, problem("WORKSPACE_WRITE_NOT_ALLOWED", "authorization", "This task has no isolated Workspace write authority"));
+      }
+      const request = workspaceDocxCreateRequest(call.id, args);
+      this.options.validator.validate("gateway-workspaceDocxCreateRequest", request);
+      const summary = `operation=ADD; path=${bounded(request.path, 512)}; blocks=${request.blocks.length}; styleProfile=${request.styleProfile}`;
+      await this.tool(task, call.id, "workspace.write", summary, "requested", null, null);
+      let result;
+      try {
+        result = await this.options.gateway.createDocx(task.view.taskId, grant, request, signal);
+      } catch (error) {
+        if (!recoverableToolRejection(error)) throw error;
+        await this.tool(task, call.id, "workspace.write", summary, "failed", `request rejected; code=${error.problem.code}`, null);
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({ status: "REJECTED", code: error.problem.code, message: "DOCX generation was rejected. Use a new .docx relative path and valid ordered blocks; existing DOC/DOCX files cannot be replaced." }) });
+        return false;
+      }
+      this.options.validator.validate("gateway-workspaceDocxCreateResult", result);
+      if (result.clientRequestId !== call.id || result.requestDigest !== request.requestDigest) {
+        throw new EngineProblem(502, problem("WORKSPACE_WRITE_RESULT_INVALID", "tool", "DOCX generation result identity does not match the request", true));
+      }
+      if (result.state === "DRAFTING") {
+        await this.tool(task, call.id, "workspace.write", summary, "succeeded", `DOCX draft accepted; path=${result.path}; totalBlocks=${result.totalBlocks}; replayed=${result.replayed}`, null);
+        task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify(result) });
+        return false;
+      }
+      if (result.operation !== "ADD" || !result.afterSha256 || result.sizeBytes === null) {
+        throw new EngineProblem(502, problem("WORKSPACE_WRITE_RESULT_INVALID", "tool", "Completed DOCX result is incomplete", true));
+      }
+      task.observations.workspaceRevision += 1;
+      task.observations.workspaceDiffObservedRevision = -1;
+      upsertWorkspaceChange(task.observations, {
+        contractVersion: "1.0", clientRequestId: result.clientRequestId,
+        requestDigest: result.requestDigest, replayed: result.replayed,
+        operation: "ADD", path: result.path, beforeSha256: null,
+        afterSha256: result.afterSha256, sizeBytes: result.sizeBytes
+      });
+      upsertRead(task.observations, result.path, result.afterSha256);
+      await this.tool(task, call.id, "workspace.write", summary, "succeeded", `generated and verified DOCX; path=${result.path}; afterSha256=${result.afterSha256}; sizeBytes=${result.sizeBytes}; replayed=${result.replayed}`, null);
       task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify(result) });
       return false;
     }
@@ -920,17 +1033,63 @@ function deterministicCallId(taskId: string, modelCall: number, ordinal: number)
 function modelCallId(call: PendingCall): string { return call.modelCallId ?? call.id; }
 function requireString(value: unknown, name: string): string { if (typeof value !== "string" || !value) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", `Tool argument ${name} must be a non-empty string`)); return value; }
 
-function requestedLineRange(args: Record<string, unknown>): { startLine?: number; endLine?: number } {
+function requestedReadSelection(args: Record<string, unknown>): {
+  startLine?: number; endLine?: number; documentCursor?: string
+} {
   const startLine = args.startLine;
   const endLine = args.endLine;
   if ((startLine !== undefined && (!Number.isInteger(startLine) || (startLine as number) < 1))
       || (endLine !== undefined && (!Number.isInteger(endLine) || (endLine as number) < 1))) {
     throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "File line ranges must be positive integers"));
   }
+  const documentCursor = args.documentCursor;
+  if (documentCursor !== undefined
+      && (typeof documentCursor !== "string"
+        || !/^v1:[0-9]{1,7}:[0-9]{1,8}$/.test(documentCursor))) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Document cursor is invalid"));
+  }
+  if (documentCursor !== undefined
+      && (startLine !== undefined || endLine !== undefined)) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Document cursor and text line ranges are mutually exclusive"));
+  }
   return {
     ...(startLine === undefined ? {} : { startLine: startLine as number }),
-    ...(endLine === undefined ? {} : { endLine: endLine as number })
+    ...(endLine === undefined ? {} : { endLine: endLine as number }),
+    ...(documentCursor === undefined ? {} : { documentCursor })
   };
+}
+
+function isPagedDocumentMediaType(mediaType: string): boolean {
+  return mediaType === "application/pdf"
+    || mediaType === "application/msword"
+    || mediaType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
+function isStructuredDocumentMediaType(mediaType: string): boolean {
+  return isPagedDocumentMediaType(mediaType)
+    || mediaType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+}
+
+function structuredDocumentPage(content: string, pageable: boolean): {
+  content: unknown; hasMore: boolean; nextCursor: string | null
+} {
+  let parsed: unknown;
+  try { parsed = JSON.parse(content); }
+  catch { throw new EngineProblem(502, problem("WORKSPACE_DOCUMENT_PAGE_INVALID", "internal", "Structured document page is not valid JSON")); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new EngineProblem(502, problem("WORKSPACE_DOCUMENT_PAGE_INVALID", "internal", "Structured document page is not an object"));
+  }
+  const summary = (parsed as Record<string, unknown>).summary;
+  const value = summary && typeof summary === "object" && !Array.isArray(summary)
+    ? summary as Record<string, unknown> : {};
+  const hasMore = pageable
+    && (value.hasMore === true || value.truncated === true);
+  const nextCursor = typeof value.nextCursor === "string" ? value.nextCursor : null;
+  if (hasMore && (!nextCursor
+      || !/^v1:[0-9]{1,7}:[0-9]{1,8}$/.test(nextCursor))) {
+    throw new EngineProblem(502, problem("WORKSPACE_DOCUMENT_PAGE_INVALID", "internal", "Structured document page omitted its continuation cursor"));
+  }
+  return { content: parsed, hasMore, nextCursor };
 }
 
 function selectLineRange(
@@ -981,9 +1140,48 @@ function workspaceWriteRequest(callId: string, args: Record<string, unknown>): W
   if (operation === "MODIFY" && (typeof baseSha256 !== "string" || !/^[a-f0-9]{64}$/.test(baseSha256))) {
     throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "MODIFY requires the exact current baseSha256"));
   }
+  if (/\.(?:pdf|doc|docx|xlsx)$/i.test(path)) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Binary documents cannot be written with write_workspace_file; use create_workspace_docx for a new DOCX"));
+  }
   const semantics: Pick<WorkspaceWriteRequest, "operation" | "path" | "baseSha256" | "content"> = {
     operation, path, baseSha256, content
   };
+  return { contractVersion: "1.0", clientRequestId: callId,
+    requestDigest: digestObject(semantics), ...semantics };
+}
+
+function workspaceDocxCreateRequest(callId: string, args: Record<string, unknown>): WorkspaceDocxCreateRequest {
+  const mode = args.mode;
+  const path = requireString(args.path, "path");
+  if (!/\.docx$/i.test(path)) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "DOCX generation requires a .docx path"));
+  const title = args.title === undefined ? null : args.title;
+  const author = args.author === undefined ? null : args.author;
+  const styleProfile = args.styleProfile;
+  const blocks = args.blocks;
+  if (!["CREATE", "START", "APPEND", "FINALIZE"].includes(String(mode))
+      || (title !== null && typeof title !== "string") || (author !== null && typeof author !== "string")
+      || (styleProfile !== undefined && styleProfile !== "GENERAL" && styleProfile !== "CHINESE_ACADEMIC")
+      || !Array.isArray(blocks)
+      || ((mode === "CREATE" || mode === "START" || mode === "APPEND") && blocks.length === 0)
+      || ((mode === "CREATE" || mode === "START") && styleProfile === undefined)
+      || ((mode === "APPEND" || mode === "FINALIZE")
+        && (title !== null || author !== null || styleProfile !== undefined))) {
+    throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "DOCX generation arguments are invalid"));
+  }
+  const normalizedBlocks = (blocks as DocxBlock[]).map((block) => ({
+    type: block.type,
+    text: block.text ?? null,
+    level: block.level ?? null,
+    alignment: block.alignment ?? null,
+    bold: block.bold ?? null,
+    fontSize: block.fontSize ?? null,
+    firstLineIndent: block.firstLineIndent ?? null,
+    headerRow: block.headerRow ?? null,
+    rows: block.rows ?? null
+  }));
+  const semantics = { mode: mode as WorkspaceDocxCreateRequest["mode"], path, title, author,
+    styleProfile: (styleProfile ?? null) as WorkspaceDocxCreateRequest["styleProfile"],
+    blocks: normalizedBlocks };
   return { contractVersion: "1.0", clientRequestId: callId,
     requestDigest: digestObject(semantics), ...semantics };
 }
@@ -1158,6 +1356,7 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.observations.workspaceDiffObservedRevision ??= -1;
   task.observations.workspaceChanges ??= [];
   task.candidateValidationRepairs ??= 0;
+  task.emptyModelResponseRepairs ??= 0;
   task.toolArgumentRepairAttempts ??= 0;
   task.discoveredToolNames ??= [];
   task.loadedToolNames ??= [];
@@ -1237,7 +1436,7 @@ function toolGroup(name: string): string {
   if (name.startsWith("literature_")) return "literature";
   if (name.startsWith("paper_")) return "paper";
   if (name.includes("conversation") || name.includes("history")) return "history";
-  if (["list_project_files", "read_project_file", "write_workspace_file", "get_workspace_diff", "execute_in_sandbox"].includes(name)) return "project";
+  if (["list_project_files", "read_project_file", "write_workspace_file", "create_workspace_docx", "get_workspace_diff", "execute_in_sandbox"].includes(name)) return "project";
   const prefix = name.split("_")[0];
   return prefix && /^[a-z][a-z0-9]{0,31}$/.test(prefix) ? prefix : "other";
 }
@@ -1387,7 +1586,7 @@ function validatedCandidateProof(
 
 function documentOnlyCandidate(entries: TaskObservations["workspaceChanges"]): boolean {
   return entries.length > 0 && entries.every((entry) =>
-    /(?:^|\/)[^/]+\.(?:txt|md|markdown|rst|adoc|tex)$/i.test(entry.path));
+    /(?:^|\/)[^/]+\.(?:txt|md|markdown|rst|adoc|tex|docx)$/i.test(entry.path));
 }
 
 function workspacePublishRequest(

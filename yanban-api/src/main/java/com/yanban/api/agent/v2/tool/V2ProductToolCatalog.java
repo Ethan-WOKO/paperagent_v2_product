@@ -167,13 +167,15 @@ public final class V2ProductToolCatalog {
     private static Entry projectDocumentExtract() {
         return entry(
                 "project_document_extract",
-                "Extract bounded text and locations from one frozen PDF or DOCX file.",
+                "Extract bounded text and locations from one frozen PDF or Word file.",
                 "project.document.extract",
                 "Extract bounded text locations and parser metadata from one "
-                        + "exact .pdf or .docx path in the authenticated frozen "
-                        + "Project Workspace. Choose this for PDF pages or DOCX "
-                        + "paragraphs/table cells, for example "
+                        + "exact .pdf, .doc, or .docx path in the authenticated "
+                        + "frozen Project Workspace. Choose this for PDF pages "
+                        + "or DOC/DOCX paragraphs/table cells, for example "
                         + "{\"path\":\"paper/report.pdf\",\"maxLocations\":20}. "
+                        + "When summary.hasMore is true, call this same tool "
+                        + "again with summary.nextCursor as cursor. "
                         + "Do not use project.read for binary documents, and do "
                         + "not use this tool for .tex structure, spreadsheets, "
                         + "OCR, images, or external resources. The result states "
@@ -182,7 +184,10 @@ public final class V2ProductToolCatalog {
                         Map.of(
                                 "path", stringSchema(
                                         1, 1_024,
-                                        "(?i).+\\.(pdf|docx)"),
+                                        "(?i).+\\.(pdf|doc|docx)"),
+                                "cursor", stringSchema(
+                                        6, 32,
+                                        "v1:[0-9]{1,7}:[0-9]{1,8}"),
                                 "maxCharacters", integerSchema(1_000, 60_000),
                                 "maxLocations", integerSchema(1, 200),
                                 "includeMetadata", booleanSchema()),

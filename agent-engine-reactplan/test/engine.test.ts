@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentEngine } from "../src/engine.js";
-import type { GatewayClient, SandboxRequest, WorkspacePublishRequest, WorkspaceWriteRequest } from "../src/gateway.js";
+import type { GatewayClient, SandboxRequest, WorkspaceDocxCreateRequest, WorkspaceDocxCreateResult, WorkspacePublishRequest, WorkspaceWriteRequest } from "../src/gateway.js";
 import { TaskStore } from "../src/store.js";
 import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, TaskSubmission, WorkspaceDiffView, WorkspacePublishResult, WorkspaceWriteResult } from "../src/types.js";
 import { digestObject, EngineProblem, problem, sha256 } from "../src/util.js";
@@ -255,6 +255,61 @@ describe("AgentEngine", () => {
     expect(gateway.publishCalls).toBe(1);
   });
 
+  it("generates a new DOCX Candidate with local integrity proof and no sandbox", async () => {
+    const blocks: WorkspaceDocxCreateRequest["blocks"] = [
+      { type: "HEADING", text: "研究报告", level: 1 },
+      { type: "PARAGRAPH", text: "生成的正文", firstLineIndent: true }
+    ];
+    const provider = new ScriptedProvider([
+      tool("create_workspace_docx", {
+        mode: "CREATE", path: "output/report.docx", title: "研究报告", author: "研伴",
+        styleProfile: "CHINESE_ACADEMIC", blocks
+      }),
+      tool("get_workspace_diff", {}),
+      { content: "A verified DOCX was generated in the Workspace.", toolCalls: [] }
+    ]);
+    const gateway = new DocxCandidateGateway();
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("7", "session.docx", "根据材料生成新的 DOCX", "1", true);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    expect(gateway.generatedPath).toBe("output/report.docx");
+    expect(gateway.lastDocxRequest?.blocks[0]).toMatchObject({
+      type: "HEADING", text: "研究报告", level: 1,
+      alignment: null, bold: null, fontSize: null,
+      firstLineIndent: null, headerRow: null, rows: null
+    });
+    expect(gateway.sandboxSubmissions).toBe(0);
+    expect(gateway.lastPublishReceipt).toMatch(/^document-integrity\.[a-f0-9]{64}$/);
+    expect(gateway.publishCalls).toBe(1);
+  });
+
+  it("builds a long DOCX across draft calls before one atomic Workspace write", async () => {
+    const provider = new ScriptedProvider([
+      tool("create_workspace_docx", { mode: "START", path: "output/long.docx",
+        title: "长文档", author: "研伴", styleProfile: "CHINESE_ACADEMIC",
+        blocks: [{ type: "HEADING", text: "第一章", level: 1 }] }),
+      tool("create_workspace_docx", { mode: "APPEND", path: "output/long.docx",
+        blocks: [{ type: "PARAGRAPH", text: "中间正文" }] }),
+      tool("create_workspace_docx", { mode: "FINALIZE", path: "output/long.docx", blocks: [] }),
+      tool("get_workspace_diff", {}),
+      { content: "The long DOCX was generated atomically.", toolCalls: [] }
+    ]);
+    const gateway = new DocxCandidateGateway();
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("8", "session.docx.long", "生成一份长 DOCX", "1", true);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    expect(gateway.docxCalls).toEqual(["START", "APPEND", "FINALIZE"]);
+    expect(gateway.workspaceWrites).toBe(1);
+    expect(gateway.publishCalls).toBe(1);
+    expect(gateway.sandboxSubmissions).toBe(0);
+  });
+
   it("does not dispatch a sandbox when the model requests one for a plain document", async () => {
     const content = "hello document\n";
     const contentHash = sha256(content);
@@ -306,6 +361,75 @@ describe("AgentEngine", () => {
     });
     expect(toolResult!.content).not.toContain("line one");
     expect(toolResult!.content).not.toContain("line four");
+  });
+
+  it("continues a structured document with the opaque cursor returned by the gateway", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", {
+        path: "notes.doc", expectedSha256: fileHash
+      }),
+      tool("read_project_file", {
+        path: "notes.doc", expectedSha256: fileHash,
+        documentCursor: "v1:1:0"
+      }),
+      { content: "Read both document pages.", toolCalls: [] }
+    ]);
+    const gateway = new PagedDocumentReadGateway();
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(gateway.cursors).toEqual([undefined, "v1:1:0"]);
+    const results = provider.requests.at(-1)!.messages
+      .filter((message) => message.role === "tool"
+        && message.content?.includes('"mediaType":"application/msword"'));
+    expect(results).toHaveLength(2);
+    expect(JSON.parse(results[0]!.content!)).toMatchObject({
+      content: { locations: [{ text: "first section" }] },
+      nextDocumentCursor: "v1:1:0", hasMore: true
+    });
+    expect(JSON.parse(results[1]!.content!)).toMatchObject({
+      content: { locations: [{ text: "second section" }] },
+      documentCursor: "v1:1:0", nextDocumentCursor: null, hasMore: false
+    });
+  });
+
+  it("returns structured-document line ranges to the model as a recoverable rejection", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", {
+        path: "notes.doc", expectedSha256: fileHash,
+        startLine: 51, endLine: 100
+      }),
+      { content: "Retried without treating document locations as lines.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new PagedDocumentReadGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(JSON.stringify(provider.requests)).toContain("PROJECT_DOCUMENT_LINE_RANGE_INVALID");
+    expect((await engine.events(taskId)).filter((event) => event.type === "tool"
+      && event.name === "project.read" && event.state === "failed")).toHaveLength(1);
+  });
+
+  it("repairs one empty model response instead of ending the task", async () => {
+    const provider = new ScriptedProvider([
+      { content: null, toolCalls: [] },
+      { content: "Recovered final answer.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1]!.messages.at(-1)?.content)
+      .toContain("neither answer text nor a tool call");
+    const delivery = (await engine.events(taskId)).find((event) =>
+      event.type === "delivery");
+    expect(delivery?.type === "delivery" ? delivery.conclusion : "")
+      .toBe("Recovered final answer.");
   });
 
   it("repairs a premature candidate conclusion until the current diff and exact Candidate are validated", async () => {
@@ -1080,7 +1204,7 @@ function testToolGroup(name: string): string {
   if (name.startsWith("paper_")) return "paper";
   if (name.startsWith("mcp_github__")) return "github";
   if (name.startsWith("mcp_fs__")) return "filesystem";
-  if (["list_project_files", "read_project_file", "write_workspace_file", "get_workspace_diff", "execute_in_sandbox", "project_search"].includes(name)) return "project";
+  if (["list_project_files", "read_project_file", "write_workspace_file", "create_workspace_docx", "get_workspace_diff", "execute_in_sandbox", "project_search"].includes(name)) return "project";
   return name.split("_")[0] ?? "other";
 }
 
@@ -1102,6 +1226,7 @@ class FakeGateway implements GatewayClient {
   list(taskIdValue: string): Promise<FileList> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, files: [{ path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java" }] }); }
   read(_taskId: string, _grant: string, _path: string, _expectedSha256: string): Promise<FileRead> { return this.operation({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java", encoding: "utf-8", content: "SECRET_FILE_BODY", truncated: false }); }
   write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, replayed: false, operation: request.operation, path: request.path, beforeSha256: request.baseSha256, afterSha256: sha256(request.content), sizeBytes: Buffer.byteLength(request.content) }); }
+  createDocx(_taskId: string, _grant: string, request: WorkspaceDocxCreateRequest): Promise<WorkspaceDocxCreateResult> { const content = JSON.stringify(request.blocks); return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, replayed: false, state: "COMPLETED", path: request.path, totalBlocks: request.blocks.length, operation: "ADD", beforeSha256: null, afterSha256: sha256(content), sizeBytes: Buffer.byteLength(content) }); }
   diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
   publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; this.lastPublishReceipt = request.receiptRef; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
@@ -1193,6 +1318,32 @@ class RangeReadGateway extends FakeGateway {
     return Promise.resolve({ contractVersion: "1.0", path: "Sort.java",
       sizeBytes: Buffer.byteLength(content), sha256: fileHash,
       mediaType: "text/x-java", encoding: "utf-8", content, truncated: false });
+  }
+}
+
+class PagedDocumentReadGateway extends FakeGateway {
+  readonly cursors: Array<string | undefined> = [];
+
+  override read(_taskId: string, _grant: string, _path: string,
+                _expectedSha256: string, _signal?: AbortSignal,
+                documentCursor?: string): Promise<FileRead> {
+    this.cursors.push(documentCursor);
+    const first = documentCursor === undefined;
+    const content = JSON.stringify({
+      formatVersion: 1,
+      tool: "project.document.extract",
+      summary: {
+        hasMore: first,
+        truncated: first,
+        ...(first ? { nextCursor: "v1:1:0" } : {})
+      },
+      locations: [{ kind: "PARAGRAPH", paragraph: first ? 1 : 2,
+        text: first ? "first section" : "second section" }]
+    });
+    return Promise.resolve({ contractVersion: "1.0", path: "notes.doc",
+      sizeBytes: Buffer.byteLength(content), sha256: fileHash,
+      mediaType: "application/msword", encoding: "utf-8", content,
+      truncated: first });
   }
 }
 
@@ -1320,6 +1471,40 @@ class DocumentCandidateGateway extends FakeGateway {
     return Promise.resolve({ contractVersion: "1.0", taskId: taskIdValue, projectVersion,
       changed: true, entries: [{ operation: "ADD", path: "notes/test.txt",
         beforeSha256: null, afterSha256: this.candidateHash }] });
+  }
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.sandboxSubmissions += 1;
+    return super.submit(_taskId, _grant, request);
+  }
+}
+
+class DocxCandidateGateway extends FakeGateway {
+  sandboxSubmissions = 0;
+  generatedPath: string | null = null;
+  docxCalls: string[] = [];
+  workspaceWrites = 0;
+  lastDocxRequest: WorkspaceDocxCreateRequest | null = null;
+  private totalBlocks = 0;
+  private completed = false;
+  private candidateHash = "8".repeat(64);
+  override createDocx(_taskId: string, _grant: string, request: WorkspaceDocxCreateRequest): Promise<WorkspaceDocxCreateResult> {
+    this.lastDocxRequest = request;
+    this.generatedPath = request.path;
+    this.docxCalls.push(request.mode);
+    this.totalBlocks += request.blocks.length;
+    const drafting = request.mode === "START" || request.mode === "APPEND";
+    if (!drafting) { this.completed = true; this.workspaceWrites += 1; }
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, replayed: false,
+      state: drafting ? "DRAFTING" : "COMPLETED", totalBlocks: this.totalBlocks,
+      operation: drafting ? null : "ADD", path: request.path, beforeSha256: null,
+      afterSha256: drafting ? null : this.candidateHash,
+      sizeBytes: drafting ? null : 4096 });
+  }
+  override diff(taskIdValue: string): Promise<WorkspaceDiffView> {
+    return Promise.resolve({ contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      changed: this.completed, entries: this.completed ? [{ operation: "ADD", path: this.generatedPath!,
+        beforeSha256: null, afterSha256: this.candidateHash }] : [] });
   }
   override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
     this.sandboxSubmissions += 1;

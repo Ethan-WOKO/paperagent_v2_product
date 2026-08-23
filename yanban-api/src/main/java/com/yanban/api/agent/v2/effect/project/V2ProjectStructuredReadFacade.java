@@ -13,6 +13,8 @@ import java.util.Objects;
  * gateways which expose one automatic Project read operation.
  */
 public final class V2ProjectStructuredReadFacade {
+    public static final int MAX_DOCUMENT_LOCATIONS =
+            V2ProjectDocumentExtractTool.MAX_LOCATIONS;
     private final ObjectMapper json;
     private final V2ProjectDocumentExtractTool documents;
     private final V2ProjectSpreadsheetInspectTool spreadsheets;
@@ -25,17 +27,33 @@ public final class V2ProjectStructuredReadFacade {
 
     public boolean supports(String path) {
         return switch (extension(path)) {
-            case "pdf", "docx", "xlsx" -> true;
+            case "pdf", "doc", "docx", "xlsx" -> true;
+            default -> false;
+        };
+    }
+
+    public boolean supportsCursor(String path) {
+        return switch (extension(path)) {
+            case "pdf", "doc", "docx" -> true;
             default -> false;
         };
     }
 
     public Result read(WorkspacePort workspace, WorkspaceRef ref, String path) {
-        ObjectNode arguments = json.createObjectNode().put("path", path);
+        return read(workspace, ref, path, null, null);
+    }
+
+    public Result read(
+            WorkspacePort workspace,
+            WorkspaceRef ref,
+            String path,
+            String cursor,
+            Integer maxLocations) {
+        ObjectNode arguments = arguments(path, cursor, maxLocations);
         final String content;
         try {
             content = switch (extension(path)) {
-                case "pdf", "docx" -> documents.execute(workspace, ref, arguments);
+                case "pdf", "doc", "docx" -> documents.execute(workspace, ref, arguments);
                 case "xlsx" -> spreadsheets.execute(workspace, ref, arguments);
                 default -> throw new ReadException("unsupported_format");
             };
@@ -46,11 +64,23 @@ public final class V2ProjectStructuredReadFacade {
     }
 
     public Result readBytes(String path, byte[] bytes) {
+        return readBytes(path, bytes, null, null);
+    }
+
+    public Result readBytes(
+            String path,
+            byte[] bytes,
+            String cursor,
+            Integer maxLocations) {
+        arguments(path, cursor, maxLocations);
         final String content;
         try {
             ProjectPath projectPath = new ProjectPath(path);
             content = switch (extension(path)) {
-                case "pdf", "docx" -> documents.execute(projectPath, bytes);
+                case "pdf", "doc", "docx" -> documents.execute(
+                        projectPath, bytes, cursor,
+                        maxLocations == null
+                                ? MAX_DOCUMENT_LOCATIONS : maxLocations);
                 case "xlsx" -> spreadsheets.execute(projectPath, bytes);
                 default -> throw new ReadException("unsupported_format");
             };
@@ -60,6 +90,22 @@ public final class V2ProjectStructuredReadFacade {
             throw new ReadException("arguments");
         }
         return result(content);
+    }
+
+    private ObjectNode arguments(
+            String path, String cursor, Integer maxLocations) {
+        if ((cursor != null || maxLocations != null)
+                && !supportsCursor(path)) {
+            throw new ReadException("arguments");
+        }
+        ObjectNode arguments = json.createObjectNode().put("path", path);
+        if (cursor != null && !cursor.isBlank()) {
+            arguments.put("cursor", cursor);
+        }
+        if (maxLocations != null) {
+            arguments.put("maxLocations", maxLocations);
+        }
+        return arguments;
     }
 
     private Result result(String content) {

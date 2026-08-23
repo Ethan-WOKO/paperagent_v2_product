@@ -603,8 +603,22 @@ public class ProjectService {
     @Transactional(readOnly = true)
     public ProjectFileResponse previewFile(
             Long userId, Long projectId, String relativePath) {
+        return previewFile(userId, projectId, relativePath, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public ProjectFileResponse previewFile(
+            Long userId,
+            Long projectId,
+            String relativePath,
+            String cursor,
+            Integer maxLocations) {
         String path = new ProjectRelativePath(relativePath).value();
         if (!ProjectAssetAdmissionPolicy.readOnlyBinaryPath(path)) {
+            if (cursor != null || maxLocations != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Document pagination is not available for text files");
+            }
             return readFile(userId, projectId, path);
         }
         ProjectManifestResponse manifest = manifest(userId, projectId);
@@ -624,7 +638,8 @@ public class ProjectService {
             throw inaccessibleFile();
         }
         try {
-            var extracted = structuredReads.readBytes(path, content);
+            var extracted = structuredReads.readBytes(
+                    path, content, cursor, maxLocations);
             return new ProjectFileResponse(path, extracted.content(),
                     content.length, entry.modifiedAt(), sha256(content));
         } catch (V2ProjectStructuredReadFacade.ReadException failure) {
@@ -653,6 +668,7 @@ public class ProjectService {
     private static String mediaType(String path) {
         String lower = path.toLowerCase(java.util.Locale.ROOT);
         if (lower.endsWith(".pdf")) return "application/pdf";
+        if (lower.endsWith(".doc")) return "application/msword";
         if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
         return "application/octet-stream";

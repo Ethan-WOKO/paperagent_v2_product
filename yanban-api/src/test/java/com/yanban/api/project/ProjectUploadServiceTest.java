@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -72,6 +74,7 @@ class ProjectUploadServiceTest {
             throws Exception {
         byte[] pdf = "%PDF-1.7\n%%EOF".getBytes(
                 StandardCharsets.US_ASCII);
+        byte[] doc = legacyDocContainer();
         byte[] docx = ooxml("word/document.xml");
         byte[] xlsx = ooxml("xl/workbook.xml");
         MockMultipartFile notes = new MockMultipartFile(
@@ -83,6 +86,8 @@ class ProjectUploadServiceTest {
                 "files", "study/paper.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 docx);
+        MockMultipartFile legacyDocument = new MockMultipartFile(
+                "files", "study/legacy.doc", "application/msword", doc);
         MockMultipartFile workbook = new MockMultipartFile(
                 "files", "study/results.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -95,13 +100,16 @@ class ProjectUploadServiceTest {
                 new byte[] {'P', 'N', 'G', 0, 1});
 
         Project project = service.upload(7L, "Study", List.of("**"),
-                List.of(), List.of(notes, paper, document, workbook,
-                        fakePdf, unsupportedBinary));
+                List.of(), List.of(notes, paper, legacyDocument, document,
+                        workbook, fakePdf, unsupportedBinary));
 
         assertThat(objectStorage.readManifest(project.getRootPath()))
                 .extracting(ProjectObjectEntry::path)
-                .containsExactly("notes.txt", "paper.docx", "paper.pdf",
-                        "results.xlsx");
+                .containsExactly("legacy.doc", "notes.txt", "paper.docx",
+                        "paper.pdf", "results.xlsx");
+        assertThat(objectStorage.readFile(
+                project.getRootPath(), "legacy.doc", 4096))
+                .isEqualTo(doc);
         assertThat(objectStorage.readFile(
                 project.getRootPath(), "paper.pdf", 1024))
                 .isEqualTo(pdf);
@@ -111,6 +119,16 @@ class ProjectUploadServiceTest {
         assertThat(objectStorage.readFile(
                 project.getRootPath(), "results.xlsx", 4096))
                 .isEqualTo(xlsx);
+    }
+
+    private static byte[] legacyDocContainer() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (POIFSFileSystem filesystem = new POIFSFileSystem()) {
+            filesystem.getRoot().createDocument("WordDocument",
+                    new ByteArrayInputStream(new byte[] {1, 2, 3, 4}));
+            filesystem.writeFilesystem(output);
+        }
+        return output.toByteArray();
     }
 
     @Test

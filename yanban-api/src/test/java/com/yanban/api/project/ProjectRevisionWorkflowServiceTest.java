@@ -47,6 +47,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.server.ResponseStatusException;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 
 @SpringBootTest
 @TestPropertySource(properties = {
@@ -193,6 +194,30 @@ class ProjectRevisionWorkflowServiceTest {
         assertThat(replay.operationId()).isEqualTo(applied.operationId());
         assertThat(revisions.findByProjectIdAndUserIdOrderByCreatedAtDescIdDesc(
                 project.getId(), owner.getId())).hasSize(2);
+    }
+
+    @Test
+    void exactServerGeneratedDocxPublishesAsImmutableBinaryRevision()
+            throws Exception {
+        byte[] content = docx("完整论文");
+        String after = hash(content);
+        var change = AutomaticProjectFileChange.generatedDocx(
+                "ADD", "完整论文.docx", null, after, content,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "docx-generation." + after);
+
+        ProjectRevisionOperationResponse applied = service.applyWorkspaceAutomatically(
+                owner.getId(), project.getId(), "react-docx-publish-test",
+                baseVersion, "document-integrity." + "8".repeat(64),
+                List.of(change));
+
+        assertThat(applied.outcome())
+                .isEqualTo(ProjectRevisionOperation.Outcome.SUCCEEDED);
+        Project current = projects.findById(project.getId()).orElseThrow();
+        assertThat(objects.get(current.getRootPath()))
+                .containsEntry("完整论文.docx", content);
+        assertThat(objects.get(project.getRootPath()))
+                .doesNotContainKey("完整论文.docx");
     }
 
     @Test
@@ -410,6 +435,14 @@ class ProjectRevisionWorkflowServiceTest {
                 new ProjectRelativePath(entry.path()), new FileHash(entry.sha256()), entry.sizeBytes())).toList()).value();
     }
     private byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
+    private byte[] docx(String value) throws Exception {
+        try (XWPFDocument document = new XWPFDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.createParagraph().createRun().setText(value);
+            document.write(output);
+            return output.toByteArray();
+        }
+    }
     private String hash(byte[] content) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)); }
         catch (Exception ex) { throw new IllegalStateException(ex); }
