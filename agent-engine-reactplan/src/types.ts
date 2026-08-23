@@ -230,7 +230,7 @@ export interface PersistedTask {
 
 export interface FileEntry { path: string; sizeBytes: number; sha256: string; mediaType: string }
 export interface FileList { contractVersion: "1.0"; taskId: string; projectVersion: string; files: FileEntry[] }
-export interface FileRead extends FileEntry { contractVersion: "1.0"; encoding: "utf-8"; content: string; truncated: false }
+export interface FileRead extends FileEntry { contractVersion: "1.0"; encoding: "utf-8"; content: string; truncated: boolean }
 export interface WorkspaceWriteResult {
   contractVersion: "1.0";
   clientRequestId: string;

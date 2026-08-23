@@ -557,11 +557,18 @@ class name containing `Agent`, `Plan`, or `V1` as sufficient deletion proof.
   backend, and focused test sources were restored from their deletion parents
   without semantic edits.
 - `#121` adapts that baseline to current `main`: `/chat` is again the default
-  authenticated workspace, its HTTP and WebSocket contracts are active, and
-  the restored model adapter accepts the legacy runtime request without
-  replacing the current V2 invocation context.
+  authenticated workspace and the restored model adapter accepts the legacy
+  runtime request without replacing the current V2 invocation context.
+- The current workspace chat transport uses authenticated HTTP submission with
+  an SSE response at `POST /api/v1/agent/sessions/{sessionId}/messages/stream`.
+  The synchronous JSON message endpoint remains the idempotent transport
+  fallback. The former `/api/v1/ws/chat` endpoint, query-string JWT handshake,
+  unused Project WebSocket handlers, browser client, and CLI client have been
+  removed. This transport cutover does not turn legacy chat into a durable V2
+  task: reconnect/retry is bounded by the existing `clientRequestId` dedup and
+  persisted final messages, not by the ReAct `Last-Event-ID` event contract.
 - Boundary: `ProjectPreviewPage.vue` remains V2-only. The old Project V1 input,
-  V1/V2 switch, and Project WebSocket route are not restored. Current V2
+  V1/V2 switch, and Project WebSocket route remain absent. Current V2
   natural-language history, Candidate/Workspace authority, and the V2
   product tool catalog remain authoritative and unchanged.
 - Data boundary: no schema or data migration, deletion, or backfill is added.

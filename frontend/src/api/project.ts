@@ -165,6 +165,10 @@ export function createProjectSession(projectId: number, payload: CreateSessionPa
   return http.post<AgentSessionResponse>(`/projects/${projectId}/agent/sessions`, payload);
 }
 export function readProjectFile(projectId: number, path: string) { return http.get<ProjectFileResponse>(`/projects/${projectId}/files/read`, { params: { path } }); }
+export function previewProjectFile(projectId: number, path: string) { return http.get<ProjectFileResponse>(`/projects/${projectId}/files/preview`, { params: { path } }); }
+export function readProjectRawFile(projectId: number, path: string) {
+  return http.get<Blob>(`/projects/${projectId}/files/raw`, { params: { path }, responseType: 'blob' });
+}
 export function searchProject(projectId: number, query: string) { return http.get<ProjectSearchHit[]>(`/projects/${projectId}/search`, { params: { query, maxResults: 50 } }); }
 export function applyProjectCandidate(projectId: number, artifactId: number, projectVersion: string,
                                       acceptedChangeIndexes: number[], validationId: string,

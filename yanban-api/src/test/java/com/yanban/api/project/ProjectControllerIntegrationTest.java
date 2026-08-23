@@ -31,6 +31,8 @@ import com.yanban.api.security.JwtUser;
 import com.yanban.api.agent.ProjectSessionService;
 import com.yanban.api.agent.AgentSessionResponse;
 import com.yanban.core.agent.AgentSessionScope;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 
 class ProjectControllerIntegrationTest {
 
@@ -62,6 +64,10 @@ class ProjectControllerIntegrationTest {
         projectRoot = Files.createDirectories(serverRoot.resolve("study"));
         Files.writeString(projectRoot.resolve("notes.txt"), "safe");
         Files.writeString(projectRoot.resolve("large.txt"), "x".repeat(33));
+        try (PDDocument document = new PDDocument()) {
+            document.addPage(new PDPage());
+            document.save(projectRoot.resolve("paper.pdf").toFile());
+        }
         properties.setLocalServerRoot(serverRoot.toString());
         properties.setAllowLocalAbsoluteProjectFolders(true);
         Project project = new Project(7L, "Study", "study", projectRoot.toRealPath().toString(), "[\"**\"]", "[]");
@@ -88,6 +94,28 @@ class ProjectControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.path").value("notes.txt"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("C:\\"))));
+    }
+
+    @Test
+    void structuredPreviewAndRawPdfRoutesRemainAuthenticatedAndBounded()
+            throws Exception {
+        mockMvc.perform(get("/api/v1/projects/42/files/preview")
+                        .param("path", "paper.pdf"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.path").value("paper.pdf"))
+                .andExpect(jsonPath("$.content").value(
+                        org.hamcrest.Matchers.containsString(
+                                "project.document.extract")));
+        mockMvc.perform(get("/api/v1/projects/42/files/raw")
+                        .param("path", "paper.pdf"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("application/pdf"))
+                .andExpect(org.springframework.test.web.servlet.result
+                        .MockMvcResultMatchers.header().string(
+                                "X-Content-Type-Options", "nosniff"));
+        mockMvc.perform(get("/api/v1/projects/42/files/read")
+                        .param("path", "paper.pdf"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

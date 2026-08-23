@@ -280,6 +280,31 @@ public class ProjectController {
         return projectService.readFile(userId, projectId, path);
     }
 
+    @GetMapping("/{projectId}/files/preview")
+    public ProjectFileResponse preview(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @RequestParam String path) {
+        return projectService.previewFile(userId, projectId, path);
+    }
+
+    @GetMapping("/{projectId}/files/raw")
+    public ResponseEntity<byte[]> rawFile(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @RequestParam String path) {
+        var file = projectService.readRawFile(userId, projectId, path);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(file.mediaType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.inline()
+                                .filename(file.path(), java.nio.charset.StandardCharsets.UTF_8)
+                                .build().toString())
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(file.content());
+    }
+
     @GetMapping("/{projectId}/search")
     public List<ProjectSearchHit> search(@AuthenticationPrincipal(expression = "id") Long userId,
                                           @PathVariable Long projectId,

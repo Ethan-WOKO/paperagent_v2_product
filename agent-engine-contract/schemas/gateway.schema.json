@@ -68,7 +68,7 @@
         },
         "encoding": { "enum": ["utf-8"] },
         "content": { "type": "string", "maxLength": 10485760 },
-        "truncated": { "const": false }
+        "truncated": { "type": "boolean" }
       }
     },
     "workspaceWriteRequest": {

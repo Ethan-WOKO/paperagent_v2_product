@@ -54,8 +54,21 @@ final class V2ProjectDocumentExtractTool {
                 workspace, ref, path, MAX_INPUT_BYTES);
         Request request = new Request(
                 path, maxCharacters, maxLocations, includeMetadata);
+        return extract(request, bytes);
+    }
+
+    String execute(ProjectPath path, byte[] bytes) {
+        if (path == null || !supported(path.value()) || bytes == null
+                || bytes.length == 0 || bytes.length > MAX_INPUT_BYTES) {
+            throw V2ProjectAnalysisToolSupport.failed("input_budget");
+        }
+        return extract(new Request(path, DEFAULT_CHARACTERS,
+                DEFAULT_LOCATIONS, true), bytes);
+    }
+
+    private String extract(Request request, byte[] bytes) {
         try {
-            return V2ProjectAnalysisToolSupport.extension(path.value())
+            return V2ProjectAnalysisToolSupport.extension(request.path().value())
                     .equals("pdf")
                     ? extractPdf(request, bytes)
                     : extractDocx(request, bytes);

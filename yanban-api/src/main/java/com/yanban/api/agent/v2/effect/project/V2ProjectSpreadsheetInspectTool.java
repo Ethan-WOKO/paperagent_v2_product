@@ -59,6 +59,21 @@ final class V2ProjectSpreadsheetInspectTool {
         List<String> requestedSheets = sheetNames(arguments);
         byte[] bytes = V2ProjectAnalysisToolSupport.readBytes(
                 workspace, ref, path, MAX_INPUT_BYTES);
+        return inspect(path, bytes, requestedSheets, maxRows, maxColumns);
+    }
+
+    String execute(ProjectPath path, byte[] bytes) {
+        if (path == null
+                || !V2ProjectAnalysisToolSupport.extension(path.value()).equals("xlsx")
+                || bytes == null || bytes.length == 0
+                || bytes.length > MAX_INPUT_BYTES) {
+            throw V2ProjectAnalysisToolSupport.failed("input_budget");
+        }
+        return inspect(path, bytes, List.of(), DEFAULT_ROWS, DEFAULT_COLUMNS);
+    }
+
+    private String inspect(ProjectPath path, byte[] bytes,
+            List<String> requestedSheets, int maxRows, int maxColumns) {
         try (OPCPackage value = OPCPackage.open(
                 new ByteArrayInputStream(bytes));
                 XSSFWorkbook workbook = new XSSFWorkbook(value)) {

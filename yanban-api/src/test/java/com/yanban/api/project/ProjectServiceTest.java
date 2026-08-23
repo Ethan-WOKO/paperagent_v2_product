@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.web.server.ResponseStatusException;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 
 class ProjectServiceTest {
 
@@ -159,6 +160,30 @@ class ProjectServiceTest {
                 "%PDF-2.0\n%%EOF".getBytes(StandardCharsets.US_ASCII));
         assertThat(service.manifest(7L, 42L).version())
                 .isNotEqualTo(manifest.version());
+    }
+
+    @Test
+    void previewsStructuredDocumentsWithoutChangingTheTextOnlyReadContract()
+            throws Exception {
+        Path serverRoot = Files.createDirectories(tempDir.resolve("preview-root"));
+        Path projectRoot = Files.createDirectories(serverRoot.resolve("study"));
+        byte[] documentBytes;
+        try (XWPFDocument document = new XWPFDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.createParagraph().createRun().setText("Preview paragraph");
+            document.write(output);
+            documentBytes = output.toByteArray();
+        }
+        Files.write(projectRoot.resolve("notes.docx"), documentBytes);
+        properties.setLocalServerRoot(serverRoot.toString());
+        ProjectService service = serviceFor(projectRoot, "[\"**\"]", "[]");
+
+        assertThatThrownBy(() -> service.readFile(7L, 42L, "notes.docx"))
+                .isInstanceOf(ResponseStatusException.class);
+        assertThat(service.previewFile(7L, 42L, "notes.docx").content())
+                .contains("project.document.extract", "Preview paragraph");
+        assertThat(service.readRawFile(7L, 42L, "notes.docx").content())
+                .isEqualTo(documentBytes);
     }
 
     @Test

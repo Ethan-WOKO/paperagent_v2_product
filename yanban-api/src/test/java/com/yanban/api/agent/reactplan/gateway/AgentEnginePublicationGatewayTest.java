@@ -94,6 +94,57 @@ class AgentEnginePublicationGatewayTest {
                 anyLong(), anyLong(), anyString(), anyString(), anyString(), any());
     }
 
+    @Test
+    void publishesPlainDocumentsWithExactLocalIntegrityProofWithoutSandbox() {
+        ObjectMapper json = new ObjectMapper();
+        AgentEngineWorkspaceGateway workspaces = mock(AgentEngineWorkspaceGateway.class);
+        AgentEngineSandboxGateway sandboxes = mock(AgentEngineSandboxGateway.class);
+        ProjectRevisionWorkflowService revisions = mock(ProjectRevisionWorkflowService.class);
+        WorkspaceDiffEntry entry = new WorkspaceDiffEntry(
+                "ADD", "notes/test.txt", null, AFTER);
+        when(workspaces.publicationChanges(any(), any())).thenReturn(List.of(
+                new AutomaticProjectFileChange(
+                        "ADD", "notes/test.txt", null, AFTER, "changed")));
+        when(revisions.applyWorkspaceAutomatically(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ProjectRevisionOperationResponse(
+                        42L, ProjectRevisionOperation.Type.APPLICATION,
+                        ProjectRevisionOperation.Outcome.SUCCEEDED,
+                        7L, VERSION, 8L, "6".repeat(64), null,
+                        "7".repeat(64), List.of(0), List.of(), Instant.now()));
+        AgentEnginePublicationGateway gateway = new AgentEnginePublicationGateway(
+                workspaces, sandboxes, revisions, json);
+
+        var result = gateway.publish(authority(), documentRequest(json, List.of(entry)));
+
+        assertThat(result.receiptRef()).startsWith("document-integrity.");
+        verify(sandboxes, never()).requireSuccessfulReceipt(any(), anyString());
+    }
+
+    @Test
+    void rejectsLocalDocumentProofForCodeChanges() {
+        ObjectMapper json = new ObjectMapper();
+        AgentEngineWorkspaceGateway workspaces = mock(AgentEngineWorkspaceGateway.class);
+        AgentEngineSandboxGateway sandboxes = mock(AgentEngineSandboxGateway.class);
+        ProjectRevisionWorkflowService revisions = mock(ProjectRevisionWorkflowService.class);
+        WorkspaceDiffEntry entry = new WorkspaceDiffEntry(
+                "MODIFY", "Sort.java", BEFORE, AFTER);
+        when(workspaces.publicationChanges(any(), any())).thenReturn(List.of(
+                new AutomaticProjectFileChange(
+                        "MODIFY", "Sort.java", BEFORE, AFTER, "changed")));
+        AgentEnginePublicationGateway gateway = new AgentEnginePublicationGateway(
+                workspaces, sandboxes, revisions, json);
+
+        assertThatThrownBy(() -> gateway.publish(
+                authority(), documentRequest(json, List.of(entry))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code()).isEqualTo(
+                                "WORKSPACE_PUBLICATION_DOCUMENT_INTEGRITY_REJECTED"));
+        verify(sandboxes, never()).requireSuccessfulReceipt(any(), anyString());
+        verify(revisions, never()).applyWorkspaceAutomatically(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), any());
+    }
+
     private static WorkspacePublishRequest request(
             ObjectMapper json, List<WorkspaceDiffEntry> entries) {
         Map<String, Object> semantics = new LinkedHashMap<>();
@@ -101,6 +152,20 @@ class AgentEnginePublicationGatewayTest {
         semantics.put("entries", entries);
         return new WorkspacePublishRequest("1.0", "call." + "a".repeat(40),
                 ReactPlanCanonicalJson.digest(json, semantics), RECEIPT, entries);
+    }
+
+    private static WorkspacePublishRequest documentRequest(
+            ObjectMapper json, List<WorkspaceDiffEntry> entries) {
+        Map<String, Object> proof = new LinkedHashMap<>();
+        proof.put("projectVersion", VERSION);
+        proof.put("entries", entries);
+        String receiptRef = "document-integrity."
+                + ReactPlanCanonicalJson.digest(json, proof);
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("receiptRef", receiptRef);
+        semantics.put("entries", entries);
+        return new WorkspacePublishRequest("1.0", "call." + "b".repeat(40),
+                ReactPlanCanonicalJson.digest(json, semantics), receiptRef, entries);
     }
 
     private static Receipt receipt(String inputHash) {

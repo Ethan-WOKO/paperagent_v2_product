@@ -21,6 +21,7 @@ import io.paperagent.v2.contracts.ProjectVersionRef;
 import io.paperagent.v2.workspace.ProjectFileSnapshot;
 import io.paperagent.v2.workspace.ProjectVersionSnapshot;
 import java.nio.charset.StandardCharsets;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -31,6 +32,12 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 class AgentEngineWorkspaceGatewayTest {
     private static final String TASK = "task." + "1".repeat(64);
@@ -72,6 +79,17 @@ class AgentEngineWorkspaceGatewayTest {
                 new FileReadRequest("1.0", "../secret", "9".repeat(64))))
                 .isInstanceOfSatisfying(EngineGatewayException.class,
                         failure -> assertThat(failure.code()).isEqualTo("WORKSPACE_PATH_INVALID"));
+    }
+
+    @Test
+    void automaticallyExtractsPdfDocxAndXlsxThroughTheSingleReadGateway()
+            throws Exception {
+        assertStructuredRead("notes.pdf", pdf("PDF project notes"),
+                "project.document.extract", "PDF project notes");
+        assertStructuredRead("notes.docx", docx("DOCX project notes"),
+                "project.document.extract", "DOCX project notes");
+        assertStructuredRead("metrics.xlsx", xlsx("accuracy", "0.95"),
+                "project.spreadsheet.inspect", "accuracy");
     }
 
     @Test
@@ -130,6 +148,11 @@ class AgentEngineWorkspaceGatewayTest {
     }
 
     private AgentEngineWorkspaceGateway gateway(byte[] content, String hash) {
+        return gateway("Sort.java", content, hash);
+    }
+
+    private AgentEngineWorkspaceGateway gateway(
+            String path, byte[] content, String hash) {
         AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
         AuthenticatedAgentTurnProjectVersionSourceFactory sources =
                 mock(AuthenticatedAgentTurnProjectVersionSourceFactory.class);
@@ -140,13 +163,60 @@ class AgentEngineWorkspaceGatewayTest {
         when(sources.create(11L, 12L)).thenReturn(version -> {
             assertThat(version).isEqualTo(new ProjectVersionRef("14", VERSION));
             return new ProjectVersionSnapshot(version, List.of(new ProjectFileSnapshot(
-                    new ProjectPath("Sort.java"), content,
+                    new ProjectPath(path), content,
                     new ContentHash("sha256", hash), Map.of())), Map.of());
         });
         EngineGatewayProperties properties = new EngineGatewayProperties();
         properties.setWorkspaceRoot(temporary.toString());
         return new AgentEngineWorkspaceGateway(
                 contexts, sources, new ProjectStorageProperties(), properties, new ObjectMapper());
+    }
+
+    private void assertStructuredRead(
+            String path, byte[] content, String tool, String expectedText) {
+        String hash = sha256(content);
+        var result = gateway(path, content, hash).read(
+                authority(), new FileReadRequest("1.0", path, hash));
+        assertThat(result.content()).contains("\"tool\":\"" + tool + "\"")
+                .contains(expectedText);
+        assertThat(result.sha256()).isEqualTo(hash);
+    }
+
+    private static byte[] pdf(String text) throws Exception {
+        try (PDDocument document = new PDDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                content.beginText();
+                content.setFont(PDType1Font.HELVETICA, 12);
+                content.newLineAtOffset(72, 720);
+                content.showText(text);
+                content.endText();
+            }
+            document.save(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] docx(String text) throws Exception {
+        try (XWPFDocument document = new XWPFDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.createParagraph().createRun().setText(text);
+            document.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] xlsx(String header, String value) throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            var sheet = workbook.createSheet("Summary");
+            sheet.createRow(0).createCell(0).setCellValue(header);
+            sheet.createRow(1).createCell(0).setCellValue(value);
+            workbook.write(output);
+            return output.toByteArray();
+        }
     }
 
     private static EngineTaskAuthority authority() {

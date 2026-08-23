@@ -13,6 +13,7 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWr
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
 import com.yanban.api.agent.v2.workspace.AuthenticatedAgentTurnProjectVersionSourceFactory;
+import com.yanban.api.agent.v2.effect.project.V2ProjectStructuredReadFacade;
 import com.yanban.api.project.AutomaticProjectFileChange;
 import com.yanban.api.project.ProjectStorageProperties;
 import io.paperagent.v2.contracts.DiffId;
@@ -54,6 +55,7 @@ final class AgentEngineWorkspaceGateway {
     private final ProjectStorageProperties storage;
     private final EngineGatewayProperties properties;
     private final ObjectMapper json;
+    private final V2ProjectStructuredReadFacade structuredReads;
     private final Path root;
     private final ConcurrentMap<String, BoundWorkspace> active = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, WriteFact> writes = new ConcurrentHashMap<>();
@@ -69,6 +71,7 @@ final class AgentEngineWorkspaceGateway {
         this.storage = storage;
         this.properties = properties;
         this.json = json;
+        this.structuredReads = new V2ProjectStructuredReadFacade(json);
         try {
             Path configured = Path.of(properties.getWorkspaceRoot());
             this.root = (configured.isAbsolute()
@@ -113,6 +116,19 @@ final class AgentEngineWorkspaceGateway {
         byte[] bytes = bound.port().read(bound.materialized().workspace(), path);
         if (bytes.length != stat.size() || !sha256(bytes).equals(stat.hash().value())) {
             throw EngineGatewayException.conflict("WORKSPACE_FILE_CHANGED");
+        }
+        if (structuredReads.supports(path.value())) {
+            try {
+                var result = structuredReads.read(
+                        bound.port(), bound.materialized().workspace(), path.value());
+                return new FileRead("1.0", path.value(), bytes.length,
+                        stat.hash().value(), mediaType(path.value()), "utf-8",
+                        result.content(), result.truncated());
+            } catch (V2ProjectStructuredReadFacade.ReadException failure) {
+                throw EngineGatewayException.badRequest(
+                        "WORKSPACE_STRUCTURED_READ_"
+                                + failure.stage().toUpperCase(Locale.ROOT));
+            }
         }
         return new FileRead("1.0", path.value(), bytes.length, stat.hash().value(),
                 mediaType(path.value()), "utf-8", utf8(bytes), false);
@@ -344,6 +360,9 @@ final class AgentEngineWorkspaceGateway {
         if (lower.endsWith(".json")) return "application/json";
         if (lower.endsWith(".md")) return "text/markdown";
         if (lower.endsWith(".tex")) return "application/x-tex";
+        if (lower.endsWith(".pdf")) return "application/pdf";
+        if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
         return "text/plain";
     }
 

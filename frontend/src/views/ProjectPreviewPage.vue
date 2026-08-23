@@ -231,6 +231,21 @@
                 <div class="project-preview project-preview--inline">
                   <div class="project-panel__title"><strong>{{ selectedFile?.path || '文件预览' }}</strong><span v-if="selectedFile">{{ shortHash(selectedFile.sha256) }}</span></div>
                   <NSpin v-if="loading.file" size="small" />
+                  <iframe v-else-if="selectedFileType === 'pdf' && pdfPreviewUrl" class="project-preview__pdf" :src="pdfPreviewUrl" :title="selectedFile?.path" />
+                  <div v-else-if="selectedFileType === 'docx' && documentPreviewLocations.length" class="project-preview__document">
+                    <article v-for="(location, index) in documentPreviewLocations" :key="`${location.kind}-${index}`">
+                      <strong>{{ documentLocationLabel(location) }}</strong>
+                      <p>{{ location.text }}</p>
+                    </article>
+                  </div>
+                  <div v-else-if="selectedFileType === 'xlsx' && spreadsheetPreviewSheets.length" class="project-preview__spreadsheet">
+                    <section v-for="sheet in spreadsheetPreviewSheets" :key="sheet.name">
+                      <strong>{{ sheet.name }}</strong>
+                      <div class="project-preview__cells">
+                        <span v-for="cell in sheet.samples || []" :key="cell.reference"><b>{{ cell.reference }}</b>{{ spreadsheetCellValue(cell) }}</span>
+                      </div>
+                    </section>
+                  </div>
                   <pre v-else-if="selectedFile">{{ selectedFile.content }}</pre>
                   <NEmpty v-else size="small" description="请从左侧选择一个可读取文件。" />
                 </div>
@@ -765,7 +780,7 @@ import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2Pro
 import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listReactPlanSessionTasks, startReactPlanTask, streamReactPlanEvents, type ReactPlanSessionTask, type ReactPlanTaskState } from '@/api/reactPlan';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, renameProject, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, previewProjectFile, readProjectFile, readProjectRawFile, rejectCandidateValidation, renameProject, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useI18n } from '@/composables/useI18n';
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
 import {
@@ -812,6 +827,28 @@ interface CandidateReviewItem {
   error: string | null;
 }
 
+interface DocumentPreviewLocation {
+  kind: 'PAGE' | 'PARAGRAPH' | 'TABLE_CELL' | string;
+  text: string;
+  page?: number;
+  paragraph?: number;
+  table?: number;
+  row?: number;
+  column?: number;
+}
+
+interface SpreadsheetPreviewCell {
+  reference: string;
+  value?: string;
+  valueType?: string;
+  formulaPresent?: boolean;
+}
+
+interface SpreadsheetPreviewSheet {
+  name: string;
+  samples?: SpreadsheetPreviewCell[];
+}
+
 const { isEnglish, t } = useI18n();
 const route = useRoute();
 const router = useRouter();
@@ -821,6 +858,7 @@ const projectSessions = ref<AgentSessionResponse[]>([]);
 const activeSessionId = ref<number | null>(null);
 const manifest = ref<ProjectManifestResponse | null>(null);
 const selectedFile = ref<ProjectFileResponse | null>(null);
+const pdfPreviewUrl = ref('');
 const searchQuery = ref('');
 const searchResults = ref<ProjectSearchHit[]>([]);
 const evidence = ref<ProjectEvidenceResponse[]>([]);
@@ -836,6 +874,35 @@ const codeValidationProfileOptions: Array<{ label: string; value: CandidateValid
   { label: '编译并运行 C 源文件', value: 'C_SOURCE_RUN' },
   { label: '编译并运行 C++ 源文件', value: 'CPP_SOURCE_RUN' },
 ];
+
+const selectedFileType = computed(() => {
+  const path = selectedFile.value?.path.toLowerCase() || '';
+  if (path.endsWith('.pdf')) return 'pdf';
+  if (path.endsWith('.docx')) return 'docx';
+  if (path.endsWith('.xlsx')) return 'xlsx';
+  return 'text';
+});
+
+const structuredFilePreview = computed<Record<string, unknown> | null>(() => {
+  if (!selectedFile.value || selectedFileType.value === 'text') return null;
+  try {
+    const value = JSON.parse(selectedFile.value.content) as unknown;
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+});
+
+const documentPreviewLocations = computed<DocumentPreviewLocation[]>(() => {
+  const locations = structuredFilePreview.value?.locations;
+  return Array.isArray(locations) ? locations as DocumentPreviewLocation[] : [];
+});
+
+const spreadsheetPreviewSheets = computed<SpreadsheetPreviewSheet[]>(() => {
+  const sheets = structuredFilePreview.value?.sheets;
+  return Array.isArray(sheets) ? sheets as SpreadsheetPreviewSheet[] : [];
+});
 const revisions = ref<ProjectRevisionResponse[]>([]);
 const applyModalOpen = ref(false);
 const validationModalOpen = ref(false);
@@ -1304,8 +1371,8 @@ function revealFileInTree(path: string) {
 }
 
 function apiError(value: unknown) {
-  const item = value as { response?: { data?: { code?: string; message?: string }; headers?: Record<string, string> }; message?: string };
-  const message = item.response?.data?.message || item.message;
+  const item = value as { response?: { data?: { code?: string; message?: string; detail?: string }; headers?: Record<string, string> }; message?: string };
+  const message = item.response?.data?.detail || item.response?.data?.message || item.message;
   if (message === 'Network Error') {
     return 'The upload connection was interrupted. Check the folder size and try again.';
   }
@@ -2709,18 +2776,62 @@ async function openFile(path: string) {
   const epoch = projectEpoch;
   if (!projectId) return;
   revealFileInTree(path);
+  clearPdfPreview();
   loading.file = true;
   try {
-    const value = (await readProjectFile(projectId, path)).data;
+    let value: ProjectFileResponse;
+    if (path.toLowerCase().endsWith('.pdf')) {
+      const raw = (await readProjectRawFile(projectId, path)).data;
+      const entry = manifest.value?.files.find((file) => file.path === path);
+      if (!entry) throw new Error('The selected PDF is not in the current Project manifest.');
+      let extracted = '';
+      try {
+        extracted = (await previewProjectFile(projectId, path)).data.content;
+      } catch {
+        // Visual PDF preview remains useful for encrypted or image-only documents.
+      }
+      value = { ...entry, content: extracted };
+      pdfPreviewUrl.value = URL.createObjectURL(raw);
+    } else if (/\.(?:docx|xlsx)$/i.test(path)) {
+      value = (await previewProjectFile(projectId, path)).data;
+    } else {
+      value = (await readProjectFile(projectId, path)).data;
+    }
     if (epoch === projectEpoch && projectId === activeProjectId.value) {
       selectedFile.value = value;
       showInspector('preview');
+    } else {
+      clearPdfPreview();
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
   } finally {
     if (epoch === projectEpoch) loading.file = false;
   }
+}
+
+function clearPdfPreview() {
+  if (!pdfPreviewUrl.value) return;
+  URL.revokeObjectURL(pdfPreviewUrl.value);
+  pdfPreviewUrl.value = '';
+}
+
+watch(() => selectedFile.value?.path, (path) => {
+  if (!path?.toLowerCase().endsWith('.pdf')) clearPdfPreview();
+});
+
+function documentLocationLabel(location: DocumentPreviewLocation) {
+  if (location.kind === 'PAGE') return `第 ${location.page || '?'} 页`;
+  if (location.kind === 'PARAGRAPH') return `第 ${location.paragraph || '?'} 段`;
+  if (location.kind === 'TABLE_CELL') {
+    return `表格 ${location.table || '?'} · 行 ${location.row || '?'} · 列 ${location.column || '?'}`;
+  }
+  return location.kind;
+}
+
+function spreadsheetCellValue(cell: SpreadsheetPreviewCell) {
+  if (cell.formulaPresent) return '公式（未执行）';
+  return cell.value ?? cell.valueType ?? '';
 }
 
 async function runSearch() {
@@ -3051,6 +3162,7 @@ onMounted(() => {
   void loadProjects();
 });
 onUnmounted(() => {
+  clearPdfPreview();
   stopProjectLayoutResize();
   stopV2NaturalLanguagePolling();
   invalidateReactPlanStream();
@@ -3302,6 +3414,13 @@ onUnmounted(() => {
 .project-preview { min-height: 120px; overflow: hidden; display: flex; flex-direction: column; gap: 7px; font-size: 10px; color: var(--yb-text-muted); }
 .project-preview--inline { min-height: 220px; max-height: 320px; }
 .project-preview pre, .project-diff pre { flex: 1 1 auto; min-height: 0; margin: 0; max-height: none; white-space: pre-wrap; word-break: break-word; color: var(--yb-text); font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.project-preview__pdf { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; border-radius: 6px; background: #fff; }
+.project-preview__document, .project-preview__spreadsheet { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.project-preview__document article, .project-preview__spreadsheet section { padding: 8px; border: 1px solid var(--yb-border); border-radius: 6px; background: var(--yb-bg); }
+.project-preview__document strong, .project-preview__spreadsheet strong { color: var(--yb-text-secondary); font-size: 9px; }
+.project-preview__document p { margin: 4px 0 0; white-space: pre-wrap; color: var(--yb-text); line-height: 1.55; }
+.project-preview__cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 4px; margin-top: 6px; }
+.project-preview__cells span { display: flex; gap: 6px; padding: 4px 6px; border-radius: 4px; background: var(--yb-bg-elevated); color: var(--yb-text); }
 
 .project-scroll-shell { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 20px; gap: 8px; align-items: stretch; overflow: hidden; }
 .project-scroll-shell > .project-messages { min-height: 0; height: 100%; }

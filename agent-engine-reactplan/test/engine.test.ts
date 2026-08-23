@@ -207,6 +207,61 @@ describe("AgentEngine", () => {
     });
   });
 
+  it("publishes a plain-document Candidate with local integrity proof and no sandbox", async () => {
+    const content = "hello document\n";
+    const contentHash = sha256(content);
+    const provider = new ScriptedProvider([
+      tool("write_workspace_file", {
+        operation: "ADD", path: "notes/test.txt", baseSha256: null, content
+      }),
+      tool("get_workspace_diff", {}),
+      { content: "test.txt was created and its exact Workspace diff was inspected.", toolCalls: [] }
+    ]);
+    const gateway = new DocumentCandidateGateway(contentHash);
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("b", "session.document", "创建 notes/test.txt", "1", true);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    const requestedTools = (await engine.events(request.taskId)).filter(
+      (event) => event.type === "tool" && event.state === "requested");
+    expect(requestedTools.some((event) => event.type === "tool"
+      && event.name === "sandbox.execute")).toBe(false);
+    expect(gateway.sandboxSubmissions).toBe(0);
+    expect(gateway.lastPublishReceipt).toMatch(/^document-integrity\.[a-f0-9]{64}$/);
+    expect(gateway.publishCalls).toBe(1);
+  });
+
+  it("does not dispatch a sandbox when the model requests one for a plain document", async () => {
+    const content = "hello document\n";
+    const contentHash = sha256(content);
+    const provider = new ScriptedProvider([
+      tool("write_workspace_file", {
+        operation: "ADD", path: "notes/test.txt", baseSha256: null, content
+      }),
+      tool("get_workspace_diff", {}),
+      tool("execute_in_sandbox", {
+        argv: ["git", "diff", "--check"],
+        inputs: [{ path: "notes/test.txt", sha256: contentHash }], timeoutMillis: 5000
+      }),
+      { content: "The document was validated locally.", toolCalls: [] }
+    ]);
+    const gateway = new DocumentCandidateGateway(contentHash);
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("c", "session.document.guard", "创建 notes/test.txt", "1", true);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    expect(gateway.sandboxSubmissions).toBe(0);
+    const sandboxEvent = (await engine.events(request.taskId)).find((event) =>
+      event.type === "tool" && event.name === "sandbox.execute" && event.state === "succeeded");
+    expect(sandboxEvent?.type === "tool" ? sandboxEvent.outputSummary : "")
+      .toContain("no sandbox was submitted");
+    expect(gateway.publishCalls).toBe(1);
+  });
+
   it("returns only the requested 1-based inclusive Workspace line range", async () => {
     const provider = new ScriptedProvider([
       tool("read_project_file", {
@@ -672,6 +727,22 @@ describe("AgentEngine", () => {
       .toHaveLength(1);
   });
 
+  it("returns a bounded document parse rejection to the model without failing the task", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", { path: "notes.pdf", expectedSha256: fileHash }),
+      { content: "The PDF could not be parsed, but the task continued.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new RejectingReadGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(JSON.stringify(provider.requests)).toContain("WORKSPACE_STRUCTURED_READ_PARSE_DOCUMENT");
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.name === "project.read" && event.state === "failed"))
+      .toHaveLength(1);
+  });
+
   it("fails after two model argument-repair rounds instead of looping forever", async () => {
     const provider = new ScriptedProvider([
       tool("read_project_file", { path: "Sort.java" }),
@@ -1002,6 +1073,7 @@ class NeverProvider implements ModelProvider {
 
 class FakeGateway implements GatewayClient {
   concurrent = 0; maximumConcurrent = 0; publishCalls = 0;
+  lastPublishReceipt: string | null = null;
   private async operation<T>(value: T): Promise<T> { this.concurrent += 1; this.maximumConcurrent = Math.max(this.maximumConcurrent, this.concurrent); await Promise.resolve(); this.concurrent -= 1; return value; }
   tools(taskIdValue: string): Promise<RegisteredToolCatalog> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, catalogDigest: "c".repeat(64), tools: [{ type: "function", function: { name: "project_search", description: "Search the frozen Project.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } }] }); }
   invoke(_taskId: string, _grant: string, request: { callId: string; toolName: string; requestDigest: string }): Promise<RegisteredToolResult> { return this.operation({ contractVersion: "1.0", callId: request.callId, toolName: request.toolName, requestDigest: request.requestDigest, success: true, output: { projectVersion, hits: [{ path: "services/order-service/pom.xml", line: "PRIVATE_SEARCH_RESULT" }] }, errorCode: null, errorMessage: null, retryable: false, evidenceRefs: ["project:1:search"], version: projectVersion }); }
@@ -1009,7 +1081,7 @@ class FakeGateway implements GatewayClient {
   read(_taskId: string, _grant: string, _path: string, _expectedSha256: string): Promise<FileRead> { return this.operation({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java", encoding: "utf-8", content: "SECRET_FILE_BODY", truncated: false }); }
   write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, replayed: false, operation: request.operation, path: request.path, beforeSha256: request.baseSha256, afterSha256: sha256(request.content), sizeBytes: Buffer.byteLength(request.content) }); }
   diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
-  publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
+  publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; this.lastPublishReceipt = request.receiptRef; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
   cancelExecution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId, requestDigest: "f".repeat(64), executionRef: "execution.1", state: "CANCELLED", receiptRef: "receipt.cancelled" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string, _signal: AbortSignal): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
@@ -1213,6 +1285,26 @@ class CandidateGateway extends FakeGateway {
   }
 }
 
+class DocumentCandidateGateway extends FakeGateway {
+  sandboxSubmissions = 0;
+  constructor(private readonly candidateHash: string) { super(); }
+  override write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> {
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, replayed: false, operation: request.operation,
+      path: request.path, beforeSha256: null, afterSha256: this.candidateHash,
+      sizeBytes: Buffer.byteLength(request.content) });
+  }
+  override diff(taskIdValue: string): Promise<WorkspaceDiffView> {
+    return Promise.resolve({ contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      changed: true, entries: [{ operation: "ADD", path: "notes/test.txt",
+        beforeSha256: null, afterSha256: this.candidateHash }] });
+  }
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.sandboxSubmissions += 1;
+    return super.submit(_taskId, _grant, request);
+  }
+}
+
 class NeverTerminalGateway extends FakeGateway {
   polls = 0;
   constructor(private readonly onAccepted: () => void) { super(); }
@@ -1235,6 +1327,13 @@ class RejectingOnceGateway extends FakeGateway {
         problem("SANDBOX_COMMAND_DENIED", "sandbox_system", "rejected")));
     }
     return super.submit(taskIdValue, grantValue, request);
+  }
+}
+
+class RejectingReadGateway extends FakeGateway {
+  override read(): Promise<FileRead> {
+    return Promise.reject(new EngineProblem(400,
+      problem("WORKSPACE_STRUCTURED_READ_PARSE_DOCUMENT", "request", "rejected")));
   }
 }
 

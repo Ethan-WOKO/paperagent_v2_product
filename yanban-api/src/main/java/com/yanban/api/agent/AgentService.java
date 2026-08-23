@@ -904,10 +904,9 @@ public class AgentService {
     }
 
     /**
-     * Servlet requests receive a trace id from {@link TraceIdFilter}. WebSocket messages run
-     * after the HTTP upgrade filter has restored MDC, so the runtime assembly must create a
-     * server-owned trace id for that production entry point instead of passing an unresolved
-     * request to the coordinator.
+     * Servlet requests normally receive a trace id from {@link TraceIdFilter}. Runtime entry
+     * points without request MDC still receive a server-owned trace id instead of passing an
+     * unresolved request to the coordinator.
      */
     static String resolvedRuntimeTraceId() {
         String traceId = MDC.get(TraceIdFilter.TRACE_ID_MDC_KEY);

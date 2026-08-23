@@ -92,4 +92,12 @@ describe('Project page presentation contract', () => {
     expect(source).toContain('role="group" aria-label="Project utilities"');
     expect(source).toContain('class="project-utility-chip project-context-toggle"');
   });
+
+  it('previews PDF, DOCX, and XLSX without treating them as plain UTF-8 files', () => {
+    expect(source).toContain("readProjectRawFile(projectId, path)");
+    expect(source).toContain("selectedFileType === 'pdf' && pdfPreviewUrl");
+    expect(source).toContain("selectedFileType === 'docx' && documentPreviewLocations.length");
+    expect(source).toContain("selectedFileType === 'xlsx' && spreadsheetPreviewSheets.length");
+    expect(source).toContain('URL.revokeObjectURL(pdfPreviewUrl.value)');
+  });
 });
