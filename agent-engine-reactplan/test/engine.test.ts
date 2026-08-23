@@ -19,6 +19,28 @@ const directories: string[] = [];
 afterEach(() => { directories.length = 0; });
 
 describe("AgentEngine", () => {
+  it("persists bounded user-facing progress content before requested tools", async () => {
+    const provider = new ScriptedProvider([
+      {
+        content: `  ${"正在检查项目文件。".repeat(300)}  `,
+        toolCalls: [{ id: "provider-call", name: "list_project_files", arguments: "{}" }]
+      },
+      { content: "检查完成。", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const events = await engine.events(taskId);
+    const progress = events.find((event) => event.type === "message");
+    const requested = events.find((event) => event.type === "tool" && event.state === "requested");
+    expect(progress?.type === "message" ? progress.content.length : 0).toBe(2000);
+    expect(progress!.sequence).toBeLessThan(requested!.sequence);
+    expect(provider.requests[0]!.messages[0]!.content).toContain("one brief user-facing progress update");
+    expect(provider.requests[0]!.messages[0]!.content).toContain("never hidden reasoning");
+  });
+
   it("automatically resumes a running checkpoint after restart without resubmission", async () => {
     const directory = await temporaryDirectory();
     const blocked = new Promise<ModelResponse>(() => undefined);

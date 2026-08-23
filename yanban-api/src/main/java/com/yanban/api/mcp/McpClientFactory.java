@@ -14,6 +14,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class McpClientFactory {
 
+    private static final String DISCOVERY_ONLY_GITHUB_TOKEN =
+            "paperagent-mcp-discovery-no-api-authority";
+
     private final McpProperties properties;
     private final UserSettingsService userSettingsService;
 
@@ -23,7 +26,21 @@ public class McpClientFactory {
     }
 
     public McpStdioClient createForDiscovery(McpServerKind kind) {
-        return new DefaultMcpStdioClient(toConfig(kind, null));
+        return new DefaultMcpStdioClient(discoveryConfig(kind));
+    }
+
+    McpServerProcessConfig discoveryConfig(McpServerKind kind) {
+        McpServerProcessConfig config = toConfig(kind, null);
+        if (kind != McpServerKind.GITHUB) {
+            return config;
+        }
+        Map<String, String> environment = new HashMap<>(config.environment());
+        environment.putIfAbsent("GITHUB_PERSONAL_ACCESS_TOKEN",
+                DISCOVERY_ONLY_GITHUB_TOKEN);
+        environment.putIfAbsent("GITHUB_TOKEN", DISCOVERY_ONLY_GITHUB_TOKEN);
+        return new McpServerProcessConfig(
+                config.command(), config.allowedCommands(), environment,
+                config.startupTimeout(), config.requestTimeout());
     }
 
     public McpStdioClient createForUser(McpServerKind kind, Long userId) {

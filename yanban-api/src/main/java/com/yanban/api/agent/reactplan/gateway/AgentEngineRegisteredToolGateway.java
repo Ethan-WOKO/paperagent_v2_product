@@ -13,6 +13,7 @@ import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredT
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolSpec;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.tool.ToolCall;
 import com.yanban.core.tool.ToolDefinition;
 import com.yanban.core.tool.ToolDescriptor;
@@ -49,6 +50,7 @@ final class AgentEngineRegisteredToolGateway {
     private final AgentToolPolicyEngine policies;
     private final AgentTurnProductContextResolver contexts;
     private final AgentEngineRegisteredToolTransactions transactions;
+    private final UserSettingsService settings;
 
     @Autowired
     AgentEngineRegisteredToolGateway(
@@ -56,12 +58,14 @@ final class AgentEngineRegisteredToolGateway {
             ToolRegistry registry,
             AgentToolPolicyEngine policies,
             AgentTurnProductContextResolver contexts,
-            AgentEngineRegisteredToolTransactions transactions) {
+            AgentEngineRegisteredToolTransactions transactions,
+            UserSettingsService settings) {
         this.json = json;
         this.registry = registry;
         this.policies = policies;
         this.contexts = contexts;
         this.transactions = transactions;
+        this.settings = settings;
     }
 
     AgentEngineRegisteredToolGateway(
@@ -69,7 +73,16 @@ final class AgentEngineRegisteredToolGateway {
             ToolRegistry registry,
             AgentToolPolicyEngine policies,
             AgentTurnProductContextResolver contexts) {
-        this(json, registry, policies, contexts, null);
+        this(json, registry, policies, contexts, null, null);
+    }
+
+    AgentEngineRegisteredToolGateway(
+            ObjectMapper json,
+            ToolRegistry registry,
+            AgentToolPolicyEngine policies,
+            AgentTurnProductContextResolver contexts,
+            UserSettingsService settings) {
+        this(json, registry, policies, contexts, null, settings);
     }
 
     RegisteredToolCatalog catalog(EngineTaskAuthority authority) {
@@ -156,7 +169,11 @@ final class AgentEngineRegisteredToolGateway {
         policyNames.addAll(LITERATURE_TASK_TOOLS);
         policyNames.addAll(PAPER_TASK_READ_TOOLS);
         policyNames.addAll(HISTORY_TOOLS);
+        boolean githubAllowed = settings == null
+                || settings.hasUsableGithubPat(authority.userId());
         return registry.listDefinitions().stream()
+                .filter(definition -> !definition.name().startsWith("mcp_github__")
+                        || githubAllowed)
                 .filter(definition -> policyNames.contains(definition.name())
                         || isMcpTool(definition.name()))
                 .filter(definition -> registry.findDescriptor(definition.name())

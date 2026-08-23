@@ -13,6 +13,28 @@ import org.junit.jupiter.api.Test;
 class McpClientFactoryTest {
 
     @Test
+    void discoveryUsesAnInertTokenWithoutReadingUserCredentials() {
+        McpProperties properties = new McpProperties();
+        properties.getGithub().setCommand(List.of("npx", "server-github"));
+        properties.getGithub().setAllowedCommands(List.of("npx"));
+        McpClientFactory factory = new McpClientFactory(
+                properties, mock(UserSettingsService.class));
+
+        McpServerProcessConfig ordinary = factory.toConfig(
+                McpServerKind.GITHUB, null);
+        McpServerProcessConfig discovery = factory.discoveryConfig(
+                McpServerKind.GITHUB);
+
+        assertThat(ordinary.environment()).doesNotContainKeys(
+                "GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_TOKEN");
+        assertThat(discovery.environment())
+                .containsEntry("GITHUB_PERSONAL_ACCESS_TOKEN",
+                        "paperagent-mcp-discovery-no-api-authority")
+                .containsEntry("GITHUB_TOKEN",
+                        "paperagent-mcp-discovery-no-api-authority");
+    }
+
+    @Test
     void injectsUserPatUsingTheOfficialGithubVariableAndLegacyAlias() {
         McpProperties properties = new McpProperties();
         properties.getGithub().setCommand(List.of(

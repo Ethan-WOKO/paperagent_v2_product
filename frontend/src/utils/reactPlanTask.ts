@@ -91,10 +91,26 @@ export function reactPlanDelivery(events: ReactPlanTaskEvent[]) {
   ) ?? null;
 }
 
+export function reactPlanMessageEvents(events: ReactPlanTaskEvent[]) {
+  return events.filter(
+    (event): event is Extract<ReactPlanTaskEvent, { type: 'message' }> => event.type === 'message',
+  );
+}
+
 export function reactPlanToolEvents(events: ReactPlanTaskEvent[]) {
   return events.filter(
     (event): event is Extract<ReactPlanTaskEvent, { type: 'tool' }> => event.type === 'tool',
   );
+}
+
+export function reactPlanActivityEvents(events: ReactPlanTaskEvent[]) {
+  return events
+    .filter(
+      (event): event is Extract<ReactPlanTaskEvent, { type: 'message' | 'tool' }> => (
+        event.type === 'message' || event.type === 'tool'
+      ),
+    )
+    .sort((left, right) => left.sequence - right.sequence);
 }
 
 export function reactPlanStateLabel(state: ReactPlanTaskState) {

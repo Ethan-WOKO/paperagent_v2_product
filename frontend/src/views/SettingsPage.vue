@@ -539,9 +539,9 @@ async function handleSave() {
   try {
     const { data } = await updateSettings({
       defaultProvider: form.defaultProvider,
-      deepseekApiKey: form.deepseekApiKey,
-      glmApiKey: form.glmApiKey,
-      githubPat: form.githubPat,
+      deepseekApiKey: form.deepseekApiKey.trim() || undefined,
+      glmApiKey: form.glmApiKey.trim() || undefined,
+      githubPat: form.githubPat.trim() || undefined,
       deepseekModel: form.deepseekModel,
       glmModel: form.glmModel,
       deepseekModels: form.deepseekModels,

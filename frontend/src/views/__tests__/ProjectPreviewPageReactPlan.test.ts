@@ -24,7 +24,7 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).toContain('streamReactPlanEvents(');
     expect(source).toContain('appendReactPlanEvent(current.events, event, current.taskId)');
     expect(source).toContain('connectReactPlanTask(record, epoch)');
-    expect(source).toContain('reactPlanToolEvents(record.events)');
+    expect(source).toContain('reactPlanActivityEvents(record.events)');
     expect(source).not.toContain('reactPlanFixedTool');
   });
 
@@ -46,9 +46,9 @@ describe('ProjectPreviewPage ReAct 接入', () => {
   });
 
   it('展示安全工具摘要、正式 Receipt、追问、取消和最终 delivery', () => {
-    expect(source).toContain('tool.outputSummary || tool.inputSummary');
-    expect(source).toContain('reactPlanToolLabel(tool)');
-    expect(source).toContain('tool.receiptRef');
+    expect(source).toContain('activity.outputSummary || activity.inputSummary');
+    expect(source).toContain('reactPlanToolLabel(activity)');
+    expect(source).toContain('activity.receiptRef');
     expect(source).toContain('item.delivery.conclusion');
     expect(source).toContain('item.question.text');
     expect(source).toContain('answerCurrentReactPlanQuestion');
