@@ -511,24 +511,38 @@
                 </header>
 
                 <details
-                  v-if="item.tools.length"
+                  v-if="item.activity.length"
                   class="v2-conversation__process"
-                  :open="item.record.view.state === 'running' || item.record.view.state === 'waiting_user'"
+                  :open="reactPlanProcessIsOpen(item.record)"
+                  @toggle="rememberReactPlanProcessOpen(item.record.taskId, $event)"
                 >
                   <summary>
                     <span>执行过程</span>
-                    <small>{{ item.tools.length }} 条工具记录</small>
+                    <small>{{ item.activity.length }} 条记录</small>
                   </summary>
                   <ol>
-                    <li v-for="tool in item.tools" :key="`${tool.callId}:${tool.sequence}`" :data-status="tool.state">
-                      <span>{{ tool.sequence }}</span>
-                      <div>
-                        <strong>{{ reactPlanToolLabel(tool) }}</strong>
-                        <small>{{ tool.outputSummary || tool.inputSummary }}</small>
-                        <code v-if="tool.receiptRef" class="reactplan-receipt">{{ tool.receiptRef }}</code>
+                    <li
+                      v-for="activity in item.activity"
+                      :key="`${activity.type}:${activity.sequence}`"
+                      :data-kind="activity.type"
+                      :data-status="activity.type === 'tool' ? activity.state : 'message'"
+                    >
+                      <span>{{ activity.sequence }}</span>
+                      <div v-if="activity.type === 'message'" class="reactplan-process-message">
+                        <small>进度更新</small>
+                        <MarkdownMessage :content="activity.content" variant="project" />
                       </div>
-                      <NTag size="tiny" :type="tool.state === 'succeeded' ? 'success' : tool.state === 'failed' ? 'error' : 'default'">
-                        {{ reactPlanToolStateLabel(tool.state) }}
+                      <div v-else>
+                        <strong>{{ reactPlanToolLabel(activity) }}</strong>
+                        <small>{{ activity.outputSummary || activity.inputSummary }}</small>
+                        <code v-if="activity.receiptRef" class="reactplan-receipt">{{ activity.receiptRef }}</code>
+                      </div>
+                      <NTag
+                        v-if="activity.type === 'tool'"
+                        size="tiny"
+                        :type="activity.state === 'succeeded' ? 'success' : activity.state === 'failed' ? 'error' : 'default'"
+                      >
+                        {{ reactPlanToolStateLabel(activity.state) }}
                       </NTag>
                     </li>
                   </ol>
@@ -537,13 +551,15 @@
                 <section class="v2-task-card__result">
                   <span class="v2-task-card__avatar v2-task-card__avatar--assistant" aria-hidden="true">R</span>
                   <div class="v2-task-card__result-copy">
-                    <MarkdownMessage v-if="item.delivery" :content="item.delivery.conclusion" variant="project" />
-                    <NAlert v-else-if="item.question" type="warning" :show-icon="false">{{ item.question.text }}</NAlert>
-                    <NAlert v-else-if="item.record.view.state === 'failed'" type="error" :show-icon="false">
-                      {{ item.record.view.error?.message || '任务执行失败。' }}
-                    </NAlert>
-                    <NAlert v-else-if="item.record.view.state === 'cancelled'" type="warning" :show-icon="false">任务已取消。</NAlert>
-                    <p v-else>{{ reactPlanStateLabel(item.record.view.state) }}</p>
+                    <div class="v2-task-card__answer">
+                      <MarkdownMessage v-if="item.delivery" :content="item.delivery.conclusion" variant="project" />
+                      <NAlert v-else-if="item.question" type="warning" :show-icon="false">{{ item.question.text }}</NAlert>
+                      <NAlert v-else-if="item.record.view.state === 'failed'" type="error" :show-icon="false">
+                        {{ item.record.view.error?.message || '任务执行失败。' }}
+                      </NAlert>
+                      <NAlert v-else-if="item.record.view.state === 'cancelled'" type="warning" :show-icon="false">任务已取消。</NAlert>
+                      <p v-else>{{ reactPlanStateLabel(item.record.view.state) }}</p>
+                    </div>
                   </div>
                 </section>
 
@@ -805,6 +821,7 @@ import {
   newReactPlanCancelId,
   newReactPlanRequestId,
   parseReactPlanHistory,
+  reactPlanActivityEvents,
   reactPlanDelivery,
   reactPlanElapsedMillis,
   reactPlanStateLabel,
@@ -959,6 +976,7 @@ const reactPlanSkillOptions = computed(() => reactPlanSkills.value
 const reactPlanRecord = ref<ReactPlanTaskRecord | null>(null);
 const reactPlanRecords = ref<ReactPlanTaskRecord[]>([]);
 const reactPlanSessionStates = ref<Record<number, ReactPlanTaskState | undefined>>({});
+const reactPlanProcessOpen = ref<Record<string, boolean>>({});
 const reactPlanNextCursor = ref<string | null>(null);
 const reactPlanLoadingOlder = ref(false);
 const reactPlanError = ref('');
@@ -986,7 +1004,7 @@ const reactPlanTimeline = computed(() => reactPlanRecords.value.map((record) => 
   durationLabel: `${isReactPlanTerminal(record.view.state) ? '用时' : '已用时'} ${formatReactPlanDuration(
     reactPlanElapsedMillis(record, reactPlanClock.value),
   )}`,
-  tools: reactPlanToolEvents(record.events),
+  activity: reactPlanActivityEvents(record.events),
   delivery: reactPlanDelivery(record.events),
   question: latestReactPlanQuestion(record.events, record.view.pendingQuestionId),
 })));
@@ -1125,6 +1143,17 @@ const contextRailCollapsed = ref(readStoredBoolean(
 const projectLayoutStyle = computed(() => ({
   '--project-context-width': `${projectLayout.width}px`,
 }));
+
+function reactPlanProcessIsOpen(record: ReactPlanTaskRecord) {
+  const remembered = reactPlanProcessOpen.value[record.taskId];
+  return remembered ?? record.events.some((event) => event.type === 'tool' || event.type === 'message');
+}
+
+function rememberReactPlanProcessOpen(taskId: string, event: Event) {
+  const details = event.currentTarget;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  reactPlanProcessOpen.value = { ...reactPlanProcessOpen.value, [taskId]: details.open };
+}
 const projectRailStyle = computed(() => ({
   gridTemplateRows: [
     sidebarSections.projects ? '34px' : `${projectLayout.projects}px`,
@@ -3313,7 +3342,8 @@ onUnmounted(() => {
 .v2-task-card__avatar--assistant { border-color: var(--yb-primary); border-radius: 5px; color: var(--yb-primary-contrast); background: var(--yb-primary); }
 .v2-task-card__result { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px; border-radius: 8px; background: var(--yb-bg-muted); }
 .v2-task-card__result-copy { min-width: 0; }
-.v2-task-card__result-copy > p { margin: 0; color: var(--yb-text-secondary); }
+.v2-task-card__answer { min-width: 0; }
+.v2-task-card__answer > p { margin: 0; color: var(--yb-text-secondary); }
 .v2-task-card__delivery { display: flex; flex-direction: column; gap: 8px; }
 .v2-task-card__validation { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 10px; }
 .v2-task-card__validation dt { color: var(--yb-text-muted); }
@@ -3336,6 +3366,10 @@ onUnmounted(() => {
 .v2-conversation__process li > span { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--yb-border); border-radius: 50%; color: var(--yb-text-muted); font-size: 10px; font-weight: 800; }
 .v2-conversation__process li > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .v2-conversation__process li small { overflow-wrap: anywhere; color: var(--yb-text-muted); font-size: 9px; }
+.v2-conversation__process li[data-kind="message"] > span { border-color: color-mix(in srgb, var(--yb-primary) 45%, var(--yb-border)); color: var(--yb-primary); }
+.reactplan-process-message :deep(.message-markdown) { min-width: 0; color: var(--yb-text-secondary); font-size: 11px; line-height: 1.55; }
+.reactplan-process-message :deep(.message-markdown > :first-child) { margin-top: 0; }
+.reactplan-process-message :deep(.message-markdown > :last-child) { margin-bottom: 0; }
 .v2-conversation__empty-process { margin: 0; color: var(--yb-text-muted); font-size: 10px; }
 .v2-conversation__result { display: flex; flex-direction: column; gap: 10px; }
 .v2-conversation__result h3 { margin: 0; font-size: 14px; }

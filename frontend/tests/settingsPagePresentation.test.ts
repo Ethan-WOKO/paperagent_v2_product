@@ -41,6 +41,9 @@ describe('settings workspace presentation contract', () => {
     }
     expect(page).toContain('guardDemoSettings');
     expect(page).toContain('modelForm.apiKey || undefined');
+    expect(page).toContain('githubPat: form.githubPat.trim() || undefined');
+    expect(page).toContain('deepseekApiKey: form.deepseekApiKey.trim() || undefined');
+    expect(page).toContain('glmApiKey: form.glmApiKey.trim() || undefined');
   });
 
   it('uses shared tokens and explicit desktop, tablet, and mobile layouts', () => {

@@ -337,6 +337,18 @@ public class UserSettingsService {
         return cryptoService.decrypt(settings.getGithubPatEncrypted());
     }
 
+    public boolean hasUsableGithubPat(Long userId) {
+        SysUserSettings settings = getOrCreate(userId);
+        if (!StringUtils.hasText(settings.getGithubPatEncrypted())) {
+            return false;
+        }
+        try {
+            return StringUtils.hasText(decryptGithubPat(settings));
+        } catch (IllegalStateException unreadableCredential) {
+            return false;
+        }
+    }
+
     public String decryptCustomModelApiKey(UserModel model) {
         if (!StringUtils.hasText(model.getApiKeyEncrypted())) {
             return null;
@@ -385,7 +397,8 @@ public class UserSettingsService {
                 parseDisabledSkills(settings),
                 parseDeepseekModels(settings),
                 parseGlmModels(settings),
-                customModels);
+                customModels,
+                hasUsableGithubPat(settings.getUserId()));
     }
 
     private SysUserSettings defaultSettings(Long userId) {

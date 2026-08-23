@@ -26,12 +26,13 @@ public record UserSettingsResponse(
                                            List<String> disabledSkills,
                                            List<String> deepseekModels,
                                            List<String> glmModels,
-                                           List<UserModelResponse> customModels) {
+                                           List<UserModelResponse> customModels,
+                                           boolean githubPatConfigured) {
         return new UserSettingsResponse(
                 settings.getDefaultProvider(),
                 settings.getDeepseekApiKeyEncrypted() != null && !settings.getDeepseekApiKeyEncrypted().isBlank(),
                 settings.getGlmApiKeyEncrypted() != null && !settings.getGlmApiKeyEncrypted().isBlank(),
-                settings.getGithubPatEncrypted() != null && !settings.getGithubPatEncrypted().isBlank(),
+                githubPatConfigured,
                 settings.getDeepseekModel(),
                 settings.getGlmModel(),
                 deepseekModels,

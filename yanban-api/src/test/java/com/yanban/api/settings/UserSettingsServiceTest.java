@@ -50,6 +50,36 @@ class UserSettingsServiceTest {
     UserSettingsService service;
 
     @Test
+    void reportsGithubPatConfiguredOnlyWhenTheStoredCredentialIsDecryptable() {
+        Long userId = 9L;
+        SysUserSettings settings = new SysUserSettings(
+                userId,
+                UserSettingsService.DEFAULT_PROVIDER,
+                null,
+                null,
+                UserSettingsService.DEFAULT_DEEPSEEK_MODEL,
+                UserSettingsService.DEFAULT_GLM_MODEL,
+                "encrypted-github-pat",
+                "[]",
+                "[]",
+                UserSettingsService.DEFAULT_TEMPERATURE,
+                UserSettingsService.DEFAULT_MAX_STEPS,
+                UserSettingsService.DEFAULT_RAG_ENABLED
+        );
+        when(repository.findById(userId)).thenReturn(Optional.of(settings));
+        when(userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId))
+                .thenReturn(List.of());
+        when(cryptoService.decrypt("encrypted-github-pat"))
+                .thenReturn("github-pat");
+
+        assertThat(service.get(userId).githubPatConfigured()).isTrue();
+
+        when(cryptoService.decrypt("encrypted-github-pat"))
+                .thenThrow(new IllegalStateException("wrong encryption key"));
+        assertThat(service.get(userId).githubPatConfigured()).isFalse();
+    }
+
+    @Test
     void getFallsBackToExistingSettingsWhenConcurrentInsertWins() {
         Long userId = 2L;
         SysUserSettings existing = new SysUserSettings(

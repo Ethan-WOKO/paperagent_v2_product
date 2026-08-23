@@ -13,6 +13,7 @@ import com.yanban.api.agent.reactplan.ReactPlanHistoryToolContract;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolCall;
 import com.yanban.api.agent.v2.AgentTurnProductContextResolver;
 import com.yanban.api.agent.v2.VerifiedAgentTurnProductContext;
+import com.yanban.api.settings.UserSettingsService;
 import com.yanban.core.agent.AgentRunIdentity;
 import com.yanban.core.tool.ToolCall;
 import com.yanban.core.tool.ToolDefinition;
@@ -138,6 +139,30 @@ class AgentEngineRegisteredToolGatewayTest {
         AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
                 json, registry, policies, contexts(VERSION));
 
+        assertThat(gateway.catalog(authority()).tools())
+                .extracting(tool -> tool.function().name())
+                .containsExactly("mcp_fs__read_file", "mcp_github__search_code");
+    }
+
+    @Test
+    void exposesGithubMcpToolsOnlyWhenTheCurrentUserHasAUsablePat() {
+        ToolRegistry registry = new ToolRegistry()
+                .register(mcpExecutor("mcp_github__search_code",
+                        ToolDescriptor.SideEffectType.EXTERNAL_READ))
+                .register(mcpExecutor("mcp_fs__read_file",
+                        ToolDescriptor.SideEffectType.READ_ONLY));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(
+                new AgentToolPolicyEngine.Decision(List.of(), 0, 1, "test"));
+        UserSettingsService settings = mock(UserSettingsService.class);
+        AgentEngineRegisteredToolGateway gateway = new AgentEngineRegisteredToolGateway(
+                json, registry, policies, contexts(VERSION), settings);
+
+        assertThat(gateway.catalog(authority()).tools())
+                .extracting(tool -> tool.function().name())
+                .containsExactly("mcp_fs__read_file");
+
+        when(settings.hasUsableGithubPat(11L)).thenReturn(true);
         assertThat(gateway.catalog(authority()).tools())
                 .extracting(tool -> tool.function().name())
                 .containsExactly("mcp_fs__read_file", "mcp_github__search_code");

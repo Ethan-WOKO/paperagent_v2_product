@@ -131,7 +131,7 @@ yanban:
       enabled: ${YANBAN_MCP_GITHUB_ENABLED:false}
       command: ${YANBAN_MCP_GITHUB_COMMAND:cmd,/c,npx,-y,@modelcontextprotocol/server-github}
       allowed-commands: ${YANBAN_MCP_GITHUB_ALLOWED_COMMANDS:cmd,npx,node}
-      request-timeout: 20s
+      request-timeout: ${YANBAN_MCP_GITHUB_REQUEST_TIMEOUT:60s}
     filesystem:
       enabled: ${YANBAN_MCP_FILESYSTEM_ENABLED:true}
       command: ${YANBAN_MCP_FILESYSTEM_COMMAND:cmd,/c,npx,-y,@modelcontextprotocol/server-filesystem}

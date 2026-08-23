@@ -9,7 +9,9 @@ import {
   newReactPlanRequestId,
   parseReactPlanHistory,
   parseReactPlanRecord,
+  reactPlanActivityEvents,
   reactPlanElapsedMillis,
+  reactPlanMessageEvents,
   reactPlanToolLabel,
   serializeReactPlanHistory,
   upsertReactPlanRecord,
@@ -179,6 +181,28 @@ describe('ReAct task frontend state', () => {
 
   it('shows the real registered tool name and product label', () => {
     expect(reactPlanToolLabel(toolEvent())).toBe('联网搜索（search_web）');
+  });
+
+  it('keeps public progress messages in event order', () => {
+    const messages: ReactPlanTaskEvent[] = [
+      status(1),
+      { ...status(2), type: 'message', content: '正在读取项目文件。' },
+      toolEvent({ sequence: 3 }),
+      { ...status(4), type: 'message', content: '正在核对读取结果。' },
+    ];
+    expect(reactPlanMessageEvents(messages).map((event) => event.content))
+      .toEqual(['正在读取项目文件。', '正在核对读取结果。']);
+  });
+
+  it('merges tool and progress events by their authoritative sequence', () => {
+    const activity: ReactPlanTaskEvent[] = [
+      toolEvent({ sequence: 4 }),
+      { ...status(2), type: 'message', content: '正在读取项目文件。' },
+      status(1),
+      toolEvent({ sequence: 3 }),
+    ];
+    expect(reactPlanActivityEvents(activity).map((event) => `${event.sequence}:${event.type}`))
+      .toEqual(['2:message', '3:tool', '4:tool']);
   });
 
   it('recognizes historical registered-tool events from their safe summary', () => {
