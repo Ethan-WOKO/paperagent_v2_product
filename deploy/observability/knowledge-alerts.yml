@@ -1,0 +1,45 @@
+groups:
+  - name: yanban-knowledge
+    rules:
+      - alert: KnowledgeKafkaLagHigh
+        expr: max(kafka_consumer_fetch_manager_records_lag_max{client_id=~".*yanban-kb-processing.*"}) > 500
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "知识库 Kafka 消费积压超过 500"
+      - alert: KnowledgeProcessingFailureRateHigh
+        expr: sum(rate(yanban_knowledge_processing_total{outcome=~".*failure"}[10m])) / clamp_min(sum(rate(yanban_knowledge_processing_total[10m])), 0.001) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "知识库任务失败率超过 10%"
+      - alert: KnowledgeProcessingSlow
+        expr: sum(rate(yanban_knowledge_processing_duration_seconds_sum{outcome="succeeded"}[10m])) / clamp_min(sum(rate(yanban_knowledge_processing_duration_seconds_count{outcome="succeeded"}[10m])), 0.001) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "知识库任务平均耗时超过 120 秒"
+      - alert: KnowledgeOutboxBacklog
+        expr: yanban_knowledge_outbox_backlog > 100
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "知识库 Outbox 积压超过 100"
+      - alert: KnowledgeDeadLettersPending
+        expr: yanban_knowledge_dead_letters_pending > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "知识库 DLQ 中存在待处理任务"
+      - alert: AgentProviderFallbackRateHigh
+        expr: sum(rate(yanban_agent_provider_routes_total{outcome="fallback"}[10m])) / clamp_min(sum(rate(yanban_agent_provider_routes_total[10m])), 0.001) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent Provider 降级率超过 20%"

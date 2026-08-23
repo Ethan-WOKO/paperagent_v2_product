@@ -155,6 +155,16 @@ class PaperGapAnalysisServiceTest {
     }
 
     @Test
+    void exposesDegradedEmptyAnalysisToTheOrchestrator() {
+        PaperTask task = tasks.save(new PaperTask(1L, "RAG Paper", "main.tex", "paper/main.tex", "RUNNING", "en", "GAP_ANALYSIS", null));
+        PaperTaskAnalysis analysis = new PaperTaskAnalysis(task.getId());
+        analysis.setGapMatrixJson("{\"analysisStatus\":\"DEGRADED\",\"suggestionCount\":0}");
+        analyses.save(analysis);
+
+        assertThat(gapAnalysisService.isDegradedWithoutSuggestions(task.getId())).isTrue();
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void partialCriticDecisionDefersAllEvidenceToCitationClosure() {
         PaperTask task = tasks.save(new PaperTask(1L, "Radar Paper", "main.tex", "paper/main.tex", "RUNNING", "en", "GAP_ANALYSIS", null));

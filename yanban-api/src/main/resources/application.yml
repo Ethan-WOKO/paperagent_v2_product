@@ -11,6 +11,12 @@ spring:
     multipart:
       max-file-size: ${YANBAN_PROJECT_MAX_FILE_SIZE:20MB}
       max-request-size: ${YANBAN_PROJECT_MAX_REQUEST_SIZE:256MB}
+  mvc:
+    # ReAct tasks may legitimately run for several minutes while a sandbox or
+    # provider is working. Keep the proxying StreamingResponseBody alive; the
+    # Engine emits SSE heartbeats every 15 seconds.
+    async:
+      request-timeout: ${YANBAN_ASYNC_REQUEST_TIMEOUT:20m}
 
 server:
   port: 8080
@@ -19,7 +25,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,prometheus,metrics
   endpoint:
     health:
       probes:

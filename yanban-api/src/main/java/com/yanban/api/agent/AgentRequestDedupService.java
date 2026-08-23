@@ -21,6 +21,14 @@ public class AgentRequestDedupService {
                                        Long sessionId,
                                        String clientRequestId,
                                        Supplier<SendMessageResponse> action) {
+        return execute(userId, sessionId, clientRequestId, null, action);
+    }
+
+    public SendMessageResponse execute(Long userId,
+                                       Long sessionId,
+                                       String clientRequestId,
+                                       Runnable onDuplicateWait,
+                                       Supplier<SendMessageResponse> action) {
         if (!StringUtils.hasText(clientRequestId)) {
             return action.get();
         }
@@ -37,6 +45,9 @@ public class AgentRequestDedupService {
         CompletableFuture<SendMessageResponse> created = new CompletableFuture<>();
         CompletableFuture<SendMessageResponse> existing = inFlight.putIfAbsent(key, created);
         if (existing != null) {
+            if (onDuplicateWait != null) {
+                onDuplicateWait.run();
+            }
             return await(existing);
         }
 

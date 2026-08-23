@@ -19,7 +19,7 @@ class AgentServiceRuntimeAssemblyTest {
     }
 
     @Test
-    void websocketRuntimeAssemblyCreatesServerOwnedTraceWhenUpgradeMdcIsGone() {
+    void runtimeAssemblyCreatesServerOwnedTraceWhenRequestMdcIsAbsent() {
         MDC.remove(TraceIdFilter.TRACE_ID_MDC_KEY);
 
         String traceId = AgentService.resolvedRuntimeTraceId();

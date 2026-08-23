@@ -1,5 +1,6 @@
 package com.yanban.api.paper;
 
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "yanban.paper.model")
@@ -9,6 +10,7 @@ public class PaperModelProperties {
     private String model;
     private String apiUrl;
     private String apiKey;
+    private Duration timeout = Duration.ofSeconds(180);
 
     public String getProvider() {
         return provider;
@@ -40,5 +42,13 @@ public class PaperModelProperties {
 
     public void setApiKey(String apiKey) {
         this.apiKey = apiKey;
+    }
+
+    public Duration getTimeout() {
+        return timeout;
+    }
+
+    public void setTimeout(Duration timeout) {
+        this.timeout = timeout;
     }
 }

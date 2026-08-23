@@ -76,7 +76,7 @@ public class YanbanCli implements Runnable {
                     break;
                 }
                 System.out.print("assistant> ");
-                API.chatViaWebSocket(sessionId, line);
+                API.chatViaSse(sessionId, line);
             }
         }
     }

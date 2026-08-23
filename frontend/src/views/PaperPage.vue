@@ -384,12 +384,34 @@
 
           <NTabPane name="preview" :tab="`Preview (${previewSections.length + suggestions.length})`">
             <div class="paper-preview-panel">
-              <NButtonGroup>
-                <NButton :type="previewMode === 'basic' ? 'primary' : 'default'" size="small" @click="previewMode = 'basic'">Recommendations</NButton>
-                <NButton :type="previewMode === 'advanced' ? 'primary' : 'default'" size="small" @click="previewMode = 'advanced'">Diff + cite patch</NButton>
-              </NButtonGroup>
+              <div class="paper-preview-toolbar">
+                <NButtonGroup>
+                  <NButton :type="previewMode === 'basic' ? 'primary' : 'default'" size="small" @click="previewMode = 'basic'">Recommendations</NButton>
+                  <NButton :type="previewMode === 'advanced' ? 'primary' : 'default'" size="small" @click="previewMode = 'advanced'">Diff + cite patch</NButton>
+                </NButtonGroup>
+                <NSpace v-if="reviewableSections.length > 0" size="small" align="center">
+                  <NCheckbox :checked="allReviewableSectionsSelected" :indeterminate="someReviewableSectionsSelected" @update:checked="toggleAllRevisionSections">
+                    {{ isEnglish ? 'Select all' : '全选' }}
+                  </NCheckbox>
+                  <NButton size="small" type="primary" :loading="batchRevisionSubmitting" :disabled="selectedRevisionSectionIds.length === 0" @click="acceptSelectedRevisions">
+                    {{ isEnglish ? `Accept selected (${selectedRevisionSectionIds.length})` : `批量采纳（${selectedRevisionSectionIds.length}）` }}
+                  </NButton>
+                </NSpace>
+              </div>
               <div v-for="section in previewSections" :key="`preview-${section.id}`" class="paper-diff-card">
-                <div class="paper-diff-card__title">{{ section.orderIndex + 1 }}. {{ section.title }} · {{ section.polishStatus || 'NOT_POLISHED' }}</div>
+                <div class="paper-diff-card__title">
+                  <NCheckbox
+                    v-if="isReviewableSection(section)"
+                    :checked="selectedRevisionSectionIds.includes(section.id)"
+                    :disabled="batchRevisionSubmitting"
+                    @update:checked="(checked) => toggleRevisionSection(section.id, checked)"
+                  />
+                  <span>{{ section.orderIndex + 1 }}. {{ section.title }} · {{ section.polishStatus || 'NOT_POLISHED' }} · {{ section.revisionStatus || 'PENDING' }}</span>
+                  <NSpace v-if="isReviewableSection(section)" size="small">
+                    <NButton size="tiny" secondary type="success" :loading="sectionRevisionSubmitting === section.id" @click="updateSectionRevisionStatus(section, 'ACCEPTED')">{{ isEnglish ? 'Accept' : '采纳' }}</NButton>
+                    <NButton size="tiny" secondary type="error" :loading="sectionRevisionSubmitting === section.id" @click="updateSectionRevisionStatus(section, 'REJECTED')">{{ isEnglish ? 'Reject' : '拒绝' }}</NButton>
+                  </NSpace>
+                </div>
                 <pre v-if="section.diffJson" class="paper-code-preview">{{ readableDiff(section.diffJson) }}</pre>
                 <pre v-else-if="section.reviewJson" class="paper-code-preview">{{ prettyJson(section.reviewJson) }}</pre>
               </div>
@@ -405,7 +427,7 @@
             </div>
           </NTabPane>
 
-          <NTabPane name="report" :tab="`Report (${bibliographyCards.length})`">
+          <NTabPane name="report" :tab="`Report (${selectedLiteratureCount})`">
             <div class="paper-report-panel">
               <div v-if="citationApplicationSummary" class="paper-citation-summary">
                 <div><span>New references</span><strong>{{ citationApplicationSummary.newReferences }}</strong></div>
@@ -422,7 +444,12 @@
                   <a v-if="card.pdfUrl" :href="card.pdfUrl" target="_blank" rel="noreferrer">PDF</a>
                 </div>
               </div>
-              <NEmpty v-if="bibliographyCards.length === 0" description="No bibliography report yet." />
+              <NEmpty
+                v-if="bibliographyCards.length === 0"
+                :description="selectedLiteratureCount > 0
+                  ? (isEnglish ? `${selectedLiteratureCount} papers selected; details are available in the retrieval artifact.` : `已选中 ${selectedLiteratureCount} 篇，详细信息见检索产物。`)
+                  : 'No bibliography report yet.'"
+              />
             </div>
           </NTabPane>
         </NTabs>
@@ -470,6 +497,7 @@ import {
   NButton,
   NButtonGroup,
   NCard,
+  NCheckbox,
   NDropdown,
   NEmpty,
   NForm,
@@ -505,6 +533,7 @@ import {
   pausePaperTask,
   resumePaperTask,
   updatePaperSectionRevisionStatus as updatePaperSectionRevisionStatusApi,
+  updatePaperSectionRevisionStatuses as updatePaperSectionRevisionStatusesApi,
   updatePaperSectionRole,
   type PaperAnalysisResponse,
   type PaperArtifactResponse,
@@ -548,6 +577,10 @@ const activeSideTab = ref('evidence');
 const selectedSuggestionId = ref<number | null>(null);
 const activeReviewTab = ref('clarification');
 const sectionRevisionSubmitting = ref<number | null>(null);
+const batchRevisionSubmitting = ref(false);
+const selectedRevisionSectionIds = ref<number[]>([]);
+const knownReviewableSectionIds = ref<Set<number>>(new Set());
+const revisionSelectionTaskId = ref<number | null>(null);
 const clarificationAnswers = reactive<Record<number, string>>({});
 const clarificationSubmitting = ref(false);
 const structureConfirmationVisible = ref(false);
@@ -616,6 +649,18 @@ const suggestedBibArtifacts = computed(() => activeArtifacts.value.filter((item)
 const polishedTexArtifacts = computed(() => activeArtifacts.value.filter((item) => item.type === 'polished_tex'));
 const retrievedLiteratureArtifacts = computed(() => activeArtifacts.value.filter((item) => item.type === 'retrieved_literature_json' || item.type === 'retrieved_literature_md'));
 const previewSections = computed(() => sections.value.filter((section) => section.diffJson || section.reviewJson || section.polishStatus));
+const reviewableSections = computed(() => previewSections.value.filter(isReviewableSection));
+const allReviewableSectionsSelected = computed(() => reviewableSections.value.length > 0
+  && reviewableSections.value.every((section) => selectedRevisionSectionIds.value.includes(section.id)));
+const someReviewableSectionsSelected = computed(() => selectedRevisionSectionIds.value.length > 0 && !allReviewableSectionsSelected.value);
+const selectedLiteratureCount = computed(() => {
+  const artifact = retrievedLiteratureArtifacts.value
+    .filter((item) => item.type === 'retrieved_literature_json')
+    .sort((left, right) => right.version - left.version)[0];
+  if (!artifact?.metadataJson) return bibliographyCards.value.length;
+  const metadata = parseJson<Record<string, unknown>>(artifact.metadataJson, {});
+  return Number(metadata.selectedCandidateCount ?? bibliographyCards.value.length);
+});
 const bibliographyCards = computed(() => {
   const seen = new Set<number>();
   return suggestions.value.flatMap((suggestion) => suggestion.evidenceCards || []).filter((card) => {
@@ -666,6 +711,21 @@ function selectPaperSuggestion(suggestionId: number) {
   selectedSuggestionId.value = suggestionId;
   activeSideTab.value = 'evidence';
 }
+
+watch([() => currentTaskId.value, () => reviewableSections.value.map((section) => section.id)], ([taskId, ids]) => {
+  const nextIds = new Set(ids);
+  if (revisionSelectionTaskId.value !== taskId) {
+    revisionSelectionTaskId.value = taskId;
+    selectedRevisionSectionIds.value = [...ids];
+  } else {
+    const selected = new Set(selectedRevisionSectionIds.value.filter((id) => nextIds.has(id)));
+    ids.forEach((id) => {
+      if (!knownReviewableSectionIds.value.has(id)) selected.add(id);
+    });
+    selectedRevisionSectionIds.value = [...selected];
+  }
+  knownReviewableSectionIds.value = nextIds;
+});
 
 const legacyStageAlias: Record<string, string> = {
   UPLOAD_RECEIVED: 'UPLOAD',
@@ -1448,6 +1508,36 @@ async function updateSectionRevisionStatus(section: PaperSectionResponse, status
   }
 }
 
+function isReviewableSection(section: PaperSectionResponse) {
+  return section.polishStatus === 'POLISHED' && section.revisionStatus !== 'ACCEPTED' && section.revisionStatus !== 'REJECTED';
+}
+
+function toggleRevisionSection(sectionId: number, checked: boolean) {
+  const selected = new Set(selectedRevisionSectionIds.value);
+  if (checked) selected.add(sectionId);
+  else selected.delete(sectionId);
+  selectedRevisionSectionIds.value = [...selected];
+}
+
+function toggleAllRevisionSections(checked: boolean) {
+  selectedRevisionSectionIds.value = checked ? reviewableSections.value.map((section) => section.id) : [];
+}
+
+async function acceptSelectedRevisions() {
+  if (!currentTaskId.value || selectedRevisionSectionIds.value.length === 0) return;
+  batchRevisionSubmitting.value = true;
+  try {
+    const acceptedCount = selectedRevisionSectionIds.value.length;
+    await updatePaperSectionRevisionStatusesApi(currentTaskId.value, selectedRevisionSectionIds.value, 'ACCEPTED');
+    await loadClarificationsAndSections(currentTaskId.value);
+    ui.message.success(isEnglish.value ? `Accepted ${acceptedCount} section revisions` : `已批量采纳 ${acceptedCount} 个章节`);
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || (isEnglish.value ? 'Failed to accept selected revisions' : '批量采纳失败'));
+  } finally {
+    batchRevisionSubmitting.value = false;
+  }
+}
+
 function prettyJson(raw: string) {
   try {
     return JSON.stringify(JSON.parse(raw), null, 2);
@@ -1646,7 +1736,7 @@ function workflowStepDetail(stage: string) {
   if (stage === 'RETRIEVE') {
     const event = latestProgressEvent.value;
     if (activeIndex === index && event?.currentSection != null && event.totalSections) return localize(`${event.currentSection}/${event.totalSections} cards`, `${event.currentSection}/${event.totalSections} 条文献`);
-    return done ? localize(`${bibliographyCards.value.length} selected`, `选中 ${bibliographyCards.value.length} 篇`) : activeIndex === index ? localize('Searching', '检索中') : localize('Pending', '等待');
+    return done ? localize(`${selectedLiteratureCount.value} selected`, `选中 ${selectedLiteratureCount.value} 篇`) : activeIndex === index ? localize('Searching', '检索中') : localize('Pending', '等待');
   }
   if (stage === 'GAP_ANALYSIS') return done ? localize(`${suggestions.value.length} suggestions`, `${suggestions.value.length} 项建议`) : activeIndex === index ? localize('Reviewing', '审查中') : localize('Pending', '等待');
   if (stage === 'POLISH') {

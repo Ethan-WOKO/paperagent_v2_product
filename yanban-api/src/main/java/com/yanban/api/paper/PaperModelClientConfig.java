@@ -4,6 +4,7 @@ import com.yanban.api.agent.LangChain4jChatModelAdapter;
 import com.yanban.api.agent.ModelInvocationContext;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.quota.UserQuotaService;
+import com.yanban.core.model.ModelProviderException;
 import com.yanban.paper.service.PaperModelExecutionContext;
 import com.yanban.paper.service.PaperModelClient;
 import dev.langchain4j.data.message.SystemMessage;
@@ -24,6 +25,7 @@ import org.springframework.util.StringUtils;
 @EnableConfigurationProperties(PaperModelProperties.class)
 public class PaperModelClientConfig {
 
+    private static final int MAX_EMPTY_RESPONSE_ATTEMPTS = 2;
     private static final String DEFAULT_PAPER_DEEPSEEK_MODEL = "deepseek-v4-flash";
     private static final String DEFAULT_OPENROUTER_MODEL = "tencent/hy3:free";
     private static final String DEFAULT_DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
@@ -67,19 +69,24 @@ public class PaperModelClientConfig {
                             .build())
                     .modelName(modelName);
             ChatRequest request = builder.build();
-            ChatResponse response;
+            ModelInvocationContext runtime;
+            String providerLabel;
             if (endpoint != null) {
+                providerLabel = endpoint.providerKey();
+                runtime = runtimeRequest(endpoint, properties);
                 log.info("Paper model call provider={} model={} sourceType={} sourceLabel={}",
                         endpoint.providerKey(), endpoint.modelName(), endpoint.sourceType(), endpoint.sourceLabel());
-                response = chatModel.chat(request, runtimeRequest(endpoint));
             } else if (StringUtils.hasText(properties.getProvider())) {
+                providerLabel = properties.getProvider();
+                runtime = runtimeRequest(properties);
                 log.info("Paper model call provider={} model={} sourceType=paper-properties sourceLabel=yanban.paper.model",
                         properties.getProvider(), modelName);
-                response = chatModel.chat(request, runtimeRequest(properties));
             } else {
+                providerLabel = "default";
+                runtime = timeoutOnlyRuntimeRequest(properties);
                 log.info("Paper model call provider=default model={} sourceType=chat-model-bean sourceLabel=default", modelName);
-                response = chatModel.chat(request);
             }
+            ChatResponse response = callWithEmptyResponseRetry(chatModel, request, runtime, log, providerLabel, modelName);
             if (quotaService != null && userId != null && response != null && response.tokenUsage() != null) {
                 quotaService.recordUsage(userId, "PAPER", response.tokenUsage().inputTokenCount(),
                         response.tokenUsage().outputTokenCount(), response.tokenUsage().totalTokenCount());
@@ -110,7 +117,9 @@ public class PaperModelClientConfig {
                 normalizeProvider(properties.getProvider()),
                 blankToNull(properties.getApiKey()),
                 resolveApiUrl(properties),
-                "paper-model-call"
+                "paper-model-call",
+                properties.getTimeout(),
+                true
         );
     }
 
@@ -179,13 +188,45 @@ public class PaperModelClientConfig {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
-    private ModelInvocationContext runtimeRequest(UserSettingsService.ModelEndpoint endpoint) {
+    private ModelInvocationContext runtimeRequest(UserSettingsService.ModelEndpoint endpoint,
+                                                  PaperModelProperties properties) {
         return new ModelInvocationContext(
                 endpoint.providerKey(),
                 endpoint.apiKey(),
                 endpoint.apiUrl(),
-                "paper-model-call"
+                "paper-model-call",
+                properties.getTimeout(),
+                true
         );
+    }
+
+    private ModelInvocationContext timeoutOnlyRuntimeRequest(PaperModelProperties properties) {
+        return new ModelInvocationContext(null, null, null, "paper-model-call", properties.getTimeout(), true);
+    }
+
+    private ChatResponse callWithEmptyResponseRetry(LangChain4jChatModelAdapter chatModel,
+                                                    ChatRequest request,
+                                                    ModelInvocationContext runtime,
+                                                    Logger log,
+                                                    String provider,
+                                                    String model) {
+        for (int attempt = 1; attempt <= MAX_EMPTY_RESPONSE_ATTEMPTS; attempt++) {
+            try {
+                return chatModel.chat(request, runtime);
+            } catch (ModelProviderException ex) {
+                if (!isEmptyResponse(ex) || attempt == MAX_EMPTY_RESPONSE_ATTEMPTS) {
+                    throw ex;
+                }
+                log.warn("Paper model empty response; retrying provider={} model={} attempt={}/{} error={}",
+                        provider, model, attempt, MAX_EMPTY_RESPONSE_ATTEMPTS, ex.getMessage());
+            }
+        }
+        throw new IllegalStateException("Unreachable paper model retry state");
+    }
+
+    private boolean isEmptyResponse(ModelProviderException ex) {
+        return ex != null && ex.getMessage() != null
+                && ex.getMessage().contains("Model returned an empty response without tool calls");
     }
 
     private static String defaultString(String value) {

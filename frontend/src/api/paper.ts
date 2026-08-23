@@ -202,6 +202,10 @@ export function updatePaperSectionRevisionStatus(taskId: number, sectionId: numb
   return http.post<PaperSectionResponse>(`/paper/tasks/${taskId}/sections/${sectionId}/revision-status`, { status });
 }
 
+export function updatePaperSectionRevisionStatuses(taskId: number, sectionIds: number[], status: string) {
+  return http.post<PaperSectionResponse[]>(`/paper/tasks/${taskId}/sections/revision-status`, { sectionIds, status });
+}
+
 export function downloadPaperTask(taskId: number) {
   return http.get<Blob>(`/paper/tasks/${taskId}/download`, {
     responseType: 'blob',

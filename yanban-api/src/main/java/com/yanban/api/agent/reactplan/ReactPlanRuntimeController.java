@@ -85,6 +85,8 @@ final class ReactPlanRuntimeController {
         };
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header("Cache-Control", "no-cache, no-transform")
+                .header("X-Accel-Buffering", "no")
                 .body(body);
     }
 

@@ -24,8 +24,19 @@ class PaperFinalAuditServiceTest {
 
         PaperFinalAuditService.AuditResult result = service.audit(tex, bib, citationResult());
 
-        assertThat(result.status()).isEqualTo("PASS");
-        assertThat(result.issues()).isEmpty();
+        assertThat(result.status()).isEqualTo("PARTIAL");
+        assertThat(result.issues()).extracting(PaperFinalAuditService.AuditIssue::code)
+                .contains("COMPILATION_NOT_EXECUTED");
+    }
+
+    @Test
+    void reportsReferencedGraphicsMissingFromUploadedResources() {
+        PaperFinalAuditService.AuditResult result = service.audit(
+                "\\includegraphics{figures/system}", "", null, Set.of("main.tex"));
+
+        assertThat(result.status()).isEqualTo("PARTIAL");
+        assertThat(result.issues()).extracting(PaperFinalAuditService.AuditIssue::code)
+                .contains("MISSING_GRAPHICS_RESOURCE", "COMPILATION_NOT_EXECUTED");
     }
 
     @Test

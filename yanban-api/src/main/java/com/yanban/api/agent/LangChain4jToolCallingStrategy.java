@@ -293,12 +293,15 @@ public class LangChain4jToolCallingStrategy {
 
                 emitProcess(request, "正在调用工具：" + toolRequest.name());
                 ToolExecutionOutcome toolResult;
-                if (request.projectContext() == null) {
-                    toolResult = executeTool(toolProviderResult, toolRequest, request.userId(), allowedTools);
-                } else {
-                    try (CandidateProposalExecutionScope ignored = CandidateProposalExecutionScope.open(
-                            request, toCoreMessages(messages))) {
+                try (ToolExecutionProgressScope ignoredProgress = ToolExecutionProgressScope.open(
+                        request.processConsumer())) {
+                    if (request.projectContext() == null) {
                         toolResult = executeTool(toolProviderResult, toolRequest, request.userId(), allowedTools);
+                    } else {
+                        try (CandidateProposalExecutionScope ignored = CandidateProposalExecutionScope.open(
+                                request, toCoreMessages(messages))) {
+                            toolResult = executeTool(toolProviderResult, toolRequest, request.userId(), allowedTools);
+                        }
                     }
                 }
                 if (toolResult.scopeRefinementRequired()) {

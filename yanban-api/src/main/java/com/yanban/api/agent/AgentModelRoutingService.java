@@ -87,6 +87,9 @@ public class AgentModelRoutingService {
                     throw new ModelProviderException("Model returned an invalid response");
                 }
                 boolean fallbackUsed = index > 0;
+                io.micrometer.core.instrument.Metrics.counter("yanban.agent.provider.routes",
+                        "outcome", fallbackUsed ? "fallback" : "primary",
+                        "provider", endpoint.providerKey()).increment();
                 log.info("agent_model_route_selected traceId={} requestedProvider={} requestedModel={} resolvedProvider={} resolvedModel={} fallbackUsed={}",
                         primaryRequest.traceId(), primaryRequest.provider(), primaryRequest.model(),
                         endpoint.providerKey(), endpoint.modelName(), fallbackUsed);
@@ -94,6 +97,8 @@ public class AgentModelRoutingService {
             } catch (RuntimeException failure) {
                 if (!mayTryNext(failure)) throw failure;
                 lastFailure = failure;
+                io.micrometer.core.instrument.Metrics.counter("yanban.agent.provider.failures",
+                        "provider", endpoint.providerKey(), "error", failure.getClass().getSimpleName()).increment();
                 log.warn("agent_model_route_failed traceId={} provider={} model={} candidate={}/{} errorType={}",
                         primaryRequest.traceId(), endpoint.providerKey(), endpoint.modelName(), index + 1,
                         routes.size(), failure.getClass().getSimpleName());
@@ -121,7 +126,12 @@ public class AgentModelRoutingService {
                         "agent_model_route_selected traceId={} requestedProvider={} requestedModel={} resolvedProvider={} resolvedModel={} fallbackUsed={}",
                         primaryRequest.traceId(), primaryRequest.provider(), primaryRequest.model(),
                         endpoint.providerKey(), endpoint.modelName(), index > 0))
+                .doOnComplete(() -> io.micrometer.core.instrument.Metrics.counter(
+                        "yanban.agent.provider.routes", "outcome", index > 0 ? "fallback" : "primary",
+                        "provider", endpoint.providerKey()).increment())
                 .onErrorResume(failure -> {
+                    io.micrometer.core.instrument.Metrics.counter("yanban.agent.provider.failures",
+                            "provider", endpoint.providerKey(), "error", failure.getClass().getSimpleName()).increment();
                     log.warn("agent_model_route_failed traceId={} provider={} model={} candidate={}/{} errorType={} emitted={}",
                             primaryRequest.traceId(), endpoint.providerKey(), endpoint.modelName(), index + 1,
                             routes.size(), failure.getClass().getSimpleName(), emitted.get());

@@ -65,7 +65,7 @@ public class DeepSeekModelProvider implements ChatModelProvider {
                                     "DeepSeek API error: HTTP " + clientResponse.statusCode().value() + " " + body))))
                     .bodyToMono(DeepSeekChatResponse.class)
                     .retryWhen(transportRetrySpec())
-                    .block(properties.getTimeout());
+                    .block(request.timeout() == null ? properties.getTimeout() : request.timeout());
             return fromDeepSeekResponse(response);
         } catch (WebClientResponseException ex) {
             throw new ModelProviderException("DeepSeek API error: HTTP " + ex.getStatusCode().value() + " " + ex.getResponseBodyAsString(), ex);

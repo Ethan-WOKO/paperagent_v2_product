@@ -14,7 +14,8 @@ describe('Paper page presentation contract', () => {
     expect(source.match(/ref="texInputRef"/g)).toHaveLength(1);
     expect(source.match(/ref="bibInputRef"/g)).toHaveLength(1);
     expect(source).not.toContain('paper-steps-bar');
-    expect(source).not.toContain('NCheckbox');
+    expect(source).toContain('Accept selected');
+    expect(source).toContain('selectedCandidateCount');
     expect(source).not.toContain('NCollapseItem');
   });
 

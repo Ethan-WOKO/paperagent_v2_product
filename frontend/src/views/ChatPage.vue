@@ -467,14 +467,15 @@ import {
   listMessages,
   listSessions,
   sendMessage as sendAgentMessage,
+  streamMessage as streamAgentMessage,
   startV2LiteratureTurn,
   updateSession as updateAgentSession,
-  type AgentDebugPayload,
   type AgentMessageResponse,
   type AgentPlanResponse,
   type AgentPlanStepResponse,
   type SendMessageResponse,
   type AgentSessionResponse,
+  type ChatStreamEvent,
   type V2LiteratureTurnOutcomeResponse,
 } from '@/api/agent';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
@@ -538,17 +539,6 @@ interface ToolCallSnapshot {
   } | null;
 }
 
-interface WsChatEvent {
-  type: 'ack' | 'process' | 'chunk' | 'done' | 'error' | 'debug';
-  content: string | null;
-  sessionId: number | null;
-  error: string | null;
-  finishReason: string | null;
-  navigationUrl: string | null;
-  clientRequestId: string | null;
-  debug: AgentDebugPayload | null;
-}
-
 interface MessageSegment {
   type: 'text' | 'code';
   content: string;
@@ -591,7 +581,6 @@ const ragDisabled = ref(false);
 const planMode = ref(false);
 const showProcessMessages = ref(false);
 const currentPlan = ref<AgentPlanResponse | null>(null);
-const currentSocket = ref<WebSocket | null>(null);
 const currentAssistantMessageId = ref<string | null>(null);
 const currentAssistantMessageSessionId = ref<number | null>(null);
 const currentProcessMessageId = ref<string | null>(null);
@@ -643,12 +632,11 @@ const compactChatViewport = ref(false);
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 const SUPPORTED_DEEPSEEK_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
 const DEFAULT_GLM_MODEL = 'glm-5.2';
-const WS_ACK_TIMEOUT_MS = 4000;
-const WS_MAX_RETRIES = 3;
 const CHAT_UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024;
 let minimapActiveLockUntil = 0;
 let messagesRequestSeq = 0;
 let compactChatMediaQuery: MediaQueryList | null = null;
+let currentChatStreamController: AbortController | null = null;
 
 const sessionMenuOptions = computed(() => [
   { label: t('chat.rename'), key: 'rename' },
@@ -797,7 +785,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleChatViewportKeydown);
   compactChatMediaQuery = null;
   literatureStartSequence += 1;
-  currentSocket.value?.close();
+  currentChatStreamController?.abort();
   stopLiteraturePolling();
   Object.keys(messageRowRefs).forEach((key) => {
     delete messageRowRefs[key];
@@ -1449,7 +1437,7 @@ function buildDisplayContentWithChatAttachments(content: string, attachments: Ch
 }
 
 async function sendPlanMessage(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
-  currentSocket.value?.close();
+  currentChatStreamController?.abort();
   const { data: createdPlan } = await createPlan(sessionId, {
     content,
     ragDisabled: disableRag,
@@ -1543,139 +1531,57 @@ function isTerminalPlanStatus(status: string) {
 async function sendMessageWithFallback(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
   const clientRequestId = globalThis.crypto?.randomUUID?.()
     || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  console.info('[chat] send start', { sessionId, mode: 'ws-preferred', clientRequestId });
+  console.info('[chat] send start', { sessionId, mode: 'sse-preferred', clientRequestId });
   try {
-    await sendWsMessageWithRetry(sessionId, content, disableRag, skillId, clientRequestId);
-  } catch (wsError: any) {
-    console.warn('[chat] websocket send failed, switching to http fallback', {
+    await sendSseMessage(sessionId, content, disableRag, skillId, clientRequestId);
+  } catch (streamError: any) {
+    if (streamError?.name === 'AbortError') throw streamError;
+    console.warn('[chat] SSE send failed, switching to HTTP fallback', {
       sessionId,
       clientRequestId,
-      error: wsError?.message || String(wsError),
+      error: streamError?.message || String(streamError),
     });
-    currentSocket.value?.close();
-    currentSocket.value = null;
+    currentChatStreamController?.abort();
+    currentChatStreamController = null;
     ui.message.warning(
-      wsError?.message
-        ? (wsError.message + '，已自动切换到稳定发送模式。')
-        : '实时连接失败，已自动切换到稳定发送模式。',
+      streamError?.message
+        ? (streamError.message + '，已自动切换到稳定发送模式。')
+        : '事件流连接失败，已自动切换到稳定发送模式。',
     );
-    await appendProcessLine('WebSocket failed, switching to stable HTTP fallback.');
+    await appendProcessLine('SSE failed, switching to stable HTTP fallback.');
     await sendHttpMessage(sessionId, content, disableRag, skillId, clientRequestId);
   }
 }
 
-async function sendWsMessageWithRetry(
+async function sendSseMessage(
   sessionId: number,
   content: string,
   disableRag: boolean,
   skillId: string | null,
   clientRequestId: string,
 ) {
-  let lastError: Error | null = null;
-  for (let attempt = 1; attempt <= WS_MAX_RETRIES; attempt += 1) {
-    try {
-      await sendWsMessage(sessionId, content, disableRag, skillId, clientRequestId, attempt);
-      return;
-    } catch (error: any) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      console.warn('[chat] websocket attempt failed', {
-        sessionId,
-        clientRequestId,
-        attempt,
-        error: lastError.message,
-      });
-    }
-  }
-  throw lastError || new Error('WebSocket ack failed');
-}
-
-async function sendWsMessage(
-  sessionId: number,
-  content: string,
-  disableRag: boolean,
-  skillId: string | null,
-  clientRequestId: string,
-  attempt: number,
-) {
-  currentSocket.value?.close();
-
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let ackReceived = false;
-    let ackTimeout: number | null = null;
-    const token = authStore.token;
-    if (!token) {
-      reject(new Error('未登录'));
-      return;
-    }
-
-    const finishResolve = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (ackTimeout !== null) {
-        window.clearTimeout(ackTimeout);
-      }
-      resolve();
-    };
-
-    const finishReject = (error: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (ackTimeout !== null) {
-        window.clearTimeout(ackTimeout);
-      }
-      reject(error);
-    };
-
-    const wsUrl = buildChatWebSocketUrl(token);
-    console.info('[chat] websocket connect start', { sessionId, wsUrl, clientRequestId, attempt });
-    const ws = new WebSocket(wsUrl);
-    currentSocket.value = ws;
-    ackTimeout = window.setTimeout(() => {
-      if (ackReceived) {
-        return;
-      }
-      finishReject(new Error('WebSocket 连接超时'));
-      ws.close();
-    }, WS_ACK_TIMEOUT_MS);
-
-    ws.onopen = () => {
-      console.info('[chat] websocket open', { sessionId, clientRequestId, attempt });
-      ws.send(JSON.stringify({
-        sessionId,
-        content,
-        ragDisabled: disableRag,
-        skillId,
-        clientRequestId,
-      }));
-    };
-
-    ws.onmessage = async (event) => {
-      const payload = JSON.parse(event.data) as WsChatEvent;
-      if (payload.clientRequestId && payload.clientRequestId !== clientRequestId) {
-        console.info('[chat] websocket ignore stale event', {
-          sessionId,
-          clientRequestId,
-          payloadRequestId: payload.clientRequestId,
-          type: payload.type,
-        });
-        return;
-      }
+  currentChatStreamController?.abort();
+  const controller = new AbortController();
+  currentChatStreamController = controller;
+  let acknowledged = false;
+  let completed = false;
+  let receivedChunk = false;
+  console.info('[chat] SSE connect start', { sessionId, clientRequestId });
+  try {
+    await streamAgentMessage(sessionId, {
+      content,
+      ragDisabled: disableRag,
+      skillId,
+      clientRequestId,
+    }, controller.signal, async (payload: ChatStreamEvent) => {
+      if (payload.clientRequestId && payload.clientRequestId !== clientRequestId) return;
       if (payload.type === 'ack') {
-        ackReceived = true;
-        if (ackTimeout !== null) {
-          window.clearTimeout(ackTimeout);
-          ackTimeout = null;
-        }
-        console.info('[chat] websocket ack', { sessionId, clientRequestId, attempt });
+        acknowledged = true;
         return;
       }
       if (payload.type === 'chunk' && payload.content) {
-        appendAssistantChunk(payload.content);
+        receivedChunk = true;
+        await appendAssistantChunk(payload.content);
         return;
       }
       if (payload.type === 'process' && payload.content) {
@@ -1683,7 +1589,7 @@ async function sendWsMessage(
         return;
       }
       if (payload.type === 'debug') {
-        console.info('[chat] websocket debug payload', {
+        console.info('[chat] SSE debug payload', {
           sessionId,
           clientRequestId,
           hasDebug: !!payload.debug,
@@ -1693,40 +1599,23 @@ async function sendWsMessage(
         return;
       }
       if (payload.type === 'error') {
-        console.warn('[chat] websocket payload error', { sessionId, clientRequestId, error: payload.error });
-        collapseCurrentProcessMessage();
-        finishReject(new Error(payload.error || 'WebSocket 对话失败'));
-        ws.close();
-        return;
+        throw new Error(payload.error || 'SSE 对话失败');
       }
       if (payload.type === 'done') {
-        console.info('[chat] websocket done', { sessionId, clientRequestId, navigationUrl: payload.navigationUrl });
-        if (payload.navigationUrl) {
-          attachAssistantNavigation(payload.navigationUrl);
+        completed = true;
+        if (!receivedChunk && payload.assistantContent) {
+          await appendAssistantChunk(payload.assistantContent);
         }
-        collapseCurrentProcessMessage();
-        await afterSendFinished(sessionId);
-        ws.close();
-        finishResolve();
+        if (payload.navigationUrl) attachAssistantNavigation(payload.navigationUrl);
       }
-    };
-
-    ws.onerror = () => {
-      console.warn('[chat] websocket error event', { sessionId, clientRequestId, attempt, readyState: ws.readyState });
-      if (!ackReceived) {
-        finishReject(new Error('WebSocket connection failed before ack'));
-        return;
-      }
-      finishReject(new Error('WebSocket 连接失败'));
-    };
-    ws.onclose = () => {
-      currentSocket.value = null;
-      console.info('[chat] websocket closed', { sessionId, clientRequestId, attempt, readyState: ws.readyState, settled, ackReceived });
-      if (!settled && sending.value && !ackReceived) {
-        finishReject(new Error('WebSocket 连接已关闭'));
-      }
-    };
-  });
+    });
+    if (!acknowledged) throw new Error('SSE stream closed before acknowledgement');
+    if (!completed) throw new Error('SSE stream closed before completion');
+    collapseCurrentProcessMessage();
+    await afterSendFinished(sessionId);
+  } finally {
+    if (currentChatStreamController === controller) currentChatStreamController = null;
+  }
 }
 
 async function sendHttpMessage(
@@ -2269,11 +2158,6 @@ function replaceRouteSessionId(sessionId: number | null) {
     nextQuery.sessionId = String(sessionId);
   }
   void router.replace({ query: nextQuery });
-}
-
-function buildChatWebSocketUrl(token: string) {
-  const wsOrigin = window.location.origin.replace(/^http/, 'ws');
-  return wsOrigin + '/api/v1/ws/chat?token=' + encodeURIComponent(token);
 }
 
 function buildPlanAssistantContent(plan: AgentPlanResponse) {

@@ -1,6 +1,7 @@
 package com.yanban.api.project;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.v2.effect.project.V2ProjectStructuredReadFacade;
 import com.yanban.core.agent.sandbox.SandboxFileSnapshot;
 import com.yanban.core.agent.sandbox.SandboxWorkspaceRef;
 import com.yanban.core.agent.sandbox.SandboxWorkspaceSnapshot;
@@ -53,6 +54,7 @@ public class ProjectService {
     private final ProjectStorageProperties properties;
     private final ObjectMapper objectMapper;
     private final ProjectObjectStorage objectStorage;
+    private final V2ProjectStructuredReadFacade structuredReads;
 
     public ProjectService(ProjectRepository projects,
                           List<ProjectRootProvider> rootProviders,
@@ -72,6 +74,7 @@ public class ProjectService {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.objectStorage = objectStorage;
+        this.structuredReads = new V2ProjectStructuredReadFacade(objectMapper);
     }
 
     @Transactional(readOnly = true)
@@ -595,6 +598,76 @@ public class ProjectService {
         }
         return new ProjectFileResponse(portablePath, decodeUtf8Strict(content),
                 content.length, entry.modifiedAt(), entry.sha256());
+    }
+
+    @Transactional(readOnly = true)
+    public ProjectFileResponse previewFile(
+            Long userId, Long projectId, String relativePath) {
+        String path = new ProjectRelativePath(relativePath).value();
+        if (!ProjectAssetAdmissionPolicy.readOnlyBinaryPath(path)) {
+            return readFile(userId, projectId, path);
+        }
+        ProjectManifestResponse manifest = manifest(userId, projectId);
+        ProjectFileEntry entry = manifest.files().stream()
+                .filter(candidate -> candidate.path().equals(path))
+                .findFirst().orElseThrow(this::inaccessibleFile);
+        ProjectVersionByteMaterialization materialized =
+                materializeVersionBytes(userId, projectId, Set.of(path));
+        if (!manifest.version().equals(materialized.snapshot().workspace()
+                .projectVersion().value())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Project changed while preparing the file preview");
+        }
+        byte[] content = materialized.files().get(path);
+        if (!ProjectAssetAdmissionPolicy.admits(path, content)
+                || !structuredReads.supports(path)) {
+            throw inaccessibleFile();
+        }
+        try {
+            var extracted = structuredReads.readBytes(path, content);
+            return new ProjectFileResponse(path, extracted.content(),
+                    content.length, entry.modifiedAt(), sha256(content));
+        } catch (V2ProjectStructuredReadFacade.ReadException failure) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Project document could not be parsed safely: "
+                            + failure.stage());
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public ProjectRawFileResponse readRawFile(
+            Long userId, Long projectId, String relativePath) {
+        String path = new ProjectRelativePath(relativePath).value();
+        if (!ProjectAssetAdmissionPolicy.readOnlyBinaryPath(path)) {
+            throw inaccessibleFile();
+        }
+        ProjectVersionByteMaterialization materialized =
+                materializeVersionBytes(userId, projectId, Set.of(path));
+        byte[] content = materialized.files().get(path);
+        if (content == null || !ProjectAssetAdmissionPolicy.admits(path, content)) {
+            throw inaccessibleFile();
+        }
+        return new ProjectRawFileResponse(path, mediaType(path), content);
+    }
+
+    private static String mediaType(String path) {
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        if (lower.endsWith(".pdf")) return "application/pdf";
+        if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        return "application/octet-stream";
+    }
+
+    public record ProjectRawFileResponse(
+            String path, String mediaType, byte[] content) {
+        public ProjectRawFileResponse {
+            content = content == null ? new byte[0] : content.clone();
+        }
+
+        @Override
+        public byte[] content() {
+            return content.clone();
+        }
     }
 
     private List<ProjectSearchHit> searchObjectFiles(Project project, ProjectPathPolicy policy,

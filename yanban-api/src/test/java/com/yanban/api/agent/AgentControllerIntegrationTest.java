@@ -788,7 +788,7 @@ class AgentControllerIntegrationTest {
         mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"content\":\"请帮我阅读 ChatWebSocketHandler.java\"}"))
+                        .content("{\"content\":\"请帮我阅读 AgentChatStreamController.java\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
 

@@ -1,7 +1,5 @@
 package com.yanban.knowledge.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.core.user.UserAccountPolicy;
 import com.yanban.knowledge.config.KnowledgeStorageProperties;
 import com.yanban.knowledge.config.KnowledgeUploadProperties;
@@ -21,22 +19,23 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
+import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR;
+import static org.springframework.http.HttpStatus.TOO_MANY_REQUESTS;
 
 @Service
 public class KnowledgeUploadService {
@@ -49,9 +48,9 @@ public class KnowledgeUploadService {
     private final KnowledgeBucketProvisioner bucketProvisioner;
     private final KnowledgeStorageProperties storageProperties;
     private final KnowledgeUploadProperties uploadProperties;
-    private final KafkaTemplate<String, String> kafkaTemplate;
-    private final ObjectMapper objectMapper;
     private final ObjectProvider<UserAccountPolicy> accountPolicy;
+    private final KnowledgeOutboxService outboxService;
+    private final KnowledgeResourceLimiter resourceLimiter;
 
     public KnowledgeUploadService(KbChunkUploadRepository chunkUploads,
                                   KbDocumentRepository documents,
@@ -59,25 +58,39 @@ public class KnowledgeUploadService {
                                   KnowledgeBucketProvisioner bucketProvisioner,
                                   KnowledgeStorageProperties storageProperties,
                                   KnowledgeUploadProperties uploadProperties,
-                                  KafkaTemplate<String, String> kafkaTemplate,
-                                  ObjectMapper objectMapper,
-                                  ObjectProvider<UserAccountPolicy> accountPolicy) {
+                                  ObjectProvider<UserAccountPolicy> accountPolicy,
+                                  KnowledgeOutboxService outboxService,
+                                  KnowledgeResourceLimiter resourceLimiter) {
         this.chunkUploads = chunkUploads;
         this.documents = documents;
         this.minioClient = minioClient;
         this.bucketProvisioner = bucketProvisioner;
         this.storageProperties = storageProperties;
         this.uploadProperties = uploadProperties;
-        this.kafkaTemplate = kafkaTemplate;
-        this.objectMapper = objectMapper;
         this.accountPolicy = accountPolicy;
+        this.outboxService = outboxService;
+        this.resourceLimiter = resourceLimiter;
     }
 
     @Transactional
     public ChunkUploadResponse uploadChunk(Long userId, ChunkUploadRequest request) {
         validateChunkRequest(request);
-        try {
+        try (KnowledgeResourceLimiter.Permit ignored = resourceLimiter.upload(userId)) {
             byte[] bytes = request.file().getBytes();
+            String digest = sha256(bytes);
+            var existing = chunkUploads.findByUserIdAndUploadIdAndChunkNumber(
+                    userId, request.uploadId(), request.chunkNumber());
+            if (existing.isPresent()) {
+                KbChunkUpload value = existing.get();
+                if (digest.equals(value.getChunkDigest())
+                        && request.totalChunks().equals(value.getTotalChunks())
+                        && request.filename().equals(value.getFilename())) {
+                    KnowledgeMetrics.upload("idempotent_replay");
+                    return new ChunkUploadResponse(request.uploadId(), request.chunkNumber(),
+                            request.totalChunks(), value.getStatus(), value.getTempObjectKey());
+                }
+                throw new ResponseStatusException(CONFLICT, "相同上传分片编号的内容不一致");
+            }
             bucketProvisioner.ensureBucketExists();
             UserAccountPolicy policy = accountPolicy.getIfAvailable();
             if (policy != null) {
@@ -93,8 +106,6 @@ public class KnowledgeUploadService {
                     .contentType(resolveContentType(request.file().getContentType()))
                     .build());
 
-            chunkUploads.findByUploadIdAndChunkNumber(request.uploadId(), request.chunkNumber())
-                    .ifPresent(chunkUploads::delete);
             chunkUploads.save(new KbChunkUpload(
                     userId,
                     request.uploadId(),
@@ -103,9 +114,11 @@ public class KnowledgeUploadService {
                     request.totalChunks(),
                     (long) bytes.length,
                     normalizeMd5(request.chunkMd5()),
+                    digest,
                     tempObjectKey,
                     "UPLOADED"
             ));
+            KnowledgeMetrics.upload("chunk_accepted");
             return new ChunkUploadResponse(
                     request.uploadId(),
                     request.chunkNumber(),
@@ -113,9 +126,13 @@ public class KnowledgeUploadService {
                     "UPLOADED",
                     tempObjectKey
             );
+        } catch (KnowledgeCapacityException ex) {
+            KnowledgeMetrics.upload("rate_limited");
+            throw new ResponseStatusException(TOO_MANY_REQUESTS, ex.getMessage(), ex);
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (Exception ex) {
+            KnowledgeMetrics.upload("failed");
             log.error("知识库上传分片失败: userId={}, uploadId={}, filename={}, chunkNumber={}, totalChunks={}",
                     userId, request.uploadId(), request.filename(), request.chunkNumber(), request.totalChunks(), ex);
             throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "上传分片失败", ex);
@@ -124,7 +141,13 @@ public class KnowledgeUploadService {
 
     @Transactional
     public KbDocumentResponse mergeChunks(Long userId, MergeUploadRequest request) {
-        List<KbChunkUpload> uploadedChunks = chunkUploads.findByUploadIdOrderByChunkNumberAsc(request.uploadId());
+        var alreadyMerged = documents.findByUserIdAndUploadId(userId, request.uploadId());
+        if (alreadyMerged.isPresent()) {
+            KnowledgeMetrics.upload("merge_idempotent_replay");
+            return KbDocumentResponse.from(alreadyMerged.get());
+        }
+        List<KbChunkUpload> uploadedChunks = chunkUploads.findByUserIdAndUploadIdOrderByChunkNumberAsc(
+                userId, request.uploadId());
         if (uploadedChunks.isEmpty()) {
             throw new ResponseStatusException(BAD_REQUEST, "未找到上传分片");
         }
@@ -142,10 +165,11 @@ public class KnowledgeUploadService {
         }
 
         Path mergedFile = null;
-        try {
+        try (KnowledgeResourceLimiter.Permit ignored = resourceLimiter.upload(userId)) {
             bucketProvisioner.ensureBucketExists();
             mergedFile = Files.createTempFile("yanban-kb-merge-", ".bin");
-            try (OutputStream out = Files.newOutputStream(mergedFile)) {
+            MessageDigest mergedDigest = MessageDigest.getInstance("SHA-256");
+            try (OutputStream out = new DigestOutputStream(Files.newOutputStream(mergedFile), mergedDigest)) {
                 for (KbChunkUpload upload : uploadedChunks) {
                     try (InputStream in = minioClient.getObject(GetObjectArgs.builder()
                             .bucket(storageProperties.getBucket())
@@ -156,7 +180,8 @@ public class KnowledgeUploadService {
                 }
             }
 
-            String objectKey = buildDocumentObjectKey(userId, request.filename());
+            String fileDigest = HexFormat.of().formatHex(mergedDigest.digest());
+            String objectKey = buildDocumentObjectKey(userId, request.uploadId(), request.filename());
             long fileSize = Files.size(mergedFile);
             try (InputStream mergedInputStream = Files.newInputStream(mergedFile)) {
                 minioClient.putObject(PutObjectArgs.builder()
@@ -171,9 +196,11 @@ public class KnowledgeUploadService {
             document.setObjectKey(objectKey);
             document.setMimeType(resolveContentType(request.mimeType()));
             document.setFileSize(fileSize);
+            document.setUploadId(request.uploadId());
+            document.setFileDigest(fileDigest);
             document = documents.save(document);
-
-            kafkaTemplate.send(uploadProperties.getProcessingTopic(), toMessage(document));
+            outboxService.enqueue(document);
+            document = documents.save(document);
 
             for (KbChunkUpload upload : uploadedChunks) {
                 minioClient.removeObject(RemoveObjectArgs.builder()
@@ -181,11 +208,17 @@ public class KnowledgeUploadService {
                         .object(upload.getTempObjectKey())
                         .build());
             }
-            chunkUploads.deleteAll(uploadedChunks);
+            uploadedChunks.forEach(KbChunkUpload::markMerged);
+            chunkUploads.saveAll(uploadedChunks);
+            KnowledgeMetrics.upload("merged");
             return KbDocumentResponse.from(document);
+        } catch (KnowledgeCapacityException ex) {
+            KnowledgeMetrics.upload("rate_limited");
+            throw new ResponseStatusException(TOO_MANY_REQUESTS, ex.getMessage(), ex);
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (Exception ex) {
+            KnowledgeMetrics.upload("failed");
             log.error("知识库合并分片失败: userId={}, uploadId={}, filename={}, totalChunks={}",
                     userId, request.uploadId(), request.filename(), request.totalChunks(), ex);
             throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "合并分片失败", ex);
@@ -259,20 +292,17 @@ public class KnowledgeUploadService {
         return uploadProperties.getTempPrefix() + "/" + userId + "/" + uploadId + "/chunk-" + chunkNumber;
     }
 
-    private String buildDocumentObjectKey(Long userId, String filename) {
+    private String buildDocumentObjectKey(Long userId, String uploadId, String filename) {
         String safeFilename = filename.replaceAll("[^a-zA-Z0-9._-]", "_");
-        return uploadProperties.getObjectPrefix() + "/" + userId + "/" + UUID.randomUUID() + "-" + safeFilename;
+        String safeUploadId = uploadId.replaceAll("[^a-zA-Z0-9._-]", "_");
+        return uploadProperties.getObjectPrefix() + "/" + userId + "/" + safeUploadId + "-" + safeFilename;
     }
 
-    private String toMessage(KbDocument document) {
+    private String sha256(byte[] bytes) {
         try {
-            return objectMapper.writeValueAsString(new FileProcessingMessage(
-                    document.getId(),
-                    document.getUserId(),
-                    document.getObjectKey()
-            ));
-        } catch (JsonProcessingException ex) {
-            throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "构造处理消息失败", ex);
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (Exception ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
         }
     }
 }

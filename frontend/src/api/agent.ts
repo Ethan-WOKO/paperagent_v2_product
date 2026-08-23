@@ -1,4 +1,6 @@
 import http from './http';
+import { expireAuthSession, isJwtExpired } from '@/auth/session';
+import { consumeChatSseChunk, type ChatStreamEvent as ParsedChatStreamEvent } from '@/utils/chatSse';
 
 export type V2ProductCapability =
   | 'literature.search'
@@ -252,6 +254,10 @@ export interface SendMessageResponse {
   finalSynthesisInput?: FinalSynthesisInput | null;
 }
 
+export type ChatStreamEvent = Omit<ParsedChatStreamEvent, 'debug'> & {
+  debug: AgentDebugPayload | null;
+};
+
 export type EvidenceStatus = 'VERIFIED' | 'SUPPORTED' | 'INFERRED' | 'UNVERIFIED' | 'CONFLICTING' | 'STALE';
 export type EvidenceCategory = 'EXECUTION_FACT' | 'VERIFIED_PROJECT_EVIDENCE' | 'EXTERNAL_SOURCE' | 'INFERENCE' | 'UNVERIFIED_INPUT';
 export type ExternalSourceAccess = 'OPENED' | 'SEARCH_SUMMARY' | 'UNKNOWN';
@@ -296,6 +302,43 @@ export interface FinalSynthesisInput {
 
 export function sendMessage(sessionId: number, payload: SendMessageRequestPayload) {
   return http.post<SendMessageResponse>(`/agent/sessions/${sessionId}/messages`, payload);
+}
+
+export async function streamMessage(
+  sessionId: number,
+  payload: SendMessageRequestPayload,
+  signal: AbortSignal,
+  onEvent: (event: ChatStreamEvent) => void | Promise<void>,
+) {
+  const token = localStorage.getItem('yanban_access_token');
+  if (token && isJwtExpired(token)) {
+    expireAuthSession();
+    throw new Error('Access token expired');
+  }
+  const headers: Record<string, string> = {
+    Accept: 'text/event-stream',
+    'Content-Type': 'application/json',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(
+    `/api/v1/agent/sessions/${sessionId}/messages/stream`,
+    { method: 'POST', headers, body: JSON.stringify(payload), signal },
+  );
+  if (response.status === 401) expireAuthSession();
+  if (!response.ok || !response.body) {
+    throw new Error(`Chat event stream failed (${response.status})`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const parsed = consumeChatSseChunk(buffer);
+    buffer = parsed.remainder;
+    for (const event of parsed.events) await onEvent(event as ChatStreamEvent);
+    if (done) break;
+  }
 }
 
 export type V2NaturalLanguageTurnStatus =

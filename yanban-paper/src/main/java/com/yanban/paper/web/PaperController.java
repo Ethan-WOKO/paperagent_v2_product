@@ -127,6 +127,15 @@ public class PaperController {
         return PaperSectionResponse.from(paperPreviewService.updateSectionRevisionStatus(userId, taskId, sectionId, request.status()));
     }
 
+    @PostMapping("/api/v1/paper/tasks/{taskId}/sections/revision-status")
+    public List<PaperSectionResponse> updateSectionRevisionStatuses(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                                    @PathVariable Long taskId,
+                                                                    @Valid @RequestBody PaperSectionRevisionBatchUpdateRequest request) {
+        return paperPreviewService.updateSectionRevisionStatuses(userId, taskId, request.sectionIds(), request.status()).stream()
+                .map(PaperSectionResponse::from)
+                .toList();
+    }
+
     @GetMapping("/api/v1/paper/tasks/{taskId}/clarifications")
     public List<PaperClarificationResponse> clarifications(@AuthenticationPrincipal(expression = "id") Long userId,
                                                            @PathVariable Long taskId) {

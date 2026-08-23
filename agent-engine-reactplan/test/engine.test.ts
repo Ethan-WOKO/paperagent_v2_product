@@ -156,7 +156,7 @@ describe("AgentEngine", () => {
     expect(gateway.publishCalls).toBe(0);
     expect(provider.requests.every((request) => request.maxOutputTokens === 4096)).toBe(true);
     expect((provider.requests[0]?.tools as Array<{ function: { name: string } }>).map((candidate) =>
-      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "list_project_files", "read_project_file", "ask_user"]);
     expect(provider.requests[0]?.messages.find((message) =>
       message.content?.includes('"type":"compact_tool_group_catalog"'))?.content)
       .toContain('"name":"project"');
@@ -191,7 +191,7 @@ describe("AgentEngine", () => {
       .map((event) => event.type === "tool" ? event.name : ""))
       .toEqual(["project.read", "workspace.write", "project.read", "workspace.diff", "sandbox.execute", "project.publish"]);
     expect((provider.requests[0]!.tools as Array<{ function: { name: string } }>).map((candidate) =>
-      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "list_project_files", "read_project_file", "ask_user"]);
     expect(provider.requests[0]!.messages.find((message) =>
       message.content?.includes('"type":"compact_tool_group_catalog"'))?.content)
       .toContain('"name":"project"');
@@ -207,6 +207,61 @@ describe("AgentEngine", () => {
     });
   });
 
+  it("publishes a plain-document Candidate with local integrity proof and no sandbox", async () => {
+    const content = "hello document\n";
+    const contentHash = sha256(content);
+    const provider = new ScriptedProvider([
+      tool("write_workspace_file", {
+        operation: "ADD", path: "notes/test.txt", baseSha256: null, content
+      }),
+      tool("get_workspace_diff", {}),
+      { content: "test.txt was created and its exact Workspace diff was inspected.", toolCalls: [] }
+    ]);
+    const gateway = new DocumentCandidateGateway(contentHash);
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("b", "session.document", "创建 notes/test.txt", "1", true);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    const requestedTools = (await engine.events(request.taskId)).filter(
+      (event) => event.type === "tool" && event.state === "requested");
+    expect(requestedTools.some((event) => event.type === "tool"
+      && event.name === "sandbox.execute")).toBe(false);
+    expect(gateway.sandboxSubmissions).toBe(0);
+    expect(gateway.lastPublishReceipt).toMatch(/^document-integrity\.[a-f0-9]{64}$/);
+    expect(gateway.publishCalls).toBe(1);
+  });
+
+  it("does not dispatch a sandbox when the model requests one for a plain document", async () => {
+    const content = "hello document\n";
+    const contentHash = sha256(content);
+    const provider = new ScriptedProvider([
+      tool("write_workspace_file", {
+        operation: "ADD", path: "notes/test.txt", baseSha256: null, content
+      }),
+      tool("get_workspace_diff", {}),
+      tool("execute_in_sandbox", {
+        argv: ["git", "diff", "--check"],
+        inputs: [{ path: "notes/test.txt", sha256: contentHash }], timeoutMillis: 5000
+      }),
+      { content: "The document was validated locally.", toolCalls: [] }
+    ]);
+    const gateway = new DocumentCandidateGateway(contentHash);
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("c", "session.document.guard", "创建 notes/test.txt", "1", true);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    expect(gateway.sandboxSubmissions).toBe(0);
+    const sandboxEvent = (await engine.events(request.taskId)).find((event) =>
+      event.type === "tool" && event.name === "sandbox.execute" && event.state === "succeeded");
+    expect(sandboxEvent?.type === "tool" ? sandboxEvent.outputSummary : "")
+      .toContain("no sandbox was submitted");
+    expect(gateway.publishCalls).toBe(1);
+  });
+
   it("returns only the requested 1-based inclusive Workspace line range", async () => {
     const provider = new ScriptedProvider([
       tool("read_project_file", {
@@ -219,8 +274,8 @@ describe("AgentEngine", () => {
     await engine.submit(submission());
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
-    expect(JSON.stringify(provider.requests[0]!.tools)).not.toContain("startLine");
-    expect(JSON.stringify(provider.requests[2]!.tools)).toContain("startLine");
+    expect(JSON.stringify(provider.requests[0]!.tools)).toContain("startLine");
+    expect(provider.requests).toHaveLength(2);
     const toolResult = provider.requests.at(-1)!.messages.find((message) =>
       message.role === "tool" && message.content?.includes('"startLine":2'));
     expect(JSON.parse(toolResult!.content!)).toMatchObject({
@@ -251,6 +306,37 @@ describe("AgentEngine", () => {
     expect(provider.requests.some((request) => request.messages.some((message) => message.role === "user"
       && message.content?.includes("isolated Workspace has unvalidated changes")))).toBe(true);
     expect(gateway.lastSandboxHash).toBe(replacementHash);
+  });
+
+  it("reuses an exact successful Candidate run after the model inspects the diff", async () => {
+    const replacement = "class Sort { int value; }\n";
+    const replacementHash = sha256(replacement);
+    const sandbox = { argv: ["yanban-runner", "java", "Sort.java"],
+      inputs: [{ path: "Sort.java", sha256: replacementHash }], timeoutMillis: 5000 };
+    const provider = new ScriptedProvider([
+      tool("write_workspace_file", { operation: "MODIFY", path: "Sort.java", baseSha256: fileHash, content: replacement }),
+      tool("execute_in_sandbox", sandbox),
+      { content: "修改和运行已完成。", toolCalls: [] },
+      tool("get_workspace_diff", {}),
+      tool("execute_in_sandbox", sandbox),
+      { content: "Candidate 已验证。", toolCalls: [] }
+    ]);
+    const gateway = new CandidateGateway(replacementHash);
+    const engine = await createEngine(provider, gateway);
+    const request = submissionFor("f", "session.reuse", "修改 Sort.java 并验证", "1", true);
+
+    await engine.submit(request);
+    await waitFor(() => engine.get(request.taskId).state === "succeeded");
+
+    expect(gateway.sandboxSubmissions).toBe(1);
+    expect(provider.requests.some((modelRequest) => modelRequest.messages.some((message) =>
+      message.role === "user" && message.content?.includes("do not rerun the unchanged sandbox command")))).toBe(true);
+    const sandboxSuccesses = (await engine.events(request.taskId)).filter((event) =>
+      event.type === "tool" && event.name === "sandbox.execute" && event.state === "succeeded");
+    expect(sandboxSuccesses).toHaveLength(2);
+    expect(sandboxSuccesses.some((event) => event.type === "tool"
+      && event.outputSummary?.includes("reused=true"))).toBe(true);
+    expect(gateway.publishCalls).toBe(1);
   });
 
   it("injects the server-assembled rolling summary and four complete turns", async () => {
@@ -399,7 +485,7 @@ describe("AgentEngine", () => {
     expect(request.messages.some((message) =>
       message.role === "user" && message.content === "Current task: 你好，你是什么模型？")).toBe(true);
     expect((request.tools as Array<{ function: { name: string } }>).map((candidate) =>
-      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "list_project_files", "read_project_file", "ask_user"]);
     expect(request.messages.find((message) =>
       message.content?.includes('"type":"compact_tool_group_catalog"'))?.content)
       .toContain('"name":"project"');
@@ -419,7 +505,7 @@ describe("AgentEngine", () => {
     const delivery = (await engine.events(taskId)).find((event) => event.type === "delivery");
     expect(delivery?.type === "delivery" ? delivery.conclusion : "")
       .toBe("Oracle dev.java documentation shows the example command java Hello.java.");
-    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests).toHaveLength(2);
   });
 
   it("does not block a final answer through textual compile-outcome heuristics", async () => {
@@ -495,7 +581,7 @@ describe("AgentEngine", () => {
     });
   });
 
-  it("exposes only compact tool names and descriptions until one schema is loaded", async () => {
+  it("preloads core Project reads and keeps other tools compact until one schema is loaded", async () => {
     const provider = new ScriptedProvider([
       tool("search_tools", { group: "project", query: "search" }),
       tool("load_tool", { name: "project_search" }),
@@ -509,7 +595,7 @@ describe("AgentEngine", () => {
 
     const first = provider.requests[0]!;
     expect((first.tools as Array<{ function: { name: string } }>).map((candidate) =>
-      candidate.function.name)).toEqual(["search_tools", "load_tool", "ask_user"]);
+      candidate.function.name)).toEqual(["search_tools", "load_tool", "list_project_files", "read_project_file", "ask_user"]);
     const catalog = first.messages.find((message) =>
       message.role === "system" && message.content?.includes('"type":"compact_tool_group_catalog"'));
     expect(catalog?.content).toContain('"name":"project"');
@@ -525,10 +611,29 @@ describe("AgentEngine", () => {
     const loadedToolNames = (provider.requests[2]!.tools as Array<{
       function: { name: string; parameters: unknown };
     }>).map((candidate) => candidate.function.name);
-    expect(loadedToolNames).toEqual(["search_tools", "load_tool", "project_search", "ask_user"]);
+    expect(loadedToolNames).toEqual([
+      "search_tools", "load_tool", "list_project_files", "read_project_file", "project_search", "ask_user"
+    ]);
     expect(JSON.stringify(provider.requests[2]!.tools)).toContain('"query"');
     expect((await engine.events(taskId)).filter((event) =>
       event.type === "tool" && event.state === "requested")).toHaveLength(1);
+  });
+
+  it("splits multi-word tool searches and ranks results by matched term count", async () => {
+    const provider = new ScriptedProvider([
+      tool("search_tools", { group: "project", query: "search frozen project run sandbox java" }),
+      { content: "Found the relevant tools.", toolCalls: [] }
+    ], false);
+    const engine = await createEngine(provider, new FakeGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const resultMessage = provider.requests[1]!.messages.find((message) =>
+      message.role === "tool" && message.content?.includes('"group":"project"'));
+    const result = JSON.parse(resultMessage!.content!) as { tools: Array<{ name: string }> };
+    expect(result.tools.slice(0, 2).map((candidate) => candidate.name))
+      .toEqual(["execute_in_sandbox", "project_search"]);
   });
 
   it("hides superseded manifest and file-read registrations from the ReAct catalog", async () => {
@@ -542,7 +647,8 @@ describe("AgentEngine", () => {
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
     const firstRequest = JSON.stringify(provider.requests[0]);
-    expect(firstRequest).not.toContain("list_project_files");
+    expect(firstRequest).toContain("list_project_files");
+    expect(firstRequest).toContain("read_project_file");
     expect(firstRequest).not.toContain("project_search");
     const searchResult = JSON.stringify(provider.requests[1]);
     expect(searchResult).toContain("list_project_files");
@@ -573,18 +679,18 @@ describe("AgentEngine", () => {
       event.type === "tool" && event.state === "requested")).toHaveLength(1);
   });
 
-  it("enforces a model-turn barrier when load_tool and premature tool calls arrive together", async () => {
+  it("enforces a model-turn barrier when load_tool and a premature non-core tool arrive together", async () => {
     const provider = new ScriptedProvider([
-      tool("search_tools", { group: "project", query: "read" }),
+      tool("search_tools", { group: "project", query: "search" }),
       {
         content: null,
         toolCalls: [
-          { id: "load-read", name: "load_tool", arguments: JSON.stringify({ name: "read_project_file" }) },
-          { id: "premature-read", name: "read_project_file", arguments: JSON.stringify({ path: "Sort.java" }) }
+          { id: "load-search", name: "load_tool", arguments: JSON.stringify({ name: "project_search" }) },
+          { id: "premature-search", name: "project_search", arguments: JSON.stringify({ query: "Sort" }) }
         ]
       },
-      tool("read_project_file", { path: "Sort.java", expectedSha256: fileHash }),
-      { content: "Read Sort.java after loading its schema.", toolCalls: [] }
+      tool("project_search", { query: "Sort" }),
+      { content: "Searched the Project after loading its schema.", toolCalls: [] }
     ], false);
     const gateway = new FakeGateway();
     const engine = await createEngine(provider, gateway);
@@ -593,11 +699,11 @@ describe("AgentEngine", () => {
     await waitFor(() => engine.get(taskId).state === "succeeded");
 
     const barrierFeedback = provider.requests.flatMap((request) => request.messages).find((message) =>
-      message.role === "tool" && message.toolCallId === "premature-read");
+      message.role === "tool" && message.toolCallId === "premature-search");
     expect(barrierFeedback?.content).toContain("TOOL_SCHEMA_NOT_LOADED");
     expect(gateway.maximumConcurrent).toBe(1);
     expect((await engine.events(taskId)).filter((event) =>
-      event.type === "tool" && event.name === "project.read" && event.state === "requested"))
+      event.type === "tool" && event.name === "registered.invoke" && event.state === "requested"))
       .toHaveLength(1);
   });
 
@@ -621,6 +727,22 @@ describe("AgentEngine", () => {
       .toHaveLength(1);
   });
 
+  it("returns a bounded document parse rejection to the model without failing the task", async () => {
+    const provider = new ScriptedProvider([
+      tool("read_project_file", { path: "notes.pdf", expectedSha256: fileHash }),
+      { content: "The PDF could not be parsed, but the task continued.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new RejectingReadGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(JSON.stringify(provider.requests)).toContain("WORKSPACE_STRUCTURED_READ_PARSE_DOCUMENT");
+    expect((await engine.events(taskId)).filter((event) =>
+      event.type === "tool" && event.name === "project.read" && event.state === "failed"))
+      .toHaveLength(1);
+  });
+
   it("fails after two model argument-repair rounds instead of looping forever", async () => {
     const provider = new ScriptedProvider([
       tool("read_project_file", { path: "Sort.java" }),
@@ -635,7 +757,7 @@ describe("AgentEngine", () => {
     expect(engine.get(taskId).error).toMatchObject({
       code: "MODEL_TOOL_ARGUMENTS_INVALID", category: "model"
     });
-    expect(provider.requests).toHaveLength(5);
+    expect(provider.requests).toHaveLength(3);
   });
 
   it("rejects a registered catalog that collides with a reserved Engine tool name", async () => {
@@ -826,6 +948,46 @@ describe("AgentEngine", () => {
     expect(gateway.submissions).toBe(2);
   });
 
+  it("repairs a disallowed Maven compile goal before calling the product gateway", async () => {
+    const gateway = new CountingSandboxGateway();
+    const provider = new ScriptedProvider([
+      tool("execute_in_sandbox", { argv: ["mvn", "-o", "compile"],
+        inputs: [{ path: "pom.xml", sha256: fileHash }], timeoutMillis: 5000 }),
+      tool("execute_in_sandbox", { argv: ["mvn", "-o", "test"],
+        inputs: [{ path: "pom.xml", sha256: fileHash }], timeoutMillis: 5000 }),
+      { content: "Maven tests passed with an allowed command.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(gateway.submissions).toBe(1);
+    expect(provider.requests.some((request) => request.messages.some((message) =>
+      message.role === "tool" && message.content?.includes("do not use compile, package, or install")))).toBe(true);
+  });
+
+  it.each([
+    [["yanban-runner", "run", "Sort.java"], ["yanban-runner", "java", "Sort.java"]],
+    [["yanban-runner", "Sort.java"], ["yanban-runner", "java", "Sort.java"]],
+    [["yanban-runner", "script.py"], ["yanban-runner", "python", "script.py"]],
+    [["yanban-runner", "run", "main.c"], ["yanban-runner", "c", "main.c"]],
+    [["yanban-runner", "main.cpp"], ["yanban-runner", "cpp", "main.cpp"]]
+  ])("normalizes an unambiguous runner alias %j", async (argv, expected) => {
+    const gateway = new CountingSandboxGateway();
+    const provider = new ScriptedProvider([
+      tool("execute_in_sandbox", { argv, inputs: [{ path: argv.at(-1), sha256: fileHash }], timeoutMillis: 5000 }),
+      { content: "The standalone source ran successfully.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(gateway.submissions).toBe(1);
+    expect(gateway.lastArgv).toEqual(expected);
+  });
+
   it("starts the sandbox deadline after acceptance and never polls beyond it", async () => {
     let clock = 0; const sleeps: number[] = [];
     const gateway = new NeverTerminalGateway(() => { clock = 30_000; });
@@ -852,9 +1014,13 @@ class ScriptedProvider implements ModelProvider {
     if (this.autoLoad && this.preloadStage < 2) {
       const firstCalls = this.responses[0]?.toolCalls ?? [];
       if (!firstCalls.some((call) => call.name === "search_tools" || call.name === "load_tool")) {
+        const alreadyLoaded = new Set((request.tools as Array<{
+          function: { name: string }
+        }>).map((toolSpec) => toolSpec.function.name));
         const names = [...new Set(this.responses.flatMap((response) =>
           response.toolCalls.map((call) => call.name)).filter((name) =>
-            name !== "search_tools" && name !== "load_tool" && name !== "ask_user"))];
+            name !== "search_tools" && name !== "load_tool" && name !== "ask_user"
+            && !alreadyLoaded.has(name)))];
         if (names.length > 0) {
           if (this.preloadStage === 0) {
             this.preloadStage = 1;
@@ -907,6 +1073,7 @@ class NeverProvider implements ModelProvider {
 
 class FakeGateway implements GatewayClient {
   concurrent = 0; maximumConcurrent = 0; publishCalls = 0;
+  lastPublishReceipt: string | null = null;
   private async operation<T>(value: T): Promise<T> { this.concurrent += 1; this.maximumConcurrent = Math.max(this.maximumConcurrent, this.concurrent); await Promise.resolve(); this.concurrent -= 1; return value; }
   tools(taskIdValue: string): Promise<RegisteredToolCatalog> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, catalogDigest: "c".repeat(64), tools: [{ type: "function", function: { name: "project_search", description: "Search the frozen Project.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } }] }); }
   invoke(_taskId: string, _grant: string, request: { callId: string; toolName: string; requestDigest: string }): Promise<RegisteredToolResult> { return this.operation({ contractVersion: "1.0", callId: request.callId, toolName: request.toolName, requestDigest: request.requestDigest, success: true, output: { projectVersion, hits: [{ path: "services/order-service/pom.xml", line: "PRIVATE_SEARCH_RESULT" }] }, errorCode: null, errorMessage: null, retryable: false, evidenceRefs: ["project:1:search"], version: projectVersion }); }
@@ -914,7 +1081,7 @@ class FakeGateway implements GatewayClient {
   read(_taskId: string, _grant: string, _path: string, _expectedSha256: string): Promise<FileRead> { return this.operation({ contractVersion: "1.0", path: "Sort.java", sizeBytes: 16, sha256: fileHash, mediaType: "text/x-java", encoding: "utf-8", content: "SECRET_FILE_BODY", truncated: false }); }
   write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, replayed: false, operation: request.operation, path: request.path, beforeSha256: request.baseSha256, afterSha256: sha256(request.content), sizeBytes: Buffer.byteLength(request.content) }); }
   diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
-  publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
+  publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; this.lastPublishReceipt = request.receiptRef; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
   submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
   cancelExecution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId, requestDigest: "f".repeat(64), executionRef: "execution.1", state: "CANCELLED", receiptRef: "receipt.cancelled" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string, _signal: AbortSignal): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
@@ -946,6 +1113,17 @@ class HardCancelGateway extends FakeGateway {
     return Promise.resolve({ contractVersion: "1.0", clientRequestId,
       requestDigest: this.requestDigest, executionRef: "execution.long-running",
       state: "CANCELLED", receiptRef: "receipt.cancelled" });
+  }
+}
+
+class CountingSandboxGateway extends FakeGateway {
+  submissions = 0;
+  lastArgv: string[] | undefined;
+
+  override submit(taskIdValue: string, grantValue: string, request: SandboxRequest): Promise<SandboxView> {
+    this.submissions += 1;
+    this.lastArgv = request.argv;
+    return super.submit(taskIdValue, grantValue, request);
   }
 }
 
@@ -1067,6 +1245,7 @@ class PollingFailedGateway extends FakeGateway {
 
 class CandidateGateway extends FakeGateway {
   lastSandboxHash: string | null = null;
+  sandboxSubmissions = 0;
   constructor(private readonly candidateHash: string) { super(); }
   override write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> {
     return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
@@ -1089,6 +1268,7 @@ class CandidateGateway extends FakeGateway {
         beforeSha256: fileHash, afterSha256: this.candidateHash }] });
   }
   override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.sandboxSubmissions += 1;
     this.lastSandboxHash = request.inputs[0]?.sha256 ?? null;
     return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
       requestDigest: request.requestDigest, executionRef: "execution.candidate",
@@ -1102,6 +1282,26 @@ class CandidateGateway extends FakeGateway {
       inputFingerprint: "f".repeat(64),
       inputs: [{ path: "Sort.java", sha256: this.candidateHash, sizeBytes: 28 }],
       startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
+  }
+}
+
+class DocumentCandidateGateway extends FakeGateway {
+  sandboxSubmissions = 0;
+  constructor(private readonly candidateHash: string) { super(); }
+  override write(_taskId: string, _grant: string, request: WorkspaceWriteRequest): Promise<WorkspaceWriteResult> {
+    return Promise.resolve({ contractVersion: "1.0", clientRequestId: request.clientRequestId,
+      requestDigest: request.requestDigest, replayed: false, operation: request.operation,
+      path: request.path, beforeSha256: null, afterSha256: this.candidateHash,
+      sizeBytes: Buffer.byteLength(request.content) });
+  }
+  override diff(taskIdValue: string): Promise<WorkspaceDiffView> {
+    return Promise.resolve({ contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      changed: true, entries: [{ operation: "ADD", path: "notes/test.txt",
+        beforeSha256: null, afterSha256: this.candidateHash }] });
+  }
+  override submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> {
+    this.sandboxSubmissions += 1;
+    return super.submit(_taskId, _grant, request);
   }
 }
 
@@ -1124,9 +1324,16 @@ class RejectingOnceGateway extends FakeGateway {
     this.submissions += 1;
     if (this.submissions === 1) {
       return Promise.reject(new EngineProblem(400,
-        problem("SANDBOX_COMMAND_DENIED", "request", "rejected")));
+        problem("SANDBOX_COMMAND_DENIED", "sandbox_system", "rejected")));
     }
     return super.submit(taskIdValue, grantValue, request);
+  }
+}
+
+class RejectingReadGateway extends FakeGateway {
+  override read(): Promise<FileRead> {
+    return Promise.reject(new EngineProblem(400,
+      problem("WORKSPACE_STRUCTURED_READ_PARSE_DOCUMENT", "request", "rejected")));
   }
 }
 

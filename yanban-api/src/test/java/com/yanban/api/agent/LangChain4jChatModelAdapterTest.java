@@ -14,6 +14,7 @@ import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ModelProviderException;
+import com.yanban.core.model.ToolCall;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -105,6 +106,47 @@ class LangChain4jChatModelAdapterTest {
                 .path("properties").path("relativePaths");
         assertThat(relativePaths.path("type").asText()).isEqualTo("array");
         assertThat(relativePaths.path("items").path("type").asText()).isEqualTo("string");
+    }
+
+    @Test
+    void rejectsBlankCompletionWithoutToolCalls() {
+        ChatModelProvider provider = mock(ChatModelProvider.class);
+        when(provider.chat(any())).thenReturn(new ChatResponse(
+                ChatMessage.assistant("  "), "length", new ChatResponse.Usage(100, 4096, 4196)));
+        LangChain4jChatModelAdapter adapter = new LangChain4jChatModelAdapter(provider, new ObjectMapper());
+
+        assertThatThrownBy(() -> adapter.chat(request(), runtimeRequest()))
+                .isInstanceOf(ModelProviderException.class)
+                .hasMessageContaining("empty response without tool calls")
+                .hasMessageContaining("finishReason=length");
+    }
+
+    @Test
+    void mapsPaperThinkingDisabledFlagToCoreRequest() {
+        ChatModelProvider provider = mock(ChatModelProvider.class);
+        when(provider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("done"), "stop", null));
+        LangChain4jChatModelAdapter adapter = new LangChain4jChatModelAdapter(provider, new ObjectMapper());
+
+        adapter.chat(request(), new ModelInvocationContext(
+                "deepseek", null, null, "paper-model-call", null, true));
+
+        ArgumentCaptor<com.yanban.core.model.ChatRequest> captor =
+                ArgumentCaptor.forClass(com.yanban.core.model.ChatRequest.class);
+        verify(provider).chat(captor.capture());
+        assertThat(captor.getValue().thinking()).isEqualTo(com.yanban.core.model.ChatRequest.Thinking.disabled());
+    }
+
+    @Test
+    void acceptsToolCallResponseWithoutText() {
+        ChatModelProvider provider = mock(ChatModelProvider.class);
+        ToolCall toolCall = new ToolCall("call-1", "function", new ToolCall.FunctionCall("project_manifest", "{}"));
+        when(provider.chat(any())).thenReturn(new ChatResponse(
+                new ChatMessage("assistant", "", List.of(toolCall), null), "tool_calls", null));
+        LangChain4jChatModelAdapter adapter = new LangChain4jChatModelAdapter(provider, new ObjectMapper());
+
+        var response = adapter.chat(request(), runtimeRequest());
+
+        assertThat(response.aiMessage().toolExecutionRequests()).hasSize(1);
     }
 
     private ChatRequest request() {

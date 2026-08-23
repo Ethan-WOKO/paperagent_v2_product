@@ -82,6 +82,21 @@ public class KbDocument {
     @Column(name = "error_message")
     private String errorMessage;
 
+    @Column(name = "upload_id", length = 64)
+    private String uploadId;
+
+    @Column(name = "file_digest", length = 64)
+    private String fileDigest;
+
+    @Column(name = "processing_event_id", length = 64)
+    private String processingEventId;
+
+    @Column(name = "processing_revision", nullable = false)
+    private Long processingRevision = 0L;
+
+    @Column(name = "processed_at")
+    private Instant processedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -141,6 +156,11 @@ public class KbDocument {
     public String getMimeType() { return mimeType; }
     public Long getFileSize() { return fileSize; }
     public String getErrorMessage() { return errorMessage; }
+    public String getUploadId() { return uploadId; }
+    public String getFileDigest() { return fileDigest; }
+    public String getProcessingEventId() { return processingEventId; }
+    public Long getProcessingRevision() { return processingRevision; }
+    public Instant getProcessedAt() { return processedAt; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 
@@ -162,6 +182,16 @@ public class KbDocument {
     public void setMimeType(String mimeType) { this.mimeType = mimeType; }
     public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public void setUploadId(String uploadId) { this.uploadId = blankToNull(uploadId); }
+    public void setFileDigest(String fileDigest) { this.fileDigest = blankToNull(fileDigest); }
+    public void setProcessingEventId(String processingEventId) { this.processingEventId = blankToNull(processingEventId); }
+    public void setProcessedAt(Instant processedAt) { this.processedAt = processedAt; }
+    public void startProcessing(String eventId) {
+        this.processingEventId = eventId;
+        this.processingRevision = (processingRevision == null ? 0L : processingRevision) + 1L;
+        this.status = "PROCESSING";
+        this.errorMessage = null;
+    }
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;

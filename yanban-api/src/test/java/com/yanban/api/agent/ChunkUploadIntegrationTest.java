@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.blankOrNullString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -12,6 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.knowledge.domain.KbDocumentRepository;
+import com.yanban.knowledge.domain.KbProcessingOutboxRepository;
+import com.yanban.knowledge.service.KnowledgeOutboxDispatcher;
 import io.minio.GetObjectResponse;
 import io.minio.MinioClient;
 import java.io.ByteArrayInputStream;
@@ -52,6 +55,12 @@ class ChunkUploadIntegrationTest {
     @Autowired
     KbDocumentRepository documents;
 
+    @Autowired
+    KbProcessingOutboxRepository outbox;
+
+    @Autowired
+    KnowledgeOutboxDispatcher dispatcher;
+
     @MockBean
     MinioClient minioClient;
 
@@ -62,7 +71,7 @@ class ChunkUploadIntegrationTest {
     void setUp() throws Exception {
         when(minioClient.putObject(any())).thenReturn(null);
         doNothing().when(minioClient).removeObject(any());
-        when(kafkaTemplate.send(any(String.class), any(String.class)))
+        when(kafkaTemplate.send(any(String.class), any(String.class), any(String.class)))
                 .thenReturn(CompletableFuture.completedFuture(null));
     }
 
@@ -113,6 +122,26 @@ class ChunkUploadIntegrationTest {
         org.assertj.core.api.Assertions.assertThat(document.getObjectKey()).isNotBlank();
         org.assertj.core.api.Assertions.assertThat(document.getMimeType()).isEqualTo("application/pdf");
         org.assertj.core.api.Assertions.assertThat(document.getFileSize()).isEqualTo(11L);
+        org.assertj.core.api.Assertions.assertThat(document.getUploadId()).isEqualTo("upload-a");
+        org.assertj.core.api.Assertions.assertThat(document.getFileDigest()).hasSize(64);
+        org.assertj.core.api.Assertions.assertThat(outbox.count()).isEqualTo(1);
+
+        dispatcher.dispatchDue();
+        verify(kafkaTemplate).send(org.mockito.ArgumentMatchers.eq("file-processing"),
+                org.mockito.ArgumentMatchers.eq(documentId.toString()), any(String.class));
+
+        mockMvc.perform(post("/api/v1/upload/merge")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{" +
+                                "\"uploadId\":\"upload-a\"," +
+                                "\"filename\":\"paper.pdf\"," +
+                                "\"totalChunks\":2," +
+                                "\"isPublic\":false," +
+                                "\"mimeType\":\"application/pdf\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(documentId));
+        org.assertj.core.api.Assertions.assertThat(documents.findAll()).hasSize(1);
     }
 
     private String registerAndGetToken(String username) throws Exception {

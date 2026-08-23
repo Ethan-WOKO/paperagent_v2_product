@@ -24,7 +24,6 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PaperSectionPolishService {
@@ -63,13 +62,11 @@ public class PaperSectionPolishService {
         this.objectMapper = objectMapper;
     }
 
-    @Transactional
     public SectionPolishResult polishSection(Long taskId, LatexSection latexSection, String targetLanguage,
                                              double scoreThreshold, int maxAttempts) {
         return polishSection(taskId, latexSection, targetLanguage, normalizeScoreThreshold(scoreThreshold), maxAttempts, 1, SectionContext.empty());
     }
 
-    @Transactional
     public SectionPolishResult polishSection(Long taskId, LatexSection latexSection, String targetLanguage,
                                              int scoreThreshold, int maxRounds, int innerMaxAttempts) {
         SectionContext context = sectionContextOverride.get();
@@ -84,7 +81,6 @@ public class PaperSectionPolishService {
         sectionContextOverride.set(context == null ? SectionContext.empty() : context);
     }
 
-    @Transactional
     public SectionPolishResult polishSection(Long taskId, LatexSection latexSection, String targetLanguage,
                                              int scoreThreshold, int maxRounds, int innerMaxAttempts,
                                              SectionContext sectionContext) {
@@ -145,6 +141,12 @@ public class PaperSectionPolishService {
                 reviewComments = lastRejectedMessage;
                 continue;
             }
+            if (equivalentIgnoringWhitespace(latexSection.rawText(), polished)) {
+                return persist(task, storedSection, "UNCHANGED", latexSection.rawText(), latexSection.rawText(), 100, true, round,
+                        reviewMeta("no_substantive_change", "The candidate only changed whitespace; the original was retained.",
+                                100, true, round, rounds, repairsPerRound, true, false, Map.of()),
+                        diff(latexSection.rawText(), latexSection.rawText()), candidateValidation.lintIssues());
+            }
             Map<String, Object> candidateDiff = diff(latexSection.rawText(), polished);
             Review review = review(task, latexSection, researchProfile, latexSection.rawText(), polished, targetLanguage, scoreThreshold, candidateDiff);
             if (review.passed() && review.score() >= scoreThreshold) {
@@ -171,6 +173,12 @@ public class PaperSectionPolishService {
                 }
                 CandidateValidation repairValidation = validateCandidate(latexSection.rawText(), repair.polishedText());
                 if (repairValidation.valid()) {
+                    if (equivalentIgnoringWhitespace(latexSection.rawText(), repair.polishedText())) {
+                        return persist(task, storedSection, "UNCHANGED", latexSection.rawText(), latexSection.rawText(), 100, true, round,
+                                reviewMeta("no_substantive_change", "The repaired candidate only changed whitespace; the original was retained.",
+                                        100, true, round, rounds, repairsPerRound, true, false, repair.raw()),
+                                diff(latexSection.rawText(), latexSection.rawText()), repairValidation.lintIssues());
+                    }
                     Map<String, Object> repairDiff = diff(latexSection.rawText(), repair.polishedText());
                     Review repairReview = review(task, latexSection, researchProfile, latexSection.rawText(), repair.polishedText(), targetLanguage, scoreThreshold, repairDiff);
                     Map<String, Object> repairReviewRaw = withRepairMeta(repairReview.raw(), review.raw(), true, repair.raw());
@@ -275,7 +283,7 @@ public class PaperSectionPolishService {
         }
         if (!structuralCommandsPreserved(original, polished)) {
             return new CandidateValidation(false, "structural_command_changed",
-                    "The candidate changed protected LaTeX structure, labels, refs, cites, or environments.", List.of());
+                    structuralCommandMismatchMessage(original, polished), List.of());
         }
         List<LatexLintIssue> lintIssues = subtractInheritedLintIssues(
                 maskingService.lint(original), maskingService.lint(polished));
@@ -283,6 +291,24 @@ public class PaperSectionPolishService {
             return new CandidateValidation(false, "latex_lint_failed", "LaTeX lint blockers were found: " + lintIssues, lintIssues);
         }
         return new CandidateValidation(true, "", "", lintIssues);
+    }
+
+    private boolean equivalentIgnoringWhitespace(String original, String candidate) {
+        return normalizeWhitespaceInsensitive(original).equals(normalizeWhitespaceInsensitive(candidate));
+    }
+
+    private String normalizeWhitespaceInsensitive(String value) {
+        return value == null ? "" : value.replaceAll("\\s+", "");
+    }
+
+    private String structuralCommandMismatchMessage(String original, String polished) {
+        List<String> expected = structuralCommands(original);
+        List<String> actual = structuralCommands(polished);
+        List<String> missing = new ArrayList<>(expected);
+        for (String command : actual) missing.remove(command);
+        List<String> unexpected = new ArrayList<>(actual);
+        for (String command : expected) unexpected.remove(command);
+        return "Protected LaTeX commands must be copied exactly. Missing: " + missing + "; unexpected: " + unexpected + ".";
     }
 
     private List<LatexLintIssue> subtractInheritedLintIssues(List<LatexLintIssue> original,

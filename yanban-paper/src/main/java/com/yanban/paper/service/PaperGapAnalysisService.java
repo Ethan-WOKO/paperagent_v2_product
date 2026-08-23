@@ -180,6 +180,21 @@ public class PaperGapAnalysisService {
         return results;
     }
 
+    @Transactional(readOnly = true)
+    public boolean isDegradedWithoutSuggestions(Long taskId) {
+        String gapMatrix = analyses.findByTaskId(taskId)
+                .map(PaperTaskAnalysis::getGapMatrixJson)
+                .orElse("");
+        if (gapMatrix == null || gapMatrix.isBlank()) return false;
+        try {
+            JsonNode root = objectMapper.readTree(gapMatrix);
+            return "DEGRADED".equals(root.path("analysisStatus").asText())
+                    && root.path("suggestionCount").asInt(0) == 0;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     @Transactional
     public List<GapSuggestionResult> parseAndSave(Long taskId, String modelText, Set<Long> allowedCardIds) {
         return parseAndSave(taskId, modelText, allowedCardIds, "{}", "");

@@ -118,7 +118,7 @@ public class PaperAssembleService {
         PaperFinalAuditService finalAuditService = finalAuditServiceProvider == null
                 ? null : finalAuditServiceProvider.getIfAvailable();
         PaperFinalAuditService.AuditResult finalAudit = advancedMode && finalAuditService != null
-                ? finalAuditService.audit(polishedTex, suggestedBib, citationResult)
+                ? finalAuditService.audit(polishedTex, suggestedBib, citationResult, sourceResourceNames(taskId))
                 : PaperFinalAuditService.AuditResult.notRun();
         String reviewReport = buildReviewReport(task, storedSections, taskSuggestions, evidenceCards, advancedMode, bibResult, finalAudit);
         Set<String> mergedKeys = new LinkedHashSet<>(document.bibliography().keySet());
@@ -214,6 +214,21 @@ public class PaperAssembleService {
                 .reduce((left, right) -> right)
                 .map(artifact -> new String(storageService.read(artifact.getObjectKey()), StandardCharsets.UTF_8))
                 .orElse("");
+    }
+
+    private Set<String> sourceResourceNames(Long taskId) {
+        Set<String> names = new LinkedHashSet<>();
+        artifacts.findByTaskIdOrderByCreatedAt(taskId).stream()
+                .filter(artifact -> artifact.getType() != null && artifact.getType().startsWith("source_"))
+                .forEach(artifact -> {
+                    try {
+                        String filename = objectMapper.readTree(artifact.getMetadataJson()).path("filename").asText("").trim();
+                        if (!filename.isBlank()) names.add(filename);
+                    } catch (Exception ignored) {
+                        // Old source artifacts may not carry filename metadata.
+                    }
+                });
+        return names;
     }
 
     private String sourceBibFilename(Long taskId) {

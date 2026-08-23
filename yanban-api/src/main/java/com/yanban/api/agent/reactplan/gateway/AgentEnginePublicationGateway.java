@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 @Service
 @ConditionalOnProperty(prefix = "yanban.agent.engine.gateway", name = "enabled", havingValue = "true")
 final class AgentEnginePublicationGateway {
+    private static final String DOCUMENT_INTEGRITY_PREFIX = "document-integrity.";
     private final AgentEngineWorkspaceGateway workspaces;
     private final AgentEngineSandboxGateway sandboxes;
     private final ProjectRevisionWorkflowService revisions;
@@ -51,19 +52,23 @@ final class AgentEnginePublicationGateway {
         }
         List<AutomaticProjectFileChange> changes =
                 workspaces.publicationChanges(authority, request.entries());
-        Receipt receipt = sandboxes.requireSuccessfulReceipt(
-                authority, request.receiptRef());
-        Map<String, String> proven = new LinkedHashMap<>();
-        for (ReceiptInput input : receipt.inputs()) {
-            if (proven.putIfAbsent(input.path(), input.sha256()) != null) {
-                throw EngineGatewayException.conflict(
-                        "WORKSPACE_PUBLICATION_RECEIPT_CONFLICT");
+        if (request.receiptRef().startsWith(DOCUMENT_INTEGRITY_PREFIX)) {
+            requireDocumentIntegrity(authority, request, changes);
+        } else {
+            Receipt receipt = sandboxes.requireSuccessfulReceipt(
+                    authority, request.receiptRef());
+            Map<String, String> proven = new LinkedHashMap<>();
+            for (ReceiptInput input : receipt.inputs()) {
+                if (proven.putIfAbsent(input.path(), input.sha256()) != null) {
+                    throw EngineGatewayException.conflict(
+                            "WORKSPACE_PUBLICATION_RECEIPT_CONFLICT");
+                }
             }
-        }
-        if (changes.stream().anyMatch(change ->
-                !change.afterSha256().equals(proven.get(change.path())))) {
-            throw EngineGatewayException.conflict(
-                    "WORKSPACE_PUBLICATION_RECEIPT_MISMATCH");
+            if (changes.stream().anyMatch(change ->
+                    !change.afterSha256().equals(proven.get(change.path())))) {
+                throw EngineGatewayException.conflict(
+                        "WORKSPACE_PUBLICATION_RECEIPT_MISMATCH");
+            }
         }
         String key = "react-engine-publish." + sha256(authority.taskId());
         ProjectRevisionOperationResponse published;
@@ -87,6 +92,33 @@ final class AgentEnginePublicationGateway {
                 published.operationId(), published.baseVersion(),
                 published.resultVersion(), published.resultRevisionId(),
                 request.receiptRef());
+    }
+
+    private void requireDocumentIntegrity(
+            EngineTaskAuthority authority,
+            WorkspacePublishRequest request,
+            List<AutomaticProjectFileChange> changes) {
+        Map<String, Object> proof = new LinkedHashMap<>();
+        proof.put("projectVersion", authority.projectVersion());
+        proof.put("entries", request.entries());
+        String expected = DOCUMENT_INTEGRITY_PREFIX
+                + ReactPlanCanonicalJson.digest(json, proof);
+        if (!expected.equals(request.receiptRef())) {
+            throw EngineGatewayException.conflict(
+                    "WORKSPACE_PUBLICATION_DOCUMENT_PROOF_MISMATCH");
+        }
+        if (changes.isEmpty() || changes.stream().anyMatch(change ->
+                !documentPath(change.path()) || change.content().indexOf('\0') >= 0)) {
+            throw EngineGatewayException.conflict(
+                    "WORKSPACE_PUBLICATION_DOCUMENT_INTEGRITY_REJECTED");
+        }
+    }
+
+    private static boolean documentPath(String path) {
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".txt") || lower.endsWith(".md")
+                || lower.endsWith(".markdown") || lower.endsWith(".rst")
+                || lower.endsWith(".adoc") || lower.endsWith(".tex");
     }
 
     private static void validate(WorkspacePublishRequest request) {

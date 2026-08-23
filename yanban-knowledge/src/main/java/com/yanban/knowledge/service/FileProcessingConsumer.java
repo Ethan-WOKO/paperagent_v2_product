@@ -1,6 +1,7 @@
 package com.yanban.knowledge.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -15,13 +16,22 @@ public class FileProcessingConsumer {
         this.fileProcessingService = fileProcessingService;
     }
 
-    @KafkaListener(topics = "${yanban.knowledge.upload.processing-topic:file-processing}", groupId = "yanban-kb-processing")
-    public void onMessage(String payload) {
+    @KafkaListener(topics = "${yanban.knowledge.upload.processing-topic:file-processing}",
+            groupId = "yanban-kb-processing", containerFactory = "knowledgeKafkaListenerContainerFactory")
+    public void onRecord(ConsumerRecord<String, String> record) throws Exception {
+        FileProcessingMessage message = objectMapper.readValue(record.value(), FileProcessingMessage.class);
+        if (record.key() == null || !record.key().equals(message.documentId().toString())) {
+            throw new KnowledgePermanentProcessingException("Kafka Key 与 Document ID 不一致");
+        }
+        fileProcessingService.process(message);
+    }
+
+    public void onMessage(String payload) throws Exception {
         try {
             FileProcessingMessage message = objectMapper.readValue(payload, FileProcessingMessage.class);
             fileProcessingService.process(message);
         } catch (Exception ex) {
-            throw new IllegalStateException("处理知识库文件消息失败", ex);
+            throw ex;
         }
     }
 }

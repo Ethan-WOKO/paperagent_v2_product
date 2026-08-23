@@ -2,6 +2,8 @@ package com.yanban.api.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,6 +22,7 @@ import io.minio.MinioClient;
 import java.io.ByteArrayInputStream;
 import java.util.Map;
 import okhttp3.Headers;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -78,21 +81,28 @@ class FileProcessingConsumerIntegrationTest {
                 "yanban-agent",
                 "us-east-1",
                 document.getObjectKey(),
-                new ByteArrayInputStream("第一段\n第二段\n第三段".getBytes())
+                new ByteArrayInputStream("第一段\n第二段\n第三段".getBytes(java.nio.charset.StandardCharsets.UTF_8))
         ));
-        when(embeddingClient.embed(any())).thenReturn(vector1024());
-        when(knowledgeIndexService.indexChunk(any())).thenReturn("es-doc-1");
+        when(embeddingClient.embedAll(any())).thenAnswer(invocation -> {
+            java.util.List<?> values = invocation.getArgument(0);
+            return values.stream().map(ignored -> vector1024()).toList();
+        });
+        when(knowledgeIndexService.indexChunks(any())).thenAnswer(invocation -> {
+            java.util.List<?> values = invocation.getArgument(0);
+            return java.util.stream.IntStream.range(0, values.size()).mapToObj(i -> "es-doc-" + i).toList();
+        });
 
-        consumer.onMessage(objectMapper.writeValueAsString(new FileProcessingMessage(
-                document.getId(),
-                document.getUserId(),
-                document.getObjectKey()
-        )));
+        String payload = objectMapper.writeValueAsString(new FileProcessingMessage(
+                document.getId(), document.getUserId(), document.getObjectKey()));
+        consumer.onMessage(payload);
+        consumer.onMessage(payload);
 
         KbDocument updated = documents.findById(document.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo("READY");
         assertThat(updated.getErrorMessage()).isNull();
         assertThat(chunks.findByDocumentIdOrderByChunkIndexAsc(document.getId())).isNotEmpty();
+        verify(minioClient, times(1)).getObject(any());
+        verify(embeddingClient, times(1)).embedAll(any());
     }
 
     @Test
@@ -104,14 +114,12 @@ class FileProcessingConsumerIntegrationTest {
 
         when(minioClient.getObject(any())).thenThrow(new RuntimeException("broken object stream"));
 
-        consumer.onMessage(objectMapper.writeValueAsString(new FileProcessingMessage(
-                document.getId(),
-                document.getUserId(),
-                document.getObjectKey()
-        )));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> consumer.onMessage(
+                objectMapper.writeValueAsString(new FileProcessingMessage(
+                        document.getId(), document.getUserId(), document.getObjectKey()))));
 
         KbDocument updated = documents.findById(document.getId()).orElseThrow();
-        assertThat(updated.getStatus()).isEqualTo("FAILED");
+        assertThat(updated.getStatus()).isEqualTo("RETRYING");
         assertThat(updated.getErrorMessage()).isNotBlank();
     }
 
@@ -131,14 +139,34 @@ class FileProcessingConsumerIntegrationTest {
                 new ByteArrayInputStream("pngbytes".getBytes())
         ));
         when(ocrProvider.extractText(any(), any(), any())).thenReturn("OCR TEXT");
-        when(embeddingClient.embed(any())).thenReturn(vector1024());
-        when(knowledgeIndexService.indexChunk(any())).thenReturn("es-doc-1");
+        when(embeddingClient.embedAll(any())).thenAnswer(invocation -> {
+            java.util.List<?> values = invocation.getArgument(0);
+            return values.stream().map(ignored -> vector1024()).toList();
+        });
+        when(knowledgeIndexService.indexChunks(any())).thenAnswer(invocation -> {
+            java.util.List<?> values = invocation.getArgument(0);
+            return java.util.stream.IntStream.range(0, values.size()).mapToObj(i -> "es-doc-" + i).toList();
+        });
 
         consumer.onMessage(objectMapper.writeValueAsString(new FileProcessingMessage(document.getId(), document.getUserId(), document.getObjectKey())));
 
         KbDocument updated = documents.findById(document.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo("READY");
         assertThat(chunks.findByDocumentIdOrderByChunkIndexAsc(document.getId()).get(0).getChunkText()).contains("OCR TEXT");
+    }
+
+    @Test
+    void rejectMessageWhoseKafkaKeyIsNotDocumentId() throws Exception {
+        Long userId = users.save(new SysUser("file_processor_wrong_key", "noop")).getId();
+        KbDocument document = new KbDocument(userId, "sample.txt", "PROCESSING", false);
+        document.setObjectKey("kb/documents/7004/sample.txt");
+        documents.save(document);
+        String payload = objectMapper.writeValueAsString(new FileProcessingMessage(
+                document.getId(), userId, document.getObjectKey()));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> consumer.onRecord(
+                        new ConsumerRecord<>("file-processing", 0, 0, "wrong-key", payload)))
+                .isInstanceOf(com.yanban.knowledge.service.KnowledgePermanentProcessingException.class);
     }
 
     private java.util.List<Double> vector1024() {

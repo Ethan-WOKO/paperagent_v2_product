@@ -25,25 +25,37 @@ public class DashScopeEmbeddingClient implements EmbeddingClient {
 
     @Override
     public List<Double> embed(String text) {
+        return embedAll(List.of(text)).get(0);
+    }
+
+    @Override
+    public List<List<Double>> embedAll(List<String> texts) {
         if (!StringUtils.hasText(properties.getApiKey())) {
             throw new IllegalStateException("DASHSCOPE_API_KEY 未配置");
         }
+        if (texts == null || texts.isEmpty()) return List.of();
         JsonNode response = restClient.post()
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getApiKey())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(new EmbeddingRequest(properties.getModel(), text))
+                .body(new EmbeddingRequest(properties.getModel(), texts))
                 .retrieve()
                 .body(JsonNode.class);
 
-        JsonNode embeddingNode = response == null ? null : response.path("data").path(0).path("embedding");
-        if (embeddingNode == null || !embeddingNode.isArray()) {
+        JsonNode data = response == null ? null : response.path("data");
+        if (data == null || !data.isArray() || data.size() != texts.size()) {
             throw new IllegalStateException("DashScope embedding 响应格式非法");
         }
-        List<Double> vector = new ArrayList<>();
-        embeddingNode.forEach(item -> vector.add(item.asDouble()));
-        return vector;
+        List<List<Double>> vectors = new ArrayList<>();
+        data.forEach(value -> {
+            JsonNode embeddingNode = value.path("embedding");
+            if (!embeddingNode.isArray()) throw new IllegalStateException("DashScope embedding 响应格式非法");
+            List<Double> vector = new ArrayList<>();
+            embeddingNode.forEach(item -> vector.add(item.asDouble()));
+            vectors.add(List.copyOf(vector));
+        });
+        return List.copyOf(vectors);
     }
 
-    private record EmbeddingRequest(String model, String input) {
+    private record EmbeddingRequest(String model, List<String> input) {
     }
 }

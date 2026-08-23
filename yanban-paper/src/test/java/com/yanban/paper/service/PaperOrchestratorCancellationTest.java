@@ -27,6 +27,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -137,6 +140,22 @@ class PaperOrchestratorCancellationTest {
     }
 
     @Test
+    void linkageErrorMarksTaskFailedInsteadOfLeavingItRunning() {
+        PaperTask task = task(PaperOrchestrator.STATUS_RUNNING, "STRUCTURE_CHECK");
+        when(tasks.findById(TASK_ID))
+                .thenThrow(new NoSuchMethodError("binary mismatch"))
+                .thenReturn(Optional.of(task));
+
+        ReflectionTestUtils.invokeMethod(orchestrator, "runTask", TASK_ID);
+
+        assertThat(task.getStatus()).isEqualTo(PaperOrchestrator.STATUS_FAILED);
+        assertThat(task.getCurrentStage()).isEqualTo(PaperOrchestrator.STATUS_FAILED);
+        assertThat(task.getErrorMessage()).isEqualTo("binary mismatch");
+        assertEventTypes("error");
+        assertRecordedEventTypes("TASK_FAILED");
+    }
+
+    @Test
     void stopTerminalTaskIsIdempotent() {
         PaperTask task = task(PaperOrchestrator.STATUS_COMPLETED, "COMPLETE");
         when(tasks.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(Optional.of(task));
@@ -172,16 +191,99 @@ class PaperOrchestratorCancellationTest {
         PaperSection stored = new PaperSection(TASK_ID, "main.tex", 0, 2, "Introduction", "INTRO", 1.0, "test", 0, 42);
 
         org.mockito.Mockito.doThrow(new IllegalStateException("boom"))
-                .when(sectionPolishService).polishSection(TASK_ID, latexSection, "zh", 92, 4, 5);
+                .when(sectionPolishService).polishSection(
+                        org.mockito.ArgumentMatchers.eq(TASK_ID),
+                        org.mockito.ArgumentMatchers.eq(latexSection),
+                        org.mockito.ArgumentMatchers.eq("zh"),
+                        org.mockito.ArgumentMatchers.eq(92),
+                        org.mockito.ArgumentMatchers.eq(4),
+                        org.mockito.ArgumentMatchers.eq(5),
+                        org.mockito.ArgumentMatchers.any(PaperSectionPolishService.SectionContext.class));
         when(sections.findByTaskIdOrderByOrderIndexAsc(TASK_ID)).thenReturn(List.of(stored));
 
         Integer processed = ReflectionTestUtils.invokeMethod(orchestrator, "polishSections", task, document);
 
         assertThat(processed).isEqualTo(1);
-        verify(sectionPolishService).polishSection(TASK_ID, latexSection, "zh", 92, 4, 5);
+        verify(sectionPolishService).polishSection(
+                org.mockito.ArgumentMatchers.eq(TASK_ID),
+                org.mockito.ArgumentMatchers.eq(latexSection),
+                org.mockito.ArgumentMatchers.eq("zh"),
+                org.mockito.ArgumentMatchers.eq(92),
+                org.mockito.ArgumentMatchers.eq(4),
+                org.mockito.ArgumentMatchers.eq(5),
+                org.mockito.ArgumentMatchers.any(PaperSectionPolishService.SectionContext.class));
         assertThat(stored.getPolishStatus()).isEqualTo("FAILED_KEEP_ORIGINAL");
         assertThat(stored.getReviewJson()).contains("section_polish_exception", "\"maxRounds\":4", "\"innerMaxAttempts\":5");
         verify(sections).save(stored);
+    }
+
+    @Test
+    void polishSectionsRunsWithBoundedParallelismAndPropagatesUserContext() throws Exception {
+        PaperTask task = task("RUNNING", "POLISH");
+        task.setScoreThreshold(75);
+        task.setMaxRounds(3);
+        task.setInnerMaxAttempts(2);
+        List<LatexSection> latexSections = List.of(
+                latexSection(0, "Introduction"),
+                latexSection(1, "Method"),
+                latexSection(2, "Conclusion"));
+        LatexDocument document = new LatexDocument("main.tex", "paper", List.of(), List.of(), "", "", latexSections,
+                List.of(), List.of(), List.of(), List.of(), Map.of(), List.of());
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        ReflectionTestUtils.setField(orchestrator, "paperSectionPolishExecutor", executor);
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maxActive = new AtomicInteger();
+        AtomicInteger callsWithUserContext = new AtomicInteger();
+        when(sectionPolishService.polishSection(
+                org.mockito.ArgumentMatchers.eq(TASK_ID),
+                org.mockito.ArgumentMatchers.any(LatexSection.class),
+                org.mockito.ArgumentMatchers.eq("zh"),
+                org.mockito.ArgumentMatchers.eq(75),
+                org.mockito.ArgumentMatchers.eq(3),
+                org.mockito.ArgumentMatchers.eq(2),
+                org.mockito.ArgumentMatchers.any(PaperSectionPolishService.SectionContext.class)))
+                .thenAnswer(invocation -> {
+                    int current = active.incrementAndGet();
+                    maxActive.accumulateAndGet(current, Math::max);
+                    if (USER_ID.equals(PaperModelExecutionContext.currentUserId())) {
+                        callsWithUserContext.incrementAndGet();
+                    }
+                    Thread.sleep(150);
+                    active.decrementAndGet();
+                    LatexSection section = invocation.getArgument(1);
+                    return new SectionPolishResult((long) section.orderIndex(), "POLISHED", section.rawText(),
+                            section.rawText(), 90, true, 1, Map.of(), Map.of(), List.of());
+                });
+
+        try {
+            Integer processed = ReflectionTestUtils.invokeMethod(orchestrator, "polishSections", task, document);
+
+            assertThat(processed).isEqualTo(3);
+            assertThat(maxActive.get()).isEqualTo(2);
+            assertThat(callsWithUserContext.get()).isEqualTo(3);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void sectionContextUsesPreviousEndingAndNextOpeningFromOriginalDocument() {
+        LatexSection previous = latexSection(0, "PREVIOUS_START " + "x".repeat(1_000) + " PREVIOUS_END");
+        LatexSection current = latexSection(1, "CURRENT");
+        LatexSection next = latexSection(2, "NEXT_START " + "y".repeat(1_000) + " NEXT_END");
+        LatexDocument document = new LatexDocument("main.tex", "paper", List.of(), List.of(), "", "",
+                List.of(previous, current, next), List.of(), List.of(), List.of(), List.of(), Map.of(), List.of());
+
+        PaperSectionPolishService.SectionContext context = ReflectionTestUtils.invokeMethod(
+                orchestrator, "sectionContext", document, current);
+
+        assertThat(context.previousSection()).contains("PREVIOUS_END").doesNotContain("PREVIOUS_START");
+        assertThat(context.nextSection()).contains("NEXT_START").doesNotContain("NEXT_END");
+    }
+
+    private LatexSection latexSection(int orderIndex, String rawText) {
+        return new LatexSection(orderIndex, 2, "section", true, "Section " + orderIndex,
+                LatexSectionRole.UNKNOWN, 0, rawText.length(), rawText);
     }
 
     private PaperTask task(String status, String stage) {

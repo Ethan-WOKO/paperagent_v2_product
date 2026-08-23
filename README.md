@@ -36,7 +36,7 @@ agent-v2/
 - Agent 会话、消息、工具调用持久化
 - Plan Agent 计划 / 步骤 / 事件持久化与计划模式 API
 - DeepSeek / GLM Provider 路由
-- WebSocket 流式聊天
+- 认证 HTTP + SSE 流式聊天
 - 计划模式：Planner 生成 JSON DAG，Step Executor 复用 Harness 与工具体系执行
 - 默认 RAG 与“本次禁用知识库”开关
 - 知识库：

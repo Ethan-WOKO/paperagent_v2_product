@@ -2,22 +2,20 @@ package com.yanban.cli;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.net.http.WebSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Properties;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
+import java.util.UUID;
 
 public class CliApiClient {
 
@@ -39,55 +37,63 @@ public class CliApiClient {
         return sendJson("POST", apiBaseUrl() + "/api/v1/agent/sessions", objectMapper.createObjectNode().put("title", title), accessToken());
     }
 
-    public String chatViaWebSocket(long sessionId, String content) {
-        Properties properties = configStore.load();
-        String baseUrl = properties.getProperty("apiBaseUrl", "http://localhost:8080");
-        String token = properties.getProperty("accessToken");
-        String wsUrl = baseUrl.replaceFirst("^http", "ws") + "/api/v1/ws/chat?token=" + URLEncoder.encode(token, StandardCharsets.UTF_8);
-        StringBuilder builder = new StringBuilder();
-        CountDownLatch latch = new CountDownLatch(1);
-        httpClient.newWebSocketBuilder().buildAsync(URI.create(wsUrl), new WebSocket.Listener() {
-            @Override
-            public void onOpen(WebSocket webSocket) {
-                try {
-                    String payload = objectMapper.createObjectNode()
-                            .put("sessionId", sessionId)
-                            .put("content", content)
-                            .toString();
-                    webSocket.sendText(payload, true);
-                    WebSocket.Listener.super.onOpen(webSocket);
-                } catch (Exception ex) {
-                    latch.countDown();
-                }
-            }
-
-            @Override
-            public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-                try {
-                    JsonNode event = objectMapper.readTree(data.toString());
-                    String type = event.path("type").asText();
-                    if ("chunk".equals(type)) {
-                        String piece = event.path("content").asText("");
-                        builder.append(piece);
-                        System.out.print(piece);
-                    }
-                    if ("done".equals(type) || "error".equals(type)) {
-                        System.out.println();
-                        latch.countDown();
-                        webSocket.abort();
-                    }
-                } catch (Exception ex) {
-                    latch.countDown();
-                }
-                return CompletableFuture.completedFuture(null);
-            }
-        }).join();
+    public String chatViaSse(long sessionId, String content) {
+        String requestId = "cli-" + UUID.randomUUID();
         try {
-            latch.await();
+            String payload = objectMapper.createObjectNode()
+                    .put("content", content)
+                    .put("clientRequestId", requestId)
+                    .toString();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(
+                            apiBaseUrl() + "/api/v1/agent/sessions/" + sessionId + "/messages/stream"))
+                    .timeout(Duration.ofMinutes(20))
+                    .header("Authorization", bearer())
+                    .header("Accept", "text/event-stream")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload))
+                    .build();
+            HttpResponse<java.io.InputStream> response = httpClient.send(
+                    request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() >= 400) {
+                throw new IllegalStateException("HTTP " + response.statusCode());
+            }
+            return consumeChatStream(response);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            throw new IllegalStateException("聊天事件流已中断", ex);
+        } catch (IOException ex) {
+            throw new IllegalStateException("读取聊天事件流失败", ex);
         }
-        return builder.toString();
+    }
+
+    private String consumeChatStream(HttpResponse<java.io.InputStream> response) throws IOException {
+        StringBuilder answer = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                response.body(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.startsWith("data:")) continue;
+                JsonNode event = objectMapper.readTree(line.substring(5).stripLeading());
+                String type = event.path("type").asText();
+                if ("chunk".equals(type)) {
+                    String piece = event.path("content").asText("");
+                    answer.append(piece);
+                    System.out.print(piece);
+                } else if ("done".equals(type)) {
+                    if (answer.isEmpty()) {
+                        String finalAnswer = event.path("assistantContent").asText("");
+                        answer.append(finalAnswer);
+                        System.out.print(finalAnswer);
+                    }
+                    System.out.println();
+                    return answer.toString();
+                } else if ("error".equals(type)) {
+                    System.out.println();
+                    throw new IllegalStateException(event.path("error").asText("对话处理失败"));
+                }
+            }
+        }
+        throw new IllegalStateException("聊天事件流在终态前关闭");
     }
 
     public JsonNode getSettings() {
