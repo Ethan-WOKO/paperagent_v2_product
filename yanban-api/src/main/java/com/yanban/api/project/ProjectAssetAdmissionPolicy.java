@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 
 /** Deterministic admission policy for Project text and read-only binary assets. */
 final class ProjectAssetAdmissionPolicy {
@@ -25,6 +26,7 @@ final class ProjectAssetAdmissionPolicy {
         }
         return switch (binaryKind(path)) {
             case PDF -> hasPrefix(content, PDF_SIGNATURE);
+            case DOC -> validLegacyWord(content);
             case DOCX -> validOoxml(content, "word/");
             case XLSX -> validOoxml(content, "xl/");
             case NONE -> readableText(content);
@@ -56,10 +58,23 @@ final class ProjectAssetAdmissionPolicy {
         if (lower.endsWith(".docx")) {
             return BinaryKind.DOCX;
         }
+        if (lower.endsWith(".doc")) {
+            return BinaryKind.DOC;
+        }
         if (lower.endsWith(".xlsx")) {
             return BinaryKind.XLSX;
         }
         return BinaryKind.NONE;
+    }
+
+    private static boolean validLegacyWord(byte[] content) {
+        try (POIFSFileSystem filesystem = new POIFSFileSystem(
+                new ByteArrayInputStream(content))) {
+            return filesystem.getRoot()
+                    .hasEntryCaseInsensitive("WordDocument");
+        } catch (IOException | RuntimeException invalid) {
+            return false;
+        }
     }
 
     private static boolean validOoxml(byte[] content, String requiredPrefix) {
@@ -137,6 +152,7 @@ final class ProjectAssetAdmissionPolicy {
     private enum BinaryKind {
         NONE,
         PDF,
+        DOC,
         DOCX,
         XLSX
     }

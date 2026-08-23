@@ -217,6 +217,7 @@ export interface PersistedTask {
   longTermMemory: LongTermMemoryEnvelope;
   observations: TaskObservations;
   candidateValidationRepairs: number;
+  emptyModelResponseRepairs?: number;
   toolArgumentRepairAttempts?: number;
   toolArgumentRepairModelCall?: number;
   publication?: PublicationFact;

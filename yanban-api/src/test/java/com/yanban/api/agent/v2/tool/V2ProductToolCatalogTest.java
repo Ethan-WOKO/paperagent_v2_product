@@ -143,6 +143,9 @@ class V2ProductToolCatalogTest {
                 "maxLocations", number(50),
                 "includeMetadata", bool(true)))));
         assertTrue(accepts(id("project.document.extract"), object(Map.of(
+                "path", text("paper/legacy.doc"),
+                "cursor", text("v1:50:0")))));
+        assertTrue(accepts(id("project.document.extract"), object(Map.of(
                 "path", text("paper/report.docx")))));
         assertFalse(accepts(id("project.document.extract"), object(Map.of(
                 "path", text("paper/main.tex")))));
@@ -181,7 +184,7 @@ class V2ProductToolCatalogTest {
         assertTrue(ordinary.contains("project.cross-material.search"));
         assertTrue(cross.contains("both a paper and a report"));
         assertTrue(cross.contains("use project.search"));
-        assertTrue(document.contains("PDF pages or DOCX"));
+        assertTrue(document.contains("PDF pages or DOC/DOCX"));
         assertTrue(document.contains("Do not use project.read"));
         assertTrue(spreadsheet.contains("Choose this for XLSX"));
         assertTrue(spreadsheet.contains("project.experiment.summary"));

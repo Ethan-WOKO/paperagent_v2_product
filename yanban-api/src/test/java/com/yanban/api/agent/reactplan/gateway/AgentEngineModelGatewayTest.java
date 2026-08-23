@@ -59,6 +59,11 @@ class AgentEngineModelGatewayTest {
         assertThat(result.resolvedProvider()).isEqualTo("deepseek");
         assertThat(result.resolvedModel()).isEqualTo("deepseek-v4-flash");
         assertThat(result.fallbackUsed()).isFalse();
+        ArgumentCaptor<ChatRequest> modelRequest =
+                ArgumentCaptor.forClass(ChatRequest.class);
+        verify(models).chat(modelRequest.capture());
+        assertThat(modelRequest.getValue().thinking())
+                .isEqualTo(ChatRequest.Thinking.disabled());
         verify(settings).resolveModelEndpoint(7L, "deepseek", "deepseek-v4-flash");
         verify(quotas).assertCanUseAi(7L);
         verify(transactions).succeed(eq(authority().taskId()), eq(request.clientRequestId()),

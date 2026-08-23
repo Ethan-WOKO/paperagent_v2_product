@@ -148,7 +148,7 @@ final class AgentEngineModelGateway {
                 request.tools().stream().map(tool -> new ToolSpec(tool.type(),
                         new ToolSpec.FunctionSpec(tool.function().name(),
                                 tool.function().description(), tool.function().parameters()))).toList(),
-                null, null, null, null,
+                null, null, null, ChatRequest.Thinking.disabled(),
                 "reactplan:model:" + request.clientRequestId());
     }
 

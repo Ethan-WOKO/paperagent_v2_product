@@ -57,6 +57,21 @@ class V2ProjectDocumentSpreadsheetToolTest {
                 .path("text").asText().contains("page one"));
         assertTrue(result.path("summary").path("partial").asBoolean());
         assertTrue(result.path("summary").path("truncated").asBoolean());
+        assertTrue(result.path("summary").path("hasMore").asBoolean());
+        String cursor = result.path("summary")
+                .path("nextCursor").asText();
+        assertTrue(cursor.matches("v1:[0-9]+:[0-9]+"));
+
+        arguments.put("cursor", cursor);
+        JsonNode continued = json.readTree(
+                new V2ProjectDocumentExtractTool(json)
+                        .execute(workspace, ref, arguments));
+        assertEquals(2, continued.path("locations").get(0)
+                .path("page").asInt());
+        assertTrue(continued.path("locations").get(0)
+                .path("text").asText().contains("page two"));
+        assertFalse(continued.path("summary").path("hasMore").asBoolean());
+        assertTrue(continued.path("summary").path("nextCursor").isMissingNode());
         assertFalse(result.path("summary").path("parseFailed").asBoolean());
         assertReadOnly(workspace);
     }
@@ -90,6 +105,24 @@ class V2ProjectDocumentSpreadsheetToolTest {
         assertTrue(result.path("locations").toString()
                 .contains("TABLE_CELL"));
         assertFalse(result.path("summary").path("parseFailed").asBoolean());
+        assertReadOnly(workspace);
+    }
+
+    @Test
+    void returnsMoreThanFiftyDocumentLocationsByDefault()
+            throws Exception {
+        WorkspacePort workspace = mock(WorkspacePort.class);
+        ProjectPath path = new ProjectPath("paper/many-paragraphs.docx");
+        when(workspace.read(ref, path)).thenReturn(
+                V2ProjectBinaryAssetFixtures.docxParagraphs(60));
+
+        JsonNode result = json.readTree(
+                new V2ProjectDocumentExtractTool(json).execute(
+                        workspace, ref, arguments(path.value())));
+
+        assertEquals(60, result.path("summary")
+                .path("locationsReturned").asInt());
+        assertFalse(result.path("summary").path("hasMore").asBoolean());
         assertReadOnly(workspace);
     }
 
