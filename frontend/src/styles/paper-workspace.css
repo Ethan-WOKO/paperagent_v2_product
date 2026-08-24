@@ -229,11 +229,6 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-polish-shell {
   gap: 12px !important;
 }
 
-.paper-page--redesign .paper-polish-shell--single,
-html:not(.canvas-scale-active) .paper-page--redesign .paper-polish-shell--single {
-  grid-template-columns: minmax(0, 1fr) !important;
-}
-
 .paper-page--redesign .paper-polish-main,
 .paper-page--redesign .paper-polish-side {
   min-width: 0;
@@ -604,6 +599,33 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
   min-height: 390px;
 }
 
+.paper-page--redesign .paper-history-card-v2__head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.paper-page--redesign .paper-history-card-v2__head > div {
+  min-width: 0;
+}
+
+.paper-page--redesign .paper-history-card-v2__head small {
+  display: block;
+  margin-top: 3px;
+  color: var(--pa-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.paper-page--redesign .paper-history-card-v2 .paper-history-compact-v2 {
+  max-height: min(42dvh, 430px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .paper-page--redesign .paper-side-tabs > .n-card__content {
   padding-top: 4px !important;
 }
@@ -685,11 +707,66 @@ html:not(.canvas-scale-active) .paper-page--redesign .paper-workflow-v2 {
 }
 
 .paper-page--redesign .paper-history-compact-v2 article {
-  padding: 9px 2px;
+  display: grid;
+  grid-template-columns: minmax(54px, 1fr) 76px minmax(48px, .7fr) 72px 40px;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  padding: 7px 4px;
+}
+
+.paper-page--redesign .paper-history-compact-v2__primary,
+.paper-page--redesign .paper-history-compact-v2__meta {
+  display: contents;
+}
+
+.paper-page--redesign .paper-history-compact-v2__primary > button {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.paper-page--redesign .paper-history-compact-v2__meta {
+  color: var(--pa-text-muted);
+  font-size: 10px;
+}
+
+.paper-page--redesign .paper-history-compact-v2__meta span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--pa-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paper-page--redesign .paper-history-compact-v2__meta small {
+  color: var(--pa-text-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.paper-page--redesign .paper-history-compact-v2 article > .n-button {
+  justify-self: end;
+  min-width: 0;
+  padding-inline: 4px;
+  white-space: nowrap;
+}
+
+.paper-page--redesign .paper-history-compact-v2 article > .n-tag {
+  justify-self: start;
 }
 
 .paper-page--redesign .paper-history-compact-v2--active {
-  background: var(--pa-accent-soft) !important;
+  box-shadow: inset 2px 0 0 var(--pa-accent);
+  background: color-mix(in srgb, var(--pa-accent-soft) 72%, transparent) !important;
 }
 
 .paper-page--redesign .paper-review-workspace-v2 {
