@@ -52,14 +52,25 @@
           {{ currentTask.errorMessage }}
         </NAlert>
         <NAlert v-if="currentTask?.status === 'WAITING_INPUT' || pendingClarifications.length > 0" type="warning" title="结构确认待处理">
-          当前任务需要你确认论文结构。请在下方 Review Workspace 的 Clarifications 中提交选择，任务会继续后台执行。
+          {{ clarificationsLoading
+            ? '正在读取结构确认内容，请稍候。'
+            : '当前任务需要你确认论文结构。请提交选择，任务会继续后台执行。' }}
         </NAlert>
         <div v-if="needsStructureConfirmation" class="paper-structure-confirmation-callout">
           <div>
             <strong>需要确认论文结构</strong>
-            <span>{{ pendingClarifications.length }} 个确认项等待处理，提交后任务会继续执行。</span>
+            <span v-if="clarificationsLoading">正在准备确认项…</span>
+            <span v-else-if="clarificationsError">确认项加载失败，可重新读取。</span>
+            <span v-else>{{ pendingClarifications.length }} 个确认项等待处理，提交后任务会继续执行。</span>
           </div>
-          <NButton type="warning" secondary @click="focusStructureConfirmation">去确认</NButton>
+          <NButton
+            v-if="clarificationsError"
+            type="warning"
+            secondary
+            :loading="clarificationsLoading"
+            @click="retryClarifications"
+          >重新读取</NButton>
+          <NButton v-else type="warning" secondary :disabled="!structureConfirmationReady" @click="focusStructureConfirmation">去确认</NButton>
         </div>
       </section>
 
@@ -104,7 +115,7 @@
         </div>
       </section>
 
-      <div class="paper-polish-shell" :class="{ 'paper-polish-shell--single': !currentTask }">
+      <div class="paper-polish-shell">
         <main class="paper-polish-main">
           <NGrid :cols="24" :x-gap="14" :y-gap="14" responsive="screen" item-responsive>
             <NGridItem span="24">
@@ -277,8 +288,49 @@
 
         </main>
 
-        <aside v-if="currentTask" class="paper-polish-side">
-          <NCard class="workbench-card scholar-card paper-polish-card paper-side-tabs" :bordered="false">
+        <aside class="paper-polish-side">
+          <NCard class="workbench-card scholar-card paper-polish-card paper-history-card-v2" :bordered="false">
+            <template #header>
+              <div class="paper-history-card-v2__head">
+                <div>
+                  <div class="section-title">{{ isEnglish ? 'Polish tasks' : '润色任务' }}</div>
+                  <small>{{ isEnglish ? 'Open an earlier task without starting a new workflow.' : '无需新建任务即可打开历史润色记录。' }}</small>
+                </div>
+                <NButton size="small" secondary :loading="historyLoading" @click="loadHistory">{{ isEnglish ? 'Refresh' : '刷新' }}</NButton>
+              </div>
+            </template>
+            <NSpin v-if="historyLoading && historyTasks.length === 0" size="small" />
+            <div v-else class="paper-history-compact-v2">
+              <article v-for="task in historyTasks" :key="task.id" :class="{ 'paper-history-compact-v2--active': task.id === currentTaskId }">
+                <div class="paper-history-compact-v2__primary">
+                  <button
+                    type="button"
+                    :title="task.title || task.sourceFilename || `Task ${task.id}`"
+                    :aria-label="task.title || task.sourceFilename || `Task ${task.id}`"
+                    @click="openHistoryTask(task.id)"
+                  >{{ task.title || task.sourceFilename || `Task ${task.id}` }}</button>
+                  <NTag size="small" :type="statusTagType(task.status)">{{ taskStatusLabel(task.status) }}</NTag>
+                </div>
+                <div class="paper-history-compact-v2__meta">
+                  <span>{{ taskStageLabel(toTaskListItem(task)) }}</span>
+                  <small :title="formatDateTime(task.updatedAt)">{{ formatTaskListDate(task.updatedAt) }}</small>
+                </div>
+                <NButton
+                  v-if="historyTaskDownloadable(task)"
+                  size="tiny"
+                  tertiary
+                  :title="isEnglish ? 'Download result' : '下载结果'"
+                  :loading="downloadingTaskId === task.id"
+                  @click.stop="downloadHistoryTask(task.id)"
+                >
+                  {{ isEnglish ? 'Download' : '下载' }}
+                </NButton>
+              </article>
+              <NEmpty v-if="historyTasks.length === 0" :description="isEnglish ? 'No history yet.' : '暂无历史任务。'" />
+            </div>
+          </NCard>
+
+          <NCard v-if="currentTask" class="workbench-card scholar-card paper-polish-card paper-side-tabs" :bordered="false">
             <NTabs v-model:value="activeSideTab" type="line" animated>
               <NTabPane name="evidence" :tab="isEnglish ? 'Evidence' : '证据'">
                 <div class="paper-support-list-v2">
@@ -319,18 +371,6 @@
                   <NEmpty v-if="liveTaskEvents.length === 0" :description="isEnglish ? 'No live events yet.' : '暂无任务事件。'" />
                 </div>
               </NTabPane>
-              <NTabPane name="history" :tab="isEnglish ? 'History' : '历史'">
-                <div class="paper-side-tab__action">
-                  <NButton size="small" secondary :loading="historyLoading" @click="loadHistory">{{ isEnglish ? 'Refresh' : '刷新' }}</NButton>
-                </div>
-                <div class="paper-history-compact-v2">
-                  <article v-for="task in historyTasks" :key="task.id" :class="{ 'paper-history-compact-v2--active': task.id === currentTaskId }">
-                    <button type="button" @click="openHistoryTask(task.id)">{{ task.title || task.sourceFilename || `Task ${task.id}` }}</button>
-                    <NTag size="small" :type="statusTagType(task.status)">{{ task.status }}</NTag>
-                  </article>
-                  <NEmpty v-if="historyTasks.length === 0" :description="isEnglish ? 'No history yet.' : '暂无历史任务。'" />
-                </div>
-              </NTabPane>
             </NTabs>
           </NCard>
         </aside>
@@ -342,7 +382,14 @@
         </template>
         <NTabs v-model:value="activeReviewTab" type="segment" animated>
           <NTabPane name="clarification" :tab="pendingClarifications.length ? `Clarifications (${pendingClarifications.length})` : 'Clarifications'">
-            <div v-if="clarifications.length > 0" class="paper-clarification-panel">
+            <NSpin v-if="clarificationsLoading" size="small" description="Loading structure confirmation items…" />
+            <NAlert v-else-if="clarificationsError" type="error" title="Structure confirmation unavailable">
+              <NSpace vertical size="small">
+                <span>{{ clarificationsError }}</span>
+                <NButton size="small" secondary @click="retryClarifications">Retry</NButton>
+              </NSpace>
+            </NAlert>
+            <div v-else-if="clarifications.length > 0" class="paper-clarification-panel">
               <NAlert v-if="pendingBlockingClarifications.length > 0" type="warning" title="Input required">
                 Some structure questions require confirmation before the workflow continues.
               </NAlert>
@@ -479,7 +526,6 @@
               <NButton size="small" secondary :disabled="clarificationSubmitting" @click="skipClarification(item)">Keep detected structure</NButton>
             </div>
           </div>
-          <NEmpty v-if="pendingClarifications.length === 0" description="Loading structure confirmation items..." />
         </div>
         <template #footer>
           <NButton v-if="pendingClarifications.length > 1" type="primary" secondary block :loading="clarificationSubmitting" @click="keepAllClarifications">
@@ -511,6 +557,7 @@ import {
   NRadioGroup,
   NSelect,
   NSpace,
+  NSpin,
   NTabPane,
   NTabs,
   NTag,
@@ -583,12 +630,15 @@ const knownReviewableSectionIds = ref<Set<number>>(new Set());
 const revisionSelectionTaskId = ref<number | null>(null);
 const clarificationAnswers = reactive<Record<number, string>>({});
 const clarificationSubmitting = ref(false);
+const clarificationsLoading = ref(false);
+const clarificationsError = ref('');
 const structureConfirmationVisible = ref(false);
 const sseStatus = ref<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle');
 const taskStatus = ref<TaskStatusResponse | null>(null);
 const lastTaskEventId = ref<number | null>(null);
 let abortController: AbortController | null = null;
 let taskBoardRefreshTimer: number | null = null;
+let clarificationRequestSequence = 0;
 
 const form = reactive({
   targetLanguage: 'zh' as 'zh' | 'en',
@@ -644,6 +694,9 @@ const resultFileText = computed(() => {
 const pendingClarifications = computed(() => clarifications.value.filter((item) => item.status === 'PENDING'));
 const pendingBlockingClarifications = computed(() => pendingClarifications.value.filter((item) => clarificationQuestion(item).blocking));
 const needsStructureConfirmation = computed(() => currentTask.value?.status === 'WAITING_INPUT' || pendingClarifications.value.length > 0);
+const structureConfirmationReady = computed(() => !clarificationsLoading.value
+  && !clarificationsError.value
+  && pendingClarifications.value.length > 0);
 const acceptedSuggestions = computed(() => suggestions.value.filter((item) => item.status === 'ACCEPTED'));
 const suggestedBibArtifacts = computed(() => activeArtifacts.value.filter((item) => item.type === 'suggested_bib' || item.type === 'suggested_bib_novel'));
 const polishedTexArtifacts = computed(() => activeArtifacts.value.filter((item) => item.type === 'polished_tex'));
@@ -835,8 +888,8 @@ watch(
   },
 );
 
-watch(needsStructureConfirmation, (needsConfirmation) => {
-  if (needsConfirmation) {
+watch(structureConfirmationReady, (ready) => {
+  if (ready) {
     activeReviewTab.value = 'clarification';
     structureConfirmationVisible.value = true;
   } else {
@@ -859,6 +912,9 @@ async function startNewPaperTask() {
   taskStatus.value = null;
   resetTaskEvents();
   clarifications.value = [];
+  clarificationsLoading.value = false;
+  clarificationsError.value = '';
+  clarificationRequestSequence++;
   sections.value = [];
   suggestions.value = [];
   artifacts.value = [];
@@ -1016,6 +1072,7 @@ async function loadTask(taskId: number, autoConnect = false) {
   try {
     const { data } = await getPaperTask(taskId);
     currentTask.value = data;
+    const detailsPromise = loadClarificationsAndSections(taskId);
     try {
       const unified = await getTaskStatus(taskId, PAPER_TASK_TYPE);
       taskStatus.value = unified.data;
@@ -1025,7 +1082,7 @@ async function loadTask(taskId: number, autoConnect = false) {
     if (events.value.length === 0) {
       await loadTaskEventHistory(taskId);
     }
-    await loadClarificationsAndSections(taskId);
+    await detailsPromise;
     const effectiveStatus = taskStatus.value?.status || data.status;
     if (autoConnect && ['PENDING', 'RUNNING', 'PAUSED', 'WAITING_INPUT', 'CANCEL_REQUESTED', 'CANCELLING'].includes(effectiveStatus)) {
       connectSse();
@@ -1041,6 +1098,7 @@ async function refreshTask() {
 }
 
 async function focusStructureConfirmation() {
+  if (!structureConfirmationReady.value) return;
   activeReviewTab.value = 'clarification';
   structureConfirmationVisible.value = true;
   await nextTick();
@@ -1048,21 +1106,14 @@ async function focusStructureConfirmation() {
 }
 
 async function loadClarificationsAndSections(taskId: number) {
-  const [clarificationResult, sectionResult, suggestionResult, artifactResult, analysisResult] = await Promise.allSettled([
-    getPaperClarifications(taskId),
+  const clarificationPromise = loadClarifications(taskId);
+  const [sectionResult, suggestionResult, artifactResult, analysisResult] = await Promise.allSettled([
     getPaperSections(taskId),
     getPaperSuggestions(taskId),
     getPaperArtifacts(taskId),
     getPaperAnalysis(taskId),
   ]);
-  if (clarificationResult.status === 'fulfilled') {
-    clarifications.value = clarificationResult.value.data;
-    for (const item of clarifications.value) {
-      if (item.status === 'PENDING' && !clarificationAnswers[item.id]) {
-        clarificationAnswers[item.id] = clarificationOptions(item).defaultOption || '保持原样';
-      }
-    }
-  }
+  if (currentTaskId.value !== taskId) return;
   if (sectionResult.status === 'fulfilled') {
     sections.value = sectionResult.value.data;
   }
@@ -1075,6 +1126,35 @@ async function loadClarificationsAndSections(taskId: number) {
   if (analysisResult.status === 'fulfilled') {
     analysis.value = analysisResult.value.data;
   }
+  await clarificationPromise;
+}
+
+async function loadClarifications(taskId: number) {
+  const requestSequence = ++clarificationRequestSequence;
+  clarificationsLoading.value = true;
+  clarificationsError.value = '';
+  try {
+    const { data } = await getPaperClarifications(taskId);
+    if (requestSequence !== clarificationRequestSequence || currentTaskId.value !== taskId) return;
+    clarifications.value = data;
+    for (const item of data) {
+      if (item.status === 'PENDING' && !clarificationAnswers[item.id]) {
+        clarificationAnswers[item.id] = clarificationOptions(item).defaultOption || '保持原样';
+      }
+    }
+  } catch (error: any) {
+    if (requestSequence !== clarificationRequestSequence || currentTaskId.value !== taskId) return;
+    clarificationsError.value = error.response?.data?.message || '加载结构确认内容失败';
+  } finally {
+    if (requestSequence === clarificationRequestSequence) {
+      clarificationsLoading.value = false;
+    }
+  }
+}
+
+async function retryClarifications() {
+  if (!currentTaskId.value) return;
+  await loadClarifications(currentTaskId.value);
 }
 
 function connectSse() {
@@ -1123,7 +1203,11 @@ async function streamTaskEvents(taskId: number, token: string, signal: AbortSign
         if (event) {
           appendTaskEvents([event]);
           applyTaskEventToTaskState(event);
-          if (event.type !== 'TASK_PROGRESS') {
+          const waitingForStructure = event.status === 'WAITING_INPUT'
+            && event.stage === 'STRUCTURE_CHECK';
+          if (waitingForStructure) {
+            await loadClarifications(taskId);
+          } else if (event.type !== 'TASK_PROGRESS') {
             await loadTask(taskId, false);
           }
           if (isTerminalTaskEvent(event)) {
@@ -1758,6 +1842,16 @@ function clampProgress(value: number) {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString(locale.value);
+}
+
+function formatTaskListDate(value: string) {
+  return new Intl.DateTimeFormat(locale.value, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value));
 }
 
 type PaperTimelineEvent = {
