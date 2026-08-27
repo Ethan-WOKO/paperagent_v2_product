@@ -4,7 +4,7 @@ export interface KbDocumentItem {
   id: number;
   userId: number;
   filename: string;
-  status: 'UPLOADING' | 'PROCESSING' | 'READY' | 'FAILED';
+  status: 'UPLOADING' | 'PROCESSING' | 'RETRYING' | 'READY' | 'FAILED';
   isPublic: boolean;
   sourceType: 'USER_UPLOAD' | 'DEMO_SEED' | string;
   projectId: number | null;

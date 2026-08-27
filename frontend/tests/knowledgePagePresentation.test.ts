@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const knowledgePath = fileURLToPath(new URL('../src/views/KnowledgeBasePage.vue', import.meta.url));
+const knowledgeApiPath = fileURLToPath(new URL('../src/api/knowledge.ts', import.meta.url));
 const searchPath = fileURLToPath(new URL('../src/views/KnowledgeSearchDebugPage.vue', import.meta.url));
 const appPath = fileURLToPath(new URL('../src/App.vue', import.meta.url));
 const stylePath = fileURLToPath(new URL('../src/styles/knowledge-workspace.css', import.meta.url));
 const knowledgeSource = readFileSync(knowledgePath, 'utf8');
+const knowledgeApiSource = readFileSync(knowledgeApiPath, 'utf8');
 const searchSource = readFileSync(searchPath, 'utf8');
 const appSource = readFileSync(appPath, 'utf8');
 const styles = readFileSync(stylePath, 'utf8');
@@ -39,6 +41,13 @@ describe('Knowledge workspace presentation contract', () => {
     expect(knowledgeSource).toContain("window.matchMedia('(max-width: 1100px)')");
     expect(knowledgeSource).toContain('@click="closePreview"');
     expect(knowledgeSource).not.toContain('The full text still participates in retrieval.');
+  });
+
+  it('keeps transient embedding failures in the processing and polling lifecycle', () => {
+    expect(knowledgeApiSource).toContain("'PROCESSING' | 'RETRYING' | 'READY'");
+    expect(knowledgeSource).toContain("status === 'RETRYING'");
+    expect(knowledgeSource).toContain('documents.value.some((item) => isProcessingStatus(item.status))');
+    expect(knowledgeSource).toContain('documents.value.filter((item) => isProcessingStatus(item.status)).length');
   });
 
   it('removes invented safety verification and derives diagnostics from returned chunks', () => {
