@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.project.ProjectService;
 import com.yanban.core.agent.AgentLongTermMemory;
 import com.yanban.core.agent.AgentLongTermMemoryRepository;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -87,6 +90,40 @@ public class LongTermMemoryService {
             memory.bindProjectVersion(resolveCurrentProjectVersion(userId, projectId));
         }
         return toResponse(memories.saveAndFlush(memory));
+    }
+
+    @Transactional
+    DistilledMemoryWriteResult createDistilledMemory(Long userId, MemoryDistillationCandidate candidate) {
+        String scope = normalizeScope(candidate.scope());
+        Long projectId = resolveCreateProjectId(scope, candidate.projectId());
+        String memoryType = normalizeMemoryType(candidate.memoryType());
+        if (candidate.content().length() > 1_200) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "distilled memory content is too long");
+        }
+        validateSafeText(candidate.content(), "memory content");
+        String tagsJson = writeTags(candidate.tags());
+        String sourceRefId = "distilled:" + distilledFingerprint(userId, scope, projectId, memoryType, candidate.content());
+        var existing = memories.findByUserIdAndSourceTypeAndSourceRefId(
+                userId, AgentLongTermMemory.SOURCE_LLM_DISTILLED, sourceRefId);
+        if (existing.isPresent()) {
+            return new DistilledMemoryWriteResult(existing.get(), false);
+        }
+        AgentLongTermMemory memory = new AgentLongTermMemory(
+                userId,
+                projectId,
+                scope,
+                memoryType,
+                candidate.content(),
+                tagsJson,
+                AgentLongTermMemory.SOURCE_LLM_DISTILLED,
+                sourceRefId,
+                candidate.confidence(),
+                null
+        );
+        if (AgentLongTermMemory.SCOPE_PROJECT.equals(scope)) {
+            memory.bindProjectVersion(resolveCurrentProjectVersion(userId, projectId));
+        }
+        return new DistilledMemoryWriteResult(memories.saveAndFlush(memory), true);
     }
 
     @Transactional
@@ -301,6 +338,18 @@ public class LongTermMemoryService {
         return "memory-settings:" + memoryId + ":" + action;
     }
 
+    private String distilledFingerprint(Long userId, String scope, Long projectId,
+                                        String memoryType, String content) {
+        String canonical = userId + "\u0000" + scope + "\u0000" + projectId + "\u0000" + memoryType
+                + "\u0000" + content.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
     private ResponseStatusException conflict(String message) {
         return new ResponseStatusException(HttpStatus.CONFLICT, message);
     }
@@ -412,4 +461,6 @@ public class LongTermMemoryService {
             throw new IllegalStateException("Failed to parse memory tags.", ex);
         }
     }
+
+    record DistilledMemoryWriteResult(AgentLongTermMemory memory, boolean created) { }
 }

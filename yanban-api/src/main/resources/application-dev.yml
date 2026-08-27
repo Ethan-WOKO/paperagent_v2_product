@@ -16,6 +16,18 @@ spring:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
 yanban:
+  memory:
+    distillation:
+      enabled: ${YANBAN_MEMORY_DISTILLATION_ENABLED:true}
+      interval: ${YANBAN_MEMORY_DISTILLATION_INTERVAL:24h}
+      claim-lease: ${YANBAN_MEMORY_DISTILLATION_CLAIM_LEASE:3m}
+      model-timeout: ${YANBAN_MEMORY_DISTILLATION_MODEL_TIMEOUT:90s}
+      scan-millis: ${YANBAN_MEMORY_DISTILLATION_SCAN_MILLIS:2000}
+      schedule-scan-millis: ${YANBAN_MEMORY_DISTILLATION_SCHEDULE_SCAN_MILLIS:60000}
+      message-batch-size: ${YANBAN_MEMORY_DISTILLATION_MESSAGE_BATCH_SIZE:80}
+      max-input-characters: ${YANBAN_MEMORY_DISTILLATION_MAX_INPUT_CHARACTERS:24000}
+      max-candidates: ${YANBAN_MEMORY_DISTILLATION_MAX_CANDIDATES:12}
+      max-attempts: ${YANBAN_MEMORY_DISTILLATION_MAX_ATTEMPTS:3}
   project:
     # Local IDEA use only. Remote/shared deployments must leave this false.
     allow-local-absolute-project-folders: ${YANBAN_PROJECT_ALLOW_LOCAL_ABSOLUTE_PROJECT_FOLDERS:true}
