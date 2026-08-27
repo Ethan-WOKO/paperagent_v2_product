@@ -57,8 +57,14 @@ public class KnowledgeStorageConfig {
 
     @Bean
     public EmbeddingClient embeddingClient(KnowledgeEmbeddingProperties properties) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(properties.getTimeout());
+        requestFactory.setReadTimeout(properties.getTimeout());
         return new DashScopeEmbeddingClient(
-                org.springframework.web.client.RestClient.builder().baseUrl(properties.getApiUrl()).build(),
+                org.springframework.web.client.RestClient.builder()
+                        .baseUrl(properties.getApiUrl())
+                        .requestFactory(requestFactory)
+                        .build(),
                 properties
         );
     }

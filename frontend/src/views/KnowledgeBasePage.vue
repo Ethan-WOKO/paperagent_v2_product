@@ -269,12 +269,12 @@ let previewReturnFocus: HTMLElement | null = null;
 let pollingTimer: number | null = null;
 
 const hasProcessingDocuments = computed(() =>
-  documents.value.some((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING'),
+  documents.value.some((item) => isProcessingStatus(item.status)),
 );
 const readyCount = computed(() => documents.value.filter((item) => item.status === 'READY').length);
 const failedCount = computed(() => documents.value.filter((item) => item.status === 'FAILED').length);
 const processingCount = computed(() =>
-  documents.value.filter((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING').length,
+  documents.value.filter((item) => isProcessingStatus(item.status)).length,
 );
 const totalStorageText = computed(() =>
   formatFileSize(documents.value.reduce((total, item) => total + (item.fileSize || 0), 0)),
@@ -495,10 +495,14 @@ function statusTagType(status: string) {
   if (status === 'FAILED') {
     return 'error';
   }
-  if (status === 'PROCESSING' || status === 'UPLOADING') {
+  if (isProcessingStatus(status)) {
     return 'warning';
   }
   return 'default';
+}
+
+function isProcessingStatus(status: string) {
+  return status === 'PROCESSING' || status === 'UPLOADING' || status === 'RETRYING';
 }
 
 function documentTypeLabel(item: KbDocumentItem) {
