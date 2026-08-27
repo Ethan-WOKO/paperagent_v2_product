@@ -13,6 +13,9 @@ import org.springframework.data.repository.query.Param;
 public interface AgentLongTermMemoryRepository extends JpaRepository<AgentLongTermMemory, Long> {
     Optional<AgentLongTermMemory> findByIdAndUserId(Long id, Long userId);
 
+    Optional<AgentLongTermMemory> findByUserIdAndSourceTypeAndSourceRefId(
+            Long userId, String sourceType, String sourceRefId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select memory from AgentLongTermMemory memory where memory.id = :id and memory.userId = :userId")
     Optional<AgentLongTermMemory> findOwnedForUpdate(@Param("id") Long id, @Param("userId") Long userId);

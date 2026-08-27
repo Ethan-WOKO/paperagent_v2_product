@@ -37,6 +37,16 @@ describe('long-term memory presentation contract', () => {
     }
   });
 
+  it('adds opt-in and manual distillation without bypassing memory review', () => {
+    expect(page).toContain('data-testid="memory-distillation-panel"');
+    expect(page).toContain('updateMemoryDistillationSettings');
+    expect(page).toContain('startMemoryDistillation');
+    expect(page).toContain('getMemoryDistillationJob');
+    expect(page).toContain("t('memory.distillation.guardrail')");
+    expect(page).toContain("data-testid=\"memory-distillation-auto\"");
+    expect(styles).toContain('.memory-distillation__status');
+  });
+
   it('uses shared design tokens and true tablet/mobile layouts', () => {
     expect(styles).toContain('background: var(--pa-surface);');
     expect(styles).toContain('border: 1px solid var(--pa-line);');

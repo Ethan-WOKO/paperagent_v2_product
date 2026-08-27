@@ -331,7 +331,8 @@ public class LongTermMemoryRetrievalService {
 
     private boolean isExplicitlyConfirmed(String sourceType) {
         return AgentLongTermMemory.SOURCE_USER_CONFIRMED.equals(sourceType)
-                || AgentLongTermMemory.SOURCE_USER_CORRECTED.equals(sourceType);
+                || AgentLongTermMemory.SOURCE_USER_CORRECTED.equals(sourceType)
+                || AgentLongTermMemory.SOURCE_LLM_DISTILLED.equals(sourceType);
     }
 
     private boolean containsSensitiveOrLocalData(String content) {
