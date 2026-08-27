@@ -55,6 +55,12 @@ public class AdminController {
         service.deleteDemoMessage(messageId);
     }
 
+    @DeleteMapping("/demo/archive/messages/{messageId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteArchivedDemoMessage(@PathVariable Long messageId) {
+        service.deleteArchivedDemoMessage(messageId);
+    }
+
     @DeleteMapping("/demo/chats")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void clearDemoChats() {

@@ -15,7 +15,7 @@ const router = read('../src/router/index.ts');
 describe('public access presentation contract', () => {
   it('shares one PaperAgent shell with language, theme, and filing controls', () => {
     expect(app).toContain('<PublicShell v-else>');
-    expect(shell).toContain('PaperAgent');
+    expect(shell).toContain('研伴');
     expect(shell).toContain('LanguageToggle');
     expect(shell).toContain('SiteFilingFooter');
     expect(shell).toContain('toggleTheme');
@@ -29,12 +29,11 @@ describe('public access presentation contract', () => {
     expect(login).toContain('authStore.signInDemo()');
     expect(login).toContain("router.push('/chat?demo=1')");
 
-    const requiredCredentials = register.indexOf('if (!form.username || !form.password)');
-    const requiredInvite = register.indexOf('if (!form.inviteCode)');
-    const matchingPassword = register.indexOf('if (form.password !== form.confirmPassword)');
-    expect(requiredCredentials).toBeGreaterThan(-1);
-    expect(requiredCredentials).toBeLessThan(requiredInvite);
-    expect(requiredInvite).toBeLessThan(matchingPassword);
+    expect(register).toContain('validateRegistration(form)');
+    expect(register).toContain('registrationFailure(error)');
+    expect(register).toContain(':feedback="fieldErrors.username"');
+    expect(register).toContain(':feedback="fieldErrors.inviteCode"');
+    expect(register).toContain('v-if="submitError"');
     expect(register).toContain('authStore.signUp');
     expect(register).toContain('inviteCode: form.inviteCode');
   });

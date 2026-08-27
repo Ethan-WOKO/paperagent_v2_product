@@ -16,6 +16,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.admin.AdminService;
+import com.yanban.api.user.SysUserRepository;
+import com.yanban.core.agent.AgentMessage;
+import com.yanban.core.agent.AgentMessageRepository;
+import com.yanban.core.agent.AgentSession;
+import com.yanban.core.agent.AgentSessionRepository;
 import com.yanban.knowledge.service.EmbeddingClient;
 import com.yanban.knowledge.service.KnowledgeIndexService;
 import com.yanban.knowledge.service.KnowledgeSearchIndexClient;
@@ -54,6 +60,18 @@ class DemoControllerIntegrationTest {
     @Autowired
     ObjectMapper objectMapper;
 
+    @Autowired
+    SysUserRepository users;
+
+    @Autowired
+    AgentSessionRepository sessions;
+
+    @Autowired
+    AgentMessageRepository messages;
+
+    @Autowired
+    AdminService adminService;
+
     @MockBean
     EmbeddingClient embeddingClient;
 
@@ -66,9 +84,19 @@ class DemoControllerIntegrationTest {
     @BeforeEach
     void setUp() {
         when(embeddingClient.embed(any())).thenReturn(List.of(0.1d, 0.2d));
+        when(embeddingClient.embedAll(any())).thenAnswer(invocation -> {
+            List<?> values = invocation.getArgument(0);
+            return values.stream().map(ignored -> List.of(0.1d, 0.2d)).toList();
+        });
         when(indexClient.searchLexical(any(), any(), anyInt())).thenReturn(List.of());
         when(indexClient.searchVector(any(), any(), anyInt())).thenReturn(List.of());
         when(knowledgeIndexService.indexChunk(any())).thenReturn("es-demo");
+        when(knowledgeIndexService.indexChunks(any())).thenAnswer(invocation -> {
+            List<?> values = invocation.getArgument(0);
+            return java.util.stream.IntStream.range(0, values.size())
+                    .mapToObj(index -> "es-demo-" + index)
+                    .toList();
+        });
         doNothing().when(knowledgeIndexService).deleteByDocumentId(any());
     }
 
@@ -123,6 +151,36 @@ class DemoControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.enabled").value(true))
                 .andExpect(jsonPath("$.exampleQuestions.length()").value(4));
+    }
+
+    @Test
+    void nextDemoLoginHidesPriorConversationFromGuestButRetainsAdminArchive() throws Exception {
+        demoLogin();
+        Long demoUserId = users.findByUsername("demo").orElseThrow().getId();
+        AgentSession prior = sessions.saveAndFlush(new AgentSession(
+                demoUserId, "往期游客会话", "deepseek", "deepseek-chat", 20, false));
+        messages.saveAndFlush(new AgentMessage(
+                prior.getId(), demoUserId, "user", "请分析这个问题", null, null));
+        messages.saveAndFlush(new AgentMessage(
+                prior.getId(), demoUserId, "assistant", "这是往期回答", null, null));
+
+        String nextVisitorToken = demoLogin();
+
+        mockMvc.perform(get("/api/v1/agent/sessions")
+                        .header("Authorization", "Bearer " + nextVisitorToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        var archived = adminService.userDetail(demoUserId).chats().stream()
+                .filter(chat -> "往期游客会话".equals(chat.title()))
+                .findFirst()
+                .orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(archived.archived()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(archived.messages())
+                .extracting(message -> message.role() + ":" + message.content())
+                .containsExactly("user:请分析这个问题", "assistant:这是往期回答");
+        org.assertj.core.api.Assertions.assertThat(adminService.userDetail(demoUserId)
+                .user().chatSessionCount()).isGreaterThanOrEqualTo(1);
     }
 
     private String demoLogin() throws Exception {

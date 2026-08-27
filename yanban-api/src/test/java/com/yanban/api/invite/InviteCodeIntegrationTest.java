@@ -41,9 +41,12 @@ class InviteCodeIntegrationTest {
     @Test
     void registerRequiresInviteCode() throws Exception {
         mockMvc.perform(post("/api/v1/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"nocode_user\",\"password\":\"password123\"}"))
-                .andExpect(status().isBadRequest());
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"nocode_user\",\"password\":\"password123\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVITE_CODE_REQUIRED"))
+                .andExpect(jsonPath("$.message").value("请填写邀请码"))
+                .andExpect(jsonPath("$.fieldErrors.inviteCode").value("请填写邀请码"));
     }
 
     @Test
@@ -61,9 +64,11 @@ class InviteCodeIntegrationTest {
     @Test
     void registerWithInvalidInviteCodeFails() throws Exception {
         mockMvc.perform(post("/api/v1/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"badcode_user\",\"password\":\"password123\",\"inviteCode\":\"DOES-NOT-EXIST\"}"))
-                .andExpect(status().isBadRequest());
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"badcode_user\",\"password\":\"password123\",\"inviteCode\":\"DOES-NOT-EXIST\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVITE_CODE_INVALID"))
+                .andExpect(jsonPath("$.message").value("邀请码无效"));
     }
 
     @Test
@@ -81,8 +86,10 @@ class InviteCodeIntegrationTest {
 
         // Third use should be rejected
         mockMvc.perform(post("/api/v1/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"code_user4\",\"password\":\"password123\",\"inviteCode\":\"TEST-INVITE-002\"}"))
-                .andExpect(status().isBadRequest());
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"code_user4\",\"password\":\"password123\",\"inviteCode\":\"TEST-INVITE-002\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVITE_CODE_EXHAUSTED"))
+                .andExpect(jsonPath("$.message").value("邀请码使用次数已达上限"));
     }
 }

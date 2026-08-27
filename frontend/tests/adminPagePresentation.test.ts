@@ -33,6 +33,7 @@ describe('admin console presentation contract', () => {
       'resetAdminQuota',
       'listAdminInviteCodes',
       'deleteDemoMessage',
+      'deleteArchivedDemoMessage',
       'clearDemoChats',
       'clearDemoProjects',
     ]) {
@@ -53,6 +54,8 @@ describe('admin console presentation contract', () => {
     expect(page).toContain('chat.messages.length');
     expect(page).toContain('<details v-for="chat in group.chats"');
     expect(page).toContain("detail.user.accountType === 'DEMO' && message.deletable");
+    expect(page).toContain('chat.archived');
+    expect(page).toContain('往期游客会话');
   });
 
   it('uses shared theme tokens and opts into true responsive layout', () => {

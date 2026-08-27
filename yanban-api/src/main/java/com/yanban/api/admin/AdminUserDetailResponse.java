@@ -17,6 +17,8 @@ public record AdminUserDetailResponse(AdminUserSummaryResponse user,
                               String model,
                               Instant createdAt,
                               Instant updatedAt,
+                              boolean archived,
+                              Instant archivedAt,
                               List<ChatMessage> messages) {
     }
 

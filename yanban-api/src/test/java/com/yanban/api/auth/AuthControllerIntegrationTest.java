@@ -64,7 +64,23 @@ class AuthControllerIntegrationTest {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isConflict());
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("USERNAME_TAKEN"))
+                .andExpect(jsonPath("$.message").value("用户名已存在"));
+    }
+
+    @Test
+    void registerExplainsInvalidUsernameAndPasswordFields() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"中文用户\",\"password\":\"short\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("AUTH_VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.message").value("用户名只允许字母、数字、下划线、@、点和横线"))
+                .andExpect(jsonPath("$.fieldErrors.username")
+                        .value("用户名只允许字母、数字、下划线、@、点和横线"))
+                .andExpect(jsonPath("$.fieldErrors.password")
+                        .value("密码长度必须为 8 到 128 个字符"));
     }
 
     @Test
