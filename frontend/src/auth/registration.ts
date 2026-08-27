@@ -1,3 +1,5 @@
+import { apiErrorPayload } from '@/api/errors';
+
 export interface RegistrationValues {
   username: string;
   password: string;
@@ -35,20 +37,11 @@ export function validateRegistration(values: RegistrationValues): RegistrationFi
 }
 
 export function registrationFailure(error: unknown): RegistrationFailure {
-  const response = isRecord(error) && isRecord(error.response) ? error.response : undefined;
-  const data = response && isRecord(response.data) ? response.data : undefined;
-  const rawFields = data && isRecord(data.fieldErrors) ? data.fieldErrors : undefined;
+  const apiError = apiErrorPayload(error, '注册失败，请检查填写的信息后重试');
   const fieldErrors: RegistrationFieldErrors = {};
   for (const field of ['username', 'password', 'confirmPassword', 'inviteCode'] as const) {
-    const value = rawFields?.[field];
+    const value = apiError.fieldErrors[field];
     if (typeof value === 'string' && value.trim()) fieldErrors[field] = value;
   }
-  const candidates = [data?.message, data?.detail, data?.error];
-  const message = candidates.find((value): value is string => typeof value === 'string' && Boolean(value.trim()))
-    ?? '注册失败，请检查填写的信息后重试';
-  return { message, fieldErrors };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return { message: apiError.message, fieldErrors };
 }

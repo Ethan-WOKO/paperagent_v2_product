@@ -70,6 +70,7 @@ import { useRouter } from 'vue-router';
 import { getDemoConfig, type DemoConfigResponse } from '@/api/demo';
 import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
+import { apiErrorMessage } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
 
 const DEFAULT_QUESTIONS = [
@@ -129,8 +130,8 @@ async function handleStartDemo() {
       query.q = pendingQuestion.value;
     }
     await router.push({ path: '/chat', query });
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '进入 Demo 失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '进入 Demo 失败'));
   } finally {
     starting.value = false;
     pendingQuestion.value = null;

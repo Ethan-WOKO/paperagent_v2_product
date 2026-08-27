@@ -244,6 +244,7 @@ import {
   type KbDocumentPreviewResponse,
 } from '@/api/knowledge';
 import { ui } from '@/ui';
+import { apiErrorMessage } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
 
 const CHUNK_SIZE = 1024 * 1024;
@@ -268,12 +269,12 @@ let previewReturnFocus: HTMLElement | null = null;
 let pollingTimer: number | null = null;
 
 const hasProcessingDocuments = computed(() =>
-  documents.value.some((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING'),
+  documents.value.some((item) => isProcessingStatus(item.status)),
 );
 const readyCount = computed(() => documents.value.filter((item) => item.status === 'READY').length);
 const failedCount = computed(() => documents.value.filter((item) => item.status === 'FAILED').length);
 const processingCount = computed(() =>
-  documents.value.filter((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING').length,
+  documents.value.filter((item) => isProcessingStatus(item.status)).length,
 );
 const totalStorageText = computed(() =>
   formatFileSize(documents.value.reduce((total, item) => total + (item.fileSize || 0), 0)),
@@ -370,8 +371,8 @@ async function handleUpload() {
     ui.message.success('Upload complete. The document is processing.');
     clearSelectedFile();
     await loadDocuments();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Upload failed.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Upload failed.'));
   } finally {
     uploading.value = false;
   }
@@ -390,8 +391,8 @@ async function loadDocuments() {
     } else {
       stopPolling();
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Failed to load knowledge documents.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Failed to load knowledge documents.'));
   } finally {
     loading.value = false;
   }
@@ -406,8 +407,8 @@ async function handleDelete(documentId: number) {
       previewData.value = null;
     }
     await loadDocuments();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Delete failed.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Delete failed.'));
   }
 }
 
@@ -425,8 +426,8 @@ async function handlePreview(document: KbDocumentItem, event?: MouseEvent) {
   try {
     const { data } = await previewKbDocument(document.id, 20000);
     previewData.value = data;
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Failed to load preview.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Failed to load preview.'));
   } finally {
     previewLoading.value = false;
   }
@@ -494,10 +495,14 @@ function statusTagType(status: string) {
   if (status === 'FAILED') {
     return 'error';
   }
-  if (status === 'PROCESSING' || status === 'UPLOADING') {
+  if (isProcessingStatus(status)) {
     return 'warning';
   }
   return 'default';
+}
+
+function isProcessingStatus(status: string) {
+  return status === 'PROCESSING' || status === 'UPLOADING' || status === 'RETRYING';
 }
 
 function documentTypeLabel(item: KbDocumentItem) {

@@ -371,6 +371,7 @@ import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { getSettings, updateSettings, refreshProviderModels, createModel, updateModel, deleteModel, testModel, type UserModelResponse, type UserSettingsResponse } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
+import { apiErrorMessage } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
 
 const DEFAULT_DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
@@ -488,8 +489,8 @@ async function loadSettings() {
   try {
     const { data } = await getSettings();
     applySettingsResponse(data);
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Failed to load settings.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Failed to load settings.'));
   }
 }
 
@@ -518,8 +519,8 @@ async function loadSkills() {
   try {
     const { data } = await listSkills();
     skills.value = data;
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Failed to load skills.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Failed to load skills.'));
   }
 }
 
@@ -554,8 +555,8 @@ async function handleSave() {
     });
     applySettingsResponse(data);
     ui.message.success('Settings saved.');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Failed to save settings.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Failed to save settings.'));
   } finally {
     saving.value = false;
   }
@@ -570,8 +571,8 @@ async function handleRefreshModels(provider: 'deepseek' | 'glm') {
     const { data } = await refreshProviderModels(provider);
     applySettingsResponse(data);
     ui.message.success(provider === 'deepseek' ? 'DeepSeek models refreshed.' : 'GLM catalog synced.');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || `Failed to refresh ${provider} models.`);
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, `Failed to refresh ${provider} models.`));
   } finally {
     refreshingProvider.value = null;
   }
@@ -639,8 +640,8 @@ async function handleSaveModel() {
     }
     modelModalVisible.value = false;
     await loadSettings();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '保存模型失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '保存模型失败'));
   }
 }
 
@@ -652,8 +653,8 @@ async function handleDeleteModel(model: UserModelResponse) {
     await deleteModel(model.id);
     ui.message.success('模型已删除');
     await loadSettings();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '删除模型失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '删除模型失败'));
   }
 }
 
@@ -668,8 +669,8 @@ async function handleTestModel(model: UserModelResponse) {
     } else {
       ui.message.error(`连接失败：${data.error || '未知错误'}`);
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '测试失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '测试失败'));
   } finally {
     testingModelId.value = null;
   }

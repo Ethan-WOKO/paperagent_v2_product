@@ -1,5 +1,6 @@
 package com.yanban.api.project;
 
+import com.yanban.api.error.ApiErrorResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
@@ -13,26 +14,26 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 class ProjectExceptionHandler {
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
-    ResponseEntity<ProjectErrorResponse> uploadTooLarge(MaxUploadSizeExceededException ignored) {
-        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ProjectErrorResponse(
+    ResponseEntity<ApiErrorResponse> uploadTooLarge(MaxUploadSizeExceededException ignored) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(ApiErrorResponse.of(
                 "PROJECT_UPLOAD_TOO_LARGE",
                 "The selected Project folder is too large. Remove generated or binary files and try again."));
     }
 
     @ExceptionHandler(InvalidProjectPathException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    ProjectErrorResponse invalidPath() {
-        return new ProjectErrorResponse("INVALID_PROJECT_PATH", "Invalid Project path");
+    ApiErrorResponse invalidPath() {
+        return ApiErrorResponse.of("INVALID_PROJECT_PATH", "Invalid Project path");
     }
 
     @ExceptionHandler(ProjectTraversalLimitException.class)
     @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
-    ProjectErrorResponse traversalLimit() {
-        return new ProjectErrorResponse("PROJECT_LIMIT_EXCEEDED", "Project traversal limit exceeded");
+    ApiErrorResponse traversalLimit() {
+        return ApiErrorResponse.of("PROJECT_LIMIT_EXCEEDED", "Project traversal limit exceeded");
     }
 
     @ExceptionHandler(ResponseStatusException.class)
-    ResponseEntity<ProjectErrorResponse> responseStatus(ResponseStatusException exception) {
+    ResponseEntity<ApiErrorResponse> responseStatus(ResponseStatusException exception) {
         int status = exception.getStatusCode().value();
         String message = StringUtils.hasText(exception.getReason())
                 ? exception.getReason() : "Project request failed (HTTP " + status + ").";
@@ -40,7 +41,7 @@ class ProjectExceptionHandler {
                 ? isStorageFailure(message) ? "PROJECT_STORAGE_UNAVAILABLE" : "PROJECT_PLAN_FAILED"
                 : "PROJECT_REQUEST_FAILED";
         return ResponseEntity.status(exception.getStatusCode())
-                .body(new ProjectErrorResponse(code, message));
+                .body(ApiErrorResponse.of(code, message));
     }
 
     private boolean isStorageFailure(String message) {

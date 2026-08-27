@@ -1,5 +1,6 @@
 package com.yanban.api.security;
 
+import com.yanban.api.error.ApiSecurityErrorWriter;
 import com.yanban.api.user.SysUserRepository;
 import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
@@ -18,14 +19,17 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final ApiSecurityErrorWriter securityErrors;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+                          ApiSecurityErrorWriter securityErrors) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.securityErrors = securityErrors;
     }
 
     @Bean
     public UserDetailsService userDetailsService(SysUserRepository users) {
-        return username -> users.findByUsername(username)
+        return username -> users.findByUsernameAndDeletedAtIsNull(username)
                 .map(user -> User.withUsername(user.getUsername())
                         .password(user.getPasswordHash())
                         .authorities(user.isAdmin() ? "ROLE_ADMIN" : "ROLE_USER")
@@ -48,8 +52,11 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/**").authenticated()
                         .anyRequest().permitAll()
                 )
-                .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) ->
-                        response.sendError(401, "Unauthorized")))
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint((request, response, authException) ->
+                                securityErrors.write(response, 401, "UNAUTHORIZED", "请登录后重试"))
+                        .accessDeniedHandler((request, response, accessDeniedException) ->
+                                securityErrors.write(response, 403, "FORBIDDEN", "没有权限执行此操作")))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
     }

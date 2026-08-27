@@ -63,7 +63,9 @@ export interface AdminInviteCode {
   code: string;
   maxUses: number;
   usedCount: number;
+  remainingUses: number;
   enabled: boolean;
+  status: 'AVAILABLE' | 'EXHAUSTED' | 'DISABLED';
   createdAt: string;
 }
 
@@ -73,6 +75,10 @@ export function listAdminUsers() {
 
 export function getAdminUser(userId: number) {
   return http.get<AdminUserDetail>(`/admin/users/${userId}`);
+}
+
+export function deleteAdminUser(userId: number) {
+  return http.delete(`/admin/users/${userId}`);
 }
 
 export function updateAdminQuota(userId: number, payload: { totalQuota: number; resetUsed: boolean }) {
@@ -85,6 +91,18 @@ export function resetAdminQuota(userId: number) {
 
 export function listAdminInviteCodes() {
   return http.get<AdminInviteCode[]>('/admin/invite-codes');
+}
+
+export function generateAdminInviteCode() {
+  return http.post<{ code: string }>('/admin/invite-codes/generate');
+}
+
+export function createAdminInviteCode(payload: { code: string; maxUses: number }) {
+  return http.post<AdminInviteCode>('/admin/invite-codes', payload);
+}
+
+export function deleteAdminInviteCode(inviteCodeId: number) {
+  return http.delete(`/admin/invite-codes/${inviteCodeId}`);
 }
 
 export function deleteDemoMessage(messageId: number) {

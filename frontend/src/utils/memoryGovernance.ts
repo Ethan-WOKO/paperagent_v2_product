@@ -1,4 +1,5 @@
 import type { LongTermMemoryResponse } from '@/api/memory';
+import { apiErrorPayload } from '@/api/errors';
 
 export interface MemoryActions {
   confirm: boolean;
@@ -51,22 +52,18 @@ export function memoryActions(
 }
 
 export function memoryApiError(error: unknown, fallback: string) {
-  const { detail } = memoryApiErrorParts(error);
-  return detail || (error as { message?: string })?.message || fallback;
+  return apiErrorPayload(error, fallback).message;
 }
 
 export function isStaleMemoryApiError(error: unknown) {
-  const { status, detail } = memoryApiErrorParts(error);
+  const status = responseStatus(error);
+  const detail = apiErrorPayload(error).message;
   return status === 409 && Boolean(detail && /stale|project.*version/i.test(detail));
 }
 
-function memoryApiErrorParts(error: unknown) {
-  const response = (error as {
-    response?: { status?: number; data?: string | { detail?: string; message?: string; error?: string } };
-  })?.response;
-  const data = response?.data;
-  return {
-    status: response?.status,
-    detail: typeof data === 'string' ? data : data?.detail || data?.message || data?.error,
-  };
+function responseStatus(error: unknown) {
+  if (typeof error !== 'object' || error === null || !('response' in error)) return undefined;
+  const response = error.response;
+  if (typeof response !== 'object' || response === null || !('status' in response)) return undefined;
+  return typeof response.status === 'number' ? response.status : undefined;
 }

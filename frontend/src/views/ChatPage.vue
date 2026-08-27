@@ -498,6 +498,7 @@ import {
   type V2ProductAvailabilityState,
 } from '@/utils/v2ProductAvailability';
 import { ui } from '@/ui';
+import { apiErrorMessage } from '@/api/errors';
 
 type MessageRole = 'user' | 'assistant' | 'system' | 'tool' | 'process';
 
@@ -1068,8 +1069,8 @@ async function loadSettings() {
     if (!selectedModelKey.value) {
       selectedModelKey.value = defaultModelKeyFromSettings(data);
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '加载模型设置失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '加载模型设置失败'));
     if (!selectedModelKey.value) {
       selectedModelKey.value = toModelKey('deepseek', DEFAULT_DEEPSEEK_MODEL);
     }
@@ -1080,8 +1081,8 @@ async function loadSkills() {
   try {
     const { data } = await listSkills();
     availableSkills.value = data;
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '加载 Skills 失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '加载 Skills 失败'));
   }
 }
 
@@ -1220,8 +1221,8 @@ async function handleCreateSession() {
     demoQuestionPanelState.value = { ...demoQuestionPanelState.value, [data.id]: true };
     await selectSession(data.id);
     ui.message.success('已创建新会话');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '创建会话失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '创建会话失败'));
   }
 }
 
@@ -1250,8 +1251,8 @@ async function handleChatFileChange(event: Event) {
     }
     chatAttachments.value = [...chatAttachments.value, ...uploaded];
     ui.message.success(uploaded.length === 1 ? '资料已上传，将随下一条消息使用' : `已上传 ${uploaded.length} 个资料文件`);
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || error.message || '上传资料失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '上传资料失败'));
   } finally {
     chatUploading.value = false;
     chatUploadProgress.value = 0;
@@ -1389,13 +1390,13 @@ async function handleSend() {
     } else {
       await sendMessageWithFallback(sessionId, content, ragDisabled.value, selectedSkillId.value);
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     collapseCurrentProcessMessage();
     removePendingAssistant();
     if (activeSendSessionId) {
       await reloadCurrentMessages(activeSendSessionId).catch(() => undefined);
     }
-    ui.message.error(error.response?.data?.message || error.message || '发送失败');
+    ui.message.error(apiErrorMessage(error, '发送失败'));
     sending.value = false;
   }
 }
@@ -1509,8 +1510,8 @@ async function sendPlanMessage(sessionId: number, content: string, disableRag: b
     await setProcessContent(buildPlanProcessContent(finalPlan));
     await setAssistantContent(buildPlanAssistantContent(finalPlan));
     await afterSendFinished(sessionId);
-  } catch (error: any) {
-    const message = error.response?.data?.message || error.message || 'Plan execution failed';
+  } catch (error: unknown) {
+    const message = apiErrorMessage(error, 'Plan execution failed');
     const refreshedPlan = await refreshPlan();
     if (refreshedPlan) {
       await setProcessContent(buildPlanProcessContent(refreshedPlan));
@@ -1928,8 +1929,8 @@ async function handleModelChange(value: string) {
       model: selectedModel.model,
     });
     replaceSession(data);
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '切换模型失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '切换模型失败'));
   }
 }
 
@@ -2018,8 +2019,8 @@ async function confirmRenameSession() {
     replaceSession(data);
     renameModalVisible.value = false;
     ui.message.success('宸查噸鍛藉悕');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '重命名失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '重命名失败'));
   } finally {
     renaming.value = false;
   }
@@ -2046,8 +2047,8 @@ async function handleDeleteSession(session: AgentSessionResponse) {
       }
     }
     ui.message.success('已删除会话');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '删除会话失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '删除会话失败'));
   }
 }
 
@@ -2208,8 +2209,8 @@ async function previewArtifact(artifact: ChatArtifactCard) {
     artifactPreviewType.value = data.artifactType || artifact.artifactType || 'MARKDOWN';
     artifactPreviewContent.value = data.content || '';
     artifactPreviewVisible.value = true;
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '预览文档失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '预览文档失败'));
   } finally {
     previewingArtifactId.value = null;
   }
@@ -2230,8 +2231,8 @@ async function downloadArtifactCard(artifact: ChatArtifactCard) {
     anchor.remove();
     URL.revokeObjectURL(url);
     ui.message.success('下载已开始');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '下载文档失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '下载文档失败'));
   } finally {
     downloadingArtifactId.value = null;
   }
@@ -2242,8 +2243,8 @@ async function saveArtifactCardToKnowledge(artifact: ChatArtifactCard) {
   try {
     const { data } = await saveArtifactToKnowledge(artifact.id);
     ui.message.success(`已存入知识库：${data.filename || '文档 #' + data.documentId}`);
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '存入知识库失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '存入知识库失败'));
   } finally {
     savingArtifactId.value = null;
   }

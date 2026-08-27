@@ -46,6 +46,9 @@ public class SysUser {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false, insertable = false)
     private Instant createdAt;
 
@@ -121,6 +124,17 @@ public class SysUser {
         lastLoginAt = Instant.now();
     }
 
+    public void deleteAccount() {
+        if (deletedAt == null) {
+            deletedAt = Instant.now();
+            loginVersion++;
+        }
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
+    }
+
     public long getAiQuotaTotal() {
         return aiQuotaTotal;
     }
@@ -153,6 +167,10 @@ public class SysUser {
 
     public Instant getLastLoginAt() {
         return lastLoginAt;
+    }
+
+    public Instant getDeletedAt() {
+        return deletedAt;
     }
 
     public Instant getCreatedAt() {

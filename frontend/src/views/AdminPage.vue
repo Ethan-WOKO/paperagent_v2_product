@@ -55,7 +55,13 @@
                   <strong>{{ detail.user.username }}</strong>
                   <small>{{ detail.user.accountType }} · {{ detail.user.role }}</small>
                 </div>
-                <NTag :type="detail.user.aiQuotaTotal < 0 ? 'success' : 'info'" round>{{ quotaText(detail.user) }}</NTag>
+                <div class="admin-detail__actions">
+                  <NTag :type="detail.user.aiQuotaTotal < 0 ? 'success' : 'info'" round>{{ quotaText(detail.user) }}</NTag>
+                  <NPopconfirm v-if="canDeleteSelectedUser" @positive-click="handleDeleteUser">
+                    <template #trigger><NButton size="small" tertiary type="error">删除账号</NButton></template>
+                    删除后该账号将立即退出登录且无法再次登录，历史论文、项目和审计数据会保留。确认删除？
+                  </NPopconfirm>
+                </div>
               </div>
             </template>
 
@@ -185,13 +191,28 @@
       </div>
 
       <NCard class="admin-card admin-invites" :bordered="false">
-        <template #header>邀请码使用情况</template>
+        <template #header>
+          <div class="admin-invite-header">
+            <span>邀请码生成与使用情况</span>
+            <small>邀请码由安全随机数生成，保存后才能用于注册。</small>
+          </div>
+        </template>
+        <div class="admin-invite-create">
+          <NInput v-model:value="inviteDraft" readonly placeholder="点击“生成邀请码”获取随机邀请码" />
+          <NInputNumber v-model:value="inviteMaxUses" :min="1" :max="100000" :precision="0" />
+          <NButton secondary :loading="inviteGenerating" @click="generateInvite">生成邀请码</NButton>
+          <NButton type="primary" :disabled="!inviteDraft" :loading="inviteSaving" @click="saveInvite">保存</NButton>
+        </div>
         <NEmpty v-if="invites.length === 0" description="暂无邀请码" />
         <div v-else class="admin-list">
           <div v-for="invite in invites" :key="invite.id" class="admin-list__row admin-invite-row">
             <strong :title="invite.code">{{ invite.code }}</strong>
-            <span>已使用 {{ invite.usedCount }} / {{ invite.maxUses }} 人</span>
-            <NTag size="small" :type="invite.enabled ? 'success' : 'default'">{{ invite.enabled ? '可用' : '已停用' }}</NTag>
+            <span>已使用 {{ invite.usedCount }} / {{ invite.maxUses }} 人 · 剩余 {{ invite.remainingUses }} 次</span>
+            <NTag size="small" :type="invite.status === 'AVAILABLE' ? 'success' : 'default'">{{ inviteStatusText(invite.status) }}</NTag>
+            <NPopconfirm @positive-click="removeInvite(invite.id)">
+              <template #trigger><NButton size="tiny" tertiary type="error">删除</NButton></template>
+              删除后该邀请码立即不可使用，但已有使用统计会保留。确认删除？
+            </NPopconfirm>
           </div>
         </div>
       </NCard>
@@ -201,13 +222,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { NButton, NCard, NEmpty, NInputNumber, NPopconfirm, NSpin, NTabPane, NTag, NTabs } from 'naive-ui';
+import { NButton, NCard, NEmpty, NInput, NInputNumber, NPopconfirm, NSpin, NTabPane, NTag, NTabs } from 'naive-ui';
 import AppLayout from '@/components/AppLayout.vue';
 import {
   clearDemoChats,
   clearDemoProjects,
+  createAdminInviteCode,
+  deleteAdminInviteCode,
+  deleteAdminUser,
   deleteArchivedDemoMessage,
   deleteDemoMessage,
+  generateAdminInviteCode,
   getAdminUser,
   listAdminInviteCodes,
   listAdminUsers,
@@ -217,6 +242,7 @@ import {
   type AdminUserDetail,
   type AdminUserSummary,
 } from '@/api/admin';
+import { apiErrorMessage } from '@/api/errors';
 import { ui } from '@/ui';
 
 const users = ref<AdminUserSummary[]>([]);
@@ -227,12 +253,22 @@ const quotaTotal = ref<number | null>(null);
 const loading = ref(false);
 const detailLoading = ref(false);
 const quotaSaving = ref(false);
+const inviteDraft = ref('');
+const inviteMaxUses = ref<number | null>(5);
+const inviteGenerating = ref(false);
+const inviteSaving = ref(false);
 const chatScope = ref<'WORKSPACE' | 'PROJECT'>('WORKSPACE');
 const ADMIN_USAGE_REFRESH_MS = 15_000;
 let usageRefreshTimer: number | null = null;
 let usageRefreshPending = false;
 
 type AdminChat = AdminUserDetail['chats'][number];
+
+const canDeleteSelectedUser = computed(() => Boolean(
+  detail.value
+  && detail.value.user.role !== 'ADMIN'
+  && detail.value.user.accountType !== 'DEMO',
+));
 
 const workspaceChats = computed(() => detail.value?.chats.filter((chat) => chat.scope !== 'PROJECT') ?? []);
 const projectChats = computed(() => detail.value?.chats.filter((chat) => chat.scope === 'PROJECT') ?? []);
@@ -266,6 +302,12 @@ function quotaText(user: Pick<AdminUserSummary, 'aiQuotaTotal' | 'aiQuotaUsed' |
   return `${formatNumber(user.aiQuotaUsed)} / ${formatNumber(user.aiQuotaTotal)} Token`;
 }
 
+function inviteStatusText(status: AdminInviteCode['status']) {
+  if (status === 'EXHAUSTED') return '已用尽';
+  if (status === 'DISABLED') return '已停用';
+  return '可用';
+}
+
 async function refresh() {
   loading.value = true;
   try {
@@ -276,8 +318,8 @@ async function refresh() {
       detail.value = null;
       selectedUserId.value = null;
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '加载管理数据失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '加载管理数据失败'));
   } finally {
     loading.value = false;
   }
@@ -313,8 +355,8 @@ async function selectUser(userId: number) {
     if (selectedUserId.value !== userId) return;
     detail.value = response.data;
     quotaTotal.value = response.data.user.aiQuotaTotal;
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '加载账号详情失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '加载账号详情失败'));
   } finally {
     detailLoading.value = false;
   }
@@ -332,8 +374,8 @@ async function saveQuota(resetUsed: boolean) {
     await updateAdminQuota(detail.value.user.id, { totalQuota: Math.trunc(quotaTotal.value), resetUsed });
     ui.message.success(resetUsed ? '额度已保存并重置' : '额度已保存');
     await reloadSelected();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '保存额度失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '保存额度失败'));
   } finally {
     quotaSaving.value = false;
   }
@@ -346,8 +388,8 @@ async function resetQuota() {
     await resetAdminQuota(detail.value.user.id);
     ui.message.success('已用额度已重置');
     await reloadSelected();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '重置额度失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '重置额度失败'));
   } finally {
     quotaSaving.value = false;
   }
@@ -359,8 +401,8 @@ async function removeDemoMessage(messageId: number, archived: boolean) {
     else await deleteDemoMessage(messageId);
     ui.message.success('游客消息已删除');
     await reloadSelected();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '删除消息失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '删除消息失败'));
   }
 }
 
@@ -369,8 +411,8 @@ async function handleClearDemoChats() {
     await clearDemoChats();
     ui.message.success('游客聊天已清空');
     await reloadSelected();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '清空游客聊天失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '清空游客聊天失败'));
   }
 }
 
@@ -379,8 +421,59 @@ async function handleClearDemoProjects() {
     await clearDemoProjects();
     ui.message.success('游客项目已清空');
     await reloadSelected();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '清空游客项目失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '清空游客项目失败'));
+  }
+}
+
+async function handleDeleteUser() {
+  if (!detail.value || !canDeleteSelectedUser.value) return;
+  const username = detail.value.user.username;
+  try {
+    await deleteAdminUser(detail.value.user.id);
+    detail.value = null;
+    selectedUserId.value = null;
+    ui.message.success(`账号 ${username} 已删除`);
+    await refresh();
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '删除账号失败'));
+  }
+}
+
+async function generateInvite() {
+  inviteGenerating.value = true;
+  try {
+    const response = await generateAdminInviteCode();
+    inviteDraft.value = response.data.code;
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '生成邀请码失败'));
+  } finally {
+    inviteGenerating.value = false;
+  }
+}
+
+async function saveInvite() {
+  if (!inviteDraft.value || inviteMaxUses.value == null) return;
+  inviteSaving.value = true;
+  try {
+    await createAdminInviteCode({ code: inviteDraft.value, maxUses: Math.trunc(inviteMaxUses.value) });
+    inviteDraft.value = '';
+    ui.message.success('邀请码已保存');
+    await refresh();
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '保存邀请码失败'));
+  } finally {
+    inviteSaving.value = false;
+  }
+}
+
+async function removeInvite(inviteCodeId: number) {
+  try {
+    await deleteAdminInviteCode(inviteCodeId);
+    ui.message.success('邀请码已删除');
+    await refresh();
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '删除邀请码失败'));
   }
 }
 
@@ -616,6 +709,12 @@ onUnmounted(() => {
 .admin-detail__title small {
   color: var(--pa-text-muted);
   font-size: 10px;
+}
+
+.admin-detail__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .admin-stat-grid {
@@ -887,6 +986,25 @@ onUnmounted(() => {
   padding: 0 12px 10px !important;
 }
 
+.admin-invite-header {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-invite-header small {
+  color: var(--pa-text-muted);
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.admin-invite-create {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 130px auto auto;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--pa-line);
+}
+
 .admin-invites .admin-list {
   max-height: clamp(240px, 36vh, 420px);
   overflow: auto;
@@ -895,7 +1013,7 @@ onUnmounted(() => {
 
 .admin-invite-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
 }
 
@@ -1050,6 +1168,10 @@ onUnmounted(() => {
 
   .admin-invite-row {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-invite-create {
+    grid-template-columns: minmax(0, 1fr) minmax(100px, .35fr);
   }
 
   .admin-invite-row > span {

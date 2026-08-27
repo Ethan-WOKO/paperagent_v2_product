@@ -32,6 +32,10 @@ describe('admin console presentation contract', () => {
       'updateAdminQuota',
       'resetAdminQuota',
       'listAdminInviteCodes',
+      'deleteAdminUser',
+      'generateAdminInviteCode',
+      'createAdminInviteCode',
+      'deleteAdminInviteCode',
       'deleteDemoMessage',
       'deleteArchivedDemoMessage',
       'clearDemoChats',
@@ -43,6 +47,11 @@ describe('admin console presentation contract', () => {
     expect(page).toContain('saveQuota(true)');
     expect(page).toContain("if (user.aiQuotaTotal < 0)");
     expect(page).toContain("detail.user.accountType === 'DEMO'");
+    expect(page).toContain('删除账号');
+    expect(page).toContain('生成邀请码');
+    expect(page).toContain('邀请码已保存');
+    expect(page).toContain('已使用 {{ invite.usedCount }} / {{ invite.maxUses }} 人');
+    expect(page).toContain('删除后该邀请码立即不可使用');
   });
 
   it('separates workspace and project conversations without duplicating the data source', () => {

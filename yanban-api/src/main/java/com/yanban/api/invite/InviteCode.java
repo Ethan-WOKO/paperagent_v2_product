@@ -30,6 +30,9 @@ public class InviteCode {
     @Column(nullable = false)
     private Boolean enabled;
 
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -66,6 +69,21 @@ public class InviteCode {
 
     public Boolean getEnabled() {
         return enabled;
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
+    }
+
+    public Instant getDeletedAt() {
+        return deletedAt;
+    }
+
+    public void delete() {
+        if (deletedAt == null) {
+            enabled = false;
+            deletedAt = Instant.now();
+        }
     }
 
     public Instant getCreatedAt() {

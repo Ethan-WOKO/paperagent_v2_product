@@ -557,6 +557,6 @@ export const mockAdminDetail: AdminUserDetail = {
 };
 
 export const mockAdminInvites: AdminInviteCode[] = [
-  { id: 901, code: 'RESEARCH-2026', maxUses: 20, usedCount: 8, enabled: true, createdAt: '2026-06-01T02:00:00Z' },
-  { id: 902, code: 'PAPER-DEMO', maxUses: 50, usedCount: 50, enabled: false, createdAt: '2026-06-15T02:00:00Z' },
+  { id: 901, code: 'YB-RSCH-ABCD-EFGH-JKLM', maxUses: 20, usedCount: 8, remainingUses: 12, enabled: true, status: 'AVAILABLE', createdAt: '2026-06-01T02:00:00Z' },
+  { id: 902, code: 'YB-PAPR-DEMN-JKLM-NPQR', maxUses: 50, usedCount: 50, remainingUses: 0, enabled: true, status: 'EXHAUSTED', createdAt: '2026-06-15T02:00:00Z' },
 ];

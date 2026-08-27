@@ -2,7 +2,9 @@ package com.yanban.api.admin;
 
 import com.yanban.api.demo.DemoAccessService;
 import com.yanban.api.demo.DemoChatArchiveService;
+import com.yanban.api.error.ApiException;
 import com.yanban.api.invite.InviteCode;
+import com.yanban.api.invite.InviteCodeGenerator;
 import com.yanban.api.invite.InviteCodeRepository;
 import com.yanban.api.project.ProjectRepository;
 import com.yanban.api.project.ProjectService;
@@ -21,6 +23,7 @@ import com.yanban.core.agent.AgentSessionScope;
 import com.yanban.paper.domain.PaperTaskRepository;
 import java.util.Comparator;
 import java.util.List;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -42,6 +45,7 @@ public class AdminService {
     private final AiUsageRecordRepository usage;
     private final UserQuotaService quotaService;
     private final InviteCodeRepository inviteCodes;
+    private final InviteCodeGenerator inviteCodeGenerator;
     private final ReactPlanAdminConversationReader reactPlanConversations;
     private final DemoChatArchiveService demoChatArchives;
 
@@ -55,6 +59,7 @@ public class AdminService {
                         AiUsageRecordRepository usage,
                         UserQuotaService quotaService,
                         InviteCodeRepository inviteCodes,
+                        InviteCodeGenerator inviteCodeGenerator,
                         ReactPlanAdminConversationReader reactPlanConversations,
                         DemoChatArchiveService demoChatArchives) {
         this.users = users;
@@ -67,13 +72,14 @@ public class AdminService {
         this.usage = usage;
         this.quotaService = quotaService;
         this.inviteCodes = inviteCodes;
+        this.inviteCodeGenerator = inviteCodeGenerator;
         this.reactPlanConversations = reactPlanConversations;
         this.demoChatArchives = demoChatArchives;
     }
 
     @Transactional(readOnly = true)
     public List<AdminUserSummaryResponse> listUsers() {
-        return users.findAll().stream()
+        return users.findByDeletedAtIsNull().stream()
                 .sorted(Comparator.comparing(SysUser::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(this::summary)
                 .toList();
@@ -116,20 +122,74 @@ public class AdminService {
     }
 
     public AdminUserSummaryResponse updateQuota(Long userId, AdminQuotaUpdateRequest request) {
+        requireUser(userId);
         return summary(quotaService.updateQuota(userId, request.totalQuota(), request.resetUsed()));
     }
 
     public AdminUserSummaryResponse resetQuotaUsage(Long userId) {
+        requireUser(userId);
         return summary(quotaService.resetQuotaUsage(userId));
+    }
+
+    @Transactional
+    public void deleteUser(Long administratorId, Long userId) {
+        SysUser administrator = requireUser(administratorId);
+        if (!administrator.isAdmin()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ADMIN_REQUIRED", "只有管理员可以删除账号");
+        }
+        SysUser user = requireUser(userId);
+        if (administratorId.equals(userId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                    "ADMIN_SELF_DELETE_FORBIDDEN", "管理员不能删除自己的账号");
+        }
+        if (user.isAdmin()) {
+            throw new ApiException(HttpStatus.FORBIDDEN,
+                    "ADMIN_ACCOUNT_DELETE_FORBIDDEN", "不能删除管理员账号");
+        }
+        if (DemoAccessService.ACCOUNT_TYPE_DEMO.equalsIgnoreCase(user.getAccountType())) {
+            throw new ApiException(HttpStatus.FORBIDDEN,
+                    "DEMO_ACCOUNT_DELETE_FORBIDDEN", "不能删除系统游客账号");
+        }
+        user.deleteAccount();
+        users.saveAndFlush(user);
     }
 
     @Transactional(readOnly = true)
     public List<AdminInviteCodeResponse> listInviteCodes() {
-        return inviteCodes.findAll().stream()
-                .sorted(Comparator.comparing(InviteCode::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                .map(code -> new AdminInviteCodeResponse(code.getId(), code.getCode(), code.getMaxUses(),
-                        code.getUsedCount(), Boolean.TRUE.equals(code.getEnabled()), code.getCreatedAt()))
+        return inviteCodes.findByDeletedAtIsNullOrderByCreatedAtDesc().stream()
+                .map(this::inviteResponse)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public String generateInviteCode() {
+        return inviteCodeGenerator.generate();
+    }
+
+    @Transactional
+    public AdminInviteCodeResponse createInviteCode(AdminInviteCodeCreateRequest request) {
+        if (inviteCodes.existsByCode(request.code())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                    "INVITE_CODE_ALREADY_EXISTS", "邀请码已存在，请重新生成",
+                    java.util.Map.of("code", "邀请码已存在，请重新生成"));
+        }
+        try {
+            return inviteResponse(inviteCodes.saveAndFlush(new InviteCode(request.code(), request.maxUses())));
+        } catch (DataIntegrityViolationException duplicate) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                    "INVITE_CODE_ALREADY_EXISTS", "邀请码已存在，请重新生成",
+                    java.util.Map.of("code", "邀请码已存在，请重新生成"));
+        }
+    }
+
+    @Transactional
+    public void deleteInviteCode(Long inviteCodeId) {
+        InviteCode code = inviteCodes.findLockedById(inviteCodeId)
+                .filter(value -> !value.isDeleted())
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.NOT_FOUND, "INVITE_CODE_NOT_FOUND", "邀请码不存在"));
+        code.delete();
+        inviteCodes.saveAndFlush(code);
     }
 
     @Transactional
@@ -179,6 +239,14 @@ public class AdminService {
                 projects.countByUserId(user.getId()));
     }
 
+    private AdminInviteCodeResponse inviteResponse(InviteCode code) {
+        int remainingUses = Math.max(0, code.getMaxUses() - code.getUsedCount());
+        boolean enabled = Boolean.TRUE.equals(code.getEnabled());
+        String status = !enabled ? "DISABLED" : remainingUses == 0 ? "EXHAUSTED" : "AVAILABLE";
+        return new AdminInviteCodeResponse(code.getId(), code.getCode(), code.getMaxUses(),
+                code.getUsedCount(), remainingUses, enabled, status, code.getCreatedAt());
+    }
+
     private AdminUserDetailResponse.AiUsage usageResponse(AiUsageRecord record) {
         return new AdminUserDetailResponse.AiUsage(record.getId(), record.getFeature(), record.getPromptTokens(),
                 record.getCompletionTokens(), record.getTotalTokens(), record.getCreatedAt());
@@ -200,13 +268,13 @@ public class AdminService {
     }
 
     private boolean isDemoUser(Long userId) {
-        return users.findById(userId)
+        return users.findByIdAndDeletedAtIsNull(userId)
                 .map(value -> DemoAccessService.ACCOUNT_TYPE_DEMO.equalsIgnoreCase(value.getAccountType()))
                 .orElse(false);
     }
 
     private SysUser requireUser(Long userId) {
-        return users.findById(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在"));
+        return users.findByIdAndDeletedAtIsNull(userId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "用户不存在"));
     }
 }
