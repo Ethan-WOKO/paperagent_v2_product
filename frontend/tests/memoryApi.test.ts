@@ -14,8 +14,12 @@ import {
   correctLongTermMemory,
   createLongTermMemory,
   deleteLongTermMemory,
+  getMemoryDistillationJob,
+  getMemoryDistillationSettings,
   listLongTermMemories,
   rejectLongTermMemory,
+  startMemoryDistillation,
+  updateMemoryDistillationSettings,
   updateLongTermMemoryExpiry,
 } from '../src/api/memory';
 
@@ -53,5 +57,17 @@ describe('long-term memory API client', () => {
     expect(http.put).toHaveBeenNthCalledWith(1, '/settings/memory/21/expiry', { expiresAt: '2026-08-01T08:00:00.000Z' });
     expect(http.put).toHaveBeenNthCalledWith(2, '/settings/memory/21/expiry', { expiresAt: null });
     expect(http.delete).toHaveBeenCalledWith('/settings/memory/21');
+  });
+
+  it('maps opt-in settings, manual runs, and job polling to the distillation endpoints', () => {
+    getMemoryDistillationSettings();
+    updateMemoryDistillationSettings(true);
+    startMemoryDistillation();
+    getMemoryDistillationJob(91);
+
+    expect(http.get).toHaveBeenNthCalledWith(1, '/settings/memory/distillation');
+    expect(http.put).toHaveBeenCalledWith('/settings/memory/distillation', { autoEnabled: true });
+    expect(http.post).toHaveBeenCalledWith('/settings/memory/distillation/jobs', {});
+    expect(http.get).toHaveBeenNthCalledWith(2, '/settings/memory/distillation/jobs/91');
   });
 });

@@ -141,6 +141,26 @@ class LongTermMemoryRetrievalServiceTest {
     }
 
     @Test
+    void distilledMemoryRequiresExplicitUserConfirmationBeforeRetrieval() {
+        AgentLongTermMemory unconfirmed = rawMemory(
+                USER_ID, null, AgentLongTermMemory.SCOPE_USER,
+                AgentLongTermMemory.SOURCE_LLM_DISTILLED,
+                "Unconfirmed distilled GraphRAG preference.", "0.90");
+        AgentLongTermMemory confirmed = govern(rawMemory(
+                USER_ID, null, AgentLongTermMemory.SCOPE_USER,
+                AgentLongTermMemory.SOURCE_LLM_DISTILLED,
+                "Confirmed distilled GraphRAG preference.", "0.90"), null);
+        when(memories.findGovernedUserCandidates(eq(USER_ID), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(unconfirmed, confirmed));
+
+        AgentLongTermMemoryContext context = service.retrieve(USER_ID, "GraphRAG");
+
+        assertThat(context.hitCount()).isEqualTo(1);
+        assertThat(context.content()).contains("Confirmed distilled GraphRAG preference")
+                .doesNotContain("Unconfirmed distilled GraphRAG preference");
+    }
+
+    @Test
     void deduplicatesContentAndRejectsSensitiveOrAbsolutePathText() {
         when(memories.findGovernedUserCandidates(eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(

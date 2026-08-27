@@ -110,6 +110,69 @@ export function resolveUiMockResponse(request: MockRequest, scenario: UiMockScen
   if (method === 'GET' && path === '/kb/documents') return { status: 200, data: mockKnowledgeDocuments };
   if (method === 'GET' && path === '/kb/documents/301/preview') return { status: 200, data: mockKnowledgePreview };
   if (method === 'POST' && path === '/search') return { status: 200, data: mockKnowledgeSearchResults };
+  if (method === 'GET' && path === '/settings/memory/distillation') {
+    return {
+      status: 200,
+      data: {
+        available: true,
+        autoEnabled: false,
+        intervalSeconds: 86400,
+        lastProcessedMessageId: 8400,
+        nextRunAt: null,
+        lastSuccessAt: '2026-08-26T08:30:00Z',
+        latestJob: {
+          id: 91,
+          triggerType: 'MANUAL',
+          status: 'SUCCEEDED',
+          fromMessageId: 8300,
+          throughMessageId: 8400,
+          messageCount: 18,
+          candidateCount: 3,
+          createdMemoryCount: 2,
+          attemptCount: 1,
+          errorCode: null,
+          errorMessage: null,
+          startedAt: '2026-08-26T08:29:00Z',
+          finishedAt: '2026-08-26T08:30:00Z',
+          createdAt: '2026-08-26T08:29:00Z',
+          updatedAt: '2026-08-26T08:30:00Z',
+        },
+      },
+    };
+  }
+  if (method === 'PUT' && path === '/settings/memory/distillation') {
+    return {
+      status: 200,
+      data: {
+        available: true, autoEnabled: true, intervalSeconds: 86400,
+        lastProcessedMessageId: 8400, nextRunAt: '2026-08-27T08:30:00Z',
+        lastSuccessAt: '2026-08-26T08:30:00Z', latestJob: null,
+      },
+    };
+  }
+  if (method === 'POST' && path === '/settings/memory/distillation/jobs') {
+    return {
+      status: 202,
+      data: {
+        id: 92, triggerType: 'MANUAL', status: 'PENDING', fromMessageId: 8400,
+        throughMessageId: 8450, messageCount: 8, candidateCount: 0, createdMemoryCount: 0,
+        attemptCount: 0, errorCode: null, errorMessage: null, startedAt: null, finishedAt: null,
+        createdAt: '2026-08-27T08:30:00Z', updatedAt: '2026-08-27T08:30:00Z',
+      },
+    };
+  }
+  if (method === 'GET' && /^\/settings\/memory\/distillation\/jobs\/\d+$/.test(path)) {
+    return {
+      status: 200,
+      data: {
+        id: 92, triggerType: 'MANUAL', status: 'SUCCEEDED', fromMessageId: 8400,
+        throughMessageId: 8450, messageCount: 8, candidateCount: 2, createdMemoryCount: 2,
+        attemptCount: 1, errorCode: null, errorMessage: null,
+        startedAt: '2026-08-27T08:30:01Z', finishedAt: '2026-08-27T08:30:03Z',
+        createdAt: '2026-08-27T08:30:00Z', updatedAt: '2026-08-27T08:30:03Z',
+      },
+    };
+  }
   if (method === 'GET' && path === '/settings/memory') return { status: 200, data: mockMemories };
   if (method === 'GET' && path === '/settings') return { status: 200, data: mockSettings };
   if (method === 'GET' && path === '/skills') return { status: 200, data: mockSkills };

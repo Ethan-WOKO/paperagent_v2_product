@@ -19,6 +19,72 @@
         </div>
       </header>
 
+      <section class="memory-distillation" data-testid="memory-distillation-panel">
+        <div class="memory-distillation__intro">
+          <span class="memory-distillation__eyebrow">{{ t('memory.distillation.eyebrow') }}</span>
+          <h2>{{ t('memory.distillation.title') }}</h2>
+          <p>{{ t('memory.distillation.description') }}</p>
+          <p class="memory-distillation__guardrail">{{ t('memory.distillation.guardrail') }}</p>
+        </div>
+        <div class="memory-distillation__controls">
+          <label class="memory-distillation__toggle">
+            <NSwitch
+              :value="distillationSettings?.autoEnabled ?? false"
+              :loading="distillationSaving"
+              :disabled="distillationLoading || !distillationSettings?.available"
+              data-testid="memory-distillation-auto"
+              @update:value="updateAutoDistillation"
+            />
+            <span>
+              <strong>{{ t('memory.distillation.auto') }}</strong>
+              <small>{{ t('memory.distillation.autoHint', { hours: distillationIntervalHours }) }}</small>
+            </span>
+          </label>
+          <NButton
+            type="primary"
+            secondary
+            data-testid="memory-distillation-start"
+            :loading="distillationActive"
+            :disabled="distillationLoading || !distillationSettings?.available"
+            @click="runDistillationNow"
+          >
+            {{ distillationActive ? t('memory.distillation.running') : t('memory.distillation.runNow') }}
+          </NButton>
+        </div>
+        <div class="memory-distillation__status" aria-live="polite">
+          <NSpin v-if="distillationLoading" size="small" />
+          <template v-else-if="distillationSettings">
+            <span>
+              <small>{{ t('memory.distillation.latestStatus') }}</small>
+              <NTag size="small" :type="distillationStatusType(distillationJob?.status)">
+                {{ distillationStatusLabel(distillationJob?.status) }}
+              </NTag>
+            </span>
+            <span>
+              <small>{{ t('memory.distillation.lastSuccess') }}</small>
+              <strong>{{ formatOptionalDate(distillationSettings.lastSuccessAt) }}</strong>
+            </span>
+            <span>
+              <small>{{ t('memory.distillation.nextRun') }}</small>
+              <strong>{{ distillationSettings.autoEnabled ? formatOptionalDate(distillationSettings.nextRunAt) : t('memory.distillation.autoOff') }}</strong>
+            </span>
+            <span v-if="distillationJob?.status === 'SUCCEEDED'">
+              <small>{{ t('memory.distillation.result') }}</small>
+              <strong>{{ t('memory.distillation.resultCount', { count: distillationJob.createdMemoryCount }) }}</strong>
+            </span>
+          </template>
+        </div>
+        <NAlert
+          v-if="distillationError"
+          class="memory-distillation__error"
+          type="error"
+          closable
+          @close="distillationError = ''"
+        >
+          {{ distillationError }}
+        </NAlert>
+      </section>
+
       <section class="memory-toolbar" :aria-label="t('memory.listControls')">
         <NButtonGroup>
           <NButton
@@ -430,9 +496,10 @@ import {
   NPopconfirm,
   NSelect,
   NSpin,
+  NSwitch,
   NTag,
 } from 'naive-ui';
-import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue';
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
 import {
@@ -440,10 +507,17 @@ import {
   correctLongTermMemory,
   createLongTermMemory,
   deleteLongTermMemory,
+  getMemoryDistillationJob,
+  getMemoryDistillationSettings,
   listLongTermMemories,
   rejectLongTermMemory,
+  startMemoryDistillation,
+  updateMemoryDistillationSettings,
   updateLongTermMemoryExpiry,
   type LongTermMemoryResponse,
+  type MemoryDistillationJobResponse,
+  type MemoryDistillationJobStatus,
+  type MemoryDistillationSettingsResponse,
   type MemoryListStatus,
   type MemoryScope,
 } from '@/api/memory';
@@ -499,6 +573,11 @@ const operationError = ref('');
 const operationErrorIsStale = ref(false);
 const pendingAction = ref('');
 const expandedIds = ref(new Set<number>());
+const distillationSettings = ref<MemoryDistillationSettingsResponse | null>(null);
+const distillationLoading = ref(false);
+const distillationSaving = ref(false);
+const distillationError = ref('');
+let distillationPollTimer: number | undefined;
 
 const editorVisible = ref(false);
 const editorSaving = ref(false);
@@ -525,8 +604,128 @@ const scopeOptions = computed(() => [
   { label: t('memory.scope.project'), value: 'PROJECT' },
 ]);
 const memoryTypeOptions = computed(() => MEMORY_TYPES.map((value) => ({ label: memoryTypeLabel(value), value })));
+const distillationJob = computed(() => distillationSettings.value?.latestJob ?? null);
+const distillationActive = computed(() => ['PENDING', 'RUNNING'].includes(distillationJob.value?.status ?? ''));
+const distillationIntervalHours = computed(() => Math.max(
+  1,
+  Math.round((distillationSettings.value?.intervalSeconds ?? 86400) / 3600),
+));
 
-onMounted(loadMemories);
+onMounted(() => {
+  void loadMemories();
+  void loadDistillationSettings();
+});
+
+onBeforeUnmount(() => {
+  if (distillationPollTimer != null) window.clearTimeout(distillationPollTimer);
+});
+
+async function loadDistillationSettings() {
+  distillationLoading.value = true;
+  distillationError.value = '';
+  try {
+    const { data } = await getMemoryDistillationSettings();
+    distillationSettings.value = data;
+    const latestJob = data.latestJob;
+    if (latestJob && isDistillationActive(latestJob)) scheduleDistillationPoll(latestJob.id);
+  } catch (error: unknown) {
+    distillationError.value = memoryApiError(error, t('memory.distillation.failure.load'));
+  } finally {
+    distillationLoading.value = false;
+  }
+}
+
+async function updateAutoDistillation(autoEnabled: boolean) {
+  distillationSaving.value = true;
+  distillationError.value = '';
+  try {
+    const { data } = await updateMemoryDistillationSettings(autoEnabled);
+    distillationSettings.value = data;
+    ui.message.success(autoEnabled
+      ? t('memory.distillation.toast.autoOn')
+      : t('memory.distillation.toast.autoOff'));
+  } catch (error: unknown) {
+    distillationError.value = memoryApiError(error, t('memory.distillation.failure.update'));
+  } finally {
+    distillationSaving.value = false;
+  }
+}
+
+async function runDistillationNow() {
+  distillationError.value = '';
+  try {
+    const { data } = await startMemoryDistillation();
+    setDistillationJob(data);
+    if (data.status === 'NO_WORK') {
+      ui.message.info(t('memory.distillation.toast.noWork'));
+      await loadDistillationSettings();
+      return;
+    }
+    ui.message.success(t('memory.distillation.toast.started'));
+    scheduleDistillationPoll(data.id);
+  } catch (error: unknown) {
+    distillationError.value = memoryApiError(error, t('memory.distillation.failure.start'));
+  }
+}
+
+function scheduleDistillationPoll(jobId: number) {
+  if (distillationPollTimer != null) window.clearTimeout(distillationPollTimer);
+  distillationPollTimer = window.setTimeout(() => void pollDistillationJob(jobId), 1500);
+}
+
+async function pollDistillationJob(jobId: number) {
+  try {
+    const { data } = await getMemoryDistillationJob(jobId);
+    setDistillationJob(data);
+    if (isDistillationActive(data)) {
+      scheduleDistillationPoll(jobId);
+      return;
+    }
+    if (data.status === 'SUCCEEDED') {
+      ui.message.success(t('memory.distillation.toast.completed', { count: data.createdMemoryCount }));
+      await Promise.all([loadMemories(), refreshDistillationSettings()]);
+    } else if (data.status === 'NO_WORK') {
+      ui.message.info(t('memory.distillation.toast.noWork'));
+      await refreshDistillationSettings();
+    } else if (data.status === 'FAILED') {
+      distillationError.value = data.errorMessage || t('memory.distillation.failure.run');
+      await refreshDistillationSettings();
+    }
+  } catch (error: unknown) {
+    distillationError.value = memoryApiError(error, t('memory.distillation.failure.poll'));
+  }
+}
+
+async function refreshDistillationSettings() {
+  const { data } = await getMemoryDistillationSettings();
+  distillationSettings.value = data;
+}
+
+function setDistillationJob(job: MemoryDistillationJobResponse) {
+  if (!distillationSettings.value) return;
+  distillationSettings.value = { ...distillationSettings.value, latestJob: job };
+}
+
+function isDistillationActive(job: MemoryDistillationJobResponse | null) {
+  return job != null && (job.status === 'PENDING' || job.status === 'RUNNING');
+}
+
+function distillationStatusLabel(status?: MemoryDistillationJobStatus) {
+  if (status === 'PENDING') return t('memory.distillation.status.pending');
+  if (status === 'RUNNING') return t('memory.distillation.status.running');
+  if (status === 'SUCCEEDED') return t('memory.distillation.status.succeeded');
+  if (status === 'FAILED') return t('memory.distillation.status.failed');
+  if (status === 'NO_WORK') return t('memory.distillation.status.no_work');
+  return t('memory.distillation.status.never');
+}
+
+function distillationStatusType(status?: MemoryDistillationJobStatus): 'success' | 'warning' | 'error' | 'info' | 'default' {
+  if (status === 'SUCCEEDED') return 'success';
+  if (status === 'FAILED') return 'error';
+  if (status === 'PENDING' || status === 'RUNNING') return 'info';
+  if (status === 'NO_WORK') return 'default';
+  return 'default';
+}
 
 async function loadMemories() {
   loading.value = true;

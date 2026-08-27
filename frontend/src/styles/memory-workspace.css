@@ -67,6 +67,113 @@
   background: var(--pa-accent) !important;
 }
 
+.product-shell .memory-page--redesign .memory-distillation {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.3fr) minmax(300px, 1fr);
+  gap: 14px 28px;
+  margin: 14px 0 0;
+  padding: 16px 18px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-sm);
+  background:
+    linear-gradient(115deg, color-mix(in srgb, var(--pa-accent-soft) 65%, transparent), transparent 46%),
+    var(--pa-surface);
+}
+
+.product-shell .memory-page--redesign .memory-distillation__eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--pa-accent);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.product-shell .memory-page--redesign .memory-distillation h2 {
+  margin: 0;
+  color: var(--pa-text);
+  font-size: 15px;
+  font-weight: 680;
+}
+
+.product-shell .memory-page--redesign .memory-distillation p {
+  max-width: 720px;
+  margin: 5px 0 0;
+  color: var(--pa-text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.product-shell .memory-page--redesign .memory-distillation .memory-distillation__guardrail {
+  color: var(--pa-text-muted);
+}
+
+.product-shell .memory-page--redesign .memory-distillation__controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__toggle span {
+  display: grid;
+  gap: 2px;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__toggle strong {
+  color: var(--pa-text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__toggle small,
+.product-shell .memory-page--redesign .memory-distillation__status small {
+  color: var(--pa-text-muted);
+  font-size: 10px;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__controls > .n-button {
+  min-height: 34px;
+  border-radius: var(--pa-radius-sm) !important;
+  box-shadow: none !important;
+  font-size: 11px;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__status {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  padding-top: 11px;
+  border-top: 1px solid color-mix(in srgb, var(--pa-line) 70%, transparent);
+}
+
+.product-shell .memory-page--redesign .memory-distillation__status > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__status strong {
+  color: var(--pa-text-secondary);
+  font-size: 11px;
+  font-weight: 580;
+}
+
+.product-shell .memory-page--redesign .memory-distillation__error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .product-shell .memory-page--redesign .memory-toolbar {
   display: flex;
   justify-content: space-between;
@@ -429,6 +536,14 @@
 }
 
 @media (max-width: 900px) {
+  .product-shell .memory-page--redesign .memory-distillation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .product-shell .memory-page--redesign .memory-distillation__controls {
+    justify-content: space-between;
+  }
+
   .product-shell .memory-page--redesign .memory-record__summary-cells {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -468,6 +583,27 @@
     align-items: stretch;
     flex-direction: column;
     margin-top: 10px;
+  }
+
+  .product-shell .memory-page--redesign .memory-distillation {
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .product-shell .memory-page--redesign .memory-distillation__controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .product-shell .memory-page--redesign .memory-distillation__controls > .n-button {
+    min-height: 40px;
+    width: 100%;
+  }
+
+  .product-shell .memory-page--redesign .memory-distillation__status {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .product-shell .memory-page--redesign .memory-toolbar .n-button-group,

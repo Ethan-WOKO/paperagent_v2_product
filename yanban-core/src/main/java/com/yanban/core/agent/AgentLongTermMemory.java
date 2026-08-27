@@ -30,6 +30,7 @@ public class AgentLongTermMemory {
     public static final String PROVENANCE_USER_SETTINGS_ACTION = "USER_SETTINGS_ACTION";
     public static final String SOURCE_USER_CONFIRMED = "USER_CONFIRMED";
     public static final String SOURCE_USER_CORRECTED = "USER_CORRECTED";
+    public static final String SOURCE_LLM_DISTILLED = "LLM_DISTILLED";
     public static final String TYPE_FACT = "FACT";
 
     @Id
