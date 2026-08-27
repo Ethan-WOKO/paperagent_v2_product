@@ -135,7 +135,10 @@
                       <summary>
                         <span class="admin-chat-session__identity">
                           <strong>{{ chat.title || '未命名会话' }}</strong>
-                          <small>{{ chat.messages.length }} 条消息 · {{ chat.modelProvider }} / {{ chat.model }} · {{ formatDate(chat.updatedAt) }}</small>
+                          <small>
+                            {{ chat.messages.length }} 条消息 · {{ chat.modelProvider }} / {{ chat.model }} · {{ formatDate(chat.updatedAt) }}
+                            <NTag v-if="chat.archived" size="tiny" type="warning">往期游客会话</NTag>
+                          </small>
                         </span>
                         <span class="admin-chat-session__toggle" aria-hidden="true">⌄</span>
                       </summary>
@@ -143,7 +146,7 @@
                         <article v-for="message in chat.messages" :key="message.id" class="admin-message">
                           <div><NTag size="small" :type="message.role === 'user' ? 'info' : 'default'">{{ message.role }}</NTag><small>{{ formatDate(message.createdAt) }}</small></div>
                           <p>{{ message.content || '（无文本内容）' }}</p>
-                          <NPopconfirm v-if="detail.user.accountType === 'DEMO' && message.deletable" @positive-click="removeDemoMessage(message.id)">
+                          <NPopconfirm v-if="detail.user.accountType === 'DEMO' && message.deletable" @positive-click="removeDemoMessage(message.id, chat.archived)">
                             <template #trigger><NButton size="tiny" tertiary type="error">删除此消息</NButton></template>
                             确认删除这条游客聊天消息？
                           </NPopconfirm>
@@ -203,6 +206,7 @@ import AppLayout from '@/components/AppLayout.vue';
 import {
   clearDemoChats,
   clearDemoProjects,
+  deleteArchivedDemoMessage,
   deleteDemoMessage,
   getAdminUser,
   listAdminInviteCodes,
@@ -349,9 +353,10 @@ async function resetQuota() {
   }
 }
 
-async function removeDemoMessage(messageId: number) {
+async function removeDemoMessage(messageId: number, archived: boolean) {
   try {
-    await deleteDemoMessage(messageId);
+    if (archived) await deleteArchivedDemoMessage(messageId);
+    else await deleteDemoMessage(messageId);
     ui.message.success('游客消息已删除');
     await reloadSelected();
   } catch (error: any) {

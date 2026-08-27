@@ -1,6 +1,7 @@
 package com.yanban.api.admin;
 
 import com.yanban.api.demo.DemoAccessService;
+import com.yanban.api.demo.DemoChatArchiveService;
 import com.yanban.api.invite.InviteCode;
 import com.yanban.api.invite.InviteCodeRepository;
 import com.yanban.api.project.ProjectRepository;
@@ -42,6 +43,7 @@ public class AdminService {
     private final UserQuotaService quotaService;
     private final InviteCodeRepository inviteCodes;
     private final ReactPlanAdminConversationReader reactPlanConversations;
+    private final DemoChatArchiveService demoChatArchives;
 
     public AdminService(SysUserRepository users,
                         AgentSessionRepository sessions,
@@ -53,7 +55,8 @@ public class AdminService {
                         AiUsageRecordRepository usage,
                         UserQuotaService quotaService,
                         InviteCodeRepository inviteCodes,
-                        ReactPlanAdminConversationReader reactPlanConversations) {
+                        ReactPlanAdminConversationReader reactPlanConversations,
+                        DemoChatArchiveService demoChatArchives) {
         this.users = users;
         this.sessions = sessions;
         this.messages = messages;
@@ -65,6 +68,7 @@ public class AdminService {
         this.quotaService = quotaService;
         this.inviteCodes = inviteCodes;
         this.reactPlanConversations = reactPlanConversations;
+        this.demoChatArchives = demoChatArchives;
     }
 
     @Transactional(readOnly = true)
@@ -78,12 +82,24 @@ public class AdminService {
     @Transactional(readOnly = true)
     public AdminUserDetailResponse userDetail(Long userId) {
         SysUser user = requireUser(userId);
-        List<AdminUserDetailResponse.ChatSession> chats = sessions.findByUserIdOrderByUpdatedAtDesc(userId).stream()
+        List<AdminUserDetailResponse.ChatSession> chats = new java.util.ArrayList<>();
+        chats.addAll(sessions.findByUserIdOrderByUpdatedAtDesc(userId).stream()
                 .map(session -> new AdminUserDetailResponse.ChatSession(
                         session.getId(), session.getTitle(), session.getScope().name(), session.getProjectId(),
-                        session.getModelProviderSnapshot(), session.getModelSnapshot(), session.getCreatedAt(), session.getUpdatedAt(),
-                        adminMessages(userId, session)))
-                .toList();
+                        session.getModelProviderSnapshot(), session.getModelSnapshot(), session.getCreatedAt(),
+                        session.getUpdatedAt(), false, null, adminMessages(userId, session)))
+                .toList());
+        chats.addAll(demoChatArchives.list(userId).stream()
+                .map(session -> new AdminUserDetailResponse.ChatSession(
+                        session.sourceSessionId(), session.title(), session.scope(), session.projectId(),
+                        session.modelProvider(), session.model(), session.createdAt(), session.updatedAt(),
+                        true, session.archivedAt(), session.messages().stream()
+                                .map(message -> new AdminUserDetailResponse.ChatMessage(
+                                        message.id(), message.role(), message.content(), message.createdAt(),
+                                        message.deletable()))
+                                .toList()))
+                .toList());
+        chats.sort(Comparator.comparing(AdminUserDetailResponse.ChatSession::updatedAt).reversed());
         List<AdminUserDetailResponse.PaperTask> paperItems = papers.findByUserIdOrderByCreatedAtDesc(userId).stream()
                 .map(task -> new AdminUserDetailResponse.PaperTask(task.getId(), task.getTitle(), task.getSourceFilename(),
                         task.getStatus(), task.getCurrentStage(), task.getErrorMessage(), task.getCreatedAt(), task.getUpdatedAt()))
@@ -128,8 +144,14 @@ public class AdminService {
     }
 
     @Transactional
+    public void deleteArchivedDemoMessage(Long messageId) {
+        demoChatArchives.deleteMessage(messageId);
+    }
+
+    @Transactional
     public void clearDemoChats() {
         for (SysUser user : users.findByAccountTypeIgnoreCase(DemoAccessService.ACCOUNT_TYPE_DEMO)) {
+            demoChatArchives.clear(user.getId());
             for (AgentSession session : sessions.findByUserIdOrderByUpdatedAtDesc(user.getId())) {
                 messageCache.evictSession(user.getId(), session.getId());
                 sessions.delete(session);
@@ -147,9 +169,13 @@ public class AdminService {
     }
 
     private AdminUserSummaryResponse summary(SysUser user) {
+        long chatSessionCount = sessions.countByUserId(user.getId());
+        if (DemoAccessService.ACCOUNT_TYPE_DEMO.equalsIgnoreCase(user.getAccountType())) {
+            chatSessionCount += demoChatArchives.count(user.getId());
+        }
         return new AdminUserSummaryResponse(user.getId(), user.getUsername(), user.getAccountType(), user.getRole(),
                 user.getAiQuotaTotal(), user.getAiQuotaUsed(), user.getAiQuotaRemaining(), user.getCreatedAt(),
-                user.getLastLoginAt(), sessions.countByUserId(user.getId()), papers.countByUserId(user.getId()),
+                user.getLastLoginAt(), chatSessionCount, papers.countByUserId(user.getId()),
                 projects.countByUserId(user.getId()));
     }
 

@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -43,6 +44,7 @@ public class DemoAccountService {
     private final DemoProperties properties;
     private final SysUserRepository users;
     private final PasswordEncoder passwordEncoder;
+    private final DemoUserInitializer demoUserInitializer;
     private final UserSettingsService userSettingsService;
     private final KnowledgeIngestionService ingestionService;
     private final KbDocumentRepository documents;
@@ -50,6 +52,7 @@ public class DemoAccountService {
     private final KbChunkUploadRepository chunkUploads;
     private final KnowledgeIndexService indexService;
     private final AgentSessionRepository sessions;
+    private final DemoChatArchiveService chatArchives;
     private final PaperTaskRepository paperTasks;
     private final ProjectRepository projects;
     private final ProjectService projectService;
@@ -57,6 +60,7 @@ public class DemoAccountService {
     public DemoAccountService(DemoProperties properties,
                               SysUserRepository users,
                               PasswordEncoder passwordEncoder,
+                              DemoUserInitializer demoUserInitializer,
                               UserSettingsService userSettingsService,
                               KnowledgeIngestionService ingestionService,
                               KbDocumentRepository documents,
@@ -64,12 +68,14 @@ public class DemoAccountService {
                               KbChunkUploadRepository chunkUploads,
                               KnowledgeIndexService indexService,
                               AgentSessionRepository sessions,
+                              DemoChatArchiveService chatArchives,
                               PaperTaskRepository paperTasks,
                               ProjectRepository projects,
                               ProjectService projectService) {
         this.properties = properties;
         this.users = users;
         this.passwordEncoder = passwordEncoder;
+        this.demoUserInitializer = demoUserInitializer;
         this.userSettingsService = userSettingsService;
         this.ingestionService = ingestionService;
         this.documents = documents;
@@ -77,6 +83,7 @@ public class DemoAccountService {
         this.chunkUploads = chunkUploads;
         this.indexService = indexService;
         this.sessions = sessions;
+        this.chatArchives = chatArchives;
         this.paperTasks = paperTasks;
         this.projects = projects;
         this.projectService = projectService;
@@ -135,6 +142,7 @@ public class DemoAccountService {
     }
 
     private void clearTransientDemoData(Long userId) {
+        chatArchives.archiveCurrentSessions(userId);
         sessions.deleteAll(sessions.findByUserIdOrderByUpdatedAtDesc(userId));
         for (Project project : projects.findByUserIdOrderByUpdatedAtDesc(userId)) {
             projectService.delete(userId, project.getId());
@@ -143,19 +151,25 @@ public class DemoAccountService {
 
     private SysUser ensureDemoUser() {
         String username = normalizeUsername(properties.getUsername());
-        return users.findByUsername(username)
-                .map(existing -> {
-                    if (!DemoAccessService.ACCOUNT_TYPE_DEMO.equalsIgnoreCase(existing.getAccountType())) {
-                        throw new ResponseStatusException(HttpStatus.CONFLICT, "Demo 用户名已被普通账号占用：" + username);
-                    }
-                    return existing;
-                })
-                .orElseGet(() -> users.saveAndFlush(new SysUser(
-                        username,
-                        passwordEncoder.encode(UUID.randomUUID().toString()),
-                        null,
-                        DemoAccessService.ACCOUNT_TYPE_DEMO
-                )));
+        SysUser existing = users.findByUsername(username).orElse(null);
+        if (existing != null) {
+            return requireDemoAccount(existing, username);
+        }
+        try {
+            return demoUserInitializer.create(
+                    username, passwordEncoder.encode(UUID.randomUUID().toString()));
+        } catch (DataIntegrityViolationException concurrentCreation) {
+            return users.findByUsername(username)
+                    .map(user -> requireDemoAccount(user, username))
+                    .orElseThrow(() -> concurrentCreation);
+        }
+    }
+
+    private SysUser requireDemoAccount(SysUser user, String username) {
+        if (!DemoAccessService.ACCOUNT_TYPE_DEMO.equalsIgnoreCase(user.getAccountType())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Demo 用户名已被普通账号占用：" + username);
+        }
+        return user;
     }
 
     private void ensureSeedDocuments(Long userId) {

@@ -542,7 +542,7 @@ export const mockAdminDetail: AdminUserDetail = {
   user: mockAdminUsers[0],
   chats: [{
     id: 6401, title: '评审 V2 执行架构', scope: 'PROJECT', projectId: 64, modelProvider: 'deepseek',
-    model: 'deepseek-v4-flash', createdAt: CREATED_AT, updatedAt: UPDATED_AT,
+    model: 'deepseek-v4-flash', createdAt: CREATED_AT, updatedAt: UPDATED_AT, archived: false,
     messages: [
       { id: 8401, role: 'user', content: '检查任务编排、证据链和验证机制。', createdAt: CREATED_AT, deletable: false },
       { id: 8402, role: 'assistant', content: '模块边界清晰，仍需补强失败恢复验证。', createdAt: UPDATED_AT, deletable: false },

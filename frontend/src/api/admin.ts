@@ -26,6 +26,8 @@ export interface AdminUserDetail {
     model: string;
     createdAt: string;
     updatedAt: string;
+    archived: boolean;
+    archivedAt?: string | null;
     messages: Array<{ id: number; role: string; content?: string | null; createdAt: string; deletable: boolean }>;
   }>;
   papers: Array<{
@@ -87,6 +89,10 @@ export function listAdminInviteCodes() {
 
 export function deleteDemoMessage(messageId: number) {
   return http.delete(`/admin/demo/messages/${messageId}`);
+}
+
+export function deleteArchivedDemoMessage(messageId: number) {
+  return http.delete(`/admin/demo/archive/messages/${messageId}`);
 }
 
 export function clearDemoChats() {
