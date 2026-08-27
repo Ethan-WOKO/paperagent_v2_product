@@ -592,6 +592,7 @@ import {
 } from '@/api/paper';
 import { cancelTask, getTaskStatus, listTaskEvents, type TaskEventResponse, type TaskStatusResponse } from '@/api/task';
 import { ui } from '@/ui';
+import { apiErrorMessage } from '@/api/errors';
 import { expireAuthSession, isJwtExpired } from '@/auth/session';
 import { useI18n } from '@/composables/useI18n';
 
@@ -1005,8 +1006,8 @@ async function handleSubmit() {
     connectSse();
     await loadHistory();
     ui.message.success('论文任务已创建');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '创建论文任务失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '创建论文任务失败'));
   } finally {
     submitting.value = false;
   }
@@ -1017,8 +1018,8 @@ async function loadHistory() {
   try {
     const { data } = await getPaperTasks();
     historyTasks.value = data;
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '加载历史任务失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '加载历史任务失败'));
   } finally {
     historyLoading.value = false;
   }
@@ -1087,8 +1088,8 @@ async function loadTask(taskId: number, autoConnect = false) {
     if (autoConnect && ['PENDING', 'RUNNING', 'PAUSED', 'WAITING_INPUT', 'CANCEL_REQUESTED', 'CANCELLING'].includes(effectiveStatus)) {
       connectSse();
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '加载论文任务失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '加载论文任务失败'));
   }
 }
 
@@ -1142,9 +1143,9 @@ async function loadClarifications(taskId: number) {
         clarificationAnswers[item.id] = clarificationOptions(item).defaultOption || '保持原样';
       }
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (requestSequence !== clarificationRequestSequence || currentTaskId.value !== taskId) return;
-    clarificationsError.value = error.response?.data?.message || '加载结构确认内容失败';
+    clarificationsError.value = apiErrorMessage(error, '加载结构确认内容失败');
   } finally {
     if (requestSequence === clarificationRequestSequence) {
       clarificationsLoading.value = false;
@@ -1300,8 +1301,8 @@ async function handleStop() {
       abortController?.abort();
       sseStatus.value = 'closed';
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '停止请求失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '停止请求失败'));
   }
 }
 
@@ -1330,8 +1331,8 @@ async function downloadTaskById(taskId: number, fallbackFilename?: string) {
     anchor.remove();
     window.URL.revokeObjectURL(blobUrl);
     ui.message.success('下载已开始');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '下载结果文件失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '下载结果文件失败'));
   }
 }
 
@@ -1480,8 +1481,8 @@ async function keepAllClarifications() {
     }
     if (currentTaskId.value) await loadTask(currentTaskId.value, false);
     ui.message.success('已全部保持原样');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '提交结构确认失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '提交结构确认失败'));
   } finally {
     clarificationSubmitting.value = false;
   }
@@ -1495,8 +1496,8 @@ async function answerClarificationWithOption(item: PaperClarificationResponse, o
     await answerPaperClarification(currentTaskId.value, item.id, answerJson);
     await loadTask(currentTaskId.value, false);
     if (manageLoading) ui.message.success('结构确认已提交');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '提交结构确认失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '提交结构确认失败'));
     throw error;
   } finally {
     if (manageLoading) clarificationSubmitting.value = false;
@@ -1509,8 +1510,8 @@ async function handleSectionRoleChange(sectionId: number, role: string) {
     await updatePaperSectionRole(currentTaskId.value, sectionId, role);
     await loadClarificationsAndSections(currentTaskId.value);
     ui.message.success('章节角色已更新');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '更新章节角色失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '更新章节角色失败'));
   }
 }
 
@@ -1585,8 +1586,8 @@ async function updateSectionRevisionStatus(section: PaperSectionResponse, status
     await updatePaperSectionRevisionStatusApi(currentTaskId.value, section.id, status);
     await loadClarificationsAndSections(currentTaskId.value);
     ui.message.success(status === 'ACCEPTED' ? '已采纳章节润色' : status === 'REJECTED' ? '已拒绝章节润色' : '章节润色已标记为待处理');
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '更新章节采纳状态失败');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '更新章节采纳状态失败'));
   } finally {
     sectionRevisionSubmitting.value = null;
   }
@@ -1615,8 +1616,8 @@ async function acceptSelectedRevisions() {
     await updatePaperSectionRevisionStatusesApi(currentTaskId.value, selectedRevisionSectionIds.value, 'ACCEPTED');
     await loadClarificationsAndSections(currentTaskId.value);
     ui.message.success(isEnglish.value ? `Accepted ${acceptedCount} section revisions` : `已批量采纳 ${acceptedCount} 个章节`);
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || (isEnglish.value ? 'Failed to accept selected revisions' : '批量采纳失败'));
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, isEnglish.value ? 'Failed to accept selected revisions' : '批量采纳失败'));
   } finally {
     batchRevisionSubmitting.value = false;
   }

@@ -36,6 +36,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 JwtUser tokenUser = jwtService.parseAccessToken(token);
                 SysUser persistedUser = users.findById(tokenUser.id())
                         .orElseThrow(() -> new IllegalArgumentException("User not found"));
+                if (persistedUser.isDeleted()) {
+                    throw new IllegalArgumentException("User account has been deleted");
+                }
                 if (persistedUser.getLoginVersion() != tokenUser.loginVersion()) {
                     throw new IllegalArgumentException("Session has been replaced by a newer login");
                 }

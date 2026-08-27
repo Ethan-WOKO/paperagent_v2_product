@@ -212,6 +212,7 @@ import AppLayout from '@/components/AppLayout.vue';
 import WorkspaceHero from '@/components/WorkspaceHero.vue';
 import { searchKnowledge, type KnowledgeSearchResult } from '@/api/knowledge';
 import { ui } from '@/ui';
+import { apiErrorMessage } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
 
 const { isEnglish, locale } = useI18n();
@@ -300,8 +301,8 @@ async function handleSearch() {
       diagnosticsReturnFocus = searchButtonRef.value?.$el || null;
       await focusCompactDiagnostics();
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Search failed.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Search failed.'));
   } finally {
     searching.value = false;
   }

@@ -153,7 +153,9 @@ class KnowledgeControllerIntegrationTest {
 
         mockMvc.perform(get("/api/v1/kb/documents/{documentId}/preview", documentId)
                         .header("Authorization", "Bearer " + tokenB))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.fieldErrors").isMap());
     }
 
     @Test

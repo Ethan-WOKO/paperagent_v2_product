@@ -163,7 +163,10 @@ class PaperControllerIntegrationTest {
                         .param("literatureCount", "5")
                         .param("targetLanguage", "zh")
                         .header("Authorization", "Bearer " + token))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+                .andExpect(jsonPath("$.message").value("main document only supports .tex"))
+                .andExpect(jsonPath("$.fieldErrors").isMap());
     }
 
     @Test

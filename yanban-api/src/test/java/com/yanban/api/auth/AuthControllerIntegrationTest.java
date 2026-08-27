@@ -114,7 +114,10 @@ class AuthControllerIntegrationTest {
     @Test
     void protectedApiRejectsMissingAndForgedToken() throws Exception {
         mockMvc.perform(get("/api/v1/users/me"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.message").value("请登录后重试"))
+                .andExpect(jsonPath("$.fieldErrors").isMap());
 
         mockMvc.perform(get("/api/v1/users/me")
                         .header("Authorization", "Bearer forged.token.value"))

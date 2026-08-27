@@ -244,6 +244,7 @@ import {
   type KbDocumentPreviewResponse,
 } from '@/api/knowledge';
 import { ui } from '@/ui';
+import { apiErrorMessage } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
 
 const CHUNK_SIZE = 1024 * 1024;
@@ -370,8 +371,8 @@ async function handleUpload() {
     ui.message.success('Upload complete. The document is processing.');
     clearSelectedFile();
     await loadDocuments();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Upload failed.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Upload failed.'));
   } finally {
     uploading.value = false;
   }
@@ -390,8 +391,8 @@ async function loadDocuments() {
     } else {
       stopPolling();
     }
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Failed to load knowledge documents.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Failed to load knowledge documents.'));
   } finally {
     loading.value = false;
   }
@@ -406,8 +407,8 @@ async function handleDelete(documentId: number) {
       previewData.value = null;
     }
     await loadDocuments();
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Delete failed.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Delete failed.'));
   }
 }
 
@@ -425,8 +426,8 @@ async function handlePreview(document: KbDocumentItem, event?: MouseEvent) {
   try {
     const { data } = await previewKbDocument(document.id, 20000);
     previewData.value = data;
-  } catch (error: any) {
-    ui.message.error(error.response?.data?.message || 'Failed to load preview.');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, 'Failed to load preview.'));
   } finally {
     previewLoading.value = false;
   }

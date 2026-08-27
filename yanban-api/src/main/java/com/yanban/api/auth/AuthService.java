@@ -4,6 +4,7 @@ import com.yanban.api.invite.InviteCode;
 import com.yanban.api.invite.InviteCodeProperties;
 import com.yanban.api.invite.InviteCodeRepository;
 import com.yanban.api.demo.DemoAccountService;
+import com.yanban.api.error.ApiException;
 import com.yanban.api.security.JwtService;
 import com.yanban.api.security.JwtUser;
 import com.yanban.api.user.SysUser;
@@ -14,7 +15,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
-import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class AuthService {
@@ -44,7 +44,7 @@ public class AuthService {
     public AuthResponse register(RegisterRequest request) {
         String username = normalizeUsername(request.username());
         if (users.existsByUsername(username)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
+            throw new ApiException(HttpStatus.CONFLICT, "USERNAME_TAKEN", "用户名已存在");
         }
 
         Long inviteCodeId = validateAndConsumeInviteCode(request.inviteCode());
@@ -53,7 +53,7 @@ public class AuthService {
         try {
             users.saveAndFlush(user);
         } catch (DataIntegrityViolationException ex) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在", ex);
+            throw new ApiException(HttpStatus.CONFLICT, "USERNAME_TAKEN", "用户名已存在");
         }
         user.beginNewLogin();
         users.saveAndFlush(user);
@@ -63,10 +63,11 @@ public class AuthService {
     @Transactional
     public AuthResponse login(LoginRequest request) {
         String username = normalizeUsername(request.username());
-        SysUser user = users.findByUsername(username)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误"));
+        SysUser user = users.findByUsernameAndDeletedAtIsNull(username)
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.UNAUTHORIZED, "ACCOUNT_NOT_FOUND", "账号不存在"));
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "用户名或密码错误");
         }
         user.beginNewLogin();
         users.saveAndFlush(user);
@@ -84,10 +85,11 @@ public class AuthService {
     @Transactional(readOnly = true)
     public AuthResponse refresh(RefreshRequest request) {
         JwtUser jwtUser = jwtService.parseRefreshToken(request.refreshToken());
-        SysUser user = users.findById(jwtUser.id())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "刷新令牌无效"));
+        SysUser user = users.findByIdAndDeletedAtIsNull(jwtUser.id())
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.UNAUTHORIZED, "ACCOUNT_NOT_FOUND", "账号不存在"));
         if (user.getLoginVersion() != jwtUser.loginVersion()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已在其他设备更新，请重新登录");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "SESSION_REPLACED", "登录已在其他设备更新，请重新登录");
         }
         return tokensFor(user);
     }
@@ -101,7 +103,7 @@ public class AuthService {
             return null;
         }
         if (!StringUtils.hasText(rawInviteCode)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请填写邀请码");
+            throw inviteFailure("INVITE_CODE_REQUIRED", "请填写邀请码");
         }
         String code = rawInviteCode.trim();
         // Atomically increment used_count only if the code is valid and has remaining uses.
@@ -109,12 +111,15 @@ public class AuthService {
         if (updated == 0) {
             InviteCode inviteCode = inviteCodeRepository.findByCode(code).orElse(null);
             if (inviteCode == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "邀请码无效");
+                throw inviteFailure("INVITE_CODE_INVALID", "邀请码无效");
+            }
+            if (inviteCode.isDeleted()) {
+                throw inviteFailure("INVITE_CODE_DELETED", "邀请码已删除");
             }
             if (!Boolean.TRUE.equals(inviteCode.getEnabled())) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "邀请码已停用");
+                throw inviteFailure("INVITE_CODE_DISABLED", "邀请码已停用");
             }
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "邀请码使用次数已达上限");
+            throw inviteFailure("INVITE_CODE_EXHAUSTED", "邀请码使用次数已达上限");
         }
         return inviteCodeRepository.findByCode(code)
                 .map(InviteCode::getId)
@@ -131,5 +136,9 @@ public class AuthService {
 
     private String normalizeUsername(String username) {
         return username == null ? null : username.trim();
+    }
+
+    private ApiException inviteFailure(String code, String message) {
+        return new ApiException(HttpStatus.BAD_REQUEST, code, message, java.util.Map.of("inviteCode", message));
     }
 }

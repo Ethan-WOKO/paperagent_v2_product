@@ -123,6 +123,7 @@ class ProjectControllerIntegrationTest {
         mockMvc.perform(get("/api/v1/projects/42/files/read").param("path", "C:\\private\\secret.txt"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_PROJECT_PATH"))
+                .andExpect(jsonPath("$.fieldErrors").isMap())
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private"))));
         mockMvc.perform(get("/api/v1/projects/42/files/read").param("path", "../secret.txt"))
                 .andExpect(status().isBadRequest())

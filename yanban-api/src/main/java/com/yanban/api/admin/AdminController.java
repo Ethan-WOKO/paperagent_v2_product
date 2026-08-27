@@ -1,8 +1,10 @@
 package com.yanban.api.admin;
 
+import com.yanban.api.security.JwtUser;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,6 +35,13 @@ public class AdminController {
         return service.userDetail(userId);
     }
 
+    @DeleteMapping("/users/{userId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteUser(@AuthenticationPrincipal JwtUser administrator,
+                           @PathVariable Long userId) {
+        service.deleteUser(administrator.id(), userId);
+    }
+
     @PutMapping("/users/{userId}/quota")
     public AdminUserSummaryResponse updateQuota(@PathVariable Long userId,
                                                 @Valid @RequestBody AdminQuotaUpdateRequest request) {
@@ -47,6 +56,24 @@ public class AdminController {
     @GetMapping("/invite-codes")
     public List<AdminInviteCodeResponse> inviteCodes() {
         return service.listInviteCodes();
+    }
+
+    @PostMapping("/invite-codes/generate")
+    public AdminGeneratedInviteCodeResponse generateInviteCode() {
+        return new AdminGeneratedInviteCodeResponse(service.generateInviteCode());
+    }
+
+    @PostMapping("/invite-codes")
+    @ResponseStatus(HttpStatus.CREATED)
+    public AdminInviteCodeResponse createInviteCode(
+            @Valid @RequestBody AdminInviteCodeCreateRequest request) {
+        return service.createInviteCode(request);
+    }
+
+    @DeleteMapping("/invite-codes/{inviteCodeId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteInviteCode(@PathVariable Long inviteCodeId) {
+        service.deleteInviteCode(inviteCodeId);
     }
 
     @DeleteMapping("/demo/messages/{messageId}")

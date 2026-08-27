@@ -115,11 +115,17 @@ export function resolveUiMockResponse(request: MockRequest, scenario: UiMockScen
   if (method === 'GET' && path === '/skills') return { status: 200, data: mockSkills };
   if (method === 'GET' && path === '/admin/users') return { status: 200, data: mockAdminUsers };
   if (method === 'GET' && path === '/admin/users/1') return { status: 200, data: mockAdminDetail };
+  if (method === 'DELETE' && /^\/admin\/users\/\d+$/.test(path)) return { status: 204, data: null };
   if (method === 'GET' && path === '/admin/invite-codes') return { status: 200, data: mockAdminInvites };
+  if (method === 'POST' && path === '/admin/invite-codes/generate') {
+    return { status: 200, data: { code: 'YB-ABCD-EFGH-JKLM-NPQR' } };
+  }
+  if (method === 'POST' && path === '/admin/invite-codes') return { status: 201, data: mockAdminInvites[0] };
+  if (method === 'DELETE' && /^\/admin\/invite-codes\/\d+$/.test(path)) return { status: 204, data: null };
 
   return {
     status: 501,
-    data: { code: 'UI_MOCK_NOT_IMPLEMENTED', message: `${method} ${path} is not mocked yet.` },
+    data: { code: 'UI_MOCK_NOT_IMPLEMENTED', message: `${method} ${path} is not mocked yet.`, fieldErrors: {} },
   };
 }
 

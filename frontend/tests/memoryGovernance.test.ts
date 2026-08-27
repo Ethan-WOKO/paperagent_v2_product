@@ -53,7 +53,14 @@ describe('memoryActions', () => {
 describe('memoryApiError', () => {
   it('preserves stale Project details and exposes a deterministic stale flag', () => {
     const error = {
-      response: { status: 409, data: { detail: 'PROJECT memory is stale for the current Project version' } },
+      response: {
+        status: 409,
+        data: {
+          code: 'CONFLICT',
+          message: 'PROJECT memory is stale for the current Project version',
+          fieldErrors: {},
+        },
+      },
     };
 
     expect(memoryApiError(error, 'fallback')).toBe('PROJECT memory is stale for the current Project version');
@@ -61,7 +68,12 @@ describe('memoryApiError', () => {
   });
 
   it('preserves readable backend validation details', () => {
-    expect(memoryApiError({ response: { status: 400, data: { detail: 'expiresAt must be in the future' } } }, 'fallback'))
+    expect(memoryApiError({
+      response: {
+        status: 400,
+        data: { code: 'BAD_REQUEST', message: 'expiresAt must be in the future', fieldErrors: {} },
+      },
+    }, 'fallback'))
       .toBe('expiresAt must be in the future');
   });
 });

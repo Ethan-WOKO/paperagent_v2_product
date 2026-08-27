@@ -798,6 +798,7 @@ import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listRea
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectRevisions, listProjectSessions, listProjects, previewProjectFile, readProjectFile, readProjectRawFile, rejectCandidateValidation, renameProject, rollbackProjectRevision, searchProject, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
+import { apiErrorPayload } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
 import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
 import {
@@ -1403,15 +1404,14 @@ function revealFileInTree(path: string) {
 }
 
 function apiError(value: unknown) {
-  const item = value as { response?: { data?: { code?: string; message?: string; detail?: string }; headers?: Record<string, string> }; message?: string };
-  const message = item.response?.data?.detail || item.response?.data?.message || item.message;
-  if (message === 'Network Error') {
+  const item = value as { response?: { headers?: Record<string, string> }; message?: string };
+  if (item.message === 'Network Error') {
     return 'The upload connection was interrupted. Check the folder size and try again.';
   }
-  const code = item.response?.data?.code;
+  const failure = apiErrorPayload(value, 'Request failed.');
   const traceId = item.response?.headers?.['x-trace-id'];
-  const details = [code, traceId ? `traceId=${traceId}` : null].filter(Boolean).join(', ');
-  return `${message || 'Request failed.'}${details ? ` (${details})` : ''}`;
+  const details = [failure.code, traceId ? `traceId=${traceId}` : null].filter(Boolean).join(', ');
+  return `${failure.message}${details ? ` (${details})` : ''}`;
 }
 
 function apiStatus(value: unknown) {
