@@ -72,8 +72,8 @@ class MemoryDistillationWorker {
         } catch (RuntimeException failure) {
             String code = safeCode(failure);
             transactions.fail(work, code, userMessage(code));
-            log.warn("memory_distillation jobId={} userId={} outcome=failed errorType={}",
-                    work.jobId(), work.userId(), failure.getClass().getSimpleName());
+            log.warn("memory_distillation jobId={} userId={} outcome=failed errorCode={} errorType={}",
+                    work.jobId(), work.userId(), code, failure.getClass().getSimpleName());
         } finally {
             busy.set(false);
         }
@@ -89,6 +89,19 @@ class MemoryDistillationWorker {
         return switch (code) {
             case "MEMORY_DISTILLATION_RESPONSE_EMPTY", "MEMORY_DISTILLATION_RESPONSE_INVALID" ->
                     "模型没有返回有效的记忆候选，请检查模型配置后重试";
+            case "MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE",
+                    "MEMORY_DISTILLATION_ASSESSMENT_INVALID" ->
+                    "模型没有完成所有用户消息的记忆判断，请重试";
+            case "MEMORY_DISTILLATION_CONFIDENCE_TOO_LOW" ->
+                    "模型识别到长期记忆，但判断置信度不足，请重试";
+            case "MEMORY_DISTILLATION_SCOPE_UNRESOLVED" ->
+                    "模型识别到长期记忆，但无法确定其全局或项目作用域，请重试";
+            case "MEMORY_DISTILLATION_TOO_MANY_CANDIDATES", "MEMORY_DISTILLATION_CONTENT_INVALID",
+                    "MEMORY_DISTILLATION_TYPE_INVALID", "MEMORY_DISTILLATION_CONFIDENCE_INVALID",
+                    "MEMORY_DISTILLATION_SCOPE_CONFIDENCE_INVALID",
+                    "MEMORY_DISTILLATION_SOURCE_INVALID", "MEMORY_DISTILLATION_USER_EVIDENCE_REQUIRED",
+                    "MEMORY_DISTILLATION_MIXED_SCOPE", "MEMORY_DISTILLATION_SCOPE_INVALID" ->
+                    "模型返回的记忆候选未通过安全校验，请重试";
             case "MEMORY_DISTILLATION_CURSOR_CHANGED" -> "对话增量游标已变化，请重新发起任务";
             default -> "长期记忆沉淀失败，请检查模型设置后重试";
         };

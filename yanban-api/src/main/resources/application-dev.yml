@@ -28,6 +28,7 @@ yanban:
       max-input-characters: ${YANBAN_MEMORY_DISTILLATION_MAX_INPUT_CHARACTERS:24000}
       max-candidates: ${YANBAN_MEMORY_DISTILLATION_MAX_CANDIDATES:12}
       max-attempts: ${YANBAN_MEMORY_DISTILLATION_MAX_ATTEMPTS:3}
+      min-scope-confidence: ${YANBAN_MEMORY_DISTILLATION_MIN_SCOPE_CONFIDENCE:0.75}
   project:
     # Local IDEA use only. Remote/shared deployments must leave this false.
     allow-local-absolute-project-folders: ${YANBAN_PROJECT_ALLOW_LOCAL_ABSOLUTE_PROJECT_FOLDERS:true}

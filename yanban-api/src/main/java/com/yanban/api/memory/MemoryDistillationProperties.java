@@ -1,5 +1,6 @@
 package com.yanban.api.memory;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -14,6 +15,7 @@ public class MemoryDistillationProperties {
     private int maxInputCharacters = 24_000;
     private int maxCandidates = 12;
     private int maxAttempts = 3;
+    private BigDecimal minScopeConfidence = new BigDecimal("0.75");
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -55,6 +57,15 @@ public class MemoryDistillationProperties {
             throw new IllegalArgumentException("maxAttempts must be between 1 and 10");
         }
         this.maxAttempts = maxAttempts;
+    }
+    public BigDecimal getMinScopeConfidence() { return minScopeConfidence; }
+    public void setMinScopeConfidence(BigDecimal minScopeConfidence) {
+        if (minScopeConfidence == null
+                || minScopeConfidence.compareTo(BigDecimal.ZERO) < 0
+                || minScopeConfidence.compareTo(BigDecimal.ONE) > 0) {
+            throw new IllegalArgumentException("minScopeConfidence must be between 0 and 1");
+        }
+        this.minScopeConfidence = minScopeConfidence;
     }
 
     private Duration positive(Duration value, String name) {

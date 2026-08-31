@@ -52,6 +52,25 @@ class MemoryDistillationConversationServiceTest {
     }
 
     @Test
+    void limitsEachWindowToTheConfiguredNumberOfUserAssessments() {
+        MemoryDistillationProperties properties = new MemoryDistillationProperties();
+        properties.setMaxCandidates(2);
+        service = new MemoryDistillationConversationService(messages, sessions, properties);
+        AgentMessage firstUser = message(11L, 1L, 42L, "user", "first");
+        AgentMessage assistant = message(12L, 1L, 42L, "assistant", "reply");
+        AgentMessage secondUser = message(13L, 1L, 42L, "user", "second");
+        AgentMessage nextUser = message(14L, 1L, 42L, "user", "next window");
+        when(messages.findDistillationWindow(
+                eq(42L), eq(10L), org.mockito.ArgumentMatchers.<String>anyCollection(), any(Pageable.class)))
+                .thenReturn(List.of(firstUser, assistant, secondUser, nextUser));
+
+        MemoryDistillationConversationService.FrozenWindow window = service.freeze(42L, 10L);
+
+        assertThat(window.throughMessageId()).isEqualTo(13L);
+        assertThat(window.messageCount()).isEqualTo(3);
+    }
+
+    @Test
     void loadsOnlyOwnerQualifiedWorkspaceAndExactProjectSessions() {
         AgentMessage workspace = message(21L, 1L, 42L, "user", "workspace preference");
         AgentMessage project = message(22L, 2L, 42L, "user", "project decision");

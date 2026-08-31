@@ -36,14 +36,18 @@ class MemoryDistillationConversationService {
         if (candidates.isEmpty()) return new FrozenWindow(afterMessageId, afterMessageId, 0);
         int remaining = properties.getMaxInputCharacters();
         int count = 0;
+        int userCount = 0;
         long through = afterMessageId;
         for (AgentMessage message : candidates) {
+            boolean userMessage = "user".equalsIgnoreCase(message.getRole());
+            if (userMessage && userCount >= properties.getMaxCandidates()) break;
             String content = boundedContent(message.getContent());
             int cost = Math.max(1, content.length());
             if (count > 0 && cost > remaining) break;
             remaining -= Math.min(cost, remaining);
             through = message.getId();
             count++;
+            if (userMessage) userCount++;
             if (remaining <= 0) break;
         }
         return new FrozenWindow(afterMessageId, through, count);

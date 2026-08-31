@@ -65,6 +65,66 @@ class MemoryDistillationWorkerTest {
     }
 
     @Test
+    void candidateValidationFailureUsesAnAccurateUserMessage() {
+        MemoryDistillationTransactions.Work work = work();
+        when(transactions.claim()).thenReturn(work);
+        when(conversations.load(42L, 0L, 5L)).thenReturn(List.of());
+        when(extractor.extract(42L, 9L, List.of()))
+                .thenThrow(new IllegalStateException("MEMORY_DISTILLATION_MIXED_SCOPE"));
+
+        worker(Runnable::run).scan();
+
+        verify(transactions).fail(work, "MEMORY_DISTILLATION_MIXED_SCOPE",
+                "模型返回的记忆候选未通过安全校验，请重试");
+        verify(transactions, never()).succeed(work, List.of());
+    }
+
+    @Test
+    void incompletePerMessageAssessmentDoesNotAdvanceTheJob() {
+        MemoryDistillationTransactions.Work work = work();
+        when(transactions.claim()).thenReturn(work);
+        when(conversations.load(42L, 0L, 5L)).thenReturn(List.of());
+        when(extractor.extract(42L, 9L, List.of()))
+                .thenThrow(new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE"));
+
+        worker(Runnable::run).scan();
+
+        verify(transactions).fail(work, "MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE",
+                "模型没有完成所有用户消息的记忆判断，请重试");
+        verify(transactions, never()).succeed(work, List.of());
+    }
+
+    @Test
+    void lowConfidenceRememberAssessmentDoesNotDisappearAsSuccessfulZeroResult() {
+        MemoryDistillationTransactions.Work work = work();
+        when(transactions.claim()).thenReturn(work);
+        when(conversations.load(42L, 0L, 5L)).thenReturn(List.of());
+        when(extractor.extract(42L, 9L, List.of()))
+                .thenThrow(new IllegalStateException("MEMORY_DISTILLATION_CONFIDENCE_TOO_LOW"));
+
+        worker(Runnable::run).scan();
+
+        verify(transactions).fail(work, "MEMORY_DISTILLATION_CONFIDENCE_TOO_LOW",
+                "模型识别到长期记忆，但判断置信度不足，请重试");
+        verify(transactions, never()).succeed(work, List.of());
+    }
+
+    @Test
+    void unresolvedScopeDoesNotAdvanceTheJob() {
+        MemoryDistillationTransactions.Work work = work();
+        when(transactions.claim()).thenReturn(work);
+        when(conversations.load(42L, 0L, 5L)).thenReturn(List.of());
+        when(extractor.extract(42L, 9L, List.of()))
+                .thenThrow(new IllegalStateException("MEMORY_DISTILLATION_SCOPE_UNRESOLVED"));
+
+        worker(Runnable::run).scan();
+
+        verify(transactions).fail(work, "MEMORY_DISTILLATION_SCOPE_UNRESOLVED",
+                "模型识别到长期记忆，但无法确定其全局或项目作用域，请重试");
+        verify(transactions, never()).succeed(work, List.of());
+    }
+
+    @Test
     void rejectedDispatchMarksClaimedJobFailedAndReleasesWorker() {
         MemoryDistillationTransactions.Work work = work();
         when(transactions.claim()).thenReturn(work);
