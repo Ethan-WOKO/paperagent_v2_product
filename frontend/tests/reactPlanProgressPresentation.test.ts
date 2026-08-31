@@ -16,9 +16,10 @@ describe('ReActPlan progress presentation', () => {
     expect(source).not.toContain('reactplan-stage-messages');
   });
 
-  it('preserves the user-selected execution-detail state after completion', () => {
+  it('defaults execution details to collapsed and preserves the user-selected state', () => {
     expect(source).toContain(':open="reactPlanProcessIsOpen(item.record)"');
     expect(source).toContain('@toggle="rememberReactPlanProcessOpen(item.record.taskId, $event)"');
-    expect(source).toContain("event.type === 'tool' || event.type === 'message'");
+    expect(source).toContain('return remembered ?? false;');
+    expect(source).not.toContain("record.events.some((event) => event.type === 'tool' || event.type === 'message')");
   });
 });

@@ -1150,7 +1150,7 @@ const projectLayoutStyle = computed(() => ({
 
 function reactPlanProcessIsOpen(record: ReactPlanTaskRecord) {
   const remembered = reactPlanProcessOpen.value[record.taskId];
-  return remembered ?? record.events.some((event) => event.type === 'tool' || event.type === 'message');
+  return remembered ?? false;
 }
 
 function rememberReactPlanProcessOpen(taskId: string, event: Event) {

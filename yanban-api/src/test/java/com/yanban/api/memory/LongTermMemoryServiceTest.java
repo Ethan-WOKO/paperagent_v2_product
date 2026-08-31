@@ -69,6 +69,48 @@ class LongTermMemoryServiceTest {
     }
 
     @Test
+    void distilledCandidateIsVisibleButUnconfirmedUntilUserReview() {
+        when(memories.findByUserIdAndSourceTypeAndSourceRefId(
+                eq(42L), eq(AgentLongTermMemory.SOURCE_LLM_DISTILLED), any()))
+                .thenReturn(Optional.empty());
+
+        LongTermMemoryService.DistilledMemoryWriteResult result = service.createDistilledMemory(
+                42L,
+                new MemoryDistillationCandidate(
+                        "USER", null, "PREFERENCE", "用户偏好简洁的中文回答。",
+                        List.of("语言", "风格"), new BigDecimal("0.91"), List.of(11L)));
+
+        assertThat(result.created()).isTrue();
+        assertThat(result.memory().getStatus()).isEqualTo(AgentLongTermMemory.STATUS_ACTIVE);
+        assertThat(result.memory().getConfirmationStatus())
+                .isEqualTo(AgentLongTermMemory.CONFIRMATION_UNCONFIRMED);
+        assertThat(result.memory().getSourceType()).isEqualTo(AgentLongTermMemory.SOURCE_LLM_DISTILLED);
+        assertThat(result.memory().getSourceRefId()).startsWith("distilled:");
+        assertThat(result.memory().getConfirmedAt()).isNull();
+        assertThat(result.memory().getProvenanceType()).isNull();
+    }
+
+    @Test
+    void distilledProjectCandidateBindsTheCurrentServerProjectVersion() {
+        String version = "c".repeat(64);
+        when(projectService.manifest(42L, 7L)).thenReturn(new ProjectManifestResponse(7L, version, List.of()));
+        when(memories.findByUserIdAndSourceTypeAndSourceRefId(
+                eq(42L), eq(AgentLongTermMemory.SOURCE_LLM_DISTILLED), any()))
+                .thenReturn(Optional.empty());
+
+        LongTermMemoryService.DistilledMemoryWriteResult result = service.createDistilledMemory(
+                42L,
+                new MemoryDistillationCandidate(
+                        "PROJECT", 7L, "DECISION", "项目构建固定使用 Java 17。",
+                        List.of("构建"), new BigDecimal("0.88"), List.of(21L)));
+
+        assertThat(result.memory().getProjectId()).isEqualTo(7L);
+        assertThat(result.memory().getProjectVersion()).isEqualTo(version);
+        assertThat(result.memory().getConfirmationStatus())
+                .isEqualTo(AgentLongTermMemory.CONFIRMATION_UNCONFIRMED);
+    }
+
+    @Test
     void activeListUsesTimeAwareGovernanceQuery() {
         AgentLongTermMemory active = userMemory(42L);
         when(memories.findActiveForGovernance(eq(42L), any(Instant.class), any()))

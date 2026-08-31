@@ -17,7 +17,18 @@ Engine 在首次接受 task 时冻结并持久化这份快照，恢复时继续�
 
 本节只描述 ReAct 链路。下方关键词匹配、最多五条和 1600 字符预算仍是旧普通 Agent
 调用链的现状，不应用于 ReAct 首版。RAG、自动记忆提取和动态相关性检索不在 Issue
-#173 范围内。
+#173 范围内。自动记忆提取后来由 Issue #209 作为独立的、用户可选的沉淀链路实现；
+它不改变本节的 ReAct 快照规则。
+
+## Distilled-memory gate（Issue #209，2026-08-27）
+
+工作区与项目对话可由用户手动发起沉淀，也可在用户明确开启后定期沉淀。模型提取结果
+以 `LLM_DISTILLED` 来源写入现有长期记忆表，但初始确认状态固定为 `UNCONFIRMED`。
+因此新候选会显示在长期记忆页面，用户可以确认、拒绝、更正、设置过期时间或软删除；
+在用户确认或更正之前，普通 Agent 和 ReAct 的既有治理查询都不会把它注入上下文。
+
+沉淀失败不会写入部分候选、不会推进消息游标，也不会中断或改变原有聊天、Project、
+知识库和论文链路。PROJECT 候选继续要求精确的 owner、Project 和当前 ProjectVersion。
 
 ## Goal
 
@@ -33,10 +44,8 @@ This implementation is intentionally narrow:
 
 ## Non-goals
 
-- No automatic memory extraction from chat turns.
 - No vector retrieval.
 - No LangChain4j memory adapter yet.
-- No project-scoped memory retrieval beyond preserving the existing `project_id` field.
 
 ## Runtime flow
 
