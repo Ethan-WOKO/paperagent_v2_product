@@ -216,7 +216,7 @@
                     <div class="message-role">{{ message.role === 'user' ? '你' : 'ScholarAI' }}</div>
                     <div class="message-content">
                       <template v-if="message.role === 'assistant'">
-                        <MarkdownMessage :content="message.content || '正在思考...'" />
+                        <MarkdownMessage variant="workspace" :content="message.content || '正在思考...'" />
                         <div v-if="message.artifacts?.length" class="chat-artifact-list">
                           <article v-for="artifact in message.artifacts" :key="artifact.id" class="chat-artifact-card">
                             <div class="chat-artifact-card__icon">{{ artifactIconLabel(artifact) }}</div>

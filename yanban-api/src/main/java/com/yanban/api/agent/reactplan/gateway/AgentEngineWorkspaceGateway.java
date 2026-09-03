@@ -412,34 +412,103 @@ final class AgentEngineWorkspaceGateway {
         return List.copyOf(changes);
     }
 
-    ResolvedInputs resolveInputs(EngineTaskAuthority authority, List<SandboxInput> requested) {
+    ResolvedInputs resolveInputs(
+            EngineTaskAuthority authority,
+            List<String> argv,
+            List<SandboxInput> requested) {
         if (requested == null || requested.isEmpty() || requested.size() > 64) {
             throw EngineGatewayException.badRequest("SANDBOX_INPUTS_INVALID");
         }
         BoundWorkspace bound = bind(authority);
+        List<WorkspaceFileStat> orderedStats = stats(bound);
         Map<String, WorkspaceFileStat> stats = new LinkedHashMap<>();
-        stats(bound).forEach(value -> stats.put(value.path().value(), value));
-        Map<String, String> files = new LinkedHashMap<>();
-        List<ReceiptInput> inputs = new ArrayList<>();
+        orderedStats.forEach(value -> stats.put(value.path().value(), value));
+        Map<String, SandboxInput> anchors = new LinkedHashMap<>();
         for (SandboxInput input : requested) {
             if (input == null || input.path() == null || input.sha256() == null
-                    || !input.sha256().matches("[a-f0-9]{64}") || files.containsKey(input.path())) {
+                    || !input.sha256().matches("[a-f0-9]{64}")
+                    || anchors.putIfAbsent(input.path(), input) != null) {
                 throw EngineGatewayException.badRequest("SANDBOX_INPUTS_INVALID");
             }
             WorkspaceFileStat stat = stats.get(input.path());
-            if (stat == null) throw EngineGatewayException.notFound("SANDBOX_INPUT_NOT_FOUND");
-            if (!stat.hash().value().equals(input.sha256())) {
-                throw EngineGatewayException.conflict("SANDBOX_INPUT_HASH_CONFLICT");
+            if (stat == null) {
+                throw EngineGatewayException.notFound("SANDBOX_INPUT_NOT_FOUND");
             }
-            byte[] bytes = bound.port().read(bound.materialized().workspace(), stat.path());
-            if (bytes.length != stat.size() || !sha256(bytes).equals(input.sha256())) {
-                throw EngineGatewayException.conflict("SANDBOX_INPUT_CHANGED");
-            }
+            verifyBytes(bound, stat, input.sha256());
+        }
+        if (argv != null && !argv.isEmpty() && "mvn".equals(argv.get(0))) {
+            return resolveMavenInputs(authority, bound, orderedStats, anchors);
+        }
+        Map<String, String> files = new LinkedHashMap<>();
+        List<ReceiptInput> inputs = new ArrayList<>();
+        for (SandboxInput input : requested) {
+            WorkspaceFileStat stat = stats.get(input.path());
+            byte[] bytes = verifyBytes(bound, stat, input.sha256());
             files.put(input.path(), utf8(bytes));
             inputs.add(new ReceiptInput(input.path(), input.sha256(), bytes.length));
         }
         inputs.sort(Comparator.comparing(ReceiptInput::path));
         return new ResolvedInputs(Map.copyOf(files), List.copyOf(inputs), fingerprint(inputs));
+    }
+
+    private ResolvedInputs resolveMavenInputs(
+            EngineTaskAuthority authority,
+            BoundWorkspace bound,
+            List<WorkspaceFileStat> orderedStats,
+            Map<String, SandboxInput> anchors) {
+        if (orderedStats.stream().noneMatch(stat -> "pom.xml".equals(stat.path().value()))) {
+            throw EngineGatewayException.badRequest("MAVEN_ROOT_POM_REQUIRED");
+        }
+        AgentEngineGatewayDtos.WorkspaceDiff workspaceDiff = diff(authority);
+        for (AgentEngineGatewayDtos.WorkspaceDiffEntry change : workspaceDiff.entries()) {
+            if (readOnlyBinaryPath(change.path())) {
+                throw EngineGatewayException.badRequest(
+                        "MAVEN_BINARY_RESOURCE_UNSUPPORTED");
+            }
+            SandboxInput anchor = anchors.get(change.path());
+            if (anchor == null || !change.afterSha256().equals(anchor.sha256())) {
+                throw EngineGatewayException.badRequest(
+                        "MAVEN_CHANGED_INPUT_MISSING");
+            }
+        }
+        if (orderedStats.stream().map(stat -> stat.path().value())
+                .anyMatch(AgentEngineWorkspaceGateway::unsupportedMavenBinaryResource)) {
+            throw EngineGatewayException.badRequest(
+                    "MAVEN_BINARY_RESOURCE_UNSUPPORTED");
+        }
+        Map<String, String> files = new LinkedHashMap<>();
+        List<ReceiptInput> inputs = new ArrayList<>();
+        long totalBytes = 0;
+        for (WorkspaceFileStat stat : orderedStats) {
+            String path = stat.path().value();
+            if (readOnlyBinaryPath(path)) {
+                continue;
+            }
+            if (inputs.size() >= properties.getMaxSandboxContextFiles()
+                    || stat.size() > properties.getMaxSandboxContextFileBytes()
+                    || stat.size() > properties.getMaxSandboxContextBytes() - totalBytes) {
+                throw EngineGatewayException.tooLarge(
+                        "MAVEN_CONTEXT_LIMIT_EXCEEDED");
+            }
+            byte[] bytes = verifyBytes(bound, stat, stat.hash().value());
+            files.put(path, utf8(bytes));
+            inputs.add(new ReceiptInput(path, stat.hash().value(), bytes.length));
+            totalBytes += bytes.length;
+        }
+        return new ResolvedInputs(
+                Map.copyOf(files), List.copyOf(inputs), fingerprint(inputs));
+    }
+
+    private static byte[] verifyBytes(
+            BoundWorkspace bound, WorkspaceFileStat stat, String expectedSha256) {
+        if (!stat.hash().value().equals(expectedSha256)) {
+            throw EngineGatewayException.conflict("SANDBOX_INPUT_HASH_CONFLICT");
+        }
+        byte[] bytes = bound.port().read(bound.materialized().workspace(), stat.path());
+        if (bytes.length != stat.size() || !sha256(bytes).equals(expectedSha256)) {
+            throw EngineGatewayException.conflict("SANDBOX_INPUT_CHANGED");
+        }
+        return bytes;
     }
 
     private BoundWorkspace bind(EngineTaskAuthority authority) {
@@ -558,6 +627,15 @@ final class AgentEngineWorkspaceGateway {
 
     private static boolean readOnlyBinaryPath(String path) {
         return path.toLowerCase(Locale.ROOT).matches(".*\\.(pdf|doc|docx|xlsx)$");
+    }
+
+    private static boolean unsupportedMavenBinaryResource(String path) {
+        if (!readOnlyBinaryPath(path)) {
+            return false;
+        }
+        String normalized = "/" + path.toLowerCase(Locale.ROOT) + "/";
+        return normalized.contains("/src/main/resources/")
+                || normalized.contains("/src/test/resources/");
     }
 
     private static String mediaType(String path) {

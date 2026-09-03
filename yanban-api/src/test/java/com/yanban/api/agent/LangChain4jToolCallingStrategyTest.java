@@ -436,41 +436,6 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
-    void allowsRepeatedPollingStatusToolCalls() {
-        ToolRegistry registry = new ToolRegistry().register(new StubToolExecutor("literature_search_status", objectMapper));
-        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
-        when(chatModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class), any(AgentRuntimeRequest.class)))
-                .thenReturn(ChatResponse.builder()
-                        .aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
-                                .id("call-1")
-                                .name("literature_search_status")
-                                .arguments("{\"taskId\":3}")
-                                .build())))
-                        .build())
-                .thenReturn(ChatResponse.builder()
-                        .aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
-                                .id("call-2")
-                                .name("literature_search_status")
-                                .arguments("{\"taskId\":3}")
-                                .build())))
-                        .build())
-                .thenReturn(ChatResponse.builder()
-                        .aiMessage(AiMessage.from("Task is still running."))
-                        .build());
-        LangChain4jToolCallingStrategy strategy = new LangChain4jToolCallingStrategy(
-                chatModel,
-                toolProvider(registry),
-                objectMapper
-        );
-
-        AgentRuntimeResult result = strategy.run(request(List.of("literature_search_status"), 3, 1));
-
-        assertThat(result.success()).isTrue();
-        assertThat(result.assistantContent()).isEqualTo("Task is still running.");
-        assertThat(result.toolTrace()).hasSize(2);
-    }
-
-    @Test
     void terminalAsyncStateCannotBePolledAgain() {
         ToolRegistry registry = new ToolRegistry().register(new StubToolExecutor("terminal_status", objectMapper));
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
@@ -556,10 +521,15 @@ class LangChain4jToolCallingStrategyTest {
                 .register(new InternalStubToolExecutor("recommend_literature", objectMapper))
                 .register(new InternalStubToolExecutor("search_knowledge", objectMapper))
                 .register(new InternalStubToolExecutor("paper_task_cancel", objectMapper))
-                .register(new InternalStubToolExecutor("literature_search_start", objectMapper));
+                .register(new InternalStubToolExecutor("literature_search_start", objectMapper))
+                .register(new InternalStubToolExecutor("literature_search_status", objectMapper))
+                .register(new InternalStubToolExecutor("literature_search_result", objectMapper))
+                .register(new InternalStubToolExecutor("literature_search_cancel", objectMapper));
 
         assertThat(toolProvider(registry).provideTools(request(
-                List.of("search_web", "recommend_literature", "search_knowledge", "paper_task_cancel", "literature_search_start"),
+                List.of("search_web", "recommend_literature", "search_knowledge", "paper_task_cancel",
+                        "literature_search_start", "literature_search_status", "literature_search_result",
+                        "literature_search_cancel"),
                 6, 1)).tools().keySet())
                 .extracting(dev.langchain4j.agent.tool.ToolSpecification::name)
                 .containsExactlyInAnyOrder("search_web", "recommend_literature", "search_knowledge");
@@ -853,6 +823,58 @@ class LangChain4jToolCallingStrategyTest {
         assertThat(result.promptTokens()).isEqualTo(9);
         assertThat(result.completionTokens()).isEqualTo(2);
         assertThat(result.totalTokens()).isEqualTo(11);
+    }
+
+    @Test
+    void preservesWhitespaceDeltasInBothFinalAnswerAndLiveStream() {
+        List<String> deltas = List.of(
+                "## 基本操作流程", "\n\n", "1.", " ", "**进入项目页面**", "\n",
+                "2.", " ", "描述任务。", "\n\n", "```java", "\n", "    ",
+                "if (ready) {", "\n", "\t", "run();", "\n", "    ", "}", "\n", "```");
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        when(chatModel.stream(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
+                .thenReturn(Flux.concat(
+                        Flux.just(ChatChunk.token(null), ChatChunk.token("")),
+                        Flux.fromIterable(deltas).map(ChatChunk::token),
+                        Flux.just(ChatChunk.usage(new com.yanban.core.model.ChatResponse.Usage(9, 2, 11)),
+                                ChatChunk.done("stop"))));
+        List<String> tokens = new ArrayList<>();
+
+        AgentRuntimeResult result = new LangChain4jToolCallingStrategy(
+                chatModel, toolProvider(new ToolRegistry()), objectMapper)
+                .run(request(List.of(), 0, 1, tokens::add));
+
+        assertThat(result.success()).isTrue();
+        assertThat(tokens).containsExactlyElementsOf(deltas);
+        assertThat(result.assistantContent()).isEqualTo(String.join("", deltas));
+        assertThat(result.totalTokens()).isEqualTo(11);
+    }
+
+    @Test
+    void whitespaceFixDoesNotExposeToolCallPayloadsInLiveStream() {
+        ToolRegistry registry = new ToolRegistry().register(new StubToolExecutor("search_web", objectMapper));
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        when(chatModel.stream(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
+                .thenReturn(Flux.just(
+                        ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(
+                                0, "call-1", "function", "search_web", "{\"query\":")),
+                        ChatChunk.token("\n\n"),
+                        ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(
+                                0, null, null, null, "\"radar\"}")),
+                        ChatChunk.token("hidden tool text"),
+                        ChatChunk.done("tool_calls")))
+                .thenReturn(Flux.just(ChatChunk.token("Found"), ChatChunk.token(" "),
+                        ChatChunk.token("sources."), ChatChunk.done("stop")));
+        List<String> tokens = new ArrayList<>();
+
+        AgentRuntimeResult result = new LangChain4jToolCallingStrategy(
+                chatModel, toolProvider(registry), objectMapper)
+                .run(request(List.of("search_web"), 2, 1, tokens::add));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.toolTrace()).hasSize(1);
+        assertThat(tokens).containsExactly("Found", " ", "sources.");
+        assertThat(result.assistantContent()).isEqualTo("Found sources.");
     }
 
     private AgentRuntimeRequest request(List<String> allowedTools, Integer maxToolCalls, Integer maxDuplicateToolCalls) {

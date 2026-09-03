@@ -69,7 +69,8 @@ public class AgentChatStreamController {
                     sessionId,
                     request,
                     token -> {
-                        if (StringUtils.hasText(token)) {
+                        // Content deltas must keep spaces/newlines, unlike progress messages.
+                        if (token != null && !token.isEmpty()) {
                             writer.send(ChatStreamEvent.chunk(
                                     sessionId, token, request.clientRequestId()));
                         }

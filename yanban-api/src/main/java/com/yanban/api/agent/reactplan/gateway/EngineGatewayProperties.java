@@ -19,6 +19,15 @@ public class EngineGatewayProperties {
     @Min(1)
     @Max(10 * 1024 * 1024)
     private int maxReadBytes = 10 * 1024 * 1024;
+    @Min(1)
+    @Max(256)
+    private int maxSandboxContextFiles = 256;
+    @Min(1)
+    @Max(20L * 1024 * 1024)
+    private long maxSandboxContextBytes = 20L * 1024 * 1024;
+    @Min(1)
+    @Max(5L * 1024 * 1024)
+    private long maxSandboxContextFileBytes = 5L * 1024 * 1024;
 
     @AssertTrue(message = "enabled engine gateway requires a deployment task-grant secret of at least 32 characters")
     public boolean isTaskGrantConfigurationSafe() {
@@ -40,6 +49,18 @@ public class EngineGatewayProperties {
     public void setTaskGrantTtl(Duration taskGrantTtl) { this.taskGrantTtl = taskGrantTtl; }
     public int getMaxReadBytes() { return maxReadBytes; }
     public void setMaxReadBytes(int maxReadBytes) { this.maxReadBytes = maxReadBytes; }
+    public int getMaxSandboxContextFiles() { return maxSandboxContextFiles; }
+    public void setMaxSandboxContextFiles(int maxSandboxContextFiles) {
+        this.maxSandboxContextFiles = maxSandboxContextFiles;
+    }
+    public long getMaxSandboxContextBytes() { return maxSandboxContextBytes; }
+    public void setMaxSandboxContextBytes(long maxSandboxContextBytes) {
+        this.maxSandboxContextBytes = maxSandboxContextBytes;
+    }
+    public long getMaxSandboxContextFileBytes() { return maxSandboxContextFileBytes; }
+    public void setMaxSandboxContextFileBytes(long maxSandboxContextFileBytes) {
+        this.maxSandboxContextFileBytes = maxSandboxContextFileBytes;
+    }
     public String getWorkspaceRoot() { return workspaceRoot; }
     public void setWorkspaceRoot(String workspaceRoot) { this.workspaceRoot = workspaceRoot; }
 }
