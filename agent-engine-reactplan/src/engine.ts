@@ -9,8 +9,11 @@ const MAX_MODEL_CALLS = 20;
 const MAX_OUTPUT_TOKENS = 4096 as const;
 const MAX_CANDIDATE_VALIDATION_REPAIRS = 2;
 const MAX_TOOL_ARGUMENT_REPAIRS = 2;
+const MAX_REGISTERED_STATUS_POLLS = 4;
+const MAX_UNCHANGED_REGISTERED_STATUS_POLLS = 1;
 const TERMINAL_SANDBOX = new Set(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "SYSTEM_ERROR"]);
 const SUPERSEDED_REGISTERED_TOOLS = new Set(["project_manifest", "project_read_file"]);
+const BOUNDED_REGISTERED_STATUS_TOOLS = new Set(["literature_search_status"]);
 const TASK_LEASE_LOST = Symbol("TASK_LEASE_LOST");
 
 const MODEL_TOOLS = [
@@ -925,6 +928,8 @@ export class AgentEngine {
         arguments: args, requestDigest
       }, signal);
       validateRegisteredToolResult(result, call.id, call.name, requestDigest);
+      const pollingControl = updateRegisteredPollingControl(
+        task, call.name, requestDigest, result);
       task.observations.toolPaths = stableUnique([
         ...task.observations.toolPaths, ...pathsFromToolOutput(result.output)
       ]);
@@ -935,8 +940,17 @@ export class AgentEngine {
       task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
         success: result.success, output: result.output, errorCode: result.errorCode,
         errorMessage: result.errorMessage, retryable: result.retryable,
-        evidenceRefs: result.evidenceRefs, version: result.version
+        evidenceRefs: result.evidenceRefs, version: result.version,
+        ...(pollingControl ? { pollingControl } : {})
       }) });
+      if (pollingControl?.suppressed) {
+        task.messages.push({
+          role: "user",
+          content: pollingControl.terminal
+            ? "The asynchronous literature task is terminal. Do not call literature_search_status again in this turn; use literature_search_result if the user needs the result."
+            : "The asynchronous literature task has no meaningful new state within the bounded polling window. Do not poll it again in this turn. Return the current progress concisely and tell the user that a later turn can check again."
+        });
+      }
       return false;
     }
     throw new EngineProblem(502, problem("MODEL_TOOL_UNKNOWN", "model", "Model requested an unsupported tool"));
@@ -1251,6 +1265,49 @@ function registeredToolResultSummary(toolName: string, result: RegisteredToolRes
   ].join("; ");
 }
 
+function updateRegisteredPollingControl(
+  task: PersistedTask, toolName: string, requestDigest: string,
+  result: RegisteredToolResult
+): { suppressed: boolean; reason: "terminal" | "unchanged" | "budget" | null;
+     terminal: boolean; totalPolls: number; unchangedPolls: number } | null {
+  if (!BOUNDED_REGISTERED_STATUS_TOOLS.has(toolName) || !result.success
+      || result.output === null || Array.isArray(result.output)
+      || typeof result.output !== "object") return null;
+  const output = result.output as Record<string, unknown>;
+  const stateFingerprint = digestObject({
+    taskId: output.taskId ?? null,
+    status: output.status ?? null,
+    currentStage: output.currentStage ?? null,
+    terminal: output.terminal ?? null,
+    partialResultAvailable: output.partialResultAvailable ?? null,
+    rawCandidateCount: output.rawCandidateCount ?? null,
+    uniqueCandidateCount: output.uniqueCandidateCount ?? null,
+    sourceAttempts: output.sourceAttempts ?? null,
+    errorMessage: output.errorMessage ?? null
+  });
+  task.registeredToolPolls ??= {};
+  const previous = task.registeredToolPolls[requestDigest];
+  const unchangedPolls = previous?.lastStateFingerprint === stateFingerprint
+    ? previous.unchangedPolls + 1 : 0;
+  const totalPolls = (previous?.totalPolls ?? 0) + 1;
+  task.registeredToolPolls[requestDigest] = {
+    totalPolls, unchangedPolls, lastStateFingerprint: stateFingerprint
+  };
+  const terminalState = output.terminal === true;
+  const reason = terminalState ? "terminal"
+    : unchangedPolls >= MAX_UNCHANGED_REGISTERED_STATUS_POLLS ? "unchanged"
+    : totalPolls >= MAX_REGISTERED_STATUS_POLLS ? "budget" : null;
+  const suppressed = reason !== null;
+  if (suppressed) {
+    task.suppressedRegisteredToolNames = stableUnique([
+      ...(task.suppressedRegisteredToolNames ?? []), toolName
+    ]);
+  }
+  return {
+    suppressed, reason, terminal: terminalState, totalPolls, unchangedPolls
+  };
+}
+
 function validateRegisteredToolCatalog(catalog: RegisteredToolCatalog, task: PersistedTask): void {
   if (catalog.contractVersion !== "1.0" || catalog.taskId !== task.view.taskId
       || catalog.projectVersion !== task.authority.project.projectVersion
@@ -1400,6 +1457,8 @@ function normalizePersistedTask(task: PersistedTask): void {
   task.toolArgumentRepairAttempts ??= 0;
   task.discoveredToolNames ??= [];
   task.loadedToolNames ??= [];
+  task.registeredToolPolls ??= {};
+  task.suppressedRegisteredToolNames ??= [];
   task.cancellationRequested ??= false;
   task.activeSandboxCallId ??= null;
 }
@@ -1422,8 +1481,10 @@ function availableToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
 }
 
 function availableRegisteredToolSpecs(task: PersistedTask): RegisteredToolSpec[] {
+  const suppressed = new Set(task.suppressedRegisteredToolNames ?? []);
   return (task.registeredTools ?? []).filter((tool) =>
-    !SUPERSEDED_REGISTERED_TOOLS.has(tool.function.name));
+    !SUPERSEDED_REGISTERED_TOOLS.has(tool.function.name)
+    && !suppressed.has(tool.function.name));
 }
 
 function loadedToolSpecs(

@@ -735,6 +735,101 @@ describe("AgentEngine", () => {
     expect(JSON.stringify(provider.requests)).toContain("PRIVATE_SEARCH_RESULT");
   });
 
+  it("stops Project literature status polling after two unchanged observations", async () => {
+    const provider = new ScriptedProvider([
+      tool("literature_search_status", { taskId: 42 }),
+      tool("literature_search_status", { taskId: 42 }),
+      { content: "The literature search is still running; check again later.", toolCalls: [] }
+    ]);
+    const gateway = new LiteratureStatusGateway([
+      { status: "RUNNING", currentStage: "FETCHING", terminal: false },
+      { status: "RUNNING", currentStage: "FETCHING", terminal: false }
+    ]);
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(gateway.statusInvocations).toBe(2);
+    const finalRequest = provider.requests.at(-1)!;
+    expect((finalRequest.tools as Array<{ function: { name: string } }>).map((candidate) =>
+      candidate.function.name)).not.toContain("literature_search_status");
+    const boundedPoll = finalRequest.messages.filter((message) =>
+      message.role === "tool" && message.content?.includes("pollingControl"))
+      .map((message) => JSON.parse(message.content!) as {
+        pollingControl?: { suppressed: boolean; reason: string };
+      }).at(-1);
+    expect(boundedPoll?.pollingControl).toMatchObject({
+      suppressed: true, reason: "unchanged"
+    });
+    expect(JSON.stringify(finalRequest.messages)).toContain("Do not poll it again in this turn");
+    expect((await engine.events(taskId)).filter((event) => event.type === "tool"
+      && event.name === "registered.invoke" && event.state === "requested")).toHaveLength(2);
+  });
+
+  it("allows meaningful literature status transitions before terminal suppression", async () => {
+    const provider = new ScriptedProvider([
+      tool("literature_search_status", { taskId: 42 }),
+      tool("literature_search_status", { taskId: 42 }),
+      tool("literature_search_status", { taskId: 42 }),
+      { content: "The literature search finished and its result is ready.", toolCalls: [] }
+    ]);
+    const gateway = new LiteratureStatusGateway([
+      { status: "RUNNING", currentStage: "FETCHING", terminal: false },
+      { status: "RUNNING", currentStage: "RANKING", terminal: false },
+      { status: "SUCCEEDED", currentStage: "COMPLETED", terminal: true }
+    ]);
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(gateway.statusInvocations).toBe(3);
+    const finalRequest = provider.requests.at(-1)!;
+    const terminalPoll = finalRequest.messages.filter((message) =>
+      message.role === "tool" && message.content?.includes("pollingControl"))
+      .map((message) => JSON.parse(message.content!) as {
+        pollingControl?: { suppressed: boolean; reason: string };
+      }).at(-1);
+    expect(terminalPoll?.pollingControl).toMatchObject({
+      suppressed: true, reason: "terminal"
+    });
+    expect(JSON.stringify(finalRequest.messages)).toContain("use literature_search_result");
+  });
+
+  it("caps Project literature status polling even while non-terminal stages keep changing", async () => {
+    const provider = new ScriptedProvider([
+      tool("literature_search_status", { taskId: 42 }),
+      tool("literature_search_status", { taskId: 42 }),
+      tool("literature_search_status", { taskId: 42 }),
+      tool("literature_search_status", { taskId: 42 }),
+      { content: "The literature search is progressing; check again later.", toolCalls: [] }
+    ]);
+    const gateway = new LiteratureStatusGateway([
+      { status: "RUNNING", currentStage: "PLANNING", terminal: false },
+      { status: "RUNNING", currentStage: "SEARCHING", terminal: false },
+      { status: "RUNNING", currentStage: "FETCHING", terminal: false },
+      { status: "RUNNING", currentStage: "RANKING", terminal: false }
+    ]);
+    const engine = await createEngine(provider, gateway);
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    expect(gateway.statusInvocations).toBe(4);
+    const finalRequest = provider.requests.at(-1)!;
+    const boundedPoll = finalRequest.messages.filter((message) =>
+      message.role === "tool" && message.content?.includes("pollingControl"))
+      .map((message) => JSON.parse(message.content!) as {
+        pollingControl?: { suppressed: boolean; reason: string; totalPolls: number };
+      }).at(-1);
+    expect(boundedPoll?.pollingControl).toMatchObject({
+      suppressed: true, reason: "budget", totalPolls: 4
+    });
+    expect((finalRequest.tools as Array<{ function: { name: string } }>).map((candidate) =>
+      candidate.function.name)).not.toContain("literature_search_status");
+  });
+
   it("summarizes registered web results with provider, result count, and evidence count", async () => {
     const provider = new ScriptedProvider([
       tool("search_web", { query: "Java 17 source-file mode" }),
@@ -1260,6 +1355,55 @@ class FakeGateway implements GatewayClient {
   cancelExecution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId, requestDigest: "f".repeat(64), executionRef: "execution.1", state: "CANCELLED", receiptRef: "receipt.cancelled" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string, _signal: AbortSignal): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
   receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: this.sandboxInputs.map((input) => ({ ...input, sizeBytes: 16 })), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class LiteratureStatusGateway extends FakeGateway {
+  statusInvocations = 0;
+
+  constructor(private readonly states: Array<{
+    status: string; currentStage: string; terminal: boolean;
+  }>) { super(); }
+
+  override tools(taskIdValue: string): Promise<RegisteredToolCatalog> {
+    return Promise.resolve({
+      contractVersion: "1.0", taskId: taskIdValue, projectVersion,
+      catalogDigest: "c".repeat(64),
+      tools: [{
+        type: "function",
+        function: {
+          name: "literature_search_status",
+          description: "Inspect one asynchronous literature-search task.",
+          parameters: {
+            type: "object", additionalProperties: false, required: ["taskId"],
+            properties: { taskId: { type: "integer" } }
+          }
+        }
+      }]
+    });
+  }
+
+  override invoke(_taskId: string, _grant: string,
+                  request: { callId: string; toolName: string; requestDigest: string }):
+                  Promise<RegisteredToolResult> {
+    const index = Math.min(this.statusInvocations, this.states.length - 1);
+    const state = this.states[index]!;
+    this.statusInvocations += 1;
+    return Promise.resolve({
+      contractVersion: "1.0", callId: request.callId,
+      toolName: request.toolName, requestDigest: request.requestDigest,
+      success: true,
+      output: {
+        taskId: 42, ...state, partialResultAvailable: false,
+        rawCandidateCount: state.currentStage === "FETCHING" ? 2 : 4,
+        uniqueCandidateCount: state.currentStage === "COMPLETED" ? 4 : 0,
+        sourceAttempts: 1,
+        // Timestamp-only churn is intentionally excluded from the Engine fingerprint.
+        updatedAt: `2026-09-03T00:00:0${this.statusInvocations}Z`
+      },
+      errorCode: null, errorMessage: null, retryable: false,
+      evidenceRefs: [], version: null
+    });
+  }
 }
 
 class ExpandedMavenReceiptGateway extends FakeGateway {

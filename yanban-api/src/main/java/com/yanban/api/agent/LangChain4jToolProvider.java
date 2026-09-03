@@ -39,6 +39,18 @@ import org.springframework.util.StringUtils;
 @Component
 public class LangChain4jToolProvider implements ToolProvider {
 
+    /**
+     * Asynchronous literature lifecycle controls are internal orchestration tools in the
+     * LangChain4j chat path. Project ReactPlan exposes them through its separate, governed
+     * registered-tool gateway, and V2 executes literature.search through its effect composer.
+     */
+    private static final Set<String> HIDDEN_CHAT_ORCHESTRATION_TOOLS = Set.of(
+            "literature_search_start",
+            "literature_search_status",
+            "literature_search_result",
+            "literature_search_cancel"
+    );
+
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
     private final AgentLangChain4jTools annotatedTools;
@@ -97,7 +109,8 @@ public class LangChain4jToolProvider implements ToolProvider {
     }
 
     private boolean isModelExposable(String toolName, Set<String> allowedToolNames) {
-        return allowedToolNames.contains(toolName)
+        return !HIDDEN_CHAT_ORCHESTRATION_TOOLS.contains(toolName)
+                && allowedToolNames.contains(toolName)
                 && toolRegistry.findDescriptor(toolName)
                         .map(descriptor -> descriptor.modelVisible()
                                 && descriptor.sideEffectType() != ToolDescriptor.SideEffectType.UNKNOWN

@@ -96,6 +96,11 @@ export interface RegisteredToolResult {
   evidenceRefs: string[];
   version: string | null;
 }
+export interface RegisteredToolPollState {
+  totalPolls: number;
+  unchangedPolls: number;
+  lastStateFingerprint: string;
+}
 export interface ModelResponse {
   content: string | null;
   toolCalls: ModelToolCall[];
@@ -223,6 +228,8 @@ export interface PersistedTask {
   publication?: PublicationFact;
   registeredTools?: RegisteredToolSpec[];
   registeredToolCatalogDigest?: string;
+  registeredToolPolls?: Record<string, RegisteredToolPollState>;
+  suppressedRegisteredToolNames?: string[];
   discoveredToolNames?: string[];
   loadedToolNames?: string[];
   cancellationRequested?: boolean;

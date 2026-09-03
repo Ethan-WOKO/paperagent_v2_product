@@ -436,41 +436,6 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
-    void allowsRepeatedPollingStatusToolCalls() {
-        ToolRegistry registry = new ToolRegistry().register(new StubToolExecutor("literature_search_status", objectMapper));
-        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
-        when(chatModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class), any(AgentRuntimeRequest.class)))
-                .thenReturn(ChatResponse.builder()
-                        .aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
-                                .id("call-1")
-                                .name("literature_search_status")
-                                .arguments("{\"taskId\":3}")
-                                .build())))
-                        .build())
-                .thenReturn(ChatResponse.builder()
-                        .aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
-                                .id("call-2")
-                                .name("literature_search_status")
-                                .arguments("{\"taskId\":3}")
-                                .build())))
-                        .build())
-                .thenReturn(ChatResponse.builder()
-                        .aiMessage(AiMessage.from("Task is still running."))
-                        .build());
-        LangChain4jToolCallingStrategy strategy = new LangChain4jToolCallingStrategy(
-                chatModel,
-                toolProvider(registry),
-                objectMapper
-        );
-
-        AgentRuntimeResult result = strategy.run(request(List.of("literature_search_status"), 3, 1));
-
-        assertThat(result.success()).isTrue();
-        assertThat(result.assistantContent()).isEqualTo("Task is still running.");
-        assertThat(result.toolTrace()).hasSize(2);
-    }
-
-    @Test
     void terminalAsyncStateCannotBePolledAgain() {
         ToolRegistry registry = new ToolRegistry().register(new StubToolExecutor("terminal_status", objectMapper));
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
@@ -556,10 +521,15 @@ class LangChain4jToolCallingStrategyTest {
                 .register(new InternalStubToolExecutor("recommend_literature", objectMapper))
                 .register(new InternalStubToolExecutor("search_knowledge", objectMapper))
                 .register(new InternalStubToolExecutor("paper_task_cancel", objectMapper))
-                .register(new InternalStubToolExecutor("literature_search_start", objectMapper));
+                .register(new InternalStubToolExecutor("literature_search_start", objectMapper))
+                .register(new InternalStubToolExecutor("literature_search_status", objectMapper))
+                .register(new InternalStubToolExecutor("literature_search_result", objectMapper))
+                .register(new InternalStubToolExecutor("literature_search_cancel", objectMapper));
 
         assertThat(toolProvider(registry).provideTools(request(
-                List.of("search_web", "recommend_literature", "search_knowledge", "paper_task_cancel", "literature_search_start"),
+                List.of("search_web", "recommend_literature", "search_knowledge", "paper_task_cancel",
+                        "literature_search_start", "literature_search_status", "literature_search_result",
+                        "literature_search_cancel"),
                 6, 1)).tools().keySet())
                 .extracting(dev.langchain4j.agent.tool.ToolSpecification::name)
                 .containsExactlyInAnyOrder("search_web", "recommend_literature", "search_knowledge");
