@@ -24,4 +24,21 @@ describe('chat SSE transport', () => {
     expect(page).not.toContain('new WebSocket(');
     expect(page).not.toContain('/api/v1/ws/chat');
   });
+
+  it('preserves whitespace content across arbitrarily split SSE frames', () => {
+    const deltas = ['## 标题', '\n\n', '1.', ' ', '**步骤**', '\n', '    ', '\t'];
+    const stream = deltas.map((content) => `event: chunk\ndata: ${JSON.stringify({ type: 'chunk', content })}\n\n`).join('');
+    let remainder = '';
+    const received: string[] = [];
+    // Network reads need not align with JSON escapes, content deltas, or SSE frames.
+    for (let offset = 0; offset < stream.length; offset += 7) {
+      const parsed = consumeChatSseChunk(remainder + stream.slice(offset, offset + 7));
+      received.push(...parsed.events.map((event) => event.content!));
+      remainder = parsed.remainder;
+    }
+
+    expect(remainder).toBe('');
+    expect(received).toEqual(deltas);
+    expect(received.join('')).toBe(deltas.join(''));
+  });
 });

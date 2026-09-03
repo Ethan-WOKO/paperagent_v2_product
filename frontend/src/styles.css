@@ -4904,6 +4904,77 @@ body.theme-light .workbench-hero {
   font-weight: 800;
 }
 
+/* Workspace response typography; do not change Project reports or artifact previews. */
+.message-markdown--workspace {
+  overflow-wrap: anywhere;
+  line-height: 1.75;
+}
+
+.message-markdown--workspace :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.25em 0 0.5em;
+  padding: 0;
+  border: 0;
+  color: var(--yb-text);
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: normal;
+}
+
+.message-markdown--workspace h1 { font-size: 1.3em; }
+.message-markdown--workspace h2 { font-size: 1.18em; }
+.message-markdown--workspace h3 { font-size: 1.08em; }
+.message-markdown--workspace :is(h4, h5, h6) { font-size: 1em; }
+.message-markdown--workspace strong { font-weight: 650; }
+.message-markdown--workspace :is(h1, h2, h3, h4, h5, h6) strong { font-weight: inherit; }
+.message-markdown--workspace p { margin: 0 0 0.75em; }
+.message-markdown--workspace :is(ul, ol) { margin: 0.5em 0 1em; padding-left: 1.6em; }
+.message-markdown--workspace li { margin: 0.35em 0; }
+.message-markdown--workspace li > p { margin: 0.35em 0; }
+.message-markdown--workspace li > :is(ul, ol) { margin: 0.35em 0; }
+.message-markdown--workspace blockquote { border-radius: 0 6px 6px 0; }
+.message-markdown--workspace > :first-child { margin-top: 0; }
+.message-markdown--workspace > :last-child { margin-bottom: 0; }
+
+.message-markdown--workspace .markdown-citation {
+  display: inline;
+  margin: 0 0.15em;
+  padding: 0.1em 0.25em;
+  border: 0;
+  border-radius: 4px;
+  background: var(--yb-bg-muted);
+  color: var(--yb-link);
+  font: inherit;
+  font-size: 0.8em;
+  font-weight: 600;
+  line-height: inherit;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+.message-markdown--workspace .markdown-citation:hover {
+  background: var(--yb-border);
+}
+
+.markdown-sources {
+  margin-top: 1em;
+  padding-top: 0.65em;
+  border-top: 1px solid var(--yb-border);
+  color: var(--yb-text-secondary);
+  font-size: 0.85em;
+  line-height: 1.6;
+}
+
+.markdown-sources summary { width: fit-content; cursor: pointer; }
+.markdown-sources ol { margin: 0.65em 0 0; padding-left: 1.6em; }
+.markdown-sources li { margin: 0.35em 0; overflow-wrap: anywhere; }
+.message-markdown--workspace .markdown-citation:focus-visible,
+.markdown-sources summary:focus-visible,
+.markdown-sources li:focus {
+  outline: 2px solid var(--yb-link);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
 /* Non-workspace pages should feel flat and calm; keep depth effects for the chat workspace only. */
 .app-frame--non-chat .app-workspace {
   --yb-shadow-soft: none;

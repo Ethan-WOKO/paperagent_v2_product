@@ -1123,7 +1123,8 @@ public class LangChain4jToolCallingStrategy {
                 }
                 return;
             }
-            if (StringUtils.hasText(chunk.content()) && mode != StreamMode.TOOL_CALL) {
+            // Whitespace-only deltas carry Markdown boundaries and code indentation.
+            if (chunk.content() != null && !chunk.content().isEmpty() && mode != StreamMode.TOOL_CALL) {
                 mode = StreamMode.TEXT;
                 content.append(chunk.content());
                 if (request.tokenConsumer() != null) {

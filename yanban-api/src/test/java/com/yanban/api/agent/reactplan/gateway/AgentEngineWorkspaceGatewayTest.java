@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.FileReadRequest;
+import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.SandboxInput;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceWriteRequest;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.DocxBlock;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.WorkspaceDocxCreateRequest;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -224,6 +226,109 @@ class AgentEngineWorkspaceGatewayTest {
     }
 
     @Test
+    void expandsOnlyMavenRunsToTheBoundedTrustedTextWorkspace() {
+        Map<String, byte[]> files = new LinkedHashMap<>();
+        files.put("pom.xml", "<project/>\n".getBytes(StandardCharsets.UTF_8));
+        files.put("src/main/java/Sort.java",
+                "class Sort {}\n".getBytes(StandardCharsets.UTF_8));
+        files.put("src/main/java/Helper.java",
+                "class Helper {}\n".getBytes(StandardCharsets.UTF_8));
+        files.put("docs/guide.pdf", "%PDF-1.4".getBytes(StandardCharsets.US_ASCII));
+        AgentEngineWorkspaceGateway gateway = gateway(files, ignored -> { });
+        String sortHash = sha256(files.get("src/main/java/Sort.java"));
+
+        var maven = gateway.resolveInputs(authority(),
+                List.of("mvn", "-o", "test"),
+                List.of(new SandboxInput("src/main/java/Sort.java", sortHash)));
+        var runner = gateway.resolveInputs(authority(),
+                List.of("yanban-runner", "java", "src/main/java/Sort.java"),
+                List.of(new SandboxInput("src/main/java/Sort.java", sortHash)));
+
+        assertThat(maven.files()).containsOnlyKeys(
+                "pom.xml", "src/main/java/Sort.java", "src/main/java/Helper.java");
+        assertThat(maven.inputs()).extracting(value -> value.path())
+                .containsExactly("pom.xml", "src/main/java/Helper.java",
+                        "src/main/java/Sort.java");
+        assertThat(runner.files()).containsOnlyKeys("src/main/java/Sort.java");
+        assertThat(runner.inputs()).extracting(value -> value.path())
+                .containsExactly("src/main/java/Sort.java");
+    }
+
+    @Test
+    void rejectsMavenBeforeDispatchWithoutARootPomOrExactChangedAnchor() {
+        byte[] sort = "class Sort {}\n".getBytes(StandardCharsets.UTF_8);
+        AgentEngineWorkspaceGateway noRootPom = gateway(
+                Map.of("module/pom.xml", "<project/>\n".getBytes(StandardCharsets.UTF_8),
+                        "Sort.java", sort), ignored -> { });
+
+        assertThatThrownBy(() -> noRootPom.resolveInputs(authority(),
+                List.of("mvn", "-o", "test"),
+                List.of(new SandboxInput("Sort.java", sha256(sort)))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("MAVEN_ROOT_POM_REQUIRED"));
+
+        Map<String, byte[]> project = Map.of(
+                "pom.xml", "<project/>\n".getBytes(StandardCharsets.UTF_8),
+                "Sort.java", sort);
+        AgentEngineWorkspaceGateway changed = gateway(project, ignored -> { });
+        String replacement = "class Sort { int value; }\n";
+        changed.write(writableAuthority(), writeRequest(new ObjectMapper(),
+                "call." + "m".repeat(40), "MODIFY", "Sort.java",
+                sha256(sort), replacement));
+
+        assertThatThrownBy(() -> changed.resolveInputs(writableAuthority(),
+                List.of("mvn", "-o", "test"),
+                List.of(new SandboxInput("pom.xml",
+                        sha256(project.get("pom.xml"))))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("MAVEN_CHANGED_INPUT_MISSING"));
+    }
+
+    @Test
+    void rejectsUnsupportedOrOversizedMavenContextBeforeExecution() {
+        Map<String, byte[]> binaryProject = Map.of(
+                "pom.xml", "<project/>\n".getBytes(StandardCharsets.UTF_8),
+                "src/test/resources/sample.pdf",
+                "%PDF-1.4".getBytes(StandardCharsets.US_ASCII));
+        AgentEngineWorkspaceGateway binary = gateway(binaryProject, ignored -> { });
+
+        assertThatThrownBy(() -> binary.resolveInputs(authority(),
+                List.of("mvn", "-o", "test"),
+                List.of(new SandboxInput("pom.xml",
+                        sha256(binaryProject.get("pom.xml"))))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("MAVEN_BINARY_RESOURCE_UNSUPPORTED"));
+
+        Map<String, byte[]> largeProject = Map.of(
+                "pom.xml", "<project/>\n".getBytes(StandardCharsets.UTF_8),
+                "Sort.java", "class Sort {}\n".getBytes(StandardCharsets.UTF_8));
+        AgentEngineWorkspaceGateway limited = gateway(largeProject,
+                properties -> properties.setMaxSandboxContextFiles(1));
+
+        assertThatThrownBy(() -> limited.resolveInputs(authority(),
+                List.of("mvn", "-o", "test"),
+                List.of(new SandboxInput("pom.xml",
+                        sha256(largeProject.get("pom.xml"))))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("MAVEN_CONTEXT_LIMIT_EXCEEDED"));
+
+        AgentEngineWorkspaceGateway perFileLimited = gateway(largeProject,
+                properties -> properties.setMaxSandboxContextFileBytes(8));
+
+        assertThatThrownBy(() -> perFileLimited.resolveInputs(authority(),
+                List.of("mvn", "-o", "test"),
+                List.of(new SandboxInput("pom.xml",
+                        sha256(largeProject.get("pom.xml"))))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("MAVEN_CONTEXT_LIMIT_EXCEEDED"));
+    }
+
+    @Test
     void accumulatesLongDocxInDraftWithoutWorkspaceChangesUntilFinalize() {
         byte[] base = "base".getBytes(StandardCharsets.UTF_8);
         AgentEngineWorkspaceGateway gateway = gateway(base, sha256(base));
@@ -275,6 +380,22 @@ class AgentEngineWorkspaceGatewayTest {
 
     private AgentEngineWorkspaceGateway gateway(
             String path, byte[] content, String hash) {
+        return gatewaySnapshots(
+                Map.of(path, new SnapshotFile(content, hash)), ignored -> { });
+    }
+
+    private AgentEngineWorkspaceGateway gateway(
+            Map<String, byte[]> contents,
+            Consumer<EngineGatewayProperties> configure) {
+        Map<String, SnapshotFile> snapshots = new LinkedHashMap<>();
+        contents.forEach((path, content) -> snapshots.put(
+                path, new SnapshotFile(content, sha256(content))));
+        return gatewaySnapshots(snapshots, configure);
+    }
+
+    private AgentEngineWorkspaceGateway gatewaySnapshots(
+            Map<String, SnapshotFile> snapshots,
+            Consumer<EngineGatewayProperties> configure) {
         AgentTurnProductContextResolver contexts = mock(AgentTurnProductContextResolver.class);
         AuthenticatedAgentTurnProjectVersionSourceFactory sources =
                 mock(AuthenticatedAgentTurnProjectVersionSourceFactory.class);
@@ -284,12 +405,17 @@ class AgentEngineWorkspaceGatewayTest {
         when(contexts.resolve(11L, 12L)).thenReturn(context);
         when(sources.create(11L, 12L)).thenReturn(version -> {
             assertThat(version).isEqualTo(new ProjectVersionRef("14", VERSION));
-            return new ProjectVersionSnapshot(version, List.of(new ProjectFileSnapshot(
-                    new ProjectPath(path), content,
-                    new ContentHash("sha256", hash), Map.of())), Map.of());
+            List<ProjectFileSnapshot> files = snapshots.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .map(entry -> new ProjectFileSnapshot(
+                            new ProjectPath(entry.getKey()), entry.getValue().content(),
+                            new ContentHash("sha256", entry.getValue().hash()), Map.of()))
+                    .toList();
+            return new ProjectVersionSnapshot(version, files, Map.of());
         });
         EngineGatewayProperties properties = new EngineGatewayProperties();
         properties.setWorkspaceRoot(temporary.toString());
+        configure.accept(properties);
         return new AgentEngineWorkspaceGateway(
                 contexts, sources, new ProjectStorageProperties(), properties, new ObjectMapper());
     }
@@ -392,4 +518,6 @@ class AgentEngineWorkspaceGatewayTest {
             throw new IllegalStateException(impossible);
         }
     }
+
+    private record SnapshotFile(byte[] content, String hash) { }
 }

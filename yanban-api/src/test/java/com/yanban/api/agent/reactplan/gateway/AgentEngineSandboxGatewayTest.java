@@ -44,7 +44,7 @@ class AgentEngineSandboxGatewayTest {
                 mock(AgentEngineSandboxExecutionTransactions.class);
         SandboxBrokerClient broker = mock(SandboxBrokerClient.class);
         AtomicReference<AgentEngineSandboxExecutionEntity> stored = new AtomicReference<>();
-        when(workspaces.resolveInputs(any(), any())).thenReturn(inputs());
+        when(workspaces.resolveInputs(any(), any(), any())).thenReturn(inputs());
         when(transactions.create(any())).thenAnswer(invocation -> {
             AgentEngineSandboxExecutionEntity value = invocation.getArgument(0);
             stored.set(value);
@@ -95,6 +95,26 @@ class AgentEngineSandboxGatewayTest {
     }
 
     @Test
+    void rejectsIncompleteMavenContextBeforeBrokerDispatch() {
+        AgentEngineWorkspaceGateway workspaces = mock(AgentEngineWorkspaceGateway.class);
+        AgentEngineSandboxExecutionTransactions transactions =
+                mock(AgentEngineSandboxExecutionTransactions.class);
+        SandboxBrokerClient broker = mock(SandboxBrokerClient.class);
+        when(workspaces.resolveInputs(any(), any(), any()))
+                .thenThrow(EngineGatewayException.badRequest(
+                        "MAVEN_ROOT_POM_REQUIRED"));
+        AgentEngineSandboxGateway gateway = gateway(workspaces, transactions, broker);
+
+        assertThatThrownBy(() -> gateway.submit(authority(),
+                request("5".repeat(64), List.of("mvn", "-o", "test"))))
+                .isInstanceOfSatisfying(EngineGatewayException.class,
+                        failure -> assertThat(failure.code())
+                                .isEqualTo("MAVEN_ROOT_POM_REQUIRED"));
+        verify(broker, never()).dispatch(any());
+        verify(transactions, never()).create(any());
+    }
+
+    @Test
     void cancelsOnlyTheStoredTaskBoundBrokerExecutionWithServerFence() {
         AgentEngineWorkspaceGateway workspaces = mock(AgentEngineWorkspaceGateway.class);
         AgentEngineSandboxExecutionTransactions transactions =
@@ -126,7 +146,7 @@ class AgentEngineSandboxGatewayTest {
                 mock(AgentEngineSandboxExecutionTransactions.class);
         SandboxBrokerClient broker = mock(SandboxBrokerClient.class);
         AtomicReference<AgentEngineSandboxExecutionEntity> stored = new AtomicReference<>();
-        when(workspaces.resolveInputs(any(), any())).thenReturn(inputs());
+        when(workspaces.resolveInputs(any(), any(), any())).thenReturn(inputs());
         when(transactions.create(any())).thenAnswer(invocation -> {
             AgentEngineSandboxExecutionEntity value = invocation.getArgument(0);
             value.requestCancel(java.time.LocalDateTime.now());

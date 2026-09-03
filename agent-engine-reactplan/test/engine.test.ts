@@ -192,6 +192,32 @@ describe("AgentEngine", () => {
     expect(firstToolEvent?.type === "tool" ? firstToolEvent.callId : "").toMatch(/^call\./);
   });
 
+  it("keeps expanded Maven receipt context out of model history while retaining exact anchors", async () => {
+    const provider = new ScriptedProvider([
+      tool("execute_in_sandbox", {
+        argv: ["mvn", "-o", "test"],
+        inputs: [{ path: "Sort.java", sha256: fileHash }],
+        timeoutMillis: 5000
+      }),
+      { content: "The exact changed file was validated in the Maven project context.", toolCalls: [] }
+    ]);
+    const engine = await createEngine(provider, new ExpandedMavenReceiptGateway());
+
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+
+    const receiptMessage = provider.requests.flatMap((request) => request.messages)
+      .find((message) => message.role === "tool"
+        && message.content?.includes('"effectiveInputCount":65'))?.content ?? "";
+    const projection = JSON.parse(receiptMessage) as {
+      effectiveInputCount: number;
+      validationAnchors: Array<{ path: string; sha256: string }>;
+    };
+    expect(projection.effectiveInputCount).toBe(65);
+    expect(projection.validationAnchors).toEqual([{ path: "Sort.java", sha256: fileHash }]);
+    expect(receiptMessage).not.toContain("context/private-0.txt");
+  });
+
   it("creates an isolated Workspace candidate and requires exact diff and sandbox validation", async () => {
     const replacement = "class Sort { int value; }\n";
     const replacementHash = sha256(replacement);
@@ -1220,6 +1246,7 @@ class NeverProvider implements ModelProvider {
 class FakeGateway implements GatewayClient {
   concurrent = 0; maximumConcurrent = 0; publishCalls = 0;
   lastPublishReceipt: string | null = null;
+  protected sandboxInputs: SandboxRequest["inputs"] = [{ path: "Sort.java", sha256: fileHash }];
   private async operation<T>(value: T): Promise<T> { this.concurrent += 1; this.maximumConcurrent = Math.max(this.maximumConcurrent, this.concurrent); await Promise.resolve(); this.concurrent -= 1; return value; }
   tools(taskIdValue: string): Promise<RegisteredToolCatalog> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, catalogDigest: "c".repeat(64), tools: [{ type: "function", function: { name: "project_search", description: "Search the frozen Project.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } }] }); }
   invoke(_taskId: string, _grant: string, request: { callId: string; toolName: string; requestDigest: string }): Promise<RegisteredToolResult> { return this.operation({ contractVersion: "1.0", callId: request.callId, toolName: request.toolName, requestDigest: request.requestDigest, success: true, output: { projectVersion, hits: [{ path: "services/order-service/pom.xml", line: "PRIVATE_SEARCH_RESULT" }] }, errorCode: null, errorMessage: null, retryable: false, evidenceRefs: ["project:1:search"], version: projectVersion }); }
@@ -1229,10 +1256,30 @@ class FakeGateway implements GatewayClient {
   createDocx(_taskId: string, _grant: string, request: WorkspaceDocxCreateRequest): Promise<WorkspaceDocxCreateResult> { const content = JSON.stringify(request.blocks); return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, replayed: false, state: "COMPLETED", path: request.path, totalBlocks: request.blocks.length, operation: "ADD", beforeSha256: null, afterSha256: sha256(content), sizeBytes: Buffer.byteLength(content) }); }
   diff(taskIdValue: string): Promise<WorkspaceDiffView> { return this.operation({ contractVersion: "1.0", taskId: taskIdValue, projectVersion, changed: false, entries: [] }); }
   publish(_taskId: string, _grant: string, request: WorkspacePublishRequest): Promise<WorkspacePublishResult> { this.publishCalls += 1; this.lastPublishReceipt = request.receiptRef; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, operationId: 1, baseProjectVersion: projectVersion, publishedProjectVersion: "e".repeat(64), publishedRevisionId: 22, receiptRef: request.receiptRef }); }
-  submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
+  submit(_taskId: string, _grant: string, request: SandboxRequest): Promise<SandboxView> { this.sandboxInputs = request.inputs; return this.operation({ contractVersion: "1.0", clientRequestId: request.clientRequestId, requestDigest: request.requestDigest, executionRef: "execution.1", state: "SUCCEEDED", receiptRef: "receipt.1" }); }
   cancelExecution(_taskId: string, _grant: string, clientRequestId: string): Promise<SandboxView> { return this.operation({ contractVersion: "1.0", clientRequestId, requestDigest: "f".repeat(64), executionRef: "execution.1", state: "CANCELLED", receiptRef: "receipt.cancelled" }); }
   execution(_taskId: string, _grant: string, _clientRequestId: string, _signal: AbortSignal): Promise<SandboxView> { throw new Error("terminal submit should not poll"); }
-  receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: [{ path: "Sort.java", sha256: fileHash, sizeBytes: 16 }], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+  receipt(): Promise<Receipt> { return this.operation({ contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1", status: "SUCCEEDED", exitCode: 0, stdout: { text: "ok", truncated: false, originalBytes: 2 }, stderr: { text: "", truncated: false, originalBytes: 0 }, inputFingerprint: "d".repeat(64), inputs: this.sandboxInputs.map((input) => ({ ...input, sizeBytes: 16 })), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); }
+}
+
+class ExpandedMavenReceiptGateway extends FakeGateway {
+  override receipt(): Promise<Receipt> {
+    return Promise.resolve({
+      contractVersion: "1.0", receiptRef: "receipt.1", executionRef: "execution.1",
+      status: "SUCCEEDED", exitCode: 0,
+      stdout: { text: "ok", truncated: false, originalBytes: 2 },
+      stderr: { text: "", truncated: false, originalBytes: 0 },
+      inputFingerprint: "a".repeat(64),
+      inputs: [
+        { path: "Sort.java", sha256: fileHash, sizeBytes: 16 },
+        ...Array.from({ length: 64 }, (_, index) => ({
+          path: `context/private-${index}.txt`,
+          sha256: sha256(`private-${index}`), sizeBytes: 128
+        }))
+      ],
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString()
+    });
+  }
 }
 
 class HardCancelGateway extends FakeGateway {

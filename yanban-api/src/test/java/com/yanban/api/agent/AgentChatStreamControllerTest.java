@@ -14,6 +14,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -61,6 +63,45 @@ class AgentChatStreamControllerTest {
                 "event: chunk", "\"content\":\"Hello \"",
                 "event: chunk", "\"content\":\"world\"",
                 "event: done", "\"assistantContent\":\"Hello world\"");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preservesWhitespaceOnlyChunksInSsePayloads() throws Exception {
+        List<String> deltas = List.of("## 标题", "\n\n", "1.", " ", "**步骤**", "\n",
+                "```java", "\n", "    ", "run();", "\n", "\t", "finish();", "\n", "```");
+        SendMessageRequest request = new SendMessageRequest(
+                "explain", false, null, "request-whitespace", null);
+        SendMessageResponse response = mock(SendMessageResponse.class);
+        when(response.success()).thenReturn(true);
+        when(response.assistantContent()).thenReturn(String.join("", deltas));
+        when(agentService.sendMessageStreaming(
+                eq(7L), eq(9L), eq(request), any(Consumer.class), any(Consumer.class)))
+                .thenAnswer(invocation -> {
+                    Consumer<String> chunks = invocation.getArgument(3);
+                    chunks.accept(null);
+                    chunks.accept("");
+                    deltas.forEach(chunks);
+                    return response;
+                });
+        CloseDetectingOutputStream output = new CloseDetectingOutputStream();
+
+        controller.streamMessage(new JwtUser(7L, "owner"), 9L, request).getBody().writeTo(output);
+
+        List<String> received = new ArrayList<>();
+        ObjectMapper mapper = new ObjectMapper();
+        String finalContent = null;
+        for (String line : output.content().lines().filter(value -> value.startsWith("data:")).toList()) {
+            var event = mapper.readTree(line.substring(5).stripLeading());
+            if (event.path("type").asText().equals("chunk")) {
+                received.add(event.path("content").asText());
+            } else if (event.path("type").asText().equals("done")) {
+                finalContent = event.path("assistantContent").asText();
+            }
+        }
+        assertThat(received).containsExactlyElementsOf(deltas);
+        assertThat(String.join("", received)).isEqualTo(finalContent);
+        assertThat(output.closed()).isFalse();
     }
 
     @Test

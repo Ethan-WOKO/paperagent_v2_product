@@ -56,7 +56,7 @@ final class AgentEngineSandboxGateway {
     SandboxView submit(EngineTaskAuthority authority, SandboxSubmit request) {
         validate(request);
         AgentEngineWorkspaceGateway.ResolvedInputs inputs =
-                workspaces.resolveInputs(authority, request.inputs());
+                workspaces.resolveInputs(authority, request.argv(), request.inputs());
         String semanticDigest = semanticDigest(request, inputs.inputs());
         String executionRef = "execution." + sha256(
                 authority.taskId() + "\0" + request.clientRequestId());

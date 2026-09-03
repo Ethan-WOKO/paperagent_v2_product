@@ -16,7 +16,7 @@ const TASK_LEASE_LOST = Symbol("TASK_LEASE_LOST");
 const MODEL_TOOLS = [
   functionTool("list_project_files", "List the current isolated Workspace manifest. It initially equals the frozen ProjectVersion and reflects later isolated Candidate writes without publishing them.", { type: "object", additionalProperties: false, properties: {} }),
   functionTool("read_project_file", "Read one file in the current isolated Workspace using its current manifest hash. UTF-8 text and source files use optional 1-based inclusive startLine/endLine. PDF, DOC, and DOCX return bounded page, paragraph, and table-cell locations; when hasMore is true, call this same tool again with nextDocumentCursor as documentCursor. XLSX returns bounded sheet and cell observations. Never use text line ranges for binary documents. Binary parsing is automatic, so do not choose another read tool. This can observe Candidate text bytes after an isolated write.", { type: "object", additionalProperties: false, required: ["path", "expectedSha256"], properties: { path: { type: "string" }, expectedSha256: { type: "string" }, startLine: { type: "integer", minimum: 1, description: "Optional for UTF-8 text/source files only: 1-based inclusive first line; defaults to 1." }, endLine: { type: "integer", minimum: 1, description: "Optional for UTF-8 text/source files only: 1-based inclusive last line; defaults to the end and must be >= startLine." }, documentCursor: { type: "string", pattern: "^v1:[0-9]{1,7}:[0-9]{1,8}$", description: "Optional for PDF/DOC/DOCX only. Use the exact nextDocumentCursor returned by the preceding page; omit for the first page." } } }),
-  functionTool("execute_in_sandbox", "Run an allowed argv profile over exact workspace inputs. Commands start at the Project root. First inspect the manifest and relevant source/import or dependency files. Maven allows test or verify only, for example ['mvn','-o','test'] or ['mvn','-o','verify']; compile/package/install are not allowed. Maven preparation downloads dependencies before the offline validation command. For a standalone source, use exactly ['yanban-runner','java','path.java'], ['yanban-runner','python','path.py'], ['yanban-runner','c','path.c'], or ['yanban-runner','cpp','path.cpp']; do not add a 'run' subcommand. Add only exact pinned non-standard Java/Python dependencies as --dependency=group:artifact:version or --dependency=package==version. Do not invoke this tool when every changed file is a plain document: after the Workspace diff is inspected, the server validates and publishes that Candidate locally. Never add or upgrade a dependency merely to make validation pass. Every changed code path must be present in inputs. An identical successful argv/input run is reused automatically.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
+  functionTool("execute_in_sandbox", "Run one allowed validation profile. Choose scope before build system: use a source runner only for an explicitly targeted, genuinely standalone source after inspecting its imports; use Maven for a project/module build or when the target depends on project build context, and only when a root pom.xml exists. Commands start at the Project root. Maven allows only ['mvn','-o','test'] or ['mvn','-o','verify'] variants; the product expands exact changed-file input anchors to a bounded current UTF-8 Maven context and rejects unsupported binary resources or oversized context before execution. For a standalone source, use exactly ['yanban-runner','java','path.java'], ['yanban-runner','python','path.py'], ['yanban-runner','c','path.c'], or ['yanban-runner','cpp','path.cpp']; do not add a 'run' subcommand. Add only exact pinned non-standard Java/Python dependencies as --dependency=group:artifact:version or --dependency=package==version. Do not invoke this tool when every changed file is a plain document. Never add or upgrade a dependency merely to make validation pass. Every changed code path must be present in inputs with its exact current hash. An identical successful argv/input run is reused automatically.", { type: "object", additionalProperties: false, required: ["argv", "inputs", "timeoutMillis"], properties: { argv: { type: "array", items: { type: "string" }, minItems: 2 }, inputs: { type: "array", items: { type: "object", required: ["path", "sha256"], properties: { path: { type: "string" }, sha256: { type: "string" } } }, minItems: 1 }, timeoutMillis: { type: "integer", minimum: 1000, maximum: 300000 } } }),
   functionTool("ask_user", "Pause and ask one necessary, concrete question.", { type: "object", additionalProperties: false, required: ["question"], properties: { question: { type: "string", minLength: 1, maxLength: 4000 } } })
 ];
 
@@ -875,7 +875,7 @@ export class AgentEngine {
             `request rejected; code=${error.problem.code}`, null);
           task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
             status: "REJECTED", code: error.problem.code,
-            message: "The requested sandbox command or inputs were rejected by product policy. Choose another allowed argv using exact Project-relative input paths."
+            message: sandboxRejectionMessage(error.problem.code)
           }) });
           return false;
         }
@@ -895,11 +895,12 @@ export class AgentEngine {
       if (!view.receiptRef) throw new EngineProblem(502, problem("SANDBOX_RECEIPT_MISSING", "sandbox_system", "Terminal sandbox execution has no receipt reference", true, view.executionRef));
       const receipt = await this.options.gateway.receipt(task.view.taskId, grant, view.receiptRef, signal);
       this.options.validator.validate("receipt", receipt);
+      const validationAnchors = validatedReceiptAnchors(receipt, request);
       if (!task.receiptRefs.includes(receipt.receiptRef)) task.receiptRefs.push(receipt.receiptRef);
       task.lastSandboxStatus = receipt.status;
       task.observations.sandboxRuns.push({
         argv: [...request.argv], status: receipt.status,
-        inputs: receipt.inputs.map((input) => ({ path: input.path, sha256: input.sha256 })),
+        inputs: validationAnchors,
         workspaceRevision: task.observations.workspaceRevision,
         receiptRef: receipt.receiptRef
       });
@@ -907,7 +908,7 @@ export class AgentEngine {
       await this.tool(task, call.id, "sandbox.execute", summary, succeeded ? "succeeded" : "failed", receiptSummary(receipt), receipt.receiptRef);
       task.messages.push({
         role: "tool", toolCallId: modelCallId(call),
-        content: JSON.stringify({ status: receipt.status, exitCode: receipt.exitCode, stdout: receipt.stdout, stderr: receipt.stderr, inputFingerprint: receipt.inputFingerprint, inputs: receipt.inputs, startedAt: receipt.startedAt, finishedAt: receipt.finishedAt })
+        content: JSON.stringify(modelReceiptProjection(receipt, validationAnchors))
       });
       if (receipt.status === "SYSTEM_ERROR" || receipt.status === "TIMED_OUT") throw new EngineProblem(502, problem(receipt.status === "SYSTEM_ERROR" ? "SANDBOX_SYSTEM_ERROR" : "SANDBOX_TIMED_OUT", "sandbox_system", `Sandbox ended with ${receipt.status}`, true, receipt.receiptRef));
       if (receipt.status === "CANCELLED") throw new EngineProblem(409, problem("SANDBOX_CANCELLED", "cancelled", "Sandbox execution was cancelled", false, receipt.receiptRef));
@@ -1187,7 +1188,46 @@ function workspaceDocxCreateRequest(callId: string, args: Record<string, unknown
 }
 
 function receiptSummary(receipt: Receipt): string {
-  return `status=${receipt.status}; exitCode=${receipt.exitCode ?? "null"}; stdoutBytes=${receipt.stdout.originalBytes}; stderrBytes=${receipt.stderr.originalBytes}; inputFingerprint=${receipt.inputFingerprint}`;
+  return `status=${receipt.status}; exitCode=${receipt.exitCode ?? "null"}; stdoutBytes=${receipt.stdout.originalBytes}; stderrBytes=${receipt.stderr.originalBytes}; effectiveInputCount=${receipt.inputs.length}; inputFingerprint=${receipt.inputFingerprint}`;
+}
+
+function validatedReceiptAnchors(
+  receipt: Receipt, request: SandboxRequest
+): Array<{ path: string; sha256: string }> {
+  const effective = new Map<string, string>();
+  for (const input of receipt.inputs) {
+    if (effective.has(input.path)) {
+      throw new EngineProblem(502, problem(
+        "SANDBOX_RECEIPT_INPUTS_INVALID", "sandbox_system",
+        "Sandbox receipt contains duplicate input paths", true, receipt.receiptRef));
+    }
+    effective.set(input.path, input.sha256);
+  }
+  for (const anchor of request.inputs) {
+    if (effective.get(anchor.path) !== anchor.sha256) {
+      throw new EngineProblem(502, problem(
+        "SANDBOX_RECEIPT_INPUT_MISMATCH", "sandbox_system",
+        "Sandbox receipt does not prove every requested validation anchor", true,
+        receipt.receiptRef));
+    }
+  }
+  return request.inputs.map((input) => ({ path: input.path, sha256: input.sha256 }));
+}
+
+function modelReceiptProjection(
+  receipt: Receipt, validationAnchors: Array<{ path: string; sha256: string }>
+): Record<string, unknown> {
+  return {
+    status: receipt.status,
+    exitCode: receipt.exitCode,
+    stdout: receipt.stdout,
+    stderr: receipt.stderr,
+    inputFingerprint: receipt.inputFingerprint,
+    effectiveInputCount: receipt.inputs.length,
+    validationAnchors,
+    startedAt: receipt.startedAt,
+    finishedAt: receipt.finishedAt
+  };
 }
 
 function registeredToolResultSummary(toolName: string, result: RegisteredToolResult): string {
@@ -1266,7 +1306,7 @@ function initialMessages(
 ): ChatMessage[] {
   const runtimeIdentity = `provider=${submission.authority.model.provider}; model=${submission.authority.model.model}`;
   const messages: ChatMessage[] = [
-    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. When calling tools, response content is optional; if present, it must be one brief user-facing progress update that says what is being checked or changed, never hidden reasoning, chain-of-thought, speculative conclusions, raw tool arguments, or secrets. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files. After any Workspace write, inspect the diff and validate every exact changed file hash before reporting success. When every changed file is a plain document, inspect the Workspace diff and do not invoke the sandbox: the server performs deterministic document-integrity validation locally. Otherwise choose validation from observed Project structure: Maven test/verify when pom.xml exists, or a source runner for a genuinely standalone supported source. Read relevant imports and dependency descriptors before the first execution. Standalone Java/Python runs may declare exact pinned dependencies using the sandbox tool syntax, but never invent, add, or upgrade dependencies merely to pass validation. If the observed build system is unsupported, perform the strongest allowed content check and clearly say the full build was not verified. Do not rerun an unchanged successful command: the server reuses identical argv and input hashes. Do not claim publication yourself: after exact validation the server deterministically publishes the Candidate and appends the authoritative new ProjectVersion to the delivery. Sandbox commands start at the Project root, so argv must use exact Project-relative paths. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
+    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. When calling tools, response content is optional; if present, it must be one brief user-facing progress update that says what is being checked or changed, never hidden reasoning, chain-of-thought, speculative conclusions, raw tool arguments, or secrets. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files. After any Workspace write, inspect the diff and validate every exact changed file hash before reporting success. When every changed file is a plain document, inspect the Workspace diff and do not invoke the sandbox: the server performs deterministic document-integrity validation locally. Otherwise choose validation scope before build system: use a source runner for an explicitly targeted, genuinely standalone supported source after inspecting imports; use Maven test/verify for a project/module build or a target that depends on project build context, and only when a root pom.xml exists. Maven inputs must include every exact changed-file hash; the product supplies bounded current UTF-8 build context. Read relevant imports and dependency descriptors before the first execution. Standalone Java/Python runs may declare exact pinned dependencies using the sandbox tool syntax, but never invent, add, or upgrade dependencies merely to pass validation. If the observed build system is unsupported, perform the strongest allowed content check and clearly say the full build was not verified. Do not rerun an unchanged successful command: the server reuses identical argv and input hashes. Do not claim publication yourself: after exact validation the server deterministically publishes the Candidate and appends the authoritative new ProjectVersion to the delivery. Sandbox commands start at the Project root, so argv must use exact Project-relative paths. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
   ];
   if (submission.authority.skill) {
     messages.push({
@@ -1554,8 +1594,11 @@ function reusableSandboxRun(
 
 function validationHint(paths: string[]): string {
   const lower = paths.map((path) => path.toLowerCase());
-  if (lower.some((path) => path === "pom.xml" || path.endsWith("/pom.xml"))) {
-    return "Maven descriptor observed: read the relevant pom.xml and prefer mvn -o test or mvn -o verify with required exact project inputs.";
+  if (lower.includes("pom.xml")) {
+    return "Root Maven descriptor observed. Choose scope first: use Maven test/verify for a project/module build or project-dependent target; use a source runner for an explicitly targeted genuinely standalone source. Maven inputs are exact changed-file anchors and the product supplies bounded current UTF-8 build context.";
+  }
+  if (lower.some((path) => path.endsWith("/pom.xml"))) {
+    return "Only nested Maven descriptors are observed, so the root Maven command profile is unavailable. Use a source runner only for a genuinely standalone target, otherwise report that full Maven validation was not verified.";
   }
   if (lower.some((path) => /(^|\/)(build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?)$/.test(path))) {
     return "Gradle descriptor observed but no Gradle command profile is available: inspect it, use the strongest allowed bounded check, and report that a full Gradle build was not verified.";
@@ -1635,6 +1678,25 @@ function recoverableToolRejection(error: unknown): error is EngineProblem {
     && (error.problem.category === "request"
       || (error.problem.category === "sandbox_system"
         && error.problem.code === "SANDBOX_COMMAND_DENIED"));
+}
+
+function sandboxRejectionMessage(code: string): string {
+  if (code === "MAVEN_ROOT_POM_REQUIRED") {
+    return "Maven cannot run from the Project root because no root pom.xml exists. Use a source runner only if the exact target is genuinely standalone; otherwise report that full Maven validation is unavailable.";
+  }
+  if (code === "MAVEN_CHANGED_INPUT_MISSING") {
+    return "Maven validation requires every current changed path and exact afterSha256 as an input anchor. Inspect the current Workspace diff and retry once with all changed anchors; the product supplies the remaining bounded Maven context.";
+  }
+  if (code === "MAVEN_BINARY_RESOURCE_UNSUPPORTED") {
+    return "The Maven build needs a binary resource that the current text-only sandbox context cannot prove. Do not run an incomplete Maven build; use a valid narrower check when possible and clearly report that full Maven validation was not completed.";
+  }
+  if (code === "MAVEN_CONTEXT_LIMIT_EXCEEDED") {
+    return "The complete Maven text context exceeds the sandbox file or byte limit. Do not submit a partial Maven build; use a valid narrower check when possible and clearly report that full Maven validation was not completed.";
+  }
+  if (code === "WORKSPACE_FILE_NOT_UTF8") {
+    return "The requested source or Maven build context contains a non-UTF-8 file that the text-only sandbox input contract cannot prove. Do not retry the same incomplete validation; use a valid narrower check when possible and report the limitation.";
+  }
+  return "The requested sandbox command or inputs were rejected by product policy. Choose another allowed argv using exact Project-relative input paths.";
 }
 
 function projectReadRejectionMessage(code: string): string {
