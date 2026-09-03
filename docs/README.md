@@ -52,6 +52,7 @@
 
 ### 开发流程
 
+- `当前有效/开发流程/spec-kit-ai-coding-workflow.md`
 - `当前有效/开发流程/verification-matrix.md`
 - `当前有效/开发流程/local-merge-gate.md`
 - `当前有效/开发流程/project-coding-acceptance.md`
