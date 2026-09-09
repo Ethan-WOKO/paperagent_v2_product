@@ -131,7 +131,7 @@
                 </div>
 
                 <NEmpty v-if="visibleChatCount === 0" :description="chatScope === 'WORKSPACE' ? '暂无工作区对话' : '暂无项目对话'" />
-                <div v-else class="admin-chat-list">
+                <div v-else class="admin-chat-list" role="region" aria-label="历史对话，可在区域内滚动" tabindex="0">
                   <section v-for="group in visibleChatGroups" :key="group.key" class="admin-chat-group">
                     <header v-if="chatScope === 'PROJECT'" class="admin-chat-group__header">
                       <strong>{{ group.title }}</strong>
@@ -872,6 +872,20 @@ onUnmounted(() => {
   border: 0;
   border-bottom: 1px solid var(--pa-line);
   border-radius: 0;
+}
+
+.admin-chat-list {
+  height: clamp(240px, 45dvh, 520px);
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+.admin-chat-list:focus-visible {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: -2px;
 }
 
 .admin-chat-group__header {
