@@ -66,6 +66,11 @@ public class PaperStorageService {
     }
 
     public byte[] read(String objectKey) {
+        return read(objectKey, Integer.MAX_VALUE - 1);
+    }
+
+    public byte[] read(String objectKey, int maxBytes) {
+        if (maxBytes < 1 || maxBytes == Integer.MAX_VALUE) throw new IllegalArgumentException("invalid read limit");
         try {
             if (properties.isPreferMinio()) {
                 MinioClient minioClient = minioClientProvider.getIfAvailable();
@@ -75,17 +80,30 @@ public class PaperStorageService {
                             .object(objectKey)
                             .build())) {
                         if (inputStream != null) {
-                            return inputStream.readAllBytes();
+                            return boundedRead(inputStream, maxBytes);
                         }
                     } catch (Exception ignored) {
                         // Fall back to local backup below. This keeps tests and local dev robust when MinIO is mocked or unavailable.
                     }
                 }
             }
-            return Files.readAllBytes(properties.getLocalRoot().resolve(objectKey));
+            Path root = properties.getLocalRoot().toAbsolutePath().normalize();
+            Path source = root.resolve(objectKey).normalize();
+            if (!source.startsWith(root) || !source.toRealPath().startsWith(root.toRealPath())) {
+                throw new IllegalStateException("invalid paper storage reference");
+            }
+            try (InputStream input = Files.newInputStream(source)) {
+                return boundedRead(input, maxBytes);
+            }
         } catch (Exception ex) {
             throw new IllegalStateException("读取论文文件失败", ex);
         }
+    }
+
+    private byte[] boundedRead(InputStream input, int maxBytes) throws java.io.IOException {
+        byte[] bytes = input.readNBytes(maxBytes + 1);
+        if (bytes.length > maxBytes) throw new java.io.IOException("paper source exceeds read limit");
+        return bytes;
     }
 
     private void storeBytes(String objectKey, byte[] bytes, String contentType) throws Exception {

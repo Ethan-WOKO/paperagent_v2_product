@@ -39,6 +39,12 @@ import org.springframework.web.server.ResponseStatusException;
 
 class PaperOrchestratorCancellationTest {
 
+    @Test
+    void unclaimedToolDispatchDoesNotEnterPipeline() {
+        orchestrator.startTaskIfClaimed(42L, () -> false);
+        org.mockito.Mockito.verifyNoInteractions(tasks, sectionPolishService, eventStreamService);
+    }
+
     private static final Long USER_ID = 7L;
     private static final Long TASK_ID = 42L;
 

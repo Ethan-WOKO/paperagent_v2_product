@@ -88,11 +88,13 @@ class PaperTaskToolSupport {
         return withUser(toolCallId, toolName, userId -> {
             PaperTask before = ownedTask(userId, taskId);
             boolean terminalBefore = isTerminal(before.getStatus());
-            paperOrchestrator.stop(userId, taskId, cancelReason);
+            boolean alreadyCancelling = "CANCEL_REQUESTED".equals(before.getStatus()) || "CANCELLING".equals(before.getStatus());
+            if (!alreadyCancelling) paperOrchestrator.stop(userId, taskId, cancelReason);
             PaperTask after = ownedTask(userId, taskId);
             ObjectNode output = taskSummary(userId, after);
             output.put("cancelAccepted", !terminalBefore);
-            output.put("idempotent", terminalBefore);
+            output.put("idempotent", terminalBefore || alreadyCancelling);
+            output.put("cancelled", "CANCELLED".equals(after.getStatus()));
             output.put("message", terminalBefore ? "任务已是终态，取消请求保持幂等" : "取消请求已受理");
             return ToolResult.success(toolCallId, toolName, output);
         });
@@ -105,6 +107,18 @@ class PaperTaskToolSupport {
     private ObjectNode taskSummary(Long userId, PaperTask task) {
         ObjectNode output = objectMapper.createObjectNode();
         output.put("taskId", task.getId());
+        output.put("taskType", "paper_polish");
+        output.put("taskUrl", "/paper?taskId=" + task.getId());
+        output.put("projectFilesModified", false);
+        output.put("completed", "COMPLETED".equals(task.getStatus()));
+        boolean waiting = "WAITING_INPUT".equals(task.getStatus()) || "PAUSED".equals(task.getStatus());
+        boolean cancelling = "CANCEL_REQUESTED".equals(task.getStatus()) || "CANCELLING".equals(task.getStatus());
+        output.put("requiresUserInput", waiting);
+        output.put("cancelling", cancelling);
+        output.put("pollRecommended", !waiting && !isTerminal(task.getStatus()));
+        output.put("nextAction", waiting ? "请打开论文任务页面，完成结构确认或继续任务。"
+                : cancelling ? "取消已受理，等待工作线程到达安全检查点。"
+                : isTerminal(task.getStatus()) ? "查看论文任务结果和产物。" : "任务尚未完成，请稍后查询进度。");
         output.put("title", task.getTitle());
         output.put("sourceFilename", task.getSourceFilename());
         output.put("status", task.getStatus());
@@ -123,7 +137,7 @@ class PaperTaskToolSupport {
             output.put("literatureCount", task.getLiteratureCount());
         }
         output.put("terminal", isTerminal(task.getStatus()));
-        output.put("cancellable", !isTerminal(task.getStatus()));
+        output.put("cancellable", !isTerminal(task.getStatus()) && !cancelling);
         output.put("downloadAvailable", safeDownloadAvailable(userId, task.getId()));
         output.put("createdAt", task.getCreatedAt() == null ? null : task.getCreatedAt().toString());
         output.put("updatedAt", task.getUpdatedAt() == null ? null : task.getUpdatedAt().toString());
@@ -132,7 +146,7 @@ class PaperTaskToolSupport {
     }
 
     private PaperTask ownedTask(Long userId, Long taskId) {
-        if (taskId == null) {
+        if (taskId == null || taskId <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "taskId is required");
         }
         return tasks.findByIdAndUserId(taskId, userId)
@@ -171,7 +185,7 @@ class PaperTaskToolSupport {
 
     private ToolResult withUser(String toolCallId, String toolName, ToolOperation operation) {
         Long userId = ToolExecutionContext.getCurrentUserId();
-        if (userId == null) {
+        if (userId == null || userId <= 0) {
             return ToolResult.failure(toolCallId, toolName, "缺少当前用户上下文，无法访问论文任务");
         }
         try {
@@ -179,7 +193,7 @@ class PaperTaskToolSupport {
         } catch (ResponseStatusException ex) {
             return ToolResult.failure(toolCallId, toolName, ex.getReason() == null ? ex.getStatusCode().toString() : ex.getReason());
         } catch (RuntimeException ex) {
-            return ToolResult.failure(toolCallId, toolName, ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+            return ToolResult.failure(toolCallId, toolName, "论文任务暂不可读取，请稍后重试。");
         }
     }
 

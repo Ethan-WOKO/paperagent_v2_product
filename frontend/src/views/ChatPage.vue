@@ -446,6 +446,7 @@
 </template>
 
 <script setup lang="ts">
+import { chatAttachmentContent } from '@/utils/paperPolishInput';
 import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NPopover, NSelect, NSpace, NTooltip } from 'naive-ui';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -1413,16 +1414,7 @@ function isPlanArtifactRequest(content: string) {
 }
 
 function buildContentWithChatAttachments(content: string, attachments: ChatUploadAttachment[]) {
-  if (attachments.length === 0) {
-    return content;
-  }
-  const lines = attachments.map((item) => `- documentId=${item.documentId}, filename=${item.filename}, status=${item.status}`);
-  return [
-    content,
-    '',
-    '本轮对话已上传以下知识库文档，请优先使用 search_knowledge / read_document 检索这些资料后再回答：',
-    ...lines,
-  ].join('\n');
+  return chatAttachmentContent(content, attachments);
 }
 
 function buildDisplayContentWithChatAttachments(content: string, attachments: ChatUploadAttachment[]) {

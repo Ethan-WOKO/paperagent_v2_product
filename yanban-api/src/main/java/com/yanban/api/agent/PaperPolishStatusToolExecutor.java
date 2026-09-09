@@ -36,6 +36,11 @@ public class PaperPolishStatusToolExecutor implements ToolExecutor {
     }
 
     @Override
+    public com.yanban.core.tool.ToolDescriptor descriptor() {
+        return PaperPolishToolContract.descriptor(TOOL_NAME);
+    }
+
+    @Override
     public ToolResult execute(ToolCall call) {
         return support.status(call.id(), definition.name(), taskId(call));
     }

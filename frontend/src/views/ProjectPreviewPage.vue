@@ -605,6 +605,12 @@
                 @keydown="handleReactPlanKeydown"
               />
               <div class="reactplan-composer-actions">
+                <NButton
+                  v-if="selectedFile?.path.toLowerCase().endsWith('.tex') && !reactPlanQuestion"
+                  secondary
+                  :disabled="reactPlanBusy"
+                  @click="reactPlanInput = projectPaperPolishRequest(selectedFile!, 'en')"
+                >润色所选论文（英文）</NButton>
                 <NSelect
                   v-if="!reactPlanQuestion"
                   v-model:value="selectedReactPlanSkillId"
@@ -786,6 +792,7 @@
 </template>
 
 <script setup lang="ts">
+import { projectPaperPolishRequest } from '@/utils/paperPolishInput';
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
