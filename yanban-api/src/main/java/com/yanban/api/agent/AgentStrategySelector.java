@@ -80,8 +80,18 @@ public class AgentStrategySelector {
                 return explicit;
             }
         }
-        // The unified semantic router is the Project input contract. Ordinary/non-Project Chat keeps its
-        // established deterministic selection and model-call shape for backwards compatibility.
+        // New personal capabilities must not depend on recognizing a finite list of verbs.
+        // This is the existing tool-capable model turn, not an extra routing-model call:
+        // ordinary answers can finish with zero tool calls. Explicit overrides stay above.
+        if (requested == AgentStrategy.AUTO && request.capability() == AgentRequestCapability.CHAT
+                && analysis.reactExecutable() && runtime.toolPolicy().allowedTools().stream().anyMatch(
+                        Set.of("paper_polish_start", "paper_polish_status", "paper_polish_result", "paper_task_cancel",
+                                "search_past_conversations", "get_past_conversation")::contains)) {
+            return selection(requested, AgentStrategy.SINGLE_STEP_REACT, false, false, null, candidates, analysis,
+                    List.of(AgentStrategyReasonCode.AUTO_TOOL_TASK_REACT), "native_personal_capability_routing");
+        }
+        // The unified semantic router remains the Project input contract. Other Chat policies
+        // keep their existing deterministic selection and model-call shape.
         if (requested == AgentStrategy.AUTO && llmRouter != null
                 && request.capability() == AgentRequestCapability.PROJECT_READ) {
             AgentLlmRouter.RoutingResult routed = llmRouter.route(runtime, candidates);

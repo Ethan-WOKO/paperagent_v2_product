@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yanban.api.agent.AgentToolPolicyEngine;
 import com.yanban.api.agent.reactplan.ReactPlanCanonicalJson;
 import com.yanban.api.agent.reactplan.ReactPlanHistoryToolContract;
+import com.yanban.api.agent.reactplan.ReactPlanTaskSkillPolicy;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolCall;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolCatalog;
 import com.yanban.api.agent.reactplan.gateway.AgentEngineGatewayDtos.RegisteredToolFunction;
@@ -43,6 +44,8 @@ final class AgentEngineRegisteredToolGateway {
             "literature_search_result", "literature_search_cancel");
     private static final Set<String> PAPER_TASK_READ_TOOLS = Set.of(
             "paper_polish_status", "paper_polish_result");
+    private static final Set<String> PAPER_TASK_WRITE_TOOLS = Set.of("paper_polish_start", "paper_task_cancel");
+    private static final Set<String> USER_HISTORY_TOOLS = Set.of("search_past_conversations", "get_past_conversation");
     private static final Set<String> HISTORY_TOOLS =
             ReactPlanHistoryToolContract.TOOL_NAMES;
     private final ObjectMapper json;
@@ -51,6 +54,7 @@ final class AgentEngineRegisteredToolGateway {
     private final AgentTurnProductContextResolver contexts;
     private final AgentEngineRegisteredToolTransactions transactions;
     private final UserSettingsService settings;
+    private final ReactPlanTaskSkillPolicy skillPolicy;
 
     @Autowired
     AgentEngineRegisteredToolGateway(
@@ -59,13 +63,21 @@ final class AgentEngineRegisteredToolGateway {
             AgentToolPolicyEngine policies,
             AgentTurnProductContextResolver contexts,
             AgentEngineRegisteredToolTransactions transactions,
-            UserSettingsService settings) {
+            UserSettingsService settings,
+            ReactPlanTaskSkillPolicy skillPolicy) {
         this.json = json;
         this.registry = registry;
         this.policies = policies;
         this.contexts = contexts;
         this.transactions = transactions;
         this.settings = settings;
+        this.skillPolicy = skillPolicy;
+    }
+
+    AgentEngineRegisteredToolGateway(ObjectMapper json, ToolRegistry registry, AgentToolPolicyEngine policies,
+            AgentTurnProductContextResolver contexts, AgentEngineRegisteredToolTransactions transactions,
+            UserSettingsService settings) {
+        this(json, registry, policies, contexts, transactions, settings, null);
     }
 
     AgentEngineRegisteredToolGateway(
@@ -123,6 +135,7 @@ final class AgentEngineRegisteredToolGateway {
         ToolResult result;
         try {
             ToolExecutionContext.setCurrentUserId(authority.userId());
+            ToolExecutionContext.setInvocationScope(authority.taskId());
             ToolExecutionContext.setCurrentProjectId(authority.projectId());
             ToolExecutionContext.setResolvedAllowedTools(allowed);
             result = registry.execute(new ToolCall(request.callId(), request.toolName(),
@@ -168,10 +181,22 @@ final class AgentEngineRegisteredToolGateway {
         policyNames.addAll(SYNCHRONOUS_RETRIEVAL_TOOLS);
         policyNames.addAll(LITERATURE_TASK_TOOLS);
         policyNames.addAll(PAPER_TASK_READ_TOOLS);
+        policyNames.addAll(PAPER_TASK_WRITE_TOOLS);
+        policyNames.addAll(USER_HISTORY_TOOLS);
         policyNames.addAll(HISTORY_TOOLS);
+        Set<String> skillAllowed = null;
+        if (skillPolicy != null) {
+            try {
+                skillAllowed = skillPolicy.allowedTools(authority.taskId(), authority.userId(), authority.requestDigest());
+            } catch (RuntimeException invalid) {
+                throw EngineGatewayException.forbidden("TASK_SKILL_AUTHORITY_REJECTED");
+            }
+        }
+        final Set<String> allowedBySkill = skillAllowed;
         boolean githubAllowed = settings == null
                 || settings.hasUsableGithubPat(authority.userId());
         return registry.listDefinitions().stream()
+                .filter(definition -> allowedBySkill == null || allowedBySkill.contains(definition.name()))
                 .filter(definition -> !definition.name().startsWith("mcp_github__")
                         || githubAllowed)
                 .filter(definition -> policyNames.contains(definition.name())
@@ -251,6 +276,28 @@ final class AgentEngineRegisteredToolGateway {
     }
 
     private static boolean eligible(String name, ToolDescriptor descriptor) {
+        if (USER_HISTORY_TOOLS.contains(name)) {
+            return readOnly(descriptor)
+                    && descriptor.requiredPermissions().equals(List.of("history:read"))
+                    && descriptor.resourceScopes().equals(List.of(ToolDescriptor.ResourceScope.SESSION))
+                    && descriptor.asyncMode() == ToolDescriptor.AsyncMode.SYNC;
+        }
+        if (PAPER_TASK_WRITE_TOOLS.contains(name)) {
+            if (!descriptor.modelVisible() || !descriptor.supportedProfiles().contains(ToolDescriptor.CapabilityProfile.PROJECT)
+                    || descriptor.confirmationPolicy() != ToolDescriptor.ConfirmationPolicy.NEVER) return false;
+            if ("paper_polish_start".equals(name)) {
+                return descriptor.sideEffectType() == ToolDescriptor.SideEffectType.CREATE
+                        && descriptor.asyncMode() == ToolDescriptor.AsyncMode.EXTERNAL_TASK
+                        && descriptor.idempotencyPolicy() == ToolDescriptor.IdempotencyPolicy.REQUIRED_KEY
+                        && descriptor.requiredPermissions().equals(List.of("paper:polish"))
+                        && Set.copyOf(descriptor.resourceScopes()).equals(Set.of(
+                                ToolDescriptor.ResourceScope.SESSION, ToolDescriptor.ResourceScope.EXTERNAL));
+            }
+            return descriptor.sideEffectType() == ToolDescriptor.SideEffectType.MODIFY
+                    && descriptor.asyncMode() == ToolDescriptor.AsyncMode.SYNC
+                    && descriptor.requiredPermissions().equals(List.of("task:cancel"))
+                    && descriptor.resourceScopes().equals(List.of(ToolDescriptor.ResourceScope.SESSION));
+        }
         if (isMcpTool(name)) {
             return descriptor.modelVisible()
                     && descriptor.supportedProfiles().contains(
@@ -382,6 +429,14 @@ final class AgentEngineRegisteredToolGateway {
 
     private JsonNode executionArguments(
             EngineTaskAuthority authority, RegisteredToolCall request) {
+        if ("paper_polish_start".equals(request.toolName())) {
+            if (request.arguments().has("clientRequestId") || request.arguments().has("expectedProjectVersion")) {
+                throw EngineGatewayException.badRequest("REGISTERED_TOOL_SERVER_ARGUMENT_FORBIDDEN");
+            }
+            ObjectNode enriched = request.arguments().deepCopy();
+            enriched.put("expectedProjectVersion", authority.projectVersion());
+            return enriched;
+        }
         if (HISTORY_TOOLS.contains(request.toolName())) {
             for (String serverArgument : ReactPlanHistoryToolContract.SERVER_ARGUMENTS) {
                 if (request.arguments().has(serverArgument)) {

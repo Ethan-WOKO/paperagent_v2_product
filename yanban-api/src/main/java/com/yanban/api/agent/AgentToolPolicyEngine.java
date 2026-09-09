@@ -14,7 +14,8 @@ public class AgentToolPolicyEngine {
     private static final String SEARCH_KNOWLEDGE = "search_knowledge";
     private static final int GENERAL_MAX_TOOL_CALLS = 6;
     private static final int PROJECT_INITIAL_MAX_TOOL_CALLS = 12;
-    private static final Set<String> LEGACY_CHAT_RESEARCH_PERMISSIONS = Set.of("research:web", "research:literature");
+    private static final Set<String> LEGACY_CHAT_RESEARCH_PERMISSIONS = Set.of(
+            "research:web", "research:literature", "paper:polish", "task:cancel", "history:read");
     private static final Set<String> HIDDEN_AGENT_TOOLS = Set.of(
             "literature_search_start",
             "literature_search_status",
