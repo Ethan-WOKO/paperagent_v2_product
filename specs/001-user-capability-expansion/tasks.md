@@ -27,4 +27,4 @@
 - [ ] T501 共享注册/策略/Engine 集成与回归，记录 commands/counts（Java 集成 277 及末轮定向 85、前端 47、Engine 定向 8 通过；Java 两轮有重复测试，不相加；Engine 全量出现间歇取消失败，尚不标记全部回归通过）。
 - [x] T502 需求对照审查与权限/幂等独立 review，修复遗漏（最终 PAPER_REVISION 入口和 Skill 提交契约问题均经独立复核关闭；测试及待验收风险见 verification.md）。
 - [ ] T503 检查基础服务可用性，执行可用的真实链路验收并记录未执行项（端口及模拟页面验收完成；后端/Engine 未启动，真实模型/MySQL/存储联调待完成）。
-- [ ] T504 分能力提交、推送和 Draft PR（不合并），交付重启与验收说明。
+- [x] T504 分能力提交、推送和 Draft PR（不合并），交付重启与验收说明：[Draft PR #220](https://github.com/Ethan-WOKO/paperagent_v2_product/pull/220)。当前仍有 T501/T503 待验收，不标记整个功能已完全完成。
