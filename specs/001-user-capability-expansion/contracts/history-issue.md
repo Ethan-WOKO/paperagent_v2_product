@@ -1,0 +1,5 @@
+feat(memory): retrieve current-user conversation history on demand
+
+Add bounded owner-qualified search and detail tools over workspace and project visible messages and ReAct deliveries. Authenticate from server ToolExecutionContext, reject userId/raw SQL from model. Page and truncate with source references, no access to deleted/inaccessible/other-user sessions. Keep existing project history tools and memory distillation. Owned paths: new agent/history package/tests, narrow AgentMessage/Session repositories, shared registry/policy/gateway/Engine prompt tests. Acceptance US3 FR005/006/008 T301-303.
+
+Implementation authorized directly in local codex/issue-185-react-optimization by user on 2026-09-09. Shared specification: specs/001-user-capability-expansion/spec.md; plan.md and tasks.md are frozen implementation contract. No agent-v2 core or broker changes; Redis optimization is follow-up. Preserve existing data, auth, immutable ProjectVersion and publication proofs. Add success/failure/isolation tests, report exact verification and live checks not run. Do not merge PRs.
