@@ -8,4 +8,6 @@ public record SkillListItemResponse(
         boolean enabled,
         String path
 ) {
+    public String getSource() { return builtin ? "builtin" : "user"; }
+    public boolean isManaged() { return id.startsWith("user-") && path.isEmpty(); }
 }

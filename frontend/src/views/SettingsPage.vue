@@ -256,26 +256,7 @@
             </NGridItem>
 
             <NGridItem span="24 l:12">
-              <NCard id="skills-settings" class="workbench-card scholar-card settings-section-card" :bordered="false">
-                <template #header>
-                  <div class="section-title">{{ settingsCopy('技能', 'Skills') }}</div>
-                </template>
-                <template #header-extra>
-                  <span class="chat-hint">{{ settingsCopy('从后端 Skill 注册表加载', 'Loaded from backend skill registry') }}</span>
-                </template>
-                <div class="settings-skill-grid">
-                  <NEmpty v-if="skills.length === 0" :description="settingsCopy('暂无可用技能。', 'No skills found.')" />
-                  <article v-for="skill in skills" :key="skill.id" class="settings-skill-pill">
-                    <div>
-                      <strong>{{ skill.name }}</strong>
-                      <span>{{ skill.source }}</span>
-                    </div>
-                    <NCheckbox :checked="!disabledSkillsSet.has(skill.id)" @update:checked="(checked) => toggleSkill(skill.id, checked)">
-                      {{ settingsCopy('已启用', 'Enabled') }}
-                    </NCheckbox>
-                  </article>
-                </div>
-              </NCard>
+              <SkillManagement :disabled="isDemoUser" />
             </NGridItem>
           </NGrid>
 
@@ -349,7 +330,6 @@ import {
   NAlert,
   NButton,
   NCard,
-  NCheckbox,
   NEmpty,
   NForm,
   NFormItem,
@@ -367,7 +347,7 @@ import {
 } from 'naive-ui';
 import { computed, onMounted, reactive, ref } from 'vue';
 import AppLayout from '@/components/AppLayout.vue';
-import { listSkills, type SkillListItemResponse } from '@/api/skills';
+import SkillManagement from '@/components/SkillManagement.vue';
 import { getSettings, updateSettings, refreshProviderModels, createModel, updateModel, deleteModel, testModel, type UserModelResponse, type UserSettingsResponse } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
@@ -415,8 +395,6 @@ const glmConfigured = ref(false);
 const githubConfigured = ref(false);
 const updatedAt = ref<string | null>(null);
 const filesystemRootsText = ref('workspace');
-const skills = ref<SkillListItemResponse[]>([]);
-const disabledSkills = ref<string[]>([]);
 const form = reactive({
   defaultProvider: 'deepseek',
   deepseekApiKey: '',
@@ -439,7 +417,6 @@ const modelForm = reactive({ label: '', apiUrl: '', apiKey: '', modelName: '' })
 const testingModelId = ref<number | null>(null);
 const refreshingProvider = ref<string | null>(null);
 
-const disabledSkillsSet = computed(() => new Set(disabledSkills.value));
 const isDemoUser = computed(() => Boolean(authStore.currentUser?.demo));
 const updatedAtText = computed(() => updatedAt.value
   ? new Date(updatedAt.value).toLocaleString(locale.value)
@@ -482,7 +459,7 @@ const defaultModel = computed<string>({
 const builtinModels = computed(() => customModels.value.filter((m) => m.builtin));
 
 onMounted(async () => {
-  await Promise.all([loadSettings(), loadSkills()]);
+  await loadSettings();
 });
 
 async function loadSettings() {
@@ -507,29 +484,11 @@ function applySettingsResponse(data: UserSettingsResponse) {
   form.maxSteps = data.maxSteps;
   form.ragDefaultEnabled = data.ragDefaultEnabled;
   filesystemRootsText.value = (data.filesystemRoots || []).join('\n');
-  disabledSkills.value = [...(data.disabledSkills || [])];
   deepseekConfigured.value = data.deepseekApiKeyConfigured;
   glmConfigured.value = data.glmApiKeyConfigured;
   githubConfigured.value = data.githubPatConfigured;
   updatedAt.value = data.updatedAt;
   customModels.value = data.customModels || [];
-}
-
-async function loadSkills() {
-  try {
-    const { data } = await listSkills();
-    skills.value = data;
-  } catch (error: unknown) {
-    ui.message.error(apiErrorMessage(error, 'Failed to load skills.'));
-  }
-}
-
-function toggleSkill(skillId: string, enabled: boolean) {
-  if (enabled) {
-    disabledSkills.value = disabledSkills.value.filter((item) => item !== skillId);
-  } else if (!disabledSkills.value.includes(skillId)) {
-    disabledSkills.value = [...disabledSkills.value, skillId];
-  }
 }
 
 async function handleSave() {
@@ -551,7 +510,6 @@ async function handleSave() {
       maxSteps: form.maxSteps,
       ragDefaultEnabled: form.ragDefaultEnabled,
       filesystemRoots: splitLines(filesystemRootsText.value),
-      disabledSkills: disabledSkills.value,
     });
     applySettingsResponse(data);
     ui.message.success('Settings saved.');
