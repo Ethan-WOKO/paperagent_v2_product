@@ -222,14 +222,65 @@ class KnowledgeDocumentDownloadControllerTest {
     }
 
     @Test
-    void sharedFilesDoNotGainPreviewOrDeleteAndOwnerDemoSeedProtectionRemains() throws Exception {
+    void sharedFilesCannotBeDeletedAndOwnerDemoSeedProtectionRemains() throws Exception {
         doc(1, 9, true, "public.md");
-        mvc.perform(get("/api/v1/kb/documents/1/preview").header("Authorization", token(7))).andExpect(status().isNotFound());
         mvc.perform(delete("/api/v1/kb/documents/1").header("Authorization", token(7))).andExpect(status().isNotFound());
         doc(2, 10, false, "demo.md").setSourceType("DEMO_SEED");
         doThrow(new ResponseStatusException(HttpStatus.FORBIDDEN)).when(accountPolicy).assertCanDeleteKnowledgeDocument(10L, "DEMO_SEED");
         mvc.perform(delete("/api/v1/kb/documents/2").header("Authorization", token(10))).andExpect(status().isForbidden());
         verify(documents, never()).delete(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {7, 9, 10})
+    void memberOwnerAndDemoPreviewAdministratorPublicTextWithoutOriginal(long viewer) throws Exception {
+        doc(1, 9, true, "public.md").setObjectKey(null);
+        when(chunks.countByDocumentId(1L)).thenReturn(1);
+        when(chunks.findByDocumentIdOrderByChunkIndexAsc(eq(1L), any())).thenReturn(List.of(new KbChunk(1L, 0, "管理员公开说明")));
+        mvc.perform(get("/api/v1/kb/documents/1/preview").header("Authorization", token(viewer)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content").value("管理员公开说明"))
+                .andExpect(jsonPath("$.truncated").value(false));
+        verifyNoInteractions(minio);
+    }
+
+    @Test
+    void previewRejectsOrdinaryPublicPrivateAndAdministratorPrivateBeforeReadingChunks() throws Exception {
+        doc(1, 8, true, "ordinary-public.md");
+        doc(2, 8, false, "ordinary-private.md");
+        doc(3, 9, false, "admin-private.md");
+        for (long id : List.of(1L, 2L, 3L, 999L)) {
+            mvc.perform(get("/api/v1/kb/documents/{id}/preview", id).header("Authorization", token(7)))
+                    .andExpect(status().isNotFound());
+        }
+        mvc.perform(get("/api/v1/kb/documents/2/preview").header("Authorization", token(9))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/kb/documents/1/preview")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(chunks, minio);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ROLE", "ACCOUNT_DELETED", "PRIVATE", "PROCESSING", "ARCHIVED", "DELETED", "SUPERSEDED", "DELETED_AT"})
+    void sharedPreviewRechecksCurrentPermissionAndState(String revocation) throws Exception {
+        KbDocument shared = doc(1, 9, true, "public.md");
+        switch (revocation) {
+            case "ROLE" -> identities.get(9L).setRole("USER");
+            case "ACCOUNT_DELETED" -> identities.get(9L).deleteAccount();
+            case "PRIVATE" -> ReflectionTestUtils.setField(shared, "isPublic", false);
+            case "PROCESSING" -> shared.setStatus("PROCESSING");
+            case "DELETED_AT" -> shared.setDeletedAt(Instant.now());
+            default -> shared.setVersionStatus(revocation);
+        }
+        mvc.perform(get("/api/v1/kb/documents/1/preview").header("Authorization", token(7))).andExpect(status().isNotFound());
+        verifyNoInteractions(chunks, minio);
+    }
+
+    @Test
+    void sharedPreviewKeepsExistingTextBounds() throws Exception {
+        doc(1, 9, true, "public.md");
+        when(chunks.countByDocumentId(1L)).thenReturn(1);
+        when(chunks.findByDocumentIdOrderByChunkIndexAsc(eq(1L), any())).thenReturn(List.of(new KbChunk(1L, 0, "x".repeat(2000))));
+        mvc.perform(get("/api/v1/kb/documents/1/preview").param("maxChars", "1000").header("Authorization", token(7)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content").value("x".repeat(1000)))
+                .andExpect(jsonPath("$.truncated").value(true)).andExpect(jsonPath("$.maxChars").value(1000));
     }
 
     @Test

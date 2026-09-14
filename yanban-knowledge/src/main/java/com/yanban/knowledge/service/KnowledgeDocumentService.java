@@ -83,10 +83,7 @@ public class KnowledgeDocumentService {
         KbDocument doc = documents.findById(documentId).orElseThrow(KnowledgeDocumentService::notAvailable);
         if (isRetired(doc)) throw notAvailable();
         if (!userId.equals(doc.getUserId())) {
-            KnowledgeDocumentPublisherPolicy policy = publisherPolicy.getIfAvailable();
-            if (!isShareable(doc) || policy == null || !policy.isAdministrator(doc.getUserId())) {
-                throw notAvailable();
-            }
+            requireSharedAccess(doc);
         }
         if (!hasOriginal(doc)) throw notAvailable();
         String filename = safeFilename(doc);
@@ -103,6 +100,13 @@ public class KnowledgeDocumentService {
 
     private static void requireIdentity(Long userId) {
         if (userId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请登录后重试");
+    }
+
+    private void requireSharedAccess(KbDocument doc) {
+        KnowledgeDocumentPublisherPolicy policy = publisherPolicy.getIfAvailable();
+        if (!isShareable(doc) || policy == null || !policy.isAdministrator(doc.getUserId())) {
+            throw notAvailable();
+        }
     }
 
     private static boolean isShareable(KbDocument doc) {
@@ -139,6 +143,21 @@ public class KnowledgeDocumentService {
     public KbDocumentPreviewResponse previewOwnedDocument(Long userId, Long documentId, Integer requestedMaxChars) {
         KbDocument document = documents.findByIdAndUserId(documentId, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "知识库文档不存在"));
+        return buildPreview(document, requestedMaxChars);
+    }
+
+    @Transactional(readOnly = true)
+    public KbDocumentPreviewResponse previewVisibleDocument(Long userId, Long documentId, Integer requestedMaxChars) {
+        requireIdentity(userId);
+        KbDocument document = documents.findById(documentId).orElseThrow(KnowledgeDocumentService::notAvailable);
+        if (!userId.equals(document.getUserId())) {
+            requireSharedAccess(document);
+        }
+        return buildPreview(document, requestedMaxChars);
+    }
+
+    private KbDocumentPreviewResponse buildPreview(KbDocument document, Integer requestedMaxChars) {
+        Long documentId = document.getId();
         int maxChars = normalizeMaxChars(requestedMaxChars);
         int totalChunks = chunks.countByDocumentId(documentId);
         List<com.yanban.knowledge.domain.KbChunk> previewChunks = chunks.findByDocumentIdOrderByChunkIndexAsc(

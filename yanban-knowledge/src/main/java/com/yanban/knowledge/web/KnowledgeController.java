@@ -106,7 +106,7 @@ public class KnowledgeController {
     public KbDocumentPreviewResponse previewDocument(@AuthenticationPrincipal(expression = "id") Long userId,
                                                      @PathVariable Long documentId,
                                                      @RequestParam(required = false) Integer maxChars) {
-        return documentService.previewOwnedDocument(userId, documentId, maxChars);
+        return documentService.previewVisibleDocument(userId, documentId, maxChars);
     }
 
     @DeleteMapping("/api/v1/kb/documents/{documentId}")

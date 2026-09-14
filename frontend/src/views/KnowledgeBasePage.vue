@@ -142,7 +142,7 @@
                   </NTag>
                   <span class="kb-document-updated">{{ formatDateTime(item.updatedAt) }}</span>
                   <NSpace class="kb-document-actions" size="small" justify="end">
-                    <NButton v-if="item.ownedByCurrentUser !== false" text type="primary" @click="handlePreview(item, $event)">Preview</NButton>
+                    <NButton v-if="item.ownedByCurrentUser !== false || item.administratorPublic" text type="primary" @click="handlePreview(item, $event)">Preview</NButton>
                     <NButton v-if="item.downloadAvailable" text type="primary" :loading="downloader.pending.has(item.id)" :disabled="downloader.pending.has(item.id)" @click="handleDownload(item)">
                       {{ isEnglish ? 'Download' : '下载' }}
                     </NButton>

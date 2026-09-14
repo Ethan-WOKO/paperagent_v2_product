@@ -2,7 +2,7 @@
 
 **Input**: [spec.md](spec.md)、[plan.md](plan.md)、[contracts/http.md](contracts/http.md)
 **Tests**: 根 AGENTS.md 要求新增成功与失败自动化测试。
-**Status**: 15/15 任务完成；实施、定向验证、converge、commit/push 和 Draft PR 更新完成。真实存储/游客浏览器联调未执行，见 verification.md。
+**Status**: 19/19 任务完成（含用户授权的共享预览修订）；实施、定向验证、converge、commit/push 和 Draft PR 更新完成。真实存储/游客浏览器联调未执行，见 verification.md。
 
 ## Phase 1: Setup
 
@@ -67,3 +67,12 @@ T001 → T002 → T003 → US1(T004–007) → US2(T008–010) → US3(T011–01
 | FR-009 | T002,T003,T009,T013 |
 
 SC-001 → T004/T006；SC-002 → T009/T011/T012；SC-003 → T008/T009/T010；SC-004 → T011/T012；均在 T013 汇总验证。T001/T014/T015 对应项目流程门禁。
+
+## Phase 7: 用户修订 — 管理员公开文档预览
+
+用户明确要求“那你修改一下”，已授权本修订。此前 T010/T012 中共享行不显示预览的历史完成记录由本阶段取代，删除和检索规则不变。
+
+- [x] T016 按修订的 FR-007/US2 更新 KnowledgeDocumentService.java 和 KnowledgeController.java：页面预览允许本人或当前有效管理员公开可用资料，复用解析文本及既有截断；共享权限失败在 chunks 查询前拒绝，不要求原文件存在。
+- [x] T017 更新 frontend/src/views/KnowledgeBasePage.vue 与 frontend/tests/knowledgePagePresentation.test.ts，管理员公开资料显示 Preview，Delete 继续只限本人。
+- [x] T018 在 KnowledgeDocumentDownloadControllerTest.java 增加成员/DEMO 预览、普通公开/私有拒绝、管理员角色/公开/版本状态撤销、缺失原文件可预览和字符截断测试，保留本人预览回归。
+- [x] T019 运行对应 Java 套件、前端 Vitest/build 与 diff 检查，将精确数量和限制记录到 verification.md；converge 后提交推送 185 分支，更新 Draft PR #220，不合并。

@@ -30,12 +30,12 @@ Phase 0/Phase 1 技术边界检查通过。用户在完整产物交付后明确�
 4. 下载先检查认证、所有权或管理员公开条件和状态，再访问 MinIO；返回受控资源流并在成功/失败关闭流，不暴露 bucket、objectKey 或公共链接。
 5. 新增 GET /api/v1/kb/documents/{id}/download；application/octet-stream、attachment UTF-8 安全文件名、private/no-store、nosniff。文件名去路径/控制字符，空名回退 document-{id}。
 6. 无权限/不存在/已删除/ARCHIVED/无 objectKey/NoSuchKey 为 404；存储临时故障 503。流传输开始后故障终止传输，不追加异常内容或宣称能改变已发送状态。
-7. 前端使用鉴权 http Blob 下载；成功后创建 object URL 保存并清理；抑制重复点击、加载/错误提示。仅 owner 展示原 preview/delete，DEMO_SEED 限制保持。增加文件名本地筛选，搜索服务不变。
+7. 前端使用鉴权 http Blob 下载；成功后创建 object URL 保存并清理；抑制重复点击、加载/错误提示。owner 与管理员公开行展示 preview；仅 owner 展示 delete，DEMO_SEED 限制保持。增加文件名本地筛选，搜索服务不变。
 8. deletedAt 非空或 DELETED、ARCHIVED 禁止所有下载；共享额外要求 READY/ACTIVE，null versionStatus 沿用 ACTIVE 默认；owner 原文件不受解析状态影响，SUPERSEDED 可下载。
 
 ## Failure / Compatibility
 
-旧 DTO 加法兼容。现有 preview/delete 方法和权限、上传/RAG 全部保持。管理员取消公开、角色失效、账号删除后新下载按最新数据库判断，无权限缓存；已交付字节不可收回。历史无原文件不回填、不拼接 chunks。没有新增扫描/审核基础设施。
+旧 DTO 加法兼容。保留原 owner-only preview/delete 方法给内部调用方，页面 preview 入口扩展到管理员公开资料；删除权限、上传/RAG 保持。管理员取消公开、角色失效、账号删除后新下载按最新数据库判断，无权限缓存；已交付字节不可收回。历史无原文件不回填、不拼接 chunks。没有新增扫描/审核基础设施。
 
 ## Verification / Rollback / Restart
 

@@ -17,6 +17,10 @@
 
 列表 downloadAvailable 不是授权令牌，直取重新读取最新权限。列表不查询 MinIO，因此远端文件丢失可在点击时返回 404。
 
+## GET /api/v1/kb/documents/{documentId}/preview
+
+允许 owner 或当前有效 ADMIN 的公开 READY/ACTIVE/未删除资料，预览不依赖 objectKey；共享权限失效在读取 chunks 前返回 404。复用现有解析文本响应与字符/分块限制，本人预览行为保持。
+
 ## Unchanged
 
-preview/delete 仍 owner-only，DEMO_SEED 保护不变。上传不变。POST /search 保持原有 owner OR public 检索，LLM/RAG/工具入口不变。SecurityConfig 无新增匿名规则。
+delete 仍 owner-only，DEMO_SEED 保护不变。上传不变。POST /search 保持原有 owner OR public 检索，LLM/RAG/工具入口不变。SecurityConfig 无新增匿名规则。

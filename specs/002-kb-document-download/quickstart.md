@@ -37,7 +37,7 @@ git diff --check
 3. 他人普通公开/私有、ADMIN 私有、已删除/ARCHIVED 拒绝；管理员也不可绕过他人私有。拒绝前不访问 MinIO。
 4. 管理员撤销/删除、取消公开、共享状态失效，旧页面直取拒绝。
 5. 匿名 401；无键/NoSuchKey 404；存储故障 503；中文/危险文件名安全，流关闭且不泄露。
-6. 文件名筛选/空结果，下载加载/失败/防重复，错误 Blob 不保存，object URL 清理；共享无 preview/delete，本人操作保留。
+6. 文件名筛选/空结果，下载加载/失败/防重复，错误 Blob 不保存，object URL 清理；共享可 preview 但不可 delete，本人操作保留；覆盖共享预览撤销、无原文件与原有截断上限。
 7. 固定普通公开跨用户 /search 仍命中，上传/本人预览删除/DEMO_SEED 保护保持。
 
 ## Manual acceptance and evidence

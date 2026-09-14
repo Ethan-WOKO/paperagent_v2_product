@@ -16,8 +16,8 @@
 
 ## 页面与验证
 
-- Decision: 原列表加本地文件名筛选、共享标识与下载；他人行不展示 owner-only preview/delete。
+- Decision: 原列表加本地文件名筛选、共享标识与下载；他人管理员公开行显示 preview，delete 保持 owner-only。
 - Rationale: 保持最小范围。KnowledgeControllerIntegrationTest 已含普通公开跨用户搜索回归；KnowledgeRepositoryTest 和 FileProcessingServiceTest 提供 JPA/MinIO mock 模式。
-- Alternatives: 新资料中心、全文索引、预签名公共链接、扩大共享预览均不必要。
+- Alternatives: 新资料中心、全文索引、预签名公共链接、额外原格式在线预览均不必要；按用户后续修订开放现有解析文本预览。
 
 技术未知已解决；没有读线上文件或用户数据。真实存储/浏览器流程属于实施验收，本研究不是运行证明。

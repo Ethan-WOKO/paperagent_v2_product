@@ -76,3 +76,31 @@ Converge：检查 9 项 FR、4 项 SC、10 个用户验收场景、8 项设计�
 用户批准在现有 185 分支实施。完成后仅提交 owned paths，push 并更新已有 Draft PR #220 关联 #221，不合并；旧 PR 尚未完成的其他验收门禁继续保留。
 
 交付已完成：实现提交 `4266f180` 已推送至 origin/codex/issue-185-react-optimization。[Draft PR #220](https://github.com/Ethan-WOKO/paperagent_v2_product/pull/220) 标题与说明已更新、关联 #221，并保留 #216–219 的既有验收结果和待办。未合并、未启动或重启生产服务。最终仅 .runtime/ 作为原有/本地执行数据保持未跟踪，不纳入提交。
+
+## 用户修订：管理员公开资料允许预览（2026-09-14）
+
+用户明确要求修改并直接授权实施。原规格“共享资料仅下载、不预览”由当前 spec/plan/contracts 取代，#221 合同同步修订；历史验证结果不改写。
+
+页面对本人和管理员公开资料显示 Preview；后端新增 previewVisibleDocument，原 owner-only 内部方法保留，提取同一 buildPreview 复用原字符/分块限制。共享预览与下载共用当前有效管理员公开权限判断，失败在读取 chunks 前拒绝。预览不要求原文件 objectKey，删除、上传、RAG 不变。
+
+精确验证命令（仓库根目录）：
+
+```powershell
+mvn -q -pl yanban-api -am '-Dtest=KnowledgeDocumentServiceTest,KnowledgeDocumentDownloadControllerTest,KnowledgeControllerIntegrationTest' '-Dsurefire.failIfNoSpecifiedTests=false' test
+```
+
+16:12 完成：49 tests / 0 failures / 0 errors / 0 skipped（service 14、download/preview MVC 28、原 Boot/H2 knowledge integration 7）。新增 13 个参数化/普通测试场景：成员/管理员本人/DEMO 预览无原文件的解析内容、他人普通公开/私有及管理员私有拒绝、匿名拒绝、角色/账号/公开/处理/版本/删除状态撤销、预览字符截断。越权拒绝验证 chunks/MinIO 零交互。
+
+前端目录：
+
+```powershell
+pnpm exec vitest run tests/knowledgeDownload.test.ts tests/knowledgePagePresentation.test.ts
+$env:CI='true'
+pnpm build
+```
+
+16 tests passed，build passed，保留既有 bundle-size 警告。git diff --check 通过。本修订只涉及既有 owned paths；没有新增原格式 PDF/Word 查看器、schema、存储写入或检索变化。
+
+Converge 对照修订后的 FR-007、US2、共享权限和 T016–T019，未发现未完成代码缺口。此前 T010 的“不展示共享预览”由本阶段取代；其他已完成事实保留。
+
+本轮检测到本地 8080/9000/5173 服务监听，但未重启现有服务，也未操作真实账号和资料做浏览器验收；监听不是健康证明。自动化通过不等于运行中后端已加载修改。需要重启/更新 API，前端开发模式可热更新，生产需重建发布。回滚本次预览修订提交可恢复原预览授权，下载能力仍保留。Draft PR #220 保持 Draft、不合并。
