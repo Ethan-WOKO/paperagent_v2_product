@@ -45,4 +45,6 @@ Phase 0/Phase 1 技术边界检查通过。用户在完整产物交付后明确�
 
 ## Complexity Tracking
 
+用户追加批准 FR-010：仅前端添加可见性筛选和每用户本地偏好，辅助逻辑置于 frontend/src/knowledge/documentFilters.ts；沿用 auth.currentUser.id 分隔存储键，账号变化立即重读，不将旧账号状态写给新账号。使用现有 Naive UI 分段单选与文件名输入同排，窄屏换行；空结果提供清除按钮。仅运行相关 Vitest 和 build，不重跑未改的后端/RAG。回滚前端提交即可，残留偏好不影响旧版，无后端重启要求。
+
 用户指定复用 185 分支，以独立 Issue #221 和 SDD 文件界定范围，不重写已关闭 #185 合同；无新增基础设施。

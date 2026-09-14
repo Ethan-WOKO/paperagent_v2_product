@@ -41,8 +41,3 @@ export function saveKnowledgeBlob(blob: Blob, filename: string) {
     URL.revokeObjectURL(url);
   }
 }
-
-export function filterKnowledgeDocuments(items: KbDocumentItem[], query: string) {
-  const search = query.trim().toLocaleLowerCase();
-  return items.filter((item) => item.filename.toLocaleLowerCase().includes(search));
-}

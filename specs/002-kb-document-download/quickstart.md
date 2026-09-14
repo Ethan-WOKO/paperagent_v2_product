@@ -19,7 +19,7 @@ mvn -q -pl yanban-api -am '-Dtest=KnowledgeDocumentServiceTest,KnowledgeReposito
 前端目录：
 
 ```powershell
-pnpm exec vitest run tests/knowledgeDownload.test.ts tests/knowledgePagePresentation.test.ts
+pnpm exec vitest run tests/knowledgeDownload.test.ts tests/knowledgePagePresentation.test.ts tests/knowledgeFilters.test.ts
 $env:CI='true'
 pnpm build
 ```
