@@ -94,8 +94,8 @@
               </details>
             </div>
 
-            <NTabs type="line" animated>
-              <NTabPane name="usage" tab="额度明细">
+            <NTabs type="line" class="admin-detail-tabs" pane-class="admin-detail-panel">
+              <NTabPane name="usage" tab="额度明细" role="region" aria-label="额度明细，可在区域内滚动" tabindex="0">
                 <NEmpty v-if="detail.usage.length === 0" description="尚无已记录的 AI 使用量" />
                 <div v-else class="admin-list">
                   <div v-for="item in detail.usage" :key="item.id" class="admin-list__row">
@@ -106,7 +106,7 @@
                   </div>
                 </div>
               </NTabPane>
-              <NTabPane name="chat" tab="聊天">
+              <NTabPane name="chat" tab="聊天" role="region" aria-label="历史对话，可在区域内滚动" tabindex="0">
                 <div class="admin-chat-scope" role="tablist" aria-label="对话类型">
                   <button
                     type="button"
@@ -131,7 +131,7 @@
                 </div>
 
                 <NEmpty v-if="visibleChatCount === 0" :description="chatScope === 'WORKSPACE' ? '暂无工作区对话' : '暂无项目对话'" />
-                <div v-else class="admin-chat-list" role="region" aria-label="历史对话，可在区域内滚动" tabindex="0">
+                <div v-else class="admin-chat-list">
                   <section v-for="group in visibleChatGroups" :key="group.key" class="admin-chat-group">
                     <header v-if="chatScope === 'PROJECT'" class="admin-chat-group__header">
                       <strong>{{ group.title }}</strong>
@@ -162,7 +162,7 @@
                   </section>
                 </div>
               </NTabPane>
-              <NTabPane name="paper" tab="论文">
+              <NTabPane name="paper" tab="论文" role="region" aria-label="论文任务，可在区域内滚动" tabindex="0">
                 <NEmpty v-if="detail.papers.length === 0" description="暂无论文任务" />
                 <div v-else class="admin-list">
                   <div v-for="item in detail.papers" :key="item.id" class="admin-list__row">
@@ -173,7 +173,7 @@
                   </div>
                 </div>
               </NTabPane>
-              <NTabPane name="project" tab="项目">
+              <NTabPane name="project" tab="项目" role="region" aria-label="项目列表，可在区域内滚动" tabindex="0">
                 <NEmpty v-if="detail.projects.length === 0" description="暂无项目" />
                 <div v-else class="admin-list">
                   <div v-for="item in detail.projects" :key="item.id" class="admin-list__row">
@@ -874,16 +874,18 @@ onUnmounted(() => {
   border-radius: 0;
 }
 
-.admin-chat-list {
+.admin-detail-tabs :deep(.admin-detail-panel) {
   height: clamp(240px, 45dvh, 520px);
+  box-sizing: border-box;
   min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior-y: contain;
   scrollbar-gutter: stable;
+  overflow-wrap: anywhere;
 }
 
-.admin-chat-list:focus-visible {
+.admin-detail-tabs :deep(.admin-detail-panel:focus-visible) {
   outline: 2px solid var(--pa-accent);
   outline-offset: -2px;
 }
