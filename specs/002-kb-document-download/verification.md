@@ -74,3 +74,5 @@ Converge：检查 9 项 FR、4 项 SC、10 个用户验收场景、8 项设计�
 本功能无 migration 和持久写入变化。回滚本功能提交可恢复旧列表/移除下载，保留所有对象和文档。应用更新需重启 API、重建发布前端；Engine、ES、MinIO 不需配置改动。不要回滚或覆盖同分支既有 #216–219 的工作。
 
 用户批准在现有 185 分支实施。完成后仅提交 owned paths，push 并更新已有 Draft PR #220 关联 #221，不合并；旧 PR 尚未完成的其他验收门禁继续保留。
+
+交付已完成：实现提交 `4266f180` 已推送至 origin/codex/issue-185-react-optimization。[Draft PR #220](https://github.com/Ethan-WOKO/paperagent_v2_product/pull/220) 标题与说明已更新、关联 #221，并保留 #216–219 的既有验收结果和待办。未合并、未启动或重启生产服务。最终仅 .runtime/ 作为原有/本地执行数据保持未跟踪，不纳入提交。

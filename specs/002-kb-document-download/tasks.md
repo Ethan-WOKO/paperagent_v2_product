@@ -2,7 +2,7 @@
 
 **Input**: [spec.md](spec.md)、[plan.md](plan.md)、[contracts/http.md](contracts/http.md)
 **Tests**: 根 AGENTS.md 要求新增成功与失败自动化测试。
-**Status**: 用户已批准；业务实施与定向验证完成，正在 converge 与交付。
+**Status**: 15/15 任务完成；实施、定向验证、converge、commit/push 和 Draft PR 更新完成。真实存储/游客浏览器联调未执行，见 verification.md。
 
 ## Phase 1: Setup
 
@@ -41,7 +41,7 @@
 
 - [x] T013 执行 specs/002-kb-document-download/quickstart.md 的 Java、Vitest、build 和 diff 检查，记录精确命令、数量和失败/跳过于 verification.md；有本地环境时执行成员/游客真实下载验收，无环境明确标记未执行（FR-001–009，SC-001–004）。
 - [x] T014 使用 speckit-converge 对照 specs/002-kb-document-download/spec.md、plan.md、tasks.md 复核行为和保护边界，遗漏追加到 tasks.md；禁止把剩余验收标为完成。
-- [ ] T015 在 specs/002-kb-document-download/verification.md 完成回滚/重启/风险与 owned-path 证据，验证后仅暂存本需求文件 commit/push，更新现有 Draft PR #220 关联 #221 与新增范围，不合并、不提交 .runtime。
+- [x] T015 在 specs/002-kb-document-download/verification.md 完成回滚/重启/风险与 owned-path 证据，验证后仅暂存本需求文件 commit/push，更新现有 Draft PR #220 关联 #221 与新增范围，不合并、不提交 .runtime。
 
 ## Dependencies / Parallel opportunities
 
