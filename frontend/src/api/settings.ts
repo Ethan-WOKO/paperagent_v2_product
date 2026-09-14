@@ -31,7 +31,7 @@ export interface UserSettingsRequest {
   maxSteps: number;
   ragDefaultEnabled: boolean;
   filesystemRoots: string[];
-  disabledSkills: string[];
+  disabledSkills?: string[];
 }
 
 export interface UserModelResponse {

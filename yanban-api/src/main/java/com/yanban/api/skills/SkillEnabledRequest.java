@@ -1,4 +1,6 @@
 package com.yanban.api.skills;
 
-public record SkillEnabledRequest(boolean enabled) {
+import jakarta.validation.constraints.NotNull;
+
+public record SkillEnabledRequest(@NotNull Boolean enabled) {
 }

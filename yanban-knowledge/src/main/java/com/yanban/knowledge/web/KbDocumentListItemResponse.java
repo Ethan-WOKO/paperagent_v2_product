@@ -22,9 +22,17 @@ public record KbDocumentListItemResponse(
         Long fileSize,
         String errorMessage,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        boolean ownedByCurrentUser,
+        boolean administratorPublic,
+        boolean downloadAvailable
 ) {
     public static KbDocumentListItemResponse from(KbDocument document) {
+        return from(document, true, false, false);
+    }
+
+    public static KbDocumentListItemResponse from(KbDocument document, boolean owned,
+                                                  boolean administratorPublic, boolean downloadAvailable) {
         return new KbDocumentListItemResponse(
                 document.getId(),
                 document.getUserId(),
@@ -42,9 +50,12 @@ public record KbDocumentListItemResponse(
                 document.getDeletedAt(),
                 document.getMimeType(),
                 document.getFileSize(),
-                document.getErrorMessage(),
+                owned ? document.getErrorMessage() : null,
                 document.getCreatedAt(),
-                document.getUpdatedAt()
+                document.getUpdatedAt(),
+                owned,
+                administratorPublic,
+                downloadAvailable
         );
     }
 }

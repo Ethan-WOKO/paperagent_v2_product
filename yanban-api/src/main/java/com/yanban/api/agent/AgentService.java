@@ -473,7 +473,10 @@ public class AgentService {
         ConversationIntentRouterService.IntentAction intentAction = projectContext == null
                 ? conversationIntentRouterService.route(request.content())
                 : null;
-        if (intentAction != null) {
+        // Paper requests now use the governed native tools. The old suggestion only navigates
+        // to /paper and can also match attachment guidance, so it must not consume this turn.
+        // Preserve the existing literature shortcut and its search/confirmation behavior.
+        if (intentAction != null && !"PAPER_REVISION".equals(intentAction.intent())) {
             AgentMessage processMessage = saveProcessMessageIfNeeded(
                     session.getId(),
                     userId,
@@ -575,7 +578,7 @@ public class AgentService {
                     resolvedRuntimeTraceId(),
                     tokenConsumer,
                     processConsumer
-            );
+            ).withInvocationScope(paperInvocationScope(session.getId(), turn.getId(), request.clientRequestId()));
             if (projectContext != null) {
                 runtimeRequest = runtimeRequest.withProjectContext(projectContext);
             }
@@ -911,6 +914,13 @@ public class AgentService {
     static String resolvedRuntimeTraceId() {
         String traceId = MDC.get(TraceIdFilter.TRACE_ID_MDC_KEY);
         return StringUtils.hasText(traceId) ? traceId : UUID.randomUUID().toString();
+    }
+
+    /** Stable across HTTP replay/restarts; ownership and input digest are checked in the durable paper binding. */
+    static String paperInvocationScope(Long sessionId, Long turnId, String clientRequestId) {
+        return StringUtils.hasText(clientRequestId)
+                ? "chat-request:" + sessionId + ":" + PaperPolishStartService.digest(clientRequestId)
+                : "chat-turn:" + turnId;
     }
 
     private void updateSessionSummaryAfterSuccess(AgentSession session,

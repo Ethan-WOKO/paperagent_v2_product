@@ -34,6 +34,67 @@ class AgentEngineRegisteredToolGatewayTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
+    void productionPaperAndPersonalHistoryDescriptorsWorkThroughProjectGateway() {
+        var paper = mock(com.yanban.api.agent.PaperPolishStartService.class);
+        var history = mock(com.yanban.api.agent.history.PastConversationHistoryService.class);
+        ToolRegistry registry = new ToolRegistry()
+                .register(new com.yanban.api.agent.PaperPolishStartToolExecutor(paper, json))
+                .register(new com.yanban.api.agent.history.SearchPastConversationsToolExecutor(json, history))
+                .register(new com.yanban.api.agent.history.GetPastConversationToolExecutor(json, history));
+        var gateway = new AgentEngineRegisteredToolGateway(json, registry,
+                new AgentToolPolicyEngine(registry, null), contexts(VERSION));
+        assertThat(gateway.catalog(authority()).tools()).extracting(t -> t.function().name())
+                .containsExactlyInAnyOrder("paper_polish_start", "search_past_conversations", "get_past_conversation");
+        when(paper.start(org.mockito.ArgumentMatchers.eq(authority().userId()),
+                org.mockito.ArgumentMatchers.eq(authority().projectId()), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    assertThat(ToolExecutionContext.getInvocationScope()).isEqualTo(TASK);
+                    com.fasterxml.jackson.databind.JsonNode args = invocation.getArgument(2);
+                    assertThat(args.path("expectedProjectVersion").asText()).isEqualTo(VERSION);
+                    assertThat(args.has("clientRequestId")).isFalse();
+                    return new com.yanban.api.agent.PaperPolishStartService.StartResult(42L, "PENDING", "UPLOAD_RECEIVED", false, VERSION);
+                });
+        ObjectNode args = json.createObjectNode().put("latexText", "explicit source").put("targetLanguage", "en");
+        String digest = ReactPlanCanonicalJson.digest(json, Map.of("toolName", "paper_polish_start", "arguments", args));
+        var started = gateway.invoke(authority(), new RegisteredToolCall("1.0", "call." + "a".repeat(40),
+                "paper_polish_start", args, digest));
+        assertThat(started.success()).isTrue();
+        assertThat(started.output().path("taskId").asLong()).isEqualTo(42);
+        assertThat(started.output().path("completed").asBoolean()).isFalse();
+        assertThat(ToolExecutionContext.getInvocationScope()).isNull();
+        args.put("expectedProjectVersion", "forged");
+        String forgedDigest = ReactPlanCanonicalJson.digest(json, Map.of("toolName", "paper_polish_start", "arguments", args));
+        assertThatThrownBy(() -> gateway.invoke(authority(), new RegisteredToolCall("1.0", "call." + "b".repeat(40),
+                "paper_polish_start", args, forgedDigest))).isInstanceOfSatisfying(EngineGatewayException.class,
+                        error -> assertThat(error.code()).isEqualTo("REGISTERED_TOOL_SERVER_ARGUMENT_FORBIDDEN"));
+        when(history.search(authority().userId(), "earlier", null, null, 5))
+                .thenReturn(json.createObjectNode().put("resultCount", 1).put("untrusted", true));
+        ObjectNode search = json.createObjectNode().put("query", "earlier");
+        String searchDigest = ReactPlanCanonicalJson.digest(json, Map.of("toolName", "search_past_conversations", "arguments", search));
+        var found = gateway.invoke(authority(), new RegisteredToolCall("1.0", "call." + "c".repeat(40),
+                "search_past_conversations", search, searchDigest));
+        assertThat(found.success()).isTrue();
+        assertThat(found.output().path("resultCount").asInt()).isEqualTo(1);
+        org.mockito.Mockito.verify(history).search(authority().userId(), "earlier", null, null, 5);
+    }
+
+    @Test
+    void installedSkillRestrictionsAreCheckedAgainAtInvocation() {
+        ToolRegistry registry = new ToolRegistry().register(executor("project_search", ToolDescriptor.SideEffectType.READ_ONLY));
+        AgentToolPolicyEngine policies = mock(AgentToolPolicyEngine.class);
+        when(policies.decideProject(null, null)).thenReturn(new AgentToolPolicyEngine.Decision(List.of("project_search"), 12, 1, "test"));
+        var skillPolicy = mock(com.yanban.api.agent.reactplan.ReactPlanTaskSkillPolicy.class);
+        when(skillPolicy.allowedTools(TASK, authority().userId(), authority().requestDigest())).thenReturn(java.util.Set.of());
+        var gateway = new AgentEngineRegisteredToolGateway(json, registry, policies, contexts(VERSION), null, null, skillPolicy);
+        assertThat(gateway.catalog(authority()).tools()).isEmpty();
+        ObjectNode args = json.createObjectNode().put("query", "x");
+        String digest = ReactPlanCanonicalJson.digest(json, Map.of("toolName", "project_search", "arguments", args));
+        assertThatThrownBy(() -> gateway.invoke(authority(), new RegisteredToolCall("1.0", "call." + "a".repeat(40),
+                "project_search", args, digest))).isInstanceOfSatisfying(EngineGatewayException.class,
+                        e -> assertThat(e.code()).isEqualTo("REGISTERED_TOOL_NOT_ALLOWED"));
+    }
+
+    @Test
     void exposesAndInvokesOnlyRegisteredReadOnlyProjectTools() {
         ToolRegistry registry = new ToolRegistry()
                 .register(executor("project_search", ToolDescriptor.SideEffectType.READ_ONLY))

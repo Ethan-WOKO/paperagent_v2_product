@@ -110,6 +110,11 @@ class KnowledgeControllerIntegrationTest {
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].filename").value("public.txt"))
                 .andExpect(jsonPath("$[0].isPublic").value(true));
+
+        // Retrieval visibility is deliberately independent of the new file-sharing boundary.
+        mockMvc.perform(get("/api/v1/kb/documents").header("Authorization", "Bearer " + tokenB))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
     }
 
     @Test
@@ -124,6 +129,8 @@ class KnowledgeControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].filename").value("mine.md"))
+                .andExpect(jsonPath("$[0].ownedByCurrentUser").value(true))
+                .andExpect(jsonPath("$[0].downloadAvailable").value(false))
                 .andExpect(jsonPath("$[0].status").value("READY"));
     }
 

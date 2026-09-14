@@ -204,6 +204,39 @@ class PaperTaskToolExecutorTest {
         return arguments;
     }
 
+    @Test
+    void waitingInputHasActionableTaskLinkWithoutClaimingCompletion() {
+        ToolExecutionContext.setCurrentUserId(USER_ID);
+        when(tasks.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(Optional.of(task("WAITING_INPUT", "STRUCTURE_CHECK")));
+        ToolResult result = new PaperPolishResultToolExecutor(support, objectMapper)
+                .execute(new ToolCall("waiting", "paper_polish_result", args(TASK_ID)));
+        assertThat(result.output().path("requiresUserInput").asBoolean()).isTrue();
+        assertThat(result.output().path("completed").asBoolean()).isFalse();
+        assertThat(result.output().path("pollRecommended").asBoolean()).isFalse();
+        assertThat(result.output().path("taskUrl").asText()).isEqualTo("/paper?taskId=101");
+    }
+
+    @Test
+    void cancellingReplayDoesNotSendAnotherStopOrClaimTerminalCancellation() {
+        ToolExecutionContext.setCurrentUserId(USER_ID);
+        when(tasks.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(Optional.of(task("CANCEL_REQUESTED", "POLISH")));
+        ToolResult result = new PaperTaskCancelToolExecutor(support, objectMapper)
+                .execute(new ToolCall("cancel-again", "paper_task_cancel", args(TASK_ID)));
+        assertThat(result.output().path("idempotent").asBoolean()).isTrue();
+        assertThat(result.output().path("cancelled").asBoolean()).isFalse();
+        assertThat(result.output().path("cancelling").asBoolean()).isTrue();
+        org.mockito.Mockito.verifyNoInteractions(paperOrchestrator);
+    }
+
+    @Test
+    void descriptorsPermitBoundedObservationAndAuthorizedCancellation() {
+        assertThat(new PaperPolishStatusToolExecutor(support, objectMapper).descriptor().repeatPolicy())
+                .isEqualTo(com.yanban.core.tool.ToolDescriptor.RepeatPolicy.POLL_UNTIL_TERMINAL);
+        var cancel = new PaperTaskCancelToolExecutor(support, objectMapper).descriptor();
+        assertThat(cancel.requiredPermissions()).containsExactly("task:cancel");
+        assertThat(cancel.confirmationPolicy()).isEqualTo(com.yanban.core.tool.ToolDescriptor.ConfirmationPolicy.NEVER);
+    }
+
     private PaperTask task(String status, String stage) {
         PaperTask task = new PaperTask(USER_ID, "RAG Paper", "main.tex", "paper/main.tex", status, "zh", stage, null);
         task.setMode("LATEX_BIB");

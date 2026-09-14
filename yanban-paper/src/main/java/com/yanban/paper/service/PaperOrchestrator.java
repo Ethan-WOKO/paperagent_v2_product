@@ -198,18 +198,28 @@ public class PaperOrchestrator {
     }
 
     public void startTask(Long taskId) {
+        startTaskIfClaimed(taskId, () -> true);
+    }
+
+    /** The tool adapter's durable claim runs on the worker before any pipeline effects. */
+    public void startTaskIfClaimed(Long taskId, java.util.function.BooleanSupplier claim) {
         controlStates.putIfAbsent(taskId, new ControlState());
         if (!runningTasks.add(taskId)) {
             log.info("Paper task {} is already running, skip duplicate start", taskId);
             return;
         }
-        paperTaskExecutor.execute(() -> {
-            try {
-                runTask(taskId);
-            } finally {
-                runningTasks.remove(taskId);
-            }
-        });
+        try {
+            paperTaskExecutor.execute(() -> {
+                try {
+                    if (claim.getAsBoolean()) runTask(taskId);
+                } finally {
+                    runningTasks.remove(taskId);
+                }
+            });
+        } catch (RuntimeException rejected) {
+            runningTasks.remove(taskId);
+            throw rejected;
+        }
     }
 
     @Transactional

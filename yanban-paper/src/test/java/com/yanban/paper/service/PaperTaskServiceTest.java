@@ -30,6 +30,23 @@ import org.springframework.mock.web.MockMultipartFile;
 
 class PaperTaskServiceTest {
 
+    @Test
+    void toolCreatePersistsSourcesWithoutDispatchBeforeProductBinding() {
+        MockMultipartFile tex = new MockMultipartFile("mainTex", "main.tex", "application/x-tex", "latex source".getBytes());
+        PaperProcessRequest request = new PaperProcessRequest(tex, null, null, null, null, null, 3, 5, false, "en", null);
+        when(paperTaskRepository.findByIdempotencyKey(any())).thenReturn(Optional.empty());
+        when(paperStorageService.storeOriginal(eq(7L), any())).thenReturn("owned/original.tex");
+        when(paperTaskRepository.save(any())).thenAnswer(call -> {
+            PaperTask task = call.getArgument(0); assignId(task, 25L); return task;
+        });
+        PaperTaskResponse response = service.createTaskForTool(7L, request, "paper-tool.stable");
+        assertThat(response.id()).isEqualTo(25L);
+        assertThat(response.status()).isEqualTo("PENDING");
+        verify(paperStorageService).storeOriginal(eq(7L), any());
+        verify(artifactRepository).save(any());
+        verify(paperOrchestrator, never()).startTask(any());
+    }
+
     private final PaperTaskRepository paperTaskRepository = org.mockito.Mockito.mock(PaperTaskRepository.class);
     private final PaperTaskArtifactRepository artifactRepository = org.mockito.Mockito.mock(PaperTaskArtifactRepository.class);
     private final PaperStorageService paperStorageService = org.mockito.Mockito.mock(PaperStorageService.class);

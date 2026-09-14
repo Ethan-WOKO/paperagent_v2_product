@@ -100,6 +100,8 @@ export interface RegisteredToolPollState {
   totalPolls: number;
   unchangedPolls: number;
   lastStateFingerprint: string;
+  suppressedReason?: "terminal" | "waiting_input" | "unchanged" | "budget";
+  terminal?: boolean;
 }
 export interface ModelResponse {
   content: string | null;

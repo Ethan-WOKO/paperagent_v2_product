@@ -7,6 +7,7 @@ public final class ToolExecutionContext {
 
     private static final ThreadLocal<Long> CURRENT_USER_ID = new ThreadLocal<>();
     private static final ThreadLocal<Long> CURRENT_PROJECT_ID = new ThreadLocal<>();
+    private static final ThreadLocal<String> INVOCATION_SCOPE = new ThreadLocal<>();
     private static final ThreadLocal<Set<String>> RESOLVED_ALLOWED_TOOLS = new ThreadLocal<>();
 
     private ToolExecutionContext() {
@@ -18,6 +19,18 @@ public final class ToolExecutionContext {
 
     public static Long getCurrentUserId() {
         return CURRENT_USER_ID.get();
+    }
+
+    /** Server-owned turn identity used to replay asynchronous task creation safely. */
+    public static void setInvocationScope(String scope) {
+        if (scope == null || scope.isBlank() || scope.length() > 256) {
+            throw new IllegalArgumentException("invocation scope must be server-attested");
+        }
+        INVOCATION_SCOPE.set(scope);
+    }
+
+    public static String getInvocationScope() {
+        return INVOCATION_SCOPE.get();
     }
 
     /** Server-attested Project identity for one governed model tool call. */
@@ -52,6 +65,7 @@ public final class ToolExecutionContext {
     public static void clear() {
         CURRENT_USER_ID.remove();
         CURRENT_PROJECT_ID.remove();
+        INVOCATION_SCOPE.remove();
         RESOLVED_ALLOWED_TOOLS.remove();
     }
 }

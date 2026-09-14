@@ -11,6 +11,13 @@ import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.nio.charset.StandardCharsets;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -78,14 +85,28 @@ public class KnowledgeController {
 
     @GetMapping("/api/v1/kb/documents")
     public List<KbDocumentListItemResponse> listDocuments(@AuthenticationPrincipal(expression = "id") Long userId) {
-        return documentService.listOwnedDocuments(userId);
+        return documentService.listVisibleDocuments(userId);
+    }
+
+    @GetMapping("/api/v1/kb/documents/{documentId}/download")
+    public ResponseEntity<Resource> downloadDocument(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                      @PathVariable Long documentId) {
+        var download = documentService.downloadDocument(userId, documentId);
+        // Spring's ResourceHttpMessageConverter closes this stream, including on transfer failure.
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(download.filename(), StandardCharsets.UTF_8).build().toString())
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(new InputStreamResource(download.stream()));
     }
 
     @GetMapping("/api/v1/kb/documents/{documentId}/preview")
     public KbDocumentPreviewResponse previewDocument(@AuthenticationPrincipal(expression = "id") Long userId,
                                                      @PathVariable Long documentId,
                                                      @RequestParam(required = false) Integer maxChars) {
-        return documentService.previewOwnedDocument(userId, documentId, maxChars);
+        return documentService.previewVisibleDocument(userId, documentId, maxChars);
     }
 
     @DeleteMapping("/api/v1/kb/documents/{documentId}")

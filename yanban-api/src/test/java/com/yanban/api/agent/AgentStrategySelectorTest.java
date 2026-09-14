@@ -22,6 +22,20 @@ class AgentStrategySelectorTest {
     private final AgentStrategySelector selector = new AgentStrategySelector();
 
     @Test
+    void personalCapabilitiesReachNativeToolSelectionWithoutKeywordMatching() {
+        for (String message : List.of("帮我润色任务3的论文", "你还记得上次给我的方案吗", "你好")) {
+            var decision = selector.decide(AgentCoordinationRequest.chat(request(AgentStrategy.AUTO, message,
+                    List.of("paper_polish_start", "search_past_conversations"), 6, 6)));
+            assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.SINGLE_STEP_REACT);
+            assertThat(decision.reason()).isEqualTo("native_personal_capability_routing");
+        }
+        assertThat(selector.decide(AgentCoordinationRequest.chat(request(AgentStrategy.AUTO,
+                "上次给我的方案呢", List.of(), 6, 0))).selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
+        assertThat(selector.decide(AgentCoordinationRequest.chat(request(AgentStrategy.DIRECT,
+                "你好", List.of("search_past_conversations"), 6, 6))).selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
+    }
+
+    @Test
     void explicitPlanReflectUsesOnlyRestrictedReflectionCapability() {
         AgentToolPolicyEngine.Decision toolPolicy = new AgentToolPolicyEngine.Decision(
                 List.of("search_web"), 1, 1, "search");

@@ -71,6 +71,17 @@ public class PaperTaskService {
 
     @Transactional
     public PaperTaskResponse createTask(Long userId, PaperProcessRequest request, String clientRequestIdHeader) {
+        return createTask(userId, request, clientRequestIdHeader, true);
+    }
+
+    /** Product tool adapter binds the committed task before dispatching through the same orchestrator. */
+    @Transactional
+    public PaperTaskResponse createTaskForTool(Long userId, PaperProcessRequest request, String clientRequestId) {
+        return createTask(userId, request, clientRequestId, false);
+    }
+
+    private PaperTaskResponse createTask(Long userId, PaperProcessRequest request,
+                                         String clientRequestIdHeader, boolean dispatch) {
         MultipartFile file = request.mainTex() == null ? request.file() : request.mainTex();
         MultipartFile bibFile = request.bibFile();
         validateTexFile(file);
@@ -127,7 +138,7 @@ public class PaperTaskService {
             saveSourceArtifact(saved.getId(), "source_bib", bibObjectKey, bibFile.getOriginalFilename());
         }
         recordTaskCreatedAfterCommit(saved);
-        startTaskAfterCommit(saved.getId());
+        if (dispatch) startTaskAfterCommit(saved.getId());
         return PaperTaskResponse.from(saved, saved.getLiteratureCount(), false);
     }
 

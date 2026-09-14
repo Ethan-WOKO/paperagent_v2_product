@@ -522,6 +522,8 @@ class PlanAgentServiceTest {
         assertThat(step.getAttemptCount()).isEqualTo(2);
         ArgumentCaptor<AgentRuntimeRequest> request = ArgumentCaptor.forClass(AgentRuntimeRequest.class);
         verify(agentRuntimeService, times(2)).run(request.capture());
+        assertThat(request.getAllValues()).allSatisfy(attempt -> assertThat(attempt.invocationScope())
+                .isEqualTo("plan:" + PLAN_ID + ":step:" + step.getId()));
         assertThat(request.getAllValues().get(0).repairContext()).isNull();
         assertThat(request.getAllValues().get(1).repairContext()).isNotNull();
         assertThat(request.getAllValues().get(1).repairContext().signature(objectMapper))

@@ -13,6 +13,16 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 class AgentServiceRuntimeAssemblyTest {
 
+    @Test
+    void paperScopeUsesRequestIdentityAcrossNewTurnsAndDoesNotDependOnTrace() {
+        String first = AgentService.paperInvocationScope(11L, 20L, "request-a");
+        assertThat(AgentService.paperInvocationScope(11L, 21L, "request-a")).isEqualTo(first);
+        assertThat(AgentService.paperInvocationScope(12L, 20L, "request-a")).isNotEqualTo(first);
+        assertThat(AgentService.paperInvocationScope(11L, 20L, "request-b")).isNotEqualTo(first);
+        assertThat(AgentService.paperInvocationScope(11L, 20L, null)).isEqualTo("chat-turn:20");
+        assertThat(first).doesNotContain("request-a");
+    }
+
     @AfterEach
     void clearMdc() {
         MDC.clear();

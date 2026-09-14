@@ -1416,7 +1416,7 @@ public class PlanAgentService {
                     traceId,
                     null,
                     null
-            );
+            ).withInvocationScope("plan:" + plan.getId() + ":step:" + step.getId());
             if (projectContext != null) {
                 ProjectRuntimeContext currentProjectContext = revalidateProject(
                         plan.getUserId(), projectContext.projectId());

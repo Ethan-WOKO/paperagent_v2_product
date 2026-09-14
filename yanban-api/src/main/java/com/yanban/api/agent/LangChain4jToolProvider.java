@@ -152,15 +152,28 @@ public class LangChain4jToolProvider implements ToolProvider {
     private dev.langchain4j.service.tool.ToolExecutor fallbackExecutor(AgentRuntimeRequest runtimeRequest,
                                                                         String toolName,
                                                                         Set<String> allowedToolNames) {
+        final String invocationScope = runtimeRequest.invocationScope();
         return (toolRequest, memoryId) -> {
             JsonNode arguments = null;
             boolean invocationAccepted = false;
             try {
                 arguments = objectMapper.readTree(defaultString(toolRequest.arguments(), "{}"));
+                if ("paper_polish_start".equals(toolName)) {
+                    if (arguments == null || !arguments.isObject()
+                            || arguments.has("clientRequestId") || arguments.has("expectedProjectVersion")) {
+                        return failureContent(ToolErrorCode.VALIDATION_ERROR,
+                                "Paper tool arguments must not supply server-owned request or Project version fields.", false);
+                    }
+                    if (runtimeRequest.projectContext() != null) {
+                        ((com.fasterxml.jackson.databind.node.ObjectNode) arguments).put(
+                                "expectedProjectVersion", runtimeRequest.projectContext().projectVersion());
+                    }
+                }
                 ControlledWorkerExecutionScope.validateInvocation(toolName, arguments);
                 invocationAccepted = true;
                 Long userId = runtimeRequest == null ? null : runtimeRequest.userId();
                 ToolExecutionContext.setCurrentUserId(userId);
+                ToolExecutionContext.setInvocationScope(invocationScope);
                 if (runtimeRequest.projectContext() != null) {
                     ToolExecutionContext.setCurrentProjectId(runtimeRequest.projectContext().projectId());
                 }

@@ -4,7 +4,7 @@
       <WorkspaceHero
         kicker="Knowledge Base"
         title="Knowledge Base"
-        subtitle="Manage private research documents, parsing status, retrieval visibility, and previewable text assets."
+        subtitle="Manage your documents and download public resources shared by administrators."
         storage-key="yanban.hero.knowledge"
       >
         <template #actions>
@@ -96,7 +96,16 @@
                 </template>
               </NEmpty>
 
-              <div v-else class="kb-document-table">
+              <NInput
+                v-if="documents.length > 0"
+                v-model:value="filenameFilter"
+                clearable
+                :placeholder="isEnglish ? 'Filter by filename' : '按文件名筛选'"
+                :aria-label="isEnglish ? 'Filter by filename' : '按文件名筛选'"
+                class="kb-filename-filter"
+              />
+              <NEmpty v-if="documents.length > 0 && filteredDocuments.length === 0" :description="isEnglish ? 'No matching documents.' : '没有匹配的文档。'" />
+              <div v-if="filteredDocuments.length > 0" class="kb-document-table">
                 <div class="kb-document-table__head">
                   <span class="kb-document-head kb-document-head--name">
                     <span class="kb-document-head__badge-spacer" aria-hidden="true" />
@@ -110,7 +119,7 @@
                   <span class="kb-document-head kb-document-head--actions">Actions</span>
                 </div>
                 <article
-                  v-for="item in documents"
+                  v-for="item in filteredDocuments"
                   :key="item.id"
                   class="kb-document-row"
                   :class="{ 'kb-document-row--selected': previewDocument?.id === item.id }"
@@ -120,6 +129,8 @@
                     <div>
                       <strong>{{ item.filename }}</strong>
                       <small>Document #{{ item.id }} · {{ documentKindText(item) }}</small>
+                      <small v-if="item.administratorPublic">{{ isEnglish ? 'Administrator public resource' : '管理员公开资料' }}</small>
+                      <small v-if="!item.downloadAvailable">{{ isEnglish ? 'Original unavailable' : '原文件不可下载' }}</small>
                       <small v-if="item.errorMessage" class="kb-error-text">{{ item.errorMessage }}</small>
                     </div>
                   </div>
@@ -131,14 +142,17 @@
                   </NTag>
                   <span class="kb-document-updated">{{ formatDateTime(item.updatedAt) }}</span>
                   <NSpace class="kb-document-actions" size="small" justify="end">
-                    <NButton text type="primary" @click="handlePreview(item, $event)">Preview</NButton>
-                    <NPopconfirm v-if="item.sourceType !== 'DEMO_SEED'" @positive-click="handleDelete(item.id)">
+                    <NButton v-if="item.ownedByCurrentUser !== false || item.administratorPublic" text type="primary" @click="handlePreview(item, $event)">Preview</NButton>
+                    <NButton v-if="item.downloadAvailable" text type="primary" :loading="downloader.pending.has(item.id)" :disabled="downloader.pending.has(item.id)" @click="handleDownload(item)">
+                      {{ isEnglish ? 'Download' : '下载' }}
+                    </NButton>
+                    <NPopconfirm v-if="item.ownedByCurrentUser !== false && item.sourceType !== 'DEMO_SEED'" @positive-click="handleDelete(item.id)">
                       <template #trigger>
                         <NButton text type="error">Delete</NButton>
                       </template>
                       Delete this document?
                     </NPopconfirm>
-                    <NTag v-else size="small" type="info">Demo seed</NTag>
+                    <NTag v-else-if="item.ownedByCurrentUser !== false && item.sourceType === 'DEMO_SEED'" size="small" type="info">Demo seed</NTag>
                   </NSpace>
                 </article>
               </div>
@@ -224,6 +238,7 @@ import {
   NCard,
   NCheckbox,
   NEmpty,
+  NInput,
   NPopconfirm,
   NProgress,
   NSpace,
@@ -236,6 +251,7 @@ import AppLayout from '@/components/AppLayout.vue';
 import WorkspaceHero from '@/components/WorkspaceHero.vue';
 import {
   deleteKbDocument,
+  downloadKbDocument,
   listKbDocuments,
   mergeKbUpload,
   previewKbDocument,
@@ -246,6 +262,7 @@ import {
 import { ui } from '@/ui';
 import { apiErrorMessage } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
+import { createKnowledgeDownloader, filterKnowledgeDocuments } from '@/knowledge/documentDownload';
 
 const CHUNK_SIZE = 1024 * 1024;
 
@@ -261,6 +278,20 @@ const uploadProgress = ref(0);
 const uploadStatusText = ref('');
 const loading = ref(false);
 const documents = ref<KbDocumentItem[]>([]);
+const filenameFilter = ref('');
+const filteredDocuments = computed(() => filterKnowledgeDocuments(documents.value, filenameFilter.value));
+const downloader = createKnowledgeDownloader(downloadKbDocument);
+
+async function handleDownload(item: KbDocumentItem) {
+  try {
+    await downloader.download(item);
+  } catch (error: unknown) {
+    const status = (error as { response?: { status?: number } })?.response?.status;
+    ui.message.error(status === 404
+      ? (isEnglish.value ? 'The document or original file is unavailable.' : '文档或原文件不可用。')
+      : (isEnglish.value ? 'Download failed. Please try again.' : '下载失败，请稍后重试。'));
+  }
+}
 const previewLoading = ref(false);
 const previewData = ref<KbDocumentPreviewResponse | null>(null);
 const previewDocument = ref<KbDocumentItem | null>(null);

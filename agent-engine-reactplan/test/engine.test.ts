@@ -637,6 +637,18 @@ describe("AgentEngine", () => {
     expect(searchResult).not.toContain("execute_in_sandbox");
   });
 
+  it("rejects a forged builtin call outside the selected Skill before execution", async () => {
+    const provider = new ScriptedProvider([tool("list_project_files", {})], false);
+    const engine = await createEngine(provider, new FakeGateway());
+    const request = submission();
+    request.authority.skill = { id: "no-tools", prompt: "Answer only.", allowedTools: [], digest: "f".repeat(64) };
+    request.requestDigest = digestObject(request.authority);
+    await engine.submit(request);
+    await waitFor(() => engine.get(taskId).state === "failed");
+    expect(engine.get(taskId).error?.code).toBe("MODEL_TOOL_NOT_ALLOWED");
+    expect((await engine.events(taskId)).filter((event) => event.type === "tool")).toHaveLength(0);
+  });
+
   it("answers the current runtime-identity question without replaying history or calling Project tools", async () => {
     const provider = new ScriptedProvider([
       tool("list_project_files", {}),
@@ -828,6 +840,52 @@ describe("AgentEngine", () => {
     });
     expect((finalRequest.tools as Array<{ function: { name: string } }>).map((candidate) =>
       candidate.function.name)).not.toContain("literature_search_status");
+  });
+
+  it.each([
+    { status: "RUNNING", currentStage: "POLISHING", terminal: false, polls: 2, reason: "unchanged" },
+    { status: "WAITING_INPUT", currentStage: "INPUT", terminal: false, polls: 1, reason: "waiting_input" },
+    { status: "COMPLETED", currentStage: "COMPLETE", terminal: true, polls: 1, reason: "terminal" }
+  ])("bounds paper status polling for $status", async (state) => {
+    const provider = new ScriptedProvider([
+      ...Array.from({ length: state.polls }, () => tool("paper_polish_status", { taskId: 42 })),
+      tool("paper_polish_status", { taskId: 42 }),
+      { content: "The paper task status is available on its task page.", toolCalls: [] }
+    ]);
+    const gateway = new LiteratureStatusGateway([state], "paper_polish_status");
+    const engine = await createEngine(provider, gateway);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    const finalRequest = provider.requests.at(-1)!;
+    const lastPoll = finalRequest.messages.filter((m) => m.role === "tool" && m.content?.includes("pollingControl"))
+      .map((m) => JSON.parse(m.content!)).at(-1);
+    expect(lastPoll.pollingControl).toMatchObject({ suppressed: true, reason: state.reason, totalPolls: state.polls });
+    expect(lastPoll.errorCode).toBe("POLLING_SUPPRESSED");
+    expect(gateway.statusInvocations).toBe(state.polls);
+    expect((finalRequest.tools as Array<{ function: { name: string } }>).map((t) => t.function.name))
+      .toContain("paper_polish_status");
+  });
+
+  it("keeps another paper task query available after a same-batch terminal result", async () => {
+    const provider = new ScriptedProvider([
+      { content: null, toolCalls: [
+        { id: "first-paper", name: "paper_polish_status", arguments: JSON.stringify({ taskId: 42 }) },
+        { id: "second-paper", name: "paper_polish_status", arguments: JSON.stringify({ taskId: 43 }) }
+      ] },
+      { content: "Both paper task states are available.", toolCalls: [] }
+    ]);
+    const gateway = new LiteratureStatusGateway([
+      { status: "COMPLETED", currentStage: "COMPLETE", terminal: true },
+      { status: "RUNNING", currentStage: "POLISHING", terminal: false }
+    ], "paper_polish_status");
+    const engine = await createEngine(provider, gateway);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    expect(gateway.statusInvocations).toBe(2);
+    const results = provider.requests.at(-1)!.messages.filter(m => m.role === "tool" && m.content?.includes("pollingControl"))
+      .map(m => JSON.parse(m.content!));
+    expect(results[0].pollingControl.suppressed).toBe(true);
+    expect(results[1].pollingControl.suppressed).toBe(false);
   });
 
   it("summarizes registered web results with provider, result count, and evidence count", async () => {
@@ -1362,7 +1420,7 @@ class LiteratureStatusGateway extends FakeGateway {
 
   constructor(private readonly states: Array<{
     status: string; currentStage: string; terminal: boolean;
-  }>) { super(); }
+  }>, private readonly toolName = "literature_search_status") { super(); }
 
   override tools(taskIdValue: string): Promise<RegisteredToolCatalog> {
     return Promise.resolve({
@@ -1371,7 +1429,7 @@ class LiteratureStatusGateway extends FakeGateway {
       tools: [{
         type: "function",
         function: {
-          name: "literature_search_status",
+          name: this.toolName,
           description: "Inspect one asynchronous literature-search task.",
           parameters: {
             type: "object", additionalProperties: false, required: ["taskId"],

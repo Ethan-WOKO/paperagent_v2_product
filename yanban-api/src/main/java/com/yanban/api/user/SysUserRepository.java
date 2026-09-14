@@ -8,6 +8,9 @@ import org.springframework.data.jpa.repository.Query;
 import jakarta.persistence.LockModeType;
 
 public interface SysUserRepository extends JpaRepository<SysUser, Long> {
+    @Query("select user.id from SysUser user where upper(user.role) = 'ADMIN' and user.deletedAt is null")
+    java.util.Set<Long> findActiveAdministratorIds();
+
     Optional<SysUser> findByUsername(String username);
 
     Optional<SysUser> findByUsernameAndDeletedAtIsNull(String username);

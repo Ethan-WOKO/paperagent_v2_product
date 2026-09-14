@@ -14,6 +14,14 @@ const appSource = readFileSync(appPath, 'utf8');
 const styles = readFileSync(stylePath, 'utf8');
 
 describe('Knowledge workspace presentation contract', () => {
+  it('offers shared administrator preview while keeping delete owner-only and download independent', () => {
+    expect(knowledgeSource).toContain('v-if="item.ownedByCurrentUser !== false || item.administratorPublic"');
+    expect(knowledgeSource).toContain("item.ownedByCurrentUser !== false && item.sourceType !== 'DEMO_SEED'");
+    expect(knowledgeSource).toContain('v-if="item.downloadAvailable"');
+    expect(knowledgeSource).toContain('v-if="item.administratorPublic"');
+    expect(knowledgeSource).toContain('v-for="item in filteredDocuments"');
+    expect(knowledgeApiSource).toContain("responseType: 'blob'");
+  });
   it('keeps upload available but hides it by default to protect browsing space', () => {
     expect(knowledgeSource).toContain("readStoredBoolean('yanban.knowledge.uploadOpen', false)");
     expect(knowledgeSource).toContain('v-if="uploadPanelOpen"');

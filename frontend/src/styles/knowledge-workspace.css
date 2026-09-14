@@ -222,7 +222,7 @@ html:not(.canvas-scale-active) .kb-page--redesign .kb-document-row {
   min-width: 820px !important;
   width: 100% !important;
   display: grid !important;
-  grid-template-columns: minmax(260px, 1fr) 58px 72px 90px 86px 130px 94px !important;
+  grid-template-columns: minmax(260px, 1fr) 58px 72px 90px 86px 130px 184px !important;
   column-gap: 9px !important;
   align-items: center !important;
   padding-inline: var(--kb-document-side-padding) !important;
@@ -236,6 +236,10 @@ html:not(.canvas-scale-active) .kb-page--redesign .kb-document-row {
   background: transparent;
   font-size: 10px;
   font-weight: 650;
+}
+
+.kb-page--redesign .kb-filename-filter {
+  margin-bottom: 12px;
 }
 
 .kb-page--redesign .kb-document-row,
