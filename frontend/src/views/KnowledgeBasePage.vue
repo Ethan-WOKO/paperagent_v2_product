@@ -96,15 +96,25 @@
                 </template>
               </NEmpty>
 
-              <NInput
-                v-if="documents.length > 0"
-                v-model:value="filenameFilter"
-                clearable
-                :placeholder="isEnglish ? 'Filter by filename' : '按文件名筛选'"
-                :aria-label="isEnglish ? 'Filter by filename' : '按文件名筛选'"
-                class="kb-filename-filter"
-              />
-              <NEmpty v-if="documents.length > 0 && filteredDocuments.length === 0" :description="isEnglish ? 'No matching documents.' : '没有匹配的文档。'" />
+              <div v-if="documents.length > 0" class="kb-document-filters">
+                <NRadioGroup :value="visibility" :aria-label="isEnglish ? 'Document visibility' : '文档可见性'" @update:value="setVisibility">
+                  <NRadioButton value="all">{{ isEnglish ? 'All' : '全部' }}</NRadioButton>
+                  <NRadioButton value="private">{{ isEnglish ? 'Private only' : '仅私人' }}</NRadioButton>
+                  <NRadioButton value="public">{{ isEnglish ? 'Public only' : '仅公开' }}</NRadioButton>
+                </NRadioGroup>
+                <NInput
+                  v-model:value="filenameFilter"
+                  clearable
+                  :placeholder="isEnglish ? 'Filter by filename' : '按文件名筛选'"
+                  :aria-label="isEnglish ? 'Filter by filename' : '按文件名筛选'"
+                  class="kb-filename-filter"
+                />
+              </div>
+              <NEmpty v-if="documents.length > 0 && filteredDocuments.length === 0" :description="isEnglish ? 'No documents match the current filters.' : '当前筛选条件下没有文档。'">
+                <template #extra>
+                  <NButton @click="clearDocumentFilters">{{ isEnglish ? 'Clear filters' : '清除筛选' }}</NButton>
+                </template>
+              </NEmpty>
               <div v-if="filteredDocuments.length > 0" class="kb-document-table">
                 <div class="kb-document-table__head">
                   <span class="kb-document-head kb-document-head--name">
@@ -241,11 +251,13 @@ import {
   NInput,
   NPopconfirm,
   NProgress,
+  NRadioButton,
+  NRadioGroup,
   NSpace,
   NSpin,
   NTag,
 } from 'naive-ui';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
 import WorkspaceHero from '@/components/WorkspaceHero.vue';
@@ -262,11 +274,14 @@ import {
 import { ui } from '@/ui';
 import { apiErrorMessage } from '@/api/errors';
 import { useI18n } from '@/composables/useI18n';
-import { createKnowledgeDownloader, filterKnowledgeDocuments } from '@/knowledge/documentDownload';
+import { createKnowledgeDownloader } from '@/knowledge/documentDownload';
+import { filterKnowledgeDocuments, useKnowledgeVisibilityFilter } from '@/knowledge/documentFilters';
+import { useAuthStore } from '@/stores/auth';
 
 const CHUNK_SIZE = 1024 * 1024;
 
 const router = useRouter();
+const auth = useAuthStore();
 const { isEnglish, locale } = useI18n();
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
@@ -279,7 +294,12 @@ const uploadStatusText = ref('');
 const loading = ref(false);
 const documents = ref<KbDocumentItem[]>([]);
 const filenameFilter = ref('');
-const filteredDocuments = computed(() => filterKnowledgeDocuments(documents.value, filenameFilter.value));
+const { visibility, setVisibility } = useKnowledgeVisibilityFilter(() => auth.currentUser?.id);
+const filteredDocuments = computed(() => filterKnowledgeDocuments(documents.value, filenameFilter.value, visibility.value));
+function clearDocumentFilters() {
+  filenameFilter.value = '';
+  setVisibility('all');
+}
 const downloader = createKnowledgeDownloader(downloadKbDocument);
 
 async function handleDownload(item: KbDocumentItem) {
@@ -298,6 +318,10 @@ const previewDocument = ref<KbDocumentItem | null>(null);
 const previewPanelRef = ref<HTMLElement | null>(null);
 let previewReturnFocus: HTMLElement | null = null;
 let pollingTimer: number | null = null;
+
+watch(filteredDocuments, (items) => {
+  if (previewDocument.value && !items.some((item) => item.id === previewDocument.value?.id)) closePreview();
+});
 
 const hasProcessingDocuments = computed(() =>
   documents.value.some((item) => isProcessingStatus(item.status)),

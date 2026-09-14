@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createKnowledgeDownloader, filterKnowledgeDocuments, saveKnowledgeBlob } from '../src/knowledge/documentDownload';
+import { createKnowledgeDownloader, saveKnowledgeBlob } from '../src/knowledge/documentDownload';
+import { filterKnowledgeDocuments } from '../src/knowledge/documentFilters';
 import type { KbDocumentItem } from '../src/api/knowledge';
 
 const item = (overrides: Partial<KbDocumentItem> = {}) => ({

@@ -238,8 +238,17 @@ html:not(.canvas-scale-active) .kb-page--redesign .kb-document-row {
   font-weight: 650;
 }
 
-.kb-page--redesign .kb-filename-filter {
+.kb-page--redesign .kb-document-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 12px;
+}
+
+.kb-page--redesign .kb-document-filters .kb-filename-filter {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 
 .kb-page--redesign .kb-document-row,
