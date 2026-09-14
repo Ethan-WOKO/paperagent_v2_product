@@ -8,8 +8,13 @@ import com.yanban.knowledge.domain.KbDocumentRepository;
 import com.yanban.knowledge.web.KbDocumentListItemResponse;
 import com.yanban.knowledge.web.KbDocumentPreviewResponse;
 import io.minio.MinioClient;
+import io.minio.GetObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import io.minio.RemoveObjectArgs;
 import java.util.List;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Set;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -26,19 +31,22 @@ public class KnowledgeDocumentService {
     private final MinioClient minioClient;
     private final KnowledgeStorageProperties storageProperties;
     private final ObjectProvider<UserAccountPolicy> accountPolicy;
+    private final ObjectProvider<KnowledgeDocumentPublisherPolicy> publisherPolicy;
 
     public KnowledgeDocumentService(KbDocumentRepository documents,
                                     KbChunkRepository chunks,
                                     KnowledgeIndexService indexService,
                                     MinioClient minioClient,
                                     KnowledgeStorageProperties storageProperties,
-                                    ObjectProvider<UserAccountPolicy> accountPolicy) {
+                                    ObjectProvider<UserAccountPolicy> accountPolicy,
+                                    ObjectProvider<KnowledgeDocumentPublisherPolicy> publisherPolicy) {
         this.documents = documents;
         this.chunks = chunks;
         this.indexService = indexService;
         this.minioClient = minioClient;
         this.storageProperties = storageProperties;
         this.accountPolicy = accountPolicy;
+        this.publisherPolicy = publisherPolicy;
     }
 
     @Transactional(readOnly = true)
@@ -46,6 +54,85 @@ public class KnowledgeDocumentService {
         return documents.findByUserIdOrderByCreatedAtDesc(userId).stream()
                 .map(KbDocumentListItemResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<KbDocumentListItemResponse> listVisibleDocuments(Long userId) {
+        requireIdentity(userId);
+        KnowledgeDocumentPublisherPolicy policy = publisherPolicy.getIfAvailable();
+        Set<Long> administrators = policy == null ? Set.of() : policy.administratorIds();
+        var visible = new LinkedHashMap<Long, KbDocument>();
+        documents.findByUserIdOrderByCreatedAtDesc(userId).forEach(doc -> visible.put(doc.getId(), doc));
+        if (!administrators.isEmpty()) {
+            documents.findPublicDocumentsByPublisherIds(administrators).stream()
+                    .filter(doc -> administrators.contains(doc.getUserId()) && isShareable(doc))
+                    .forEach(doc -> visible.putIfAbsent(doc.getId(), doc));
+        }
+        return visible.values().stream()
+                .sorted(Comparator.comparing(KbDocument::getUpdatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(KbDocument::getId, Comparator.reverseOrder()))
+                .map(doc -> KbDocumentListItemResponse.from(doc, userId.equals(doc.getUserId()),
+                        administrators.contains(doc.getUserId()) && Boolean.TRUE.equals(doc.getIsPublic()),
+                        !isRetired(doc) && hasOriginal(doc)))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public KnowledgeDocumentDownload downloadDocument(Long userId, Long documentId) {
+        requireIdentity(userId);
+        KbDocument doc = documents.findById(documentId).orElseThrow(KnowledgeDocumentService::notAvailable);
+        if (isRetired(doc)) throw notAvailable();
+        if (!userId.equals(doc.getUserId())) {
+            KnowledgeDocumentPublisherPolicy policy = publisherPolicy.getIfAvailable();
+            if (!isShareable(doc) || policy == null || !policy.isAdministrator(doc.getUserId())) {
+                throw notAvailable();
+            }
+        }
+        if (!hasOriginal(doc)) throw notAvailable();
+        String filename = safeFilename(doc);
+        try {
+            return new KnowledgeDocumentDownload(filename, minioClient.getObject(GetObjectArgs.builder()
+                    .bucket(storageProperties.getBucket()).object(doc.getObjectKey()).build()));
+        } catch (ErrorResponseException ex) {
+            if ("NoSuchKey".equals(ex.errorResponse().code())) throw notAvailable();
+            throw storageUnavailable();
+        } catch (Exception ex) {
+            throw storageUnavailable();
+        }
+    }
+
+    private static void requireIdentity(Long userId) {
+        if (userId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请登录后重试");
+    }
+
+    private static boolean isShareable(KbDocument doc) {
+        return !isRetired(doc) && Boolean.TRUE.equals(doc.getIsPublic())
+                && "READY".equalsIgnoreCase(doc.getStatus())
+                && (doc.getVersionStatus() == null || "ACTIVE".equalsIgnoreCase(doc.getVersionStatus()));
+    }
+
+    private static boolean isRetired(KbDocument doc) {
+        return doc.getDeletedAt() != null || "DELETED".equalsIgnoreCase(doc.getVersionStatus())
+                || "ARCHIVED".equalsIgnoreCase(doc.getVersionStatus());
+    }
+
+    private static boolean hasOriginal(KbDocument doc) {
+        return doc.getObjectKey() != null && !doc.getObjectKey().isBlank();
+    }
+
+    private static String safeFilename(KbDocument doc) {
+        String name = doc.getFilename() == null ? "" : doc.getFilename().replace('\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1).replaceAll("[\\p{Cntrl}\\p{Cf}]", "")
+                .replaceAll("[<>:\"|?*]", "_").strip().replaceAll("[. ]+$", "");
+        return name.isBlank() ? "document-" + doc.getId() : name;
+    }
+
+    private static ResponseStatusException notAvailable() {
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, "文档或原文件不可用");
+    }
+
+    private static ResponseStatusException storageUnavailable() {
+        return new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "文件暂时无法下载，请稍后重试");
     }
 
     @Transactional(readOnly = true)

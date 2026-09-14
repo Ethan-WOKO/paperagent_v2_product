@@ -1,6 +1,9 @@
 import http from './http';
 
 export interface KbDocumentItem {
+  ownedByCurrentUser?: boolean;
+  administratorPublic?: boolean;
+  downloadAvailable?: boolean;
   id: number;
   userId: number;
   filename: string;
@@ -81,6 +84,10 @@ export interface KnowledgeSearchResult {
 
 export function listKbDocuments() {
   return http.get<KbDocumentItem[]>('/kb/documents');
+}
+
+export function downloadKbDocument(documentId: number) {
+  return http.get<Blob>(`/kb/documents/${documentId}/download`, { responseType: 'blob' });
 }
 
 export function deleteKbDocument(documentId: number) {

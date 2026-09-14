@@ -87,4 +87,23 @@ class KnowledgeRepositoryTest {
         assertThat(document.getCanonicalKey()).isNull();
         assertThat(document.getEffectiveAt()).isNotNull();
     }
+
+    @Test
+    void publicFileCandidatesExcludeOtherPublishersPrivateAndInactiveDocuments() {
+        KbDocument shared = documents.save(new KbDocument(9L, "public.md", "READY", true));
+        documents.save(new KbDocument(8L, "ordinary-public.md", "READY", true));
+        documents.save(new KbDocument(9L, "private.md", "READY", false));
+        documents.save(new KbDocument(9L, "processing.md", "PROCESSING", true));
+        for (String state : java.util.List.of("SUPERSEDED", "ARCHIVED", "DELETED")) {
+            KbDocument retired = new KbDocument(9L, state + ".md", "READY", true);
+            retired.setVersionStatus(state);
+            documents.save(retired);
+        }
+        KbDocument deleted = new KbDocument(9L, "deleted.md", "READY", true);
+        deleted.setDeletedAt(java.time.Instant.now());
+        documents.save(deleted);
+        documents.flush();
+        assertThat(documents.findPublicDocumentsByPublisherIds(java.util.Set.of(9L)))
+                .extracting(KbDocument::getId).containsExactly(shared.getId());
+    }
 }
