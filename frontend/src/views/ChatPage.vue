@@ -387,7 +387,7 @@
             <div v-if="chatAttachments.length || chatUploading" class="chat-attachment-tray">
               <div v-for="attachment in chatAttachments" :key="attachment.id" class="session-attachment-card">
                 <span>{{ attachment.filename }}</span>
-                <small>{{ attachment.status === 'READY' ? '会话附件 · 可提问' : attachment.status === 'FAILED' ? '上传失败' : '解析中' }}</small>
+                <small v-if="attachment.status !== 'READY'">{{ attachment.status === 'FAILED' ? '上传失败' : '解析中' }}</small>
                 <small v-if="attachment.errorMessage" class="session-attachment-error">{{ attachment.errorMessage }}</small>
                 <button type="button" :disabled="sending || chatUploading || promotingAttachmentId !== null || attachment.status !== 'READY' || !!attachment.knowledgeDocumentId"
                   @click="promoteChatAttachment(attachment)">{{ attachment.knowledgeDocumentId ? '已加入知识库' : promotingAttachmentId === attachment.id ? '加入中…' : '加入知识库' }}</button>
