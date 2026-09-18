@@ -4,10 +4,10 @@
       <div class="admin-page__heading">
         <div>
           <span>ADMIN CONSOLE</span>
-          <h1>账号与额度管理</h1>
-          <p>查看账号使用情况，管理 AI 额度，以及清理游客体验数据。</p>
+          <h1>{{ adminSection === 'models' ? '全局模型厂商' : '账号与额度管理' }}</h1>
+          <p>{{ adminSection === 'models' ? '配置共享厂商密钥，同步模型，并设置用户可以使用的模型。' : '查看账号使用情况，管理 AI 额度，以及清理游客体验数据。' }}</p>
         </div>
-        <div class="admin-heading-actions">
+        <div v-show="adminSection === 'accounts'" class="admin-heading-actions">
           <NButton secondary :loading="loading" @click="refresh">刷新</NButton>
           <details class="admin-maintenance-menu">
             <summary>游客数据</summary>
@@ -25,7 +25,12 @@
         </div>
       </div>
 
-      <div class="admin-layout">
+      <div class="admin-section-nav" aria-label="管理后台功能">
+        <NButton :type="adminSection === 'accounts' ? 'primary' : 'default'" :aria-pressed="adminSection === 'accounts'" @click="adminSection = 'accounts'">账号与额度</NButton>
+        <NButton :type="adminSection === 'models' ? 'primary' : 'default'" :aria-pressed="adminSection === 'models'" @click="adminSection = 'models'">全局模型厂商</NButton>
+      </div>
+
+      <div v-show="adminSection === 'accounts'" class="admin-layout">
         <NCard class="admin-card admin-users" :bordered="false">
           <template #header>账号列表</template>
           <NSpin :show="loading && users.length === 0">
@@ -190,7 +195,7 @@
         </NSpin>
       </div>
 
-      <NCard class="admin-card admin-invites" :bordered="false">
+      <NCard v-show="adminSection === 'accounts'" class="admin-card admin-invites" :bordered="false">
         <template #header>
           <div class="admin-invite-header">
             <span>邀请码生成与使用情况</span>
@@ -216,7 +221,7 @@
           </div>
         </div>
       </NCard>
-      <AdminModelCatalog />
+      <AdminModelCatalog v-show="adminSection === 'models'" />
     </main>
   </AppLayout>
 </template>
@@ -247,6 +252,7 @@ import {
 import { apiErrorMessage } from '@/api/errors';
 import { ui } from '@/ui';
 
+const adminSection = ref<'accounts' | 'models'>('accounts');
 const users = ref<AdminUserSummary[]>([]);
 const invites = ref<AdminInviteCode[]>([]);
 const detail = ref<AdminUserDetail | null>(null);
@@ -492,6 +498,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.admin-section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .admin-page {
   display: grid;
   gap: 12px;
