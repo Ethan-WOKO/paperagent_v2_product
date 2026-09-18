@@ -27,7 +27,7 @@
           </template>
           <template #header-extra>
             <div class="chat-session-actions">
-              <NButton type="primary" size="small" circle @click="handleCreateSession">+</NButton>
+              <NButton type="primary" size="small" circle :loading="creatingSession" @click="handleCreateSession">+</NButton>
               <NButton secondary size="small" class="chat-panel-collapse" :title="t('chat.hideSessions')" @click="setChatSidebarCollapsed(true)">{{ t('common.hide') }}</NButton>
             </div>
           </template>
@@ -641,7 +641,6 @@ const LITERATURE_REQUEST_STORAGE_PREFIX = 'yanban.chat.v2Literature.';
 const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
 const compactChatViewport = ref(false);
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
-const SUPPORTED_DEEPSEEK_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
 const DEFAULT_GLM_MODEL = 'glm-5.2';
 
 let minimapActiveLockUntil = 0;
@@ -676,8 +675,8 @@ const modelOptions = computed(() => {
   }
   const customModels = settings.value?.customModels || [];
   for (const cm of customModels) {
-    if (!cm.builtin || cm.providerKey.startsWith('openrouter-')) {
-      options.push({ label: cm.label + ' / ' + cm.modelName, value: toModelKey(cm.providerKey, cm.modelName) });
+    if (!cm.builtin || cm.providerKey.startsWith('openrouter-') || cm.providerKey.startsWith('shared-')) {
+      options.push({ label: cm.label + ' / ' + cm.modelName + (cm.providerKey.startsWith('shared-') ? '（共享）' : ''), value: toModelKey(cm.providerKey, cm.modelName) });
     }
   }
   if (selectedModelKey.value && !options.some((option) => option.value === selectedModelKey.value)) {
@@ -824,7 +823,7 @@ async function ensureLiteratureSession() {
     modelProvider: selectedModel.provider,
     model: selectedModel.model,
   });
-  sessions.value = [data, ...sessions.value];
+  sessions.value = [data, ...sessions.value.filter(item => item.id !== data.id)];
   applySelectedSession(data.id);
   await nextTick();
   return data.id;
@@ -1218,7 +1217,10 @@ function insertProcessMessageAfterLatestUser(sessionId: number, processMessage: 
   setSessionMessages(sessionId, nextMessages);
 }
 
+const creatingSession = ref(false);
 async function handleCreateSession() {
+  if (creatingSession.value) return;
+  creatingSession.value = true;
   try {
     const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
     const { data } = await createSession({
@@ -1227,12 +1229,14 @@ async function handleCreateSession() {
       modelProvider: selectedModel.provider,
       model: selectedModel.model,
     });
-    sessions.value = [data, ...sessions.value];
+    sessions.value = [data, ...sessions.value.filter(item => item.id !== data.id)];
     demoQuestionPanelState.value = { ...demoQuestionPanelState.value, [data.id]: true };
     await selectSession(data.id);
-    ui.message.success('已创建新会话');
+    ui.message.success('已进入空会话');
   } catch (error: unknown) {
     ui.message.error(apiErrorMessage(error, '创建会话失败'));
+  } finally {
+    creatingSession.value = false;
   }
 }
 
@@ -1247,7 +1251,7 @@ async function handleChatFileChange(event: Event) {
     if (!sessionId) {
       const model = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
       const { data } = await createSession({ title: t('chat.newSession'), ragDisabled: ragDisabled.value, modelProvider: model.provider, model: model.model });
-      sessions.value = [data, ...sessions.value];
+      sessions.value = [data, ...sessions.value.filter(item => item.id !== data.id)];
       sessionId = data.id;
       applySelectedSession(sessionId);
     }
@@ -1343,7 +1347,7 @@ async function handleSend() {
         modelProvider: selectedModel.provider,
         model: selectedModel.model,
       });
-      sessions.value = [data, ...sessions.value];
+      sessions.value = [data, ...sessions.value.filter(item => item.id !== data.id)];
       applySelectedSession(data.id);
       sessionId = data.id;
     } else {
@@ -2713,7 +2717,7 @@ function defaultModelKeyFromSettings(currentSettings: UserSettingsResponse | nul
 }
 
 function isSupportedDeepseekModel(model: string) {
-  return SUPPORTED_DEEPSEEK_MODELS.has(model);
+  return !!model.trim() && !['deepseek-chat', 'deepseek-reasoner'].includes(model);
 }
 
 function normalizeModelName(provider: string, model: string) {

@@ -18,6 +18,8 @@ import org.springframework.web.server.ResponseStatusException;
 /** Stable session persistence used by the V2 Project workspace. */
 @Service
 public class AgentSessionService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private EmptySessionReuse emptySessionReuse;
     private final AgentSessionRepository sessions;
     private final AgentMessageRepository messages;
     private final AgentTurnRepository turns;
@@ -47,6 +49,10 @@ public class AgentSessionService {
             CreateSessionRequest request,
             String fallbackTitle) {
         SysUserSettings settings = userSettings.getOrCreate(userId);
+        if (emptySessionReuse != null) {
+            var empty = emptySessionReuse.find(userId, AgentSessionScope.PROJECT, projectId);
+            if (empty.isPresent()) return AgentSessionResponse.from(empty.get());
+        }
         String requestedProvider = StringUtils.hasText(request.modelProvider())
                 ? request.modelProvider().trim()
                 : settings.getDefaultProvider();

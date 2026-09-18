@@ -45,6 +45,9 @@ public class UserSettingsService {
             "glm-4-flash"
     );
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private SharedModelCatalog sharedCatalog;
+
     private final SysUserSettingsRepository repository;
     private final UserModelRepository userModelRepository;
     private final SettingsCryptoService cryptoService;
@@ -131,9 +134,8 @@ public class UserSettingsService {
             return toResponse(repository.saveAndFlush(settings));
         }
         if (PROVIDER_GLM.equals(resolvedProvider)) {
-            String selectedModel = DEFAULT_GLM_MODELS.contains(settings.getGlmModel())
-                    ? settings.getGlmModel()
-                    : DEFAULT_GLM_MODELS.get(0);
+            List<String> models = modelDiscoveryService.discoverGlmModels(decryptGlmApiKey(settings));
+            String selectedModel = settings.getGlmModel();
             settings.update(settings.getDefaultProvider(),
                     settings.getDeepseekApiKeyEncrypted(),
                     settings.getGlmApiKeyEncrypted(),
@@ -146,7 +148,7 @@ public class UserSettingsService {
                     settings.getMaxSteps(),
                     settings.getRagDefaultEnabled(),
                     settings.getDeepseekModelsText(),
-                    writeJson(DEFAULT_GLM_MODELS));
+                    writeJson(models));
             return toResponse(repository.saveAndFlush(settings));
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider: " + provider);
@@ -267,6 +269,10 @@ public class UserSettingsService {
                     "builtin",
                     "GLM");
         }
+        if (resolvedProvider.startsWith("shared-")) {
+            if(sharedCatalog == null) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"共享模型不可用");
+            return sharedCatalog.resolve(resolvedProvider,model);
+        }
         // Custom provider: providerKey stored as-is (case-sensitive match by providerKey)
         List<UserModel> userModels = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
         List<UserModel> providerMatches = userModels.stream()
@@ -315,6 +321,8 @@ public class UserSettingsService {
         userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId).stream()
                 .map(value -> new ModelReference(value.getProviderKey(), value.getModelName()))
                 .forEach(references::add);
+        if(sharedCatalog != null) sharedCatalog.availableModels().stream()
+                .map(value -> new ModelReference(value.providerKey(),value.modelName())).forEach(references::add);
         return references.stream().distinct().limit(8).toList();
     }
 
@@ -390,10 +398,10 @@ public class UserSettingsService {
     }
 
     private UserSettingsResponse toResponse(SysUserSettings settings) {
-        List<UserModelResponse> customModels = userModelRepository
+        List<UserModelResponse> customModels = new java.util.ArrayList<>(userModelRepository
                 .findByUserIdOrderBySortOrderAscIdAsc(settings.getUserId()).stream()
-                .map(this::toUserModelResponse)
-                .toList();
+                .map(this::toUserModelResponse).toList());
+        if(sharedCatalog != null) customModels.addAll(sharedCatalog.availableModels());
         return UserSettingsResponse.from(settings,
                 parseFilesystemRoots(settings),
                 parseDisabledSkills(settings),
@@ -428,15 +436,14 @@ public class UserSettingsService {
         if ("deepseek-chat".equals(resolved) || "deepseek-reasoner".equals(resolved)) {
             return DEFAULT_DEEPSEEK_MODEL;
         }
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "DeepSeek model must be deepseek-v4-flash or deepseek-v4-pro");
+        if (StringUtils.hasText(resolved) && resolved.length() <= 128) return resolved;
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请填写有效模型 ID");
     }
 
     private List<String> normalizeDeepseekModels(List<String> models) {
         List<String> normalized = (models == null ? List.<String>of() : models).stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
-                .filter(DEFAULT_DEEPSEEK_MODELS::contains)
                 .distinct()
                 .toList();
         return normalized.isEmpty() ? DEFAULT_DEEPSEEK_MODELS : normalized;
@@ -458,6 +465,11 @@ public class UserSettingsService {
         String builtin = requested.toLowerCase();
         if (DEFAULT_PROVIDER.equals(builtin) || PROVIDER_GLM.equals(builtin)) {
             return builtin;
+        }
+        if (requested.startsWith("shared-")) {
+            if(sharedCatalog == null) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"共享模型不可用");
+            sharedCatalog.resolve(requested,null);
+            return requested;
         }
         ensureUserInitialized(userId);
         boolean ownedModelProvider = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId).stream()
