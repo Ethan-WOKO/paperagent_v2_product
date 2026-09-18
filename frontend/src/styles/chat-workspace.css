@@ -677,7 +677,8 @@ html:not(.canvas-scale-active) body .product-shell .product-content .research-ch
   line-height: 1.55;
 }
 
-.product-shell .research-chat-page--redesign .chat-composer > .n-input textarea::placeholder {
+.product-shell .research-chat-page--redesign .chat-composer > .n-input textarea::placeholder,
+.product-shell .research-chat-page--redesign .chat-composer > .n-input .n-input__placeholder {
   color: var(--pa-text-muted);
 }
 

@@ -398,7 +398,6 @@
                 <small>{{ chatUploadProgress }}%</small>
               </div>
             </div>
-            <small v-if="chatAttachments.length" class="session-attachment-help">附件用于本会话及后续追问；只有点击“加入知识库”才会入库。单文件 10 MB，正文最多 24000 字符。图片需使用已启用视觉能力的模型。移除后不再用于后续回答。</small>
             <small v-if="attachmentsLoadFailed" class="session-attachment-help">附件加载失败，请重新选择会话后再发送。</small>
             <div class="chat-composer__footer">
               <span class="chat-hint">{{ t('chat.inputHint') }}</span>
