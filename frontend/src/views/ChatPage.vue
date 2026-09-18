@@ -408,9 +408,10 @@
                   class="chat-upload-button"
                   :disabled="sending || chatUploading"
                   aria-label="添加会话附件"
+                  title="添加会话附件"
                   @click="chatFileInputRef?.click()"
                 >添加附件</button>
-                <button type="button" class="chat-upload-button" @click="router.push('/knowledge-base')">知识库</button>
+                <button type="button" class="chat-knowledge-button" @click="router.push('/knowledge-base')">知识库</button>
                 <NButton
                   type="primary"
                   round
@@ -2757,6 +2758,19 @@ function goToNavigation(navigationUrl: string) {
 </script>
 
 <style scoped>
+.chat-knowledge-button {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--pa-line, #dce1e8);
+  border-radius: var(--pa-radius-xs, 6px);
+  color: var(--pa-text-secondary, #475569);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chat-knowledge-button:hover { background: var(--pa-surface-muted, #f8fafc); }
 .session-attachment-card {
   display: flex;
   flex: 0 0 240px;
