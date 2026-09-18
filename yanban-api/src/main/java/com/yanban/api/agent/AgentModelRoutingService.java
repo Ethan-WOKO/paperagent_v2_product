@@ -31,6 +31,8 @@ public class AgentModelRoutingService {
 
     private final ChatModelProvider models;
     private final UserSettingsService settings;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.yanban.api.attachment.AttachmentVisionPolicy attachmentVision;
 
     public AgentModelRoutingService(
             @Qualifier("chatModelProvider") ChatModelProvider models,
@@ -178,12 +180,16 @@ public class AgentModelRoutingService {
     private ChatRequest forEndpoint(
             ChatRequest request,
             UserSettingsService.ModelEndpoint endpoint) {
+        if (request.messages().stream().anyMatch(message -> !message.images().isEmpty())) {
+            if (attachmentVision == null) throw new IllegalStateException("Vision capability policy unavailable");
+            attachmentVision.require(endpoint.providerKey(), endpoint.modelName());
+        }
         return new ChatRequest(
                 endpoint.providerKey(), endpoint.modelName(),
                 routeAwareMessages(request, endpoint),
                 request.temperature(), request.maxTokens(), request.tools(),
                 endpoint.apiKey(), endpoint.apiUrl(), request.responseFormat(),
-                request.thinking(), request.traceId());
+                request.thinking(), request.traceId(), request.timeout());
     }
 
     private List<ChatMessage> routeAwareMessages(
@@ -209,7 +215,7 @@ public class AgentModelRoutingService {
                 }
             }
             messages.add(new ChatMessage(
-                    message.role(), content, message.toolCalls(), message.toolCallId()));
+                    message.role(), content, message.toolCalls(), message.toolCallId(), message.images()));
         }
         if (!identityInjected) messages.add(0, ChatMessage.system(identityInstruction));
         return List.copyOf(messages);

@@ -570,7 +570,7 @@ class PlanAgentServiceTest {
         assertThatThrownBy(() -> service.createPlanWithinAdapter(request))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("SANDBOX_DISABLED");
-        verify(planner, never()).createPlan(any(), any(), any(), any(), any(), any(), any());
+        verify(planner, never()).createPlan(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -1015,7 +1015,7 @@ class PlanAgentServiceTest {
             if (!ordered.contains(saved)) ordered.add(saved);
             return saved;
         });
-        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec(
                         "Repair synthesis from existing evidence",
                         List.of(new PlanningAgentPlanner.StepSpec(
@@ -1068,8 +1068,7 @@ class PlanAgentServiceTest {
                 .contains("code findings")
                 .contains("bounded comparison")
                 .contains("Dependency limitation: semantic consistency unresolved");
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(),
-                eq(List.of("project_read_file")));
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of("project_read_file")));
         ArgumentCaptor<AgentPlanEvent> recorded = ArgumentCaptor.forClass(AgentPlanEvent.class);
         verify(events, atLeast(1)).save(recorded.capture());
         assertThat(recorded.getAllValues()).anyMatch(value -> "plan_repaired".equals(value.getEventType()));
@@ -1108,7 +1107,7 @@ class PlanAgentServiceTest {
         assertThat(summary.getAttemptCount()).isEqualTo(1);
         assertThat(summary.getResult()).contains("usable dependency summary", "[Degraded warning]");
         verify(agentRuntimeService).run(any(AgentRuntimeRequest.class));
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -1451,7 +1450,7 @@ class PlanAgentServiceTest {
     void plannerOnlyReceivesTheSameFilteredPolicyThatPlanStepsPersist() {
         when(toolPolicyEngine.decide(any(), org.mockito.ArgumentMatchers.anyBoolean(), any()))
                 .thenReturn(new AgentToolPolicyEngine.Decision(List.of("search_web"), 6, 1, "shared_policy"));
-        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec("summary", List.of(
                         new PlanningAgentPlanner.StepSpec("step_1", "Research", "Research safely", "RAG",
                                 List.of(), List.of("search_web", "literature_search_status"), "done")), "{}"));
@@ -1466,7 +1465,7 @@ class PlanAgentServiceTest {
                 new CreateAgentPlanRequest("Research safely", false, null, false));
 
         ArgumentCaptor<List<String>> plannerTools = ArgumentCaptor.forClass(List.class);
-        verify(planner).createPlan(any(), any(), any(), any(), any(), any(), plannerTools.capture());
+        verify(planner).createPlan(any(), any(), any(), any(), any(), any(), any(), plannerTools.capture(), any(), any(), any());
         assertThat(plannerTools.getValue()).containsExactly("search_web");
         assertThat(response.steps()).singleElement().satisfies(step ->
                 assertThat(step.allowedTools()).containsExactly("search_web"));
@@ -1477,8 +1476,7 @@ class PlanAgentServiceTest {
     void adapterPlanPolicyCannotExpandBeyondRuntimePolicyCeiling() {
         when(toolPolicyEngine.decideProject(any(), any())).thenReturn(new AgentToolPolicyEngine.Decision(
                 List.of("project_latex_outline", "project_code_symbols"), 12, 1, "project_policy"));
-        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(),
-                any(AgentOrchestrationRequirements.class)))
+        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(), any(), any(AgentOrchestrationRequirements.class), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec("summary", List.of(
                         new PlanningAgentPlanner.StepSpec("step_1", "Inspect", "Inspect code", "ANALYSIS",
                                 List.of(), List.of("project_latex_outline", "project_code_symbols"), "done")), "{}"));
@@ -1502,8 +1500,7 @@ class PlanAgentServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<String>> plannerTools = ArgumentCaptor.forClass(List.class);
-        verify(planner).createPlan(any(), any(), any(), any(), any(), any(), plannerTools.capture(),
-                org.mockito.ArgumentMatchers.eq(requirements));
+        verify(planner).createPlan(any(), any(), any(), any(), any(), any(), any(), plannerTools.capture(), org.mockito.ArgumentMatchers.eq(requirements), any(), any());
         assertThat(plannerTools.getValue()).containsExactly("project_code_symbols");
         assertThat(response.steps()).singleElement().satisfies(step ->
                 assertThat(step.allowedTools()).containsExactly("project_code_symbols"));
@@ -1514,8 +1511,7 @@ class PlanAgentServiceTest {
     void projectPlannerToolHintsAreResolvedByServerSemanticsWithinTheRuntimeCeiling() {
         when(toolPolicyEngine.decideProject(any(), any())).thenReturn(new AgentToolPolicyEngine.Decision(
                 List.of("project_code_symbols", "project_search", "project_read_file"), 12, 1, "project_policy"));
-        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(),
-                any(AgentOrchestrationRequirements.class)))
+        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(), any(), any(AgentOrchestrationRequirements.class), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec("summary", List.of(
                         new PlanningAgentPlanner.StepSpec("code", "Analyze code implementation",
                                 "Inspect the Python implementation and collect evidence.", "ANALYSIS",
@@ -1550,7 +1546,7 @@ class PlanAgentServiceTest {
     @Test
     @MockitoSettings(strictness = Strictness.LENIENT)
     void plannerFailureIsReturnedToPlanApiWithoutPersistingAPlan() {
-        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(PlanningAgentPlanner.PlanSpec.failure(PlannerFailureCode.INVALID_PLAN, "malformed JSON"));
 
         assertThatThrownBy(() -> service.createPlan(USER_ID, SESSION_ID,
@@ -1637,13 +1633,13 @@ class PlanAgentServiceTest {
         assertThat(request.getValue().capability()).isEqualTo(AgentRequestCapability.TRUSTED_PLAN_API);
         assertThat(request.getValue().planOperation()).isEqualTo(PlanApiOperation.CREATE);
         assertThat(response.id()).isEqualTo(PLAN_ID);
-        verify(planner, org.mockito.Mockito.never()).createPlan(any(), any(), any(), any(), any(), any(), any());
+        verify(planner, org.mockito.Mockito.never()).createPlan(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
     @MockitoSettings(strictness = Strictness.LENIENT)
     void adapterCreationPlannerFailureDoesNotPersistAPlan() {
-        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(PlanningAgentPlanner.PlanSpec.failure(PlannerFailureCode.NO_STEPS, "no steps"));
 
         AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(new AgentRuntimeRequest(
@@ -1842,7 +1838,7 @@ class PlanAgentServiceTest {
         ArgumentCaptor<AgentRuntimeRequest> requestCaptor = ArgumentCaptor.forClass(AgentRuntimeRequest.class);
         verify(agentRuntimeService).run(requestCaptor.capture());
         verify(stepVerifier).verify(any(PlanStepVerifier.VerificationRequest.class));
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
 
         ArgumentCaptor<AgentPlanEvent> eventCaptor = ArgumentCaptor.forClass(AgentPlanEvent.class);
         verify(events, atLeast(1)).save(eventCaptor.capture());
@@ -1869,7 +1865,7 @@ class PlanAgentServiceTest {
         assertThat(step.getResult()).contains("usable result", "[Degraded warning]");
         verify(agentRuntimeService).run(any(AgentRuntimeRequest.class));
         verify(stepVerifier).verify(any(PlanStepVerifier.VerificationRequest.class));
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
 
         ArgumentCaptor<AgentPlanEvent> eventCaptor = ArgumentCaptor.forClass(AgentPlanEvent.class);
         verify(events, atLeast(5)).save(eventCaptor.capture());
@@ -1988,7 +1984,7 @@ class PlanAgentServiceTest {
             }
             return saved;
         });
-        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec(
                         "Repair failed step",
                         List.of(new PlanningAgentPlanner.StepSpec(
@@ -2055,7 +2051,7 @@ class PlanAgentServiceTest {
             }
             return saved;
         });
-        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec(
                         "Repair unverifiable step",
                         List.of(new PlanningAgentPlanner.StepSpec(
@@ -2099,7 +2095,7 @@ class PlanAgentServiceTest {
         assertThat(first.getErrorMessage()).contains("Superseded by recovery step").contains("missing concrete evidence");
         assertThat(repairStep.result()).isEqualTo("verified recovery");
         assertThat(downstreamStep.dependencies()).containsExactly(repairStep.stepKey());
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(agentRuntimeService, times(3)).run(any(AgentRuntimeRequest.class));
         verify(stepVerifier, times(3)).verify(any(PlanStepVerifier.VerificationRequest.class));
     }
@@ -2121,7 +2117,7 @@ class PlanAgentServiceTest {
             if (!orderedSteps.contains(saved)) orderedSteps.add(saved);
             return saved;
         });
-        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec(
                         "Replace stale remaining comparison",
                         List.of(new PlanningAgentPlanner.StepSpec(
@@ -2143,7 +2139,7 @@ class PlanAgentServiceTest {
         assertThat(obsolete.getStatus()).isEqualTo(AgentPlanStepStatus.SUPERSEDED.name());
         assertThat(response.finalAnswer()).isEqualTo("reflected final result");
         verify(agentRuntimeService).run(any());
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
         ArgumentCaptor<AgentPlanEvent> event = ArgumentCaptor.forClass(AgentPlanEvent.class);
         verify(events, atLeast(1)).save(event.capture());
         assertThat(event.getAllValues()).extracting(AgentPlanEvent::getEventType)
@@ -2165,7 +2161,7 @@ class PlanAgentServiceTest {
             if (!orderedSteps.contains(saved)) orderedSteps.add(saved);
             return saved;
         });
-        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec("One replacement",
                         List.of(new PlanningAgentPlanner.StepSpec("r1", "Alternate route",
                                 "Try a materially different bounded route.", "ANALYSIS", List.of(), List.of(),
@@ -2175,7 +2171,7 @@ class PlanAgentServiceTest {
         AgentPlanResponse response = service.executePlan(USER_ID, PLAN_ID);
 
         assertThat(response.status()).isEqualTo(AgentPlanStatus.FAILED.name());
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(agentRuntimeService, times(2)).run(any());
         ArgumentCaptor<AgentPlanEvent> event = ArgumentCaptor.forClass(AgentPlanEvent.class);
         verify(events, atLeast(1)).save(event.capture());
@@ -2195,7 +2191,7 @@ class PlanAgentServiceTest {
         assertThat(response.status()).isEqualTo(AgentPlanStatus.FAILED.name());
         assertThat(step.getAttemptCount()).isEqualTo(1);
         verify(agentRuntimeService).run(any());
-        verify(planner, never()).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner, never()).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
         ArgumentCaptor<AgentPlanEvent> event = ArgumentCaptor.forClass(AgentPlanEvent.class);
         verify(events, atLeast(1)).save(event.capture());
         assertThat(event.getAllValues()).extracting(AgentPlanEvent::getEventType)
@@ -2208,7 +2204,7 @@ class PlanAgentServiceTest {
         AgentPlanStep failed = newStep("failed", 1, List.of());
         failed.markFailed("recoverable failure");
         when(steps.findByPlanIdOrderBySortOrderAsc(PLAN_ID)).thenReturn(List.of(failed));
-        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PlanningAgentPlanner.PlanSpec("Equivalent",
                         List.of(new PlanningAgentPlanner.StepSpec("same", failed.getTitle(), failed.getDescription(),
                                 failed.getType(), List.of(), List.of(), failed.getSuccessCriteria())), "{}"));
@@ -2217,7 +2213,7 @@ class PlanAgentServiceTest {
 
         assertThat(response.status()).isEqualTo(AgentPlanStatus.FAILED.name());
         verify(agentRuntimeService, never()).run(any());
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
         ArgumentCaptor<AgentPlanEvent> event = ArgumentCaptor.forClass(AgentPlanEvent.class);
         verify(events, atLeast(1)).save(event.capture());
         assertThat(event.getAllValues()).extracting(AgentPlanEvent::getEventType)
@@ -2231,7 +2227,7 @@ class PlanAgentServiceTest {
         AgentPlanStep second = newStep("step_2", 2, List.of("step_1"));
         List<AgentPlanStep> orderedSteps = List.of(first, second);
         when(steps.findByPlanIdOrderBySortOrderAsc(PLAN_ID)).thenReturn(orderedSteps);
-        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(planner.createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(null);
         when(agentRuntimeService.run(any(AgentRuntimeRequest.class)))
                 .thenReturn(success("partial first answer"))
@@ -2252,7 +2248,7 @@ class PlanAgentServiceTest {
         assertThat(first.getErrorMessage()).contains("Degraded after verification failure");
         assertThat(second.getResult()).isEqualTo("downstream result");
         assertThat(second.getErrorMessage()).contains("DEPENDENCY_PARTIAL", "step_1");
-        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(planner).createRecoveryPlan(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(agentRuntimeService, times(2)).run(any(AgentRuntimeRequest.class));
         verify(stepVerifier, times(2)).verify(any(PlanStepVerifier.VerificationRequest.class));
 

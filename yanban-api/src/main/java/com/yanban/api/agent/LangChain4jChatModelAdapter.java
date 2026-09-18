@@ -47,6 +47,8 @@ public class LangChain4jChatModelAdapter implements ChatModel {
     private final ChatModelProvider chatModelProvider;
     private final ObjectMapper objectMapper;
     private final AgentModelRoutingService modelRoutes;
+    @Autowired(required = false)
+    private com.yanban.api.attachment.SessionAttachmentService attachments;
 
     public LangChain4jChatModelAdapter(ChatModelProvider chatModelProvider, ObjectMapper objectMapper) {
         this(chatModelProvider, objectMapper, null);
@@ -78,6 +80,9 @@ public class LangChain4jChatModelAdapter implements ChatModel {
             dev.langchain4j.model.chat.request.ChatRequest request,
             AgentRuntimeRequest runtimeRequest) {
         ChatRequest coreRequest = toCoreChatRequest(request, invocationContext(runtimeRequest));
+        if (attachments != null && runtimeRequest != null && runtimeRequest.projectContext() == null) {
+            coreRequest = attachments.enrich(coreRequest, runtimeRequest.userId(), runtimeRequest.sessionId(), runtimeRequest.invocationScope());
+        }
         ChatResponse response = modelRoutes == null
                 ? chatModelProvider.chat(coreRequest)
                 : modelRoutes.chat(runtimeRequest == null ? null : runtimeRequest.userId(), coreRequest).response();
@@ -108,6 +113,9 @@ public class LangChain4jChatModelAdapter implements ChatModel {
             dev.langchain4j.model.chat.request.ChatRequest request,
             AgentRuntimeRequest runtimeRequest) {
         ChatRequest coreRequest = toCoreChatRequest(request, invocationContext(runtimeRequest));
+        if (attachments != null && runtimeRequest != null && runtimeRequest.projectContext() == null) {
+            coreRequest = attachments.enrich(coreRequest, runtimeRequest.userId(), runtimeRequest.sessionId(), runtimeRequest.invocationScope());
+        }
         Flux<ChatChunk> stream = modelRoutes == null
                 ? chatModelProvider.streamChat(coreRequest)
                 : modelRoutes.stream(runtimeRequest == null ? null : runtimeRequest.userId(), coreRequest);

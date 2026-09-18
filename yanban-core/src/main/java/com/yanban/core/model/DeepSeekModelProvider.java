@@ -160,7 +160,7 @@ public class DeepSeekModelProvider implements ChatModelProvider {
         Double temperature = request.temperature() != null ? request.temperature() : properties.getTemperature();
         Integer maxTokens = request.maxTokens() != null ? request.maxTokens() : properties.getMaxTokens();
         List<DeepSeekMessage> messages = request.messages().stream()
-                .map(message -> new DeepSeekMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()))
+                .map(message -> new DeepSeekMessage(message.role(), message.providerContent(), message.toolCalls(), message.toolCallId()))
                 .toList();
         return new DeepSeekChatRequest(model, messages, temperature, maxTokens, stream,
                 stream ? new StreamOptions(true) : null, request.tools(),
@@ -182,7 +182,7 @@ public class DeepSeekModelProvider implements ChatModelProvider {
                 intOrNull(response.usage().totalTokens())
         );
         return new ChatResponse(
-                new ChatMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()),
+                new ChatMessage(message.role(), ChatMessage.responseText(message.content()), message.toolCalls(), message.toolCallId()),
                 choice.finishReason(),
                 usage
         );
@@ -313,7 +313,7 @@ public class DeepSeekModelProvider implements ChatModelProvider {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private record DeepSeekMessage(
             String role,
-            String content,
+            Object content,
             @JsonProperty("tool_calls") List<ToolCall> toolCalls,
             @JsonProperty("tool_call_id") String toolCallId
     ) {

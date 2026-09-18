@@ -22,6 +22,24 @@ import reactor.core.publisher.Flux;
 class AgentModelRoutingServiceTest {
 
     @Test
+    void routingPreservesImagePartsAndRejectsUnconfiguredVisionRoutes() {
+        ChatModelProvider models = mock(ChatModelProvider.class);
+        when(models.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("image seen"), "stop", null));
+        AgentModelRoutingService service = new AgentModelRoutingService(models, null);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "attachmentVision",
+                new com.yanban.api.attachment.AttachmentVisionPolicy("custom:vision"));
+        var image = new com.yanban.core.model.ChatImage("image/png", "AQID");
+        var request = new ChatRequest("custom", "vision", List.of(new ChatMessage("user", "look", null, null, List.of(image))), null, null, null, "key");
+        service.chat(1L, request);
+        var captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(models).chat(captor.capture());
+        assertThat(captor.getValue().messages().get(1).images()).containsExactly(image);
+        var unsupported = new ChatRequest("custom", "text", request.messages(), null, null, null, "key");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.chat(1L, unsupported)).hasMessageContaining("图片理解");
+        verify(models, org.mockito.Mockito.times(1)).chat(any());
+    }
+
+    @Test
     void usesFallbackProviderWithItsOwnCredentialAndActualIdentity() {
         ChatModelProvider models = mock(ChatModelProvider.class);
         UserSettingsService settings = mock(UserSettingsService.class);
