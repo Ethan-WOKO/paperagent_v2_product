@@ -95,9 +95,10 @@ class MemoryDistillationWorker {
         return switch (code) {
             case "MEMORY_DISTILLATION_RESPONSE_EMPTY", "MEMORY_DISTILLATION_RESPONSE_INVALID" ->
                     "模型没有返回有效的记忆候选，请检查模型配置后重试";
-            case "MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE",
-                    "MEMORY_DISTILLATION_ASSESSMENT_INVALID" ->
+            case "MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE" ->
                     "模型没有完成所有用户消息的记忆判断，请重试";
+            case "MEMORY_DISTILLATION_ASSESSMENT_INVALID" ->
+                    "模型返回的记忆判断格式不符合要求，自动修复未成功，请重试";
             case "MEMORY_DISTILLATION_CONFIDENCE_TOO_LOW" ->
                     "模型识别到长期记忆，但判断置信度不足，请重试";
             case "MEMORY_DISTILLATION_SCOPE_UNRESOLVED" ->

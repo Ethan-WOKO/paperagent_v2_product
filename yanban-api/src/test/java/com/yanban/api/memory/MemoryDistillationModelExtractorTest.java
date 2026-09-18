@@ -39,6 +39,75 @@ class MemoryDistillationModelExtractorTest {
     private MemoryDistillationModelExtractor extractor;
 
     @ParameterizedTest
+    @ValueSource(strings = {"missing", "extra", "unknown", "decision", "durability", "skipDurability", "skipReason", "json", "empty"})
+    void repairsStructuralFailuresWithSpecificRulesAndFullRevalidation(String issue) throws Exception {
+        String valid = fieldResponse("valid");
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(
+                routed(structuralFailure(issue)), routed(valid));
+        assertThat(extractor.extract(USER_ID, 31L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答")))).hasSize(1);
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(models, times(2)).chat(eq(USER_ID), requests.capture());
+        assertThat(requests.getAllValues().get(1).messages().get(0).content())
+                .contains("rule=", "Exactly assess these USER message IDs: [141]", "complete assessments");
+        assertThat(requests.getAllValues().get(1).messages().get(1))
+                .isEqualTo(requests.getAllValues().get(0).messages().get(1));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "extra", "unknown", "decision", "durability", "skipDurability", "skipReason", "json", "empty"})
+    void repeatedStructuralFailureStopsAfterTwoCalls(String issue) throws Exception {
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(routed(structuralFailure(issue)));
+        assertThatThrownBy(() -> extractor.extract(USER_ID, 32L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageStartingWith("MEMORY_DISTILLATION_");
+        verify(models, times(2)).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    @Test
+    void duplicatePrimaryIdsAreRepairedWithoutDroppingEitherUserRecord() throws Exception {
+        var mapper = new ObjectMapper();
+        var root = mapper.readTree(fieldResponse("valid"));
+        var assessments = (com.fasterxml.jackson.databind.node.ArrayNode) root.get("assessments");
+        assessments.add(assessments.get(0).deepCopy());
+        String duplicate = mapper.writeValueAsString(root);
+        var second = (com.fasterxml.jackson.databind.node.ObjectNode) assessments.get(1);
+        second.put("sourceMessageId", 142);
+        second.putArray("sourceMessageIds").add(142);
+        when(models.chat(eq(USER_ID), any(ChatRequest.class)))
+                .thenReturn(routed(duplicate), routed(mapper.writeValueAsString(root)));
+        assertThat(extractor.extract(USER_ID, 33L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答"),
+                line(142L, "user", "PROJECT", 7L, "以后也用中文回答")))).hasSize(1);
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(models, times(2)).chat(eq(USER_ID), requests.capture());
+        assertThat(requests.getAllValues().get(1).messages().get(0).content())
+                .contains("rule=DUPLICATE_PRIMARY_ID", "[141, 142]");
+    }
+
+    private String structuralFailure(String issue) throws Exception {
+        String valid = fieldResponse("valid");
+        return switch (issue) {
+            case "missing" -> "{\"assessments\":[]}";
+            case "extra" -> "{\"assessments\":[null,null]}";
+            case "unknown" -> valid.replace("\"sourceMessageId\":141", "\"sourceMessageId\":999");
+            case "decision" -> valid.replace("\"decision\":\"REMEMBER\"", "\"decision\":\"IGNORE\"");
+            case "durability" -> valid.replace("\"durability\":\"DURABLE\"", "\"durability\":\"PERMANENT\"");
+            case "skipDurability" -> """
+                    {"assessments":[{"sourceMessageId":141,"decision":"SKIP","durability":"DURABLE",
+                    "skipReason":"QUESTION_ONLY"}]}
+                    """;
+            case "skipReason" -> """
+                    {"assessments":[{"sourceMessageId":141,"decision":"SKIP","durability":"NON_MEMORY",
+                    "skipReason":"UNKNOWN"}]}
+                    """;
+            case "json" -> "{bad json";
+            default -> " ";
+        };
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"missing", "null", "blank"})
     void acceptsChinesePreferenceWithoutOptionalReasonInOneCall(String form) throws Exception {
         String response = withoutReason(form);
@@ -85,7 +154,7 @@ class MemoryDistillationModelExtractorTest {
         assertThatThrownBy(() -> extractor.extract(USER_ID, 8L, List.of(
                 line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
                 .hasMessage("MEMORY_DISTILLATION_" + expected);
-        verify(models).chat(eq(USER_ID), any(ChatRequest.class));
+        verify(models, times("durability".equals(invalidField) ? 2 : 1)).chat(eq(USER_ID), any(ChatRequest.class));
     }
 
     @Test
@@ -100,7 +169,7 @@ class MemoryDistillationModelExtractorTest {
         assertThat(extractor.extract(USER_ID, 8L, lines)).isEmpty();
         assertThatThrownBy(() -> extractor.extract(USER_ID, 9L, lines))
                 .hasMessage("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
-        verify(models, times(2)).chat(eq(USER_ID), any(ChatRequest.class));
+        verify(models, times(3)).chat(eq(USER_ID), any(ChatRequest.class));
     }
 
     private String withoutReason(String form) throws Exception {

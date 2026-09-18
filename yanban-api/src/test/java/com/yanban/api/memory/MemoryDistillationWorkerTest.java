@@ -25,6 +25,19 @@ class MemoryDistillationWorkerTest {
     @Mock
     private MemoryDistillationModelExtractor extractor;
 
+    @Test
+    void invalidAssessmentReportsFormatFailureWithoutAdvancingTheJob() {
+        var work = work();
+        when(transactions.claim()).thenReturn(work);
+        when(conversations.load(42L, 0L, 5L)).thenReturn(List.of());
+        when(extractor.extract(42L, 9L, List.of()))
+                .thenThrow(new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID"));
+        worker(Runnable::run).scan();
+        verify(transactions).fail(work, "MEMORY_DISTILLATION_ASSESSMENT_INVALID",
+                "模型返回的记忆判断格式不符合要求，自动修复未成功，请重试");
+        verify(transactions, never()).succeed(org.mockito.ArgumentMatchers.any(), anyList());
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"CONTENT_MISSING", "REASON_MISSING", "CONTENT_TOO_LONG", "REASON_TOO_LONG"})
     void invalidFieldsReportFormattingFailureWithoutCommittingCandidates(String suffix) {
