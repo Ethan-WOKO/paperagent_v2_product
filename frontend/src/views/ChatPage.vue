@@ -261,7 +261,7 @@
             />
           </div>
 
-          <div class="chat-composer" :class="{ 'chat-composer--has-attachments': chatAttachments.length || chatUploading }">
+          <div class="chat-composer" :class="{ 'chat-composer--has-attachments': composerAttachments.length || chatUploading }">
             <div class="chat-composer__topline">
               <div class="chat-composer__model-picker">
                 <NTooltip :disabled="!selectedModelLabel" trigger="hover">
@@ -384,8 +384,8 @@
               accept=".pdf,.doc,.docx,.txt,.md,.tex,.bib,.csv,.json,.png,.jpg,.jpeg"
               @change="handleChatFileChange"
             />
-            <div v-if="chatAttachments.length || chatUploading" class="chat-attachment-tray">
-              <div v-for="attachment in chatAttachments" :key="attachment.id" class="session-attachment-card">
+            <div v-if="composerAttachments.length || chatUploading" class="chat-attachment-tray">
+              <div v-for="attachment in composerAttachments" :key="attachment.id" class="session-attachment-card">
                 <span>{{ attachment.filename }}</span>
                 <small v-if="attachment.status !== 'READY'">{{ attachment.status === 'FAILED' ? '上传失败' : '解析中' }}</small>
                 <small v-if="attachment.errorMessage" class="session-attachment-error">{{ attachment.errorMessage }}</small>
@@ -461,7 +461,7 @@ import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { downloadArtifact, getArtifact, saveArtifactToKnowledge } from '@/api/artifact';
 import { getDemoConfig } from '@/api/demo';
 import { listSessionAttachments, uploadSessionAttachment, removeSessionAttachment, promoteSessionAttachment, type SessionAttachment } from '@/api/attachments';
-import { attachmentSendError, attachmentUploadError } from '@/utils/sessionAttachments';
+import { pendingComposerAttachments, attachmentSendError, attachmentUploadError } from '@/utils/sessionAttachments';
 import {
   cancelV2LiteratureTurn,
   createPlan,
@@ -607,6 +607,9 @@ const previewingArtifactId = ref<number | null>(null);
 const downloadingArtifactId = ref<number | null>(null);
 const savingArtifactId = ref<number | null>(null);
 const chatAttachments = ref<ChatUploadAttachment[]>([]);
+const sentAttachmentIds = ref<Set<number>>(new Set());
+const sendingAttachmentIds = new Map<number, number[]>();
+const composerAttachments = computed(() => pendingComposerAttachments(chatAttachments.value, sentAttachmentIds.value));
 const chatUploading = ref(false);
 const attachmentsLoading = ref(false);
 let attachmentLoadVersion = 0;
@@ -1352,7 +1355,8 @@ async function handleSend() {
     const sentFromDemoQuestion = pendingDemoQuestion.value != null;
     const attachmentsForSend = [...chatAttachments.value];
     const content = buildContentWithChatAttachments(rawContent, attachmentsForSend);
-    const displayContent = buildDisplayContentWithChatAttachments(rawContent, attachmentsForSend);
+    const displayContent = buildDisplayContentWithChatAttachments(rawContent, composerAttachments.value);
+    sendingAttachmentIds.set(sessionId, attachmentsForSend.map(item => item.id));
     draft.value = '';
     appendSessionMessage(sessionId, {
       localId: 'user-' + Date.now(),
@@ -1398,6 +1402,7 @@ async function handleSend() {
     collapseCurrentProcessMessage();
     removePendingAssistant();
     if (activeSendSessionId) {
+      sendingAttachmentIds.delete(activeSendSessionId);
       await reloadCurrentMessages(activeSendSessionId).catch(() => undefined);
     }
     if (!draft.value && selectedSessionId.value === activeSendSessionId) draft.value = submittedDraft;
@@ -2060,6 +2065,8 @@ function replaceSession(session: AgentSessionResponse) {
 }
 
 async function afterSendFinished(sessionId: number) {
+  for (const id of sendingAttachmentIds.get(sessionId) || []) sentAttachmentIds.value.add(id);
+  sendingAttachmentIds.delete(sessionId);
   sending.value = false;
   collapseCurrentProcessMessage();
   const processMessage = findSessionMessage(currentProcessMessageSessionId.value, currentProcessMessageId.value);

@@ -3,9 +3,17 @@ const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() })
 vi.mock('../src/api/http', () => ({ default: http }));
 import { listSessionAttachments, uploadSessionAttachment, removeSessionAttachment, promoteSessionAttachment, type SessionAttachment } from '../src/api/attachments';
 import { chatAttachmentContent } from '../src/utils/paperPolishInput';
-import { attachmentSendError, attachmentUploadError } from '../src/utils/sessionAttachments';
+import { pendingComposerAttachments, attachmentSendError, attachmentUploadError } from '../src/utils/sessionAttachments';
 const ready: SessionAttachment = { id: 1, filename: 'notes.txt', mimeType: 'text/plain', fileSize: 4, status: 'READY' };
 describe('session attachment boundaries', () => {
+  it('clears sent cards, keeps new and failed uploads, and preserves conversation attachments', () => {
+    const items = [ready, { ...ready, id: 2, firstMessageId: 123 }, { ...ready, id: 3 }, { ...ready, id: 4, status: 'FAILED' as const }];
+    expect(pendingComposerAttachments(items, new Set([1])).map(item => item.id)).toEqual([3, 4]);
+    expect(items).toHaveLength(4);
+    // A failed send leaves the upload available for retry; reload uses the server binding.
+    expect(pendingComposerAttachments([ready], new Set())).toEqual([ready]);
+    expect(pendingComposerAttachments([{ ...ready, firstMessageId: 123 }], new Set())).toEqual([]);
+  });
   beforeEach(() => vi.clearAllMocks());
   it('upload uses the private session endpoint and never merges knowledge chunks', () => {
     const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });

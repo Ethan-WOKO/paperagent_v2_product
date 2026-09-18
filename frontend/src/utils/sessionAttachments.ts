@@ -9,3 +9,8 @@ export function attachmentUploadError(file: Pick<File, 'size' | 'name'>): string
   if (!/\.(pdf|docx?|txt|md|tex|bib|csv|json|png|jpe?g)$/i.test(file.name)) return '暂不支持该附件格式';
   return null;
 }
+
+/** Composer cards represent unsent uploads; sent files remain active conversation context. */
+export function pendingComposerAttachments(items: SessionAttachment[], sentIds: ReadonlySet<number>): SessionAttachment[] {
+  return items.filter(item => item.firstMessageId == null && !sentIds.has(item.id));
+}
