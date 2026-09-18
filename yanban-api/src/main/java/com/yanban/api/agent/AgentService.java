@@ -180,9 +180,16 @@ public class AgentService {
                 requestDedupService, runtimeTokenBudgetResolver, null, null);
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private EmptySessionReuse emptySessionReuse;
+
     @Transactional
     public AgentSessionResponse createSession(Long userId, CreateSessionRequest request) {
         SysUserSettings settings = userSettingsService.getOrCreate(userId);
+        if (emptySessionReuse != null) {
+            var empty = emptySessionReuse.find(userId, AgentSessionScope.WORKSPACE, null);
+            if (empty.isPresent()) return AgentSessionResponse.from(empty.get());
+        }
         String requestedProvider = StringUtils.hasText(request.modelProvider()) ? request.modelProvider().trim() : settings.getDefaultProvider();
         UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                 userId,
@@ -206,6 +213,10 @@ public class AgentService {
     @Transactional
     public AgentSessionResponse createProjectSession(Long userId, Long projectId, CreateSessionRequest request, String fallbackTitle) {
         SysUserSettings settings = userSettingsService.getOrCreate(userId);
+        if (emptySessionReuse != null) {
+            var empty = emptySessionReuse.find(userId, AgentSessionScope.PROJECT, projectId);
+            if (empty.isPresent()) return AgentSessionResponse.from(empty.get());
+        }
         String requestedProvider = StringUtils.hasText(request.modelProvider()) ? request.modelProvider().trim() : settings.getDefaultProvider();
         UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                 userId,

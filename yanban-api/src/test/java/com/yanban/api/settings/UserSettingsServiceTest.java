@@ -49,6 +49,29 @@ class UserSettingsServiceTest {
     @InjectMocks
     UserSettingsService service;
 
+    @Test void refreshKeepsNewProviderModelsInsteadOfFilteringAgainstOldConstants() {
+        var state=settings(9L,"deepseek");
+        when(repository.findById(9L)).thenReturn(Optional.of(state));
+        when(repository.saveAndFlush(state)).thenReturn(state);
+        when(modelDiscoveryService.discoverDeepSeekModels(null)).thenReturn(List.of("deepseek-next", "deepseek-v4-flash"));
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"objectMapper",new ObjectMapper());
+        var result=service.refreshProviderModels(9L,"deepseek");
+        assertThat(result.deepseekModels()).contains("deepseek-next");
+        assertThat(service.resolveModelEndpoint(9L,"deepseek","deepseek-next").modelName()).isEqualTo("deepseek-next");
+    }
+
+    @Test void glmRefreshUsesDiscoveryAndPreservesListWhenItFails() {
+        var state=settings(9L,"glm");
+        when(repository.findById(9L)).thenReturn(Optional.of(state));
+        when(repository.saveAndFlush(state)).thenReturn(state);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"objectMapper",new ObjectMapper());
+        when(modelDiscoveryService.discoverGlmModels(null)).thenReturn(List.of("glm-5.3"));
+        assertThat(service.refreshProviderModels(9L,"glm").glmModels()).containsExactly("glm-5.3");
+        when(modelDiscoveryService.discoverGlmModels(null)).thenThrow(new IllegalStateException("offline"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->service.refreshProviderModels(9L,"glm")).hasMessage("offline");
+        assertThat(service.parseGlmModels(state)).containsExactly("glm-5.3");
+    }
+
     @Test
     void savesVisionCapabilityAndPreservesItForOlderClients() {
         var model = new UserModel(9L, "custom-9", "Qwen", "qwen3.8-max", null, null, false, 1);

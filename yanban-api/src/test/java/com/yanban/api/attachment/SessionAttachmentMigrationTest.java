@@ -25,6 +25,120 @@ class SessionAttachmentMigrationTest {
     @Autowired AgentSessionRepository sessions;
     @Autowired SessionAttachmentRepository attachments;
     @Autowired EntityManager em;
+    @Autowired com.yanban.api.settings.SharedModelCatalog catalog;
+    @Autowired com.yanban.api.settings.UserSettingsService settingsService;
+    @Autowired com.yanban.api.agent.AgentService agentService;
+    @Autowired com.yanban.api.agent.AgentSessionService projectSessionService;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
+    @Autowired com.yanban.api.user.SysUserRepository users;
+    @org.springframework.boot.test.mock.mockito.MockBean com.yanban.api.settings.ModelDiscoveryService discovery;
+
+    private Long catalogUser(String name) {
+        jdbc.update("INSERT INTO sys_users(username,password_hash) VALUES(?,'hash')",name);
+        Long id=jdbc.queryForObject("SELECT id FROM sys_users WHERE username=?",Long.class,name);
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        tx.execute(status -> { em.persist(new com.yanban.api.settings.SysUserSettings(id,"deepseek",null,null,"deepseek-v4-flash","glm-5.2",null,"[]","[]",java.math.BigDecimal.ONE,8,false)); return null; });
+        return id;
+    }
+
+    @Test @Transactional void sharedCatalogApprovalsSyncAndSecretBoundaries() throws Exception {
+        Long user=catalogUser("catalog-user");
+        long provider=catalog.saveProvider(null,new com.yanban.api.settings.SharedModelCatalog.ProviderInput("Qwen","https://example.com/v1","https://example.com/v1/models","private-shared-secret",true));
+        org.mockito.Mockito.when(discovery.discoverModels("https://example.com/v1/models","private-shared-secret")).thenReturn(java.util.List.of("qwen-new"));
+        var first=catalog.sync(provider).get(0);
+        String key="shared-"+first.id();
+        assertThat(first.approved()).isFalse();
+        assertThat(catalog.availableModels()).isEmpty();
+        assertThatThrownBy(()->settingsService.resolveModelEndpoint(user,key,"qwen-new")).hasMessageContaining("未获批准");
+        catalog.saveModel(provider,new com.yanban.api.settings.SharedModelCatalog.ModelInput("qwen-new",true,true));
+        var endpoint=settingsService.resolveModelEndpoint(user,key,"qwen-new");
+        assertThat(endpoint.apiKey()).isEqualTo("private-shared-secret");
+        assertThat(endpoint.apiUrl()).isEqualTo("https://example.com/v1/chat/completions");
+        assertThatCode(()->visionPolicy.require(user,key,"qwen-new")).doesNotThrowAnyException();
+        String token="Bearer "+jwt.createAccessToken(user,"catalog-user");
+        var response=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/settings").header("Authorization",token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(response).contains(key).doesNotContain("private-shared-secret","https://example.com");
+        // Shared credentials are available only to normal metered chat, not personal model test CRUD.
+        assertThat(settingsService.listCustomModels(user)).noneMatch(item -> item.providerKey().startsWith("shared-"));
+        org.mockito.Mockito.when(discovery.discoverModels("https://example.com/v1/models","private-shared-secret")).thenReturn(java.util.List.of("qwen-new","qwen-newer"));
+        var second=catalog.sync(provider);
+        assertThat(second).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("qwen-new");assertThat(model.approved()).isTrue();assertThat(model.supportsVision()).isTrue();});
+        assertThat(second).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("qwen-newer");assertThat(model.approved()).isFalse();});
+        catalog.saveProvider(provider,new com.yanban.api.settings.SharedModelCatalog.ProviderInput("Qwen","https://example.com/v1","https://example.com/v1/models",null,false));
+        assertThat(catalog.availableModels()).isEmpty();
+        assertThatThrownBy(()->settingsService.resolveModelEndpoint(user,key,"qwen-new")).hasMessageContaining("已停用");
+    }
+
+    @Test @Transactional void synchronizationFailureRetainsCatalogAndMissingModelsAreUnavailable() {
+        long provider=catalog.saveProvider(null,new com.yanban.api.settings.SharedModelCatalog.ProviderInput("Sync","https://example.com/v1","https://example.com/models","key",true));
+        org.mockito.Mockito.when(discovery.discoverModels("https://example.com/models","key")).thenReturn(java.util.List.of("old-model"));
+        var model=catalog.sync(provider).get(0);
+        catalog.saveModel(provider,new com.yanban.api.settings.SharedModelCatalog.ModelInput("old-model",true,false));
+        org.mockito.Mockito.when(discovery.discoverModels("https://example.com/models","key")).thenThrow(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_GATEWAY,"offline"));
+        assertThatThrownBy(()->catalog.sync(provider)).hasMessageContaining("offline");
+        assertThat(catalog.models(provider).get(0).approved()).isTrue();
+        org.mockito.Mockito.doReturn(java.util.List.of("new-model")).when(discovery).discoverModels("https://example.com/models","key");
+        catalog.sync(provider);
+        assertThatThrownBy(()->catalog.resolve("shared-"+model.id(),"old-model")).hasMessageContaining("不可用");
+    }
+
+    @Test @Transactional void onlyAdministratorsCanConfigureSharedCredentialsAndApprovals() throws Exception {
+        Long user=catalogUser("catalog-admin-test");
+        String ordinary="Bearer "+jwt.createAccessToken(user,"catalog-admin-test");
+        String path="/api/v1/admin/model-providers";
+        String body="{\"name\":\"Shared\",\"chatUrl\":\"https://example.com/v1\",\"apiKey\":\"secret-not-returned\",\"enabled\":true}";
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path).header("Authorization",ordinary))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).header("Authorization",ordinary).contentType("application/json").content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+        jdbc.update("UPDATE sys_users SET role='ADMIN' WHERE id=?",user);em.clear();
+        String admin="Bearer "+jwt.createAccessToken(users.findById(user).orElseThrow());
+        var created=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).header("Authorization",admin).contentType("application/json").content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
+        long id=Long.parseLong(created.getResponse().getContentAsString());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path+"/"+id+"/models").header("Authorization",admin).contentType("application/json").content("{\"modelName\":\"manual-model\",\"approved\":true,\"supportsVision\":true}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+        var listed=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path).header("Authorization",admin))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(listed).contains("apiKeyConfigured").doesNotContain("secret-not-returned","apiKeyEncrypted");
+        assertThat(catalog.models(id).get(0).approved()).isTrue();
+    }
+
+    @Test void concurrentNewWorkspaceSessionsReuseOneEmptySession() throws Exception {
+        Long user=catalogUser("concurrent-empty-session");
+        var request=new com.yanban.api.agent.CreateSessionRequest("New",null,null,null,true);
+        var pool=java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            var gate=new java.util.concurrent.CountDownLatch(1);
+            var futures=new java.util.ArrayList<java.util.concurrent.Future<Long>>();
+            for(int i=0;i<4;i++) futures.add(pool.submit(()->{gate.await(); return agentService.createSession(user,request).id();}));
+            gate.countDown();
+            var ids=new java.util.HashSet<Long>();
+            for(var future:futures) ids.add(future.get(20,java.util.concurrent.TimeUnit.SECONDS));
+            assertThat(ids).hasSize(1);
+            assertThat(sessions.countByUserId(user)).isEqualTo(1);
+            Long session=ids.iterator().next();
+            new org.springframework.transaction.support.TransactionTemplate(transactionManager).execute(status->{em.persist(new AgentMessage(session,user,"user","hello",null,null));return null;});
+            assertThat(agentService.createSession(user,request).id()).isNotEqualTo(session);
+        } finally { pool.shutdownNow(); }
+    }
+
+    @Test @Transactional void emptySessionsNeverCrossUserOrProjectBoundaries() {
+        Long user=catalogUser("scoped-empty-user");
+        Long other=catalogUser("scoped-empty-other");
+        for(String name:java.util.List.of("project-a","project-b")) jdbc.update("INSERT INTO projects(user_id,name,root_type,root_path,canonical_root_path,include_rules,ignore_rules) VALUES(?,?,'LOCAL','/tmp','/tmp','[]','[]')",user,name);
+        Long a=jdbc.queryForObject("SELECT id FROM projects WHERE user_id=? AND name='project-a'",Long.class,user);
+        Long b=jdbc.queryForObject("SELECT id FROM projects WHERE user_id=? AND name='project-b'",Long.class,user);
+        var request=new com.yanban.api.agent.CreateSessionRequest("New",null,null,null,true);
+        long workspace=agentService.createSession(user,request).id();
+        long first=projectSessionService.createProjectSession(user,a,request,"New").id();
+        assertThat(projectSessionService.createProjectSession(user,a,request,"New").id()).isEqualTo(first);
+        assertThat(projectSessionService.createProjectSession(user,b,request,"New").id()).isNotIn(first,workspace);
+        assertThat(agentService.createSession(other,request).id()).isNotIn(first,workspace);
+        assertThat(agentService.createSession(user,request).id()).isEqualTo(workspace);
+    }
+
     @Autowired AttachmentVisionPolicy visionPolicy;
 
     @Test @Transactional void modelApiCreatesAndUpdatesVisionWithOwnerIsolation() throws Exception {

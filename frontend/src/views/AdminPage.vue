@@ -216,11 +216,13 @@
           </div>
         </div>
       </NCard>
+      <AdminModelCatalog />
     </main>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
+import AdminModelCatalog from '@/components/AdminModelCatalog.vue';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { NButton, NCard, NEmpty, NInput, NInputNumber, NPopconfirm, NSpin, NTabPane, NTag, NTabs } from 'naive-ui';
 import AppLayout from '@/components/AppLayout.vue';

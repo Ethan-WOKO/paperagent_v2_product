@@ -3027,6 +3027,7 @@ async function selectConversation(sessionId: number) {
 }
 
 async function startNewConversation() {
+  if (loading.sessions) return;
   const project = activeProject.value;
   if (!project) return;
   resetV2NaturalLanguageView();

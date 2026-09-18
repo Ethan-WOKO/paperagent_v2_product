@@ -149,7 +149,9 @@ public class AgentModelRoutingService {
     private List<UserSettingsService.ModelEndpoint> routes(Long userId, ChatRequest primaryRequest) {
         if (primaryRequest == null) throw new IllegalArgumentException("primaryRequest must not be null");
         List<UserSettingsService.ModelEndpoint> result = new ArrayList<>();
-        result.add(new UserSettingsService.ModelEndpoint(
+        if (primaryRequest.provider() != null && primaryRequest.provider().startsWith("shared-") && settings != null) {
+            result.add(settings.resolveModelEndpoint(userId,primaryRequest.provider(),primaryRequest.model()));
+        } else result.add(new UserSettingsService.ModelEndpoint(
                 primaryRequest.provider(), primaryRequest.model(), primaryRequest.apiUrl(), primaryRequest.apiKey(),
                 "request", primaryRequest.provider()));
         if (userId == null || settings == null) return List.copyOf(result);

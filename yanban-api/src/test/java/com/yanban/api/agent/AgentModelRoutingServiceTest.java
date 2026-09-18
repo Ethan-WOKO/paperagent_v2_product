@@ -22,6 +22,23 @@ import reactor.core.publisher.Flux;
 class AgentModelRoutingServiceTest {
 
     @Test
+    void sharedPrimaryReloadsCredentialsAndRejectsRevokedApproval() {
+        var models=mock(ChatModelProvider.class);
+        var settings=mock(UserSettingsService.class);
+        var service=new AgentModelRoutingService(models,settings);
+        var request=new ChatRequest("shared-1","shared-model",List.of(ChatMessage.user("hello")),null,null,null,"stale-key");
+        when(settings.resolveModelEndpoint(1L,"shared-1","shared-model")).thenReturn(endpoint("shared-1","shared-model","fresh-key"));
+        when(models.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("ok"),"stop",null));
+        service.chat(1L,request);
+        var captured=ArgumentCaptor.forClass(ChatRequest.class);
+        verify(models).chat(captured.capture());
+        assertThat(captured.getValue().apiKey()).isEqualTo("fresh-key");
+        when(settings.resolveModelEndpoint(1L,"shared-1","shared-model")).thenThrow(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN,"revoked"));
+        assertThatThrownBy(()->service.chat(1L,request)).hasMessageContaining("revoked");
+        verify(models,org.mockito.Mockito.times(1)).chat(any());
+    }
+
+    @Test
     void routingPreservesImagePartsAndRejectsUnconfiguredVisionRoutes() {
         ChatModelProvider models = mock(ChatModelProvider.class);
         when(models.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("image seen"), "stop", null));

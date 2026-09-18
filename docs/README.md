@@ -45,6 +45,8 @@
 
 ### 产品能力
 
+- `当前有效/产品能力/shared-model-catalog-and-empty-sessions.md`
+
 - `当前有效/产品能力/kb-version-governance-rag-filtering.md`
 - `当前有效/产品能力/long-term-memory-crud.md`
 - `当前有效/产品能力/long-term-memory-context-injection.md`

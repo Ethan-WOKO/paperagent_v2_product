@@ -381,8 +381,8 @@ const DEFAULT_GLM_MODELS = [
 const providerOptions = computed(() => {
   const customProviders = new Map<string, { label: string; value: string }>();
   for (const model of customModels.value) {
-    if (!model.builtin && !customProviders.has(model.providerKey)) {
-      customProviders.set(model.providerKey, { label: model.label, value: model.providerKey });
+    if ((!model.builtin || model.providerKey.startsWith('shared-')) && !customProviders.has(model.providerKey)) {
+      customProviders.set(model.providerKey, { label: model.providerKey.startsWith('shared-') ? `${model.label} / ${model.modelName}（共享）` : model.label, value: model.providerKey });
     }
   }
   return [
@@ -534,7 +534,7 @@ async function handleRefreshModels(provider: 'deepseek' | 'glm') {
   try {
     const { data } = await refreshProviderModels(provider);
     applySettingsResponse(data);
-    ui.message.success(provider === 'deepseek' ? 'DeepSeek models refreshed.' : 'GLM catalog synced.');
+    ui.message.success(provider === 'deepseek' ? 'DeepSeek models refreshed.' : 'GLM models refreshed.');
   } catch (error: unknown) {
     ui.message.error(apiErrorMessage(error, `Failed to refresh ${provider} models.`));
   } finally {

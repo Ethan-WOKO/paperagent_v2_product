@@ -61,6 +61,31 @@ public class ModelDiscoveryService {
         }
     }
 
+    public List<String> discoverModels(String url, String apiKey) {
+        if (!StringUtils.hasText(apiKey)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先配置 API Key");
+        try {
+            String body = webClient.get().uri(SharedModelCatalog.checkedUrl(url))
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                    .accept(MediaType.APPLICATION_JSON).retrieve().bodyToMono(String.class)
+                    .block(java.time.Duration.ofSeconds(20));
+            List<String> ids = parseModelIds(body);
+            if (ids.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "模型列表为空或格式不兼容，已保留原列表；可由管理员手动添加模型");
+            if(ids.size()>2000 || ids.stream().anyMatch(id -> id.length()>128))
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "厂商模型列表超出支持范围，已保留原列表");
+            return ids;
+        } catch(WebClientResponseException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "模型列表同步失败 HTTP " + ex.getStatusCode().value() + "，已保留原列表；请检查列表接口与密钥权限，或手动添加模型");
+        } catch(ResponseStatusException ex) { throw ex; }
+        catch(RuntimeException ex) { throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"模型列表请求失败，已保留原列表"); }
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.yanban.core.model.GlmProperties glmProperties;
+    public List<String> discoverGlmModels(String apiKey) {
+        String url = glmProperties.getApiUrl().replaceAll("/chat/completions/?$", "/models");
+        return discoverModels(url, StringUtils.hasText(apiKey) ? apiKey : glmProperties.getApiKey());
+    }
+
     private List<String> parseModelIds(String body) {
         if (!StringUtils.hasText(body)) {
             return List.of();
