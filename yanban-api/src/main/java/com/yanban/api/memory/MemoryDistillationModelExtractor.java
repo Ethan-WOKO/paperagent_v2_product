@@ -97,7 +97,7 @@ class MemoryDistillationModelExtractor {
                         + failure.sourceMessageId + ", field=" + failure.field + ", error=" + failure.getMessage()
                         + ". Regenerate the complete assessments object from the same conversation records. "
                         + "Include every USER record. Supply nonblank content (at most 1200 UTF-16 code units) "
-                        + "and reason (at most 300 UTF-16 code units) for REMEMBER items. "
+                        + "for REMEMBER items. Optional reason, if supplied, must be at most 300 UTF-16 code units. "
                         + "Do not discard a durable memory merely to avoid a formatting error.\n";
                 continue;
             }
@@ -176,14 +176,14 @@ class MemoryDistillationModelExtractor {
                 || !ALLOWED_SKIP_REASONS.contains(skipReason)) {
             throw new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
         }
-        validateField(assessment.sourceMessageId(), "reason", assessment.reason(), 300);
+        validateOptionalReason(assessment);
     }
 
     private MemoryDistillationCandidate validateRemember(
             ModelAssessment candidate,
             Map<Long, MemoryDistillationConversationService.ConversationLine> byId) {
         validateField(candidate.sourceMessageId(), "content", candidate.content(), 1_200);
-        validateField(candidate.sourceMessageId(), "reason", candidate.reason(), 300);
+        validateOptionalReason(candidate);
         String memoryType = normalize(candidate.memoryType());
         if (!ALLOWED_TYPES.contains(memoryType)) {
             throw new IllegalStateException("MEMORY_DISTILLATION_TYPE_INVALID");
@@ -278,6 +278,14 @@ class MemoryDistillationModelExtractor {
         return value == null ? "" : value.trim().toUpperCase(java.util.Locale.ROOT);
     }
 
+    private void validateOptionalReason(ModelAssessment assessment) {
+        // Explanatory metadata is neither persisted nor used as evidence or authority.
+        // Its absence must not reject an otherwise fully validated assessment.
+        if (StringUtils.hasText(assessment.reason())) {
+            validateField(assessment.sourceMessageId(), "reason", assessment.reason(), 300);
+        }
+    }
+
     private void validateField(Long sourceMessageId, String field, String value, int limit) {
         int length = value == null ? 0 : value.trim().length();
         if (!StringUtils.hasText(value) || length > limit) {
@@ -332,11 +340,12 @@ class MemoryDistillationModelExtractor {
                 The server derives project authority from sourceMessageIds. USER records cannot create PROJECT memories.
 
                 Return one JSON object with an assessments array containing exactly one item for every supplied USER
-                messageId. Every item must contain sourceMessageId, decision (REMEMBER or SKIP), durability, and a short
-                reason. A REMEMBER item must use durability DURABLE and also contain memoryScope (USER or PROJECT),
+                messageId. Every item must contain sourceMessageId, decision (REMEMBER or SKIP), and durability.
+                A short explanatory reason is optional; it is not evidence or a required memory field.
+                A REMEMBER item must use durability DURABLE and also contain memoryScope (USER or PROJECT),
                 memoryType, content, tags, confidence from 0 to 1, scopeConfidence from 0 to 1, and sourceMessageIds.
-                content must be nonblank and at most 1200 UTF-16 code units after trimming. Every reason must be
-                nonblank and at most 300 UTF-16 code units after trimming. Keep both concise; never omit reason.
+                content must be nonblank and at most 1200 UTF-16 code units after trimming. If reason is supplied,
+                keep it at most 300 UTF-16 code units after trimming. Never omit required memory or evidence fields.
                 Its sourceMessageIds must include sourceMessageId, cite one to twelve supplied records, and include at least
                 one USER record. Confidence measures how explicitly and reliably the user stated or confirmed the fact,
                 not how important the model finds it; a clear direct declaration should normally be at least 0.9.

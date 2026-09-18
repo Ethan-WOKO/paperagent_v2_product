@@ -39,8 +39,82 @@ class MemoryDistillationModelExtractorTest {
     private MemoryDistillationModelExtractor extractor;
 
     @ParameterizedTest
+    @ValueSource(strings = {"missing", "null", "blank"})
+    void acceptsChinesePreferenceWithoutOptionalReasonInOneCall(String form) throws Exception {
+        String response = withoutReason(form);
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(routed(response));
+        var result = extractor.extract(USER_ID, 8L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答")));
+        assertThat(result).singleElement().satisfies(candidate -> {
+            assertThat(candidate.content()).isEqualTo("用户偏好默认使用中文回答。");
+            assertThat(candidate.scope()).isEqualTo("USER");
+            assertThat(candidate.projectId()).isNull();
+            assertThat(candidate.sourceMessageIds()).containsExactly(141L);
+        });
+        verify(models).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"source", "confidence", "scope", "type", "durability"})
+    void missingReasonDoesNotBypassRequiredValidation(String invalidField) throws Exception {
+        String response = withoutReason("missing");
+        String expected;
+        switch (invalidField) {
+            case "source" -> {
+                response = response.replace("\"sourceMessageIds\":[141]", "\"sourceMessageIds\":[999]");
+                expected = "SOURCE_INVALID";
+            }
+            case "confidence" -> {
+                response = response.replace("\"confidence\":0.95", "\"confidence\":0.2");
+                expected = "CONFIDENCE_TOO_LOW";
+            }
+            case "scope" -> {
+                response = response.replace("\"memoryScope\":\"USER\"", "\"memoryScope\":\"UNKNOWN\"");
+                expected = "SCOPE_INVALID";
+            }
+            case "type" -> {
+                response = response.replace("\"memoryType\":\"PREFERENCE\"", "\"memoryType\":\"UNKNOWN\"");
+                expected = "TYPE_INVALID";
+            }
+            default -> {
+                response = response.replace("\"durability\":\"DURABLE\"", "\"durability\":\"TEMPORARY\"");
+                expected = "ASSESSMENT_INVALID";
+            }
+        }
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(routed(response));
+        assertThatThrownBy(() -> extractor.extract(USER_ID, 8L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
+                .hasMessage("MEMORY_DISTILLATION_" + expected);
+        verify(models).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    @Test
+    void skipWithoutExplanationStillRequiresStructuredSkipReason() {
+        String response = """
+                {"assessments":[{"sourceMessageId":141,"decision":"SKIP",
+                "durability":"TEMPORARY","skipReason":"ONE_OFF_REQUEST"}]}
+                """;
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(routed(response),
+                routed(response.replace("ONE_OFF_REQUEST", "UNKNOWN")));
+        var lines = List.of(line(141L, "user", "PROJECT", 7L, "这一次使用中文回答"));
+        assertThat(extractor.extract(USER_ID, 8L, lines)).isEmpty();
+        assertThatThrownBy(() -> extractor.extract(USER_ID, 9L, lines))
+                .hasMessage("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
+        verify(models, times(2)).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    private String withoutReason(String form) throws Exception {
+        String response = fieldResponse("valid");
+        return switch (form) {
+            case "missing" -> response.replace("\"reason\":\"明确的长期语言偏好\",", "");
+            case "null" -> response.replace("\"reason\":\"明确的长期语言偏好\"", "\"reason\":null");
+            default -> response.replace("明确的长期语言偏好", "   ");
+        };
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"content:null", "content:blank", "content:long",
-            "reason:null", "reason:blank", "reason:long"})
+            "reason:long"})
     void repairsMissingOrOversizedFieldsOnceUsingTheSameProjectEvidence(String scenario) throws Exception {
         String invalid = fieldResponse(scenario);
         when(models.chat(eq(USER_ID), any(ChatRequest.class)))
@@ -66,7 +140,7 @@ class MemoryDistillationModelExtractorTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"content:null", "content:blank", "content:long",
-            "reason:null", "reason:blank", "reason:long"})
+            "reason:long"})
     void failsWithSpecificFieldCodeAfterOneUnsuccessfulRepair(String scenario) throws Exception {
         when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(routed(fieldResponse(scenario)));
         String[] parts = scenario.split(":");
@@ -82,7 +156,7 @@ class MemoryDistillationModelExtractorTest {
     @Test
     void repairedResponseStillMustPassSourceAuthorityValidation() throws Exception {
         when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(
-                routed(fieldResponse("reason:null")),
+                routed(fieldResponse("content:null")),
                 routed(fieldResponse("valid").replace("\"sourceMessageIds\":[141]", "\"sourceMessageIds\":[999]")));
         assertThatThrownBy(() -> extractor.extract(USER_ID, 26L, List.of(
                 line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
@@ -132,7 +206,7 @@ class MemoryDistillationModelExtractorTest {
     @Test
     void repairedResponseCannotSilentlyOmitUserAssessments() throws Exception {
         when(models.chat(eq(USER_ID), any(ChatRequest.class)))
-                .thenReturn(routed(fieldResponse("reason:null")), routed("{\"assessments\":[]}"));
+                .thenReturn(routed(fieldResponse("content:null")), routed("{\"assessments\":[]}"));
         assertThatThrownBy(() -> extractor.extract(USER_ID, 29L, List.of(
                 line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
                 .hasMessage("MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE");
@@ -148,14 +222,14 @@ class MemoryDistillationModelExtractorTest {
         logger.addAppender(appender);
         try {
             when(models.chat(eq(USER_ID), any(ChatRequest.class)))
-                    .thenReturn(routed(fieldResponse("reason:null")));
+                    .thenReturn(routed(fieldResponse("content:null")));
             assertThatThrownBy(() -> extractor.extract(USER_ID, 30L, List.of(
                     line(141L, "user", "PROJECT", 7L, "private-conversation-marker"))))
-                    .hasMessage("MEMORY_DISTILLATION_REASON_MISSING");
+                    .hasMessage("MEMORY_DISTILLATION_CONTENT_MISSING");
             assertThat(appender.list).hasSize(2);
             for (var event : appender.list) {
                 assertThat(event.getFormattedMessage()).contains("jobId=30", "sourceMessageId=141",
-                        "field=reason", "length=0", "MEMORY_DISTILLATION_REASON_MISSING")
+                        "field=content", "length=0", "MEMORY_DISTILLATION_CONTENT_MISSING")
                         .doesNotContain("private-conversation-marker", "用户偏好默认使用中文回答", "secret-key");
             }
         } finally {
