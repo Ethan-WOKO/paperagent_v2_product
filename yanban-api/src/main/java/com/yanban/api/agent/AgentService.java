@@ -91,6 +91,17 @@ public class AgentService {
     private final UserQuotaService quotaService;
     private final V2SessionDeletionService v2SessionDeletionService;
 
+    @Autowired(required = false)
+    private com.yanban.api.attachment.SessionAttachmentService sessionAttachments;
+
+    boolean validateSessionAttachments(Long userId, Long sessionId, String provider, String model) {
+        return sessionAttachments != null && sessionAttachments.validateForSend(userId, sessionId, provider, model);
+    }
+
+    String sessionAttachmentManifest(Long userId, Long sessionId) {
+        return sessionAttachments == null ? "" : sessionAttachments.planManifest(userId, sessionId);
+    }
+
     @Autowired
     public AgentService(AgentSessionRepository sessions,
                         AgentMessageRepository messages,
@@ -385,6 +396,8 @@ public class AgentService {
         AgentSession session = getOwnedSession(userId, sessionId);
         UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                 userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
+        boolean hasSessionAttachments = projectContext == null
+                && validateSessionAttachments(userId, sessionId, endpoint.providerKey(), endpoint.modelName());
         ModelSourceDebug modelSource = toModelSource(endpoint);
         AgentExperimentContext experimentContext = agentExperimentService.prepare(
                 userId,
@@ -416,10 +429,11 @@ public class AgentService {
         List<AgentMessage> saved = new ArrayList<>();
         AgentMessage userMessage = saveAndCacheMessage(session.getId(), userId, ChatMessage.user(request.content()));
         saved.add(userMessage);
+        if (hasSessionAttachments) sessionAttachments.bindMessage(userId, sessionId, userMessage.getId());
         AgentTurn turn = createRunningTurn(session.getId(), userId, userMessage.getId());
         saveContextSnapshot(turn, contextPackage);
 
-        if (isRuntimeIdentityQuestion(request.content())) {
+        if (!hasSessionAttachments && isRuntimeIdentityQuestion(request.content())) {
             String assistantContent = buildRuntimeIdentityAnswer(endpoint);
             AgentMessage processMessage = saveProcessMessageIfNeeded(
                     session.getId(),
@@ -470,7 +484,7 @@ public class AgentService {
 
         // Project requests already have a trusted Project capability and a governed tool policy. Workspace
         // navigation shortcuts must not intercept explicit Project operations such as Candidate proposals.
-        ConversationIntentRouterService.IntentAction intentAction = projectContext == null
+        ConversationIntentRouterService.IntentAction intentAction = projectContext == null && !hasSessionAttachments
                 ? conversationIntentRouterService.route(request.content())
                 : null;
         // Paper requests now use the governed native tools. The old suggestion only navigates

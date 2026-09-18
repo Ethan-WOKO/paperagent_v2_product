@@ -148,7 +148,7 @@ public class GlmModelProvider implements ChatModelProvider {
         Double temperature = request.temperature() != null ? request.temperature() : properties.getTemperature();
         Integer maxTokens = request.maxTokens() != null ? request.maxTokens() : properties.getMaxTokens();
         List<GlmMessage> messages = request.messages().stream()
-                .map(message -> new GlmMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()))
+                .map(message -> new GlmMessage(message.role(), message.providerContent(), message.toolCalls(), message.toolCallId()))
                 .toList();
         return new GlmChatRequest(
                 model,
@@ -177,7 +177,7 @@ public class GlmModelProvider implements ChatModelProvider {
                 intOrNull(response.usage().completionTokens()),
                 intOrNull(response.usage().totalTokens())
         );
-        return new ChatResponse(new ChatMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()), choice.finishReason(), usage);
+        return new ChatResponse(new ChatMessage(message.role(), ChatMessage.responseText(message.content()), message.toolCalls(), message.toolCallId()), choice.finishReason(), usage);
     }
 
     private Integer intOrNull(Number number) {
@@ -297,7 +297,7 @@ public class GlmModelProvider implements ChatModelProvider {
     private record StreamOptions(@JsonProperty("include_usage") boolean includeUsage) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    private record GlmMessage(String role, String content,
+    private record GlmMessage(String role, Object content,
                               @JsonProperty("tool_calls") List<ToolCall> toolCalls,
                               @JsonProperty("tool_call_id") String toolCallId) {}
 

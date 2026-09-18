@@ -381,20 +381,25 @@
               type="file"
               class="chat-file-input"
               multiple
-              accept=".pdf,.doc,.docx,.txt,.md,.tex,.bib,.csv,.json"
+              accept=".pdf,.doc,.docx,.txt,.md,.tex,.bib,.csv,.json,.png,.jpg,.jpeg"
               @change="handleChatFileChange"
             />
             <div v-if="chatAttachments.length || chatUploading" class="chat-attachment-tray">
-              <div v-for="attachment in chatAttachments" :key="attachment.documentId" class="chat-attachment-chip">
+              <div v-for="attachment in chatAttachments" :key="attachment.id" class="session-attachment-card">
                 <span>{{ attachment.filename }}</span>
-                <small>#{{ attachment.documentId }} · {{ attachment.status }}</small>
-                <button type="button" :disabled="sending || chatUploading" @click="removeChatAttachment(attachment.documentId)">×</button>
+                <small>{{ attachment.status === 'READY' ? '会话附件 · 可提问' : attachment.status === 'FAILED' ? '上传失败' : '解析中' }}</small>
+                <small v-if="attachment.errorMessage" class="session-attachment-error">{{ attachment.errorMessage }}</small>
+                <button type="button" :disabled="sending || chatUploading || promotingAttachmentId !== null || attachment.status !== 'READY' || !!attachment.knowledgeDocumentId"
+                  @click="promoteChatAttachment(attachment)">{{ attachment.knowledgeDocumentId ? '已加入知识库' : promotingAttachmentId === attachment.id ? '加入中…' : '加入知识库' }}</button>
+                <button type="button" :disabled="sending || chatUploading" aria-label="移除会话附件" @click="removeChatAttachment(attachment.id)">×</button>
               </div>
               <div v-if="chatUploading" class="chat-attachment-chip chat-attachment-chip--uploading">
-                <span>{{ chatUploadStatus || 'Uploading document...' }}</span>
+                <span>{{ chatUploadStatus || '正在上传并解析…' }}</span>
                 <small>{{ chatUploadProgress }}%</small>
               </div>
             </div>
+            <small v-if="chatAttachments.length" class="session-attachment-help">附件用于本会话及后续追问；只有点击“加入知识库”才会入库。单文件 10 MB，正文最多 24000 字符。图片需使用已启用视觉能力的模型。移除后不再用于后续回答。</small>
+            <small v-if="attachmentsLoadFailed" class="session-attachment-help">附件加载失败，请重新选择会话后再发送。</small>
             <div class="chat-composer__footer">
               <span class="chat-hint">{{ t('chat.inputHint') }}</span>
               <div class="chat-composer__send-actions">
@@ -402,15 +407,16 @@
                   type="button"
                   class="chat-upload-button"
                   :disabled="sending || chatUploading"
-                  :aria-label="t('chat.upload')"
+                  aria-label="添加会话附件"
                   @click="chatFileInputRef?.click()"
-                >{{ t('chat.upload') }}</button>
+                >添加附件</button>
+                <button type="button" class="chat-upload-button" @click="router.push('/knowledge-base')">知识库</button>
                 <NButton
                   type="primary"
                   round
                   class="chat-send-button"
                   :class="{ 'chat-send-button--busy': sending }"
-                  :disabled="chatUploading || sending"
+                  :disabled="chatUploading || sending || attachmentsLoading || attachmentsLoadFailed || chatAttachments.some(item => item.status !== 'READY')"
                   @click="handleSend"
                 >{{ t('chat.send') }}</NButton>
               </div>
@@ -455,7 +461,8 @@ import ConversationQuestionRail from '@/components/ConversationQuestionRail.vue'
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { downloadArtifact, getArtifact, saveArtifactToKnowledge } from '@/api/artifact';
 import { getDemoConfig } from '@/api/demo';
-import { mergeKbUpload, uploadChunk, type KbDocumentResponse } from '@/api/knowledge';
+import { listSessionAttachments, uploadSessionAttachment, removeSessionAttachment, promoteSessionAttachment, type SessionAttachment } from '@/api/attachments';
+import { attachmentSendError, attachmentUploadError } from '@/utils/sessionAttachments';
 import {
   cancelV2LiteratureTurn,
   createPlan,
@@ -527,11 +534,7 @@ interface ChatArtifactCard {
   preview?: string | null;
 }
 
-interface ChatUploadAttachment {
-  documentId: number;
-  filename: string;
-  status: string;
-}
+type ChatUploadAttachment = SessionAttachment;
 
 interface ToolCallSnapshot {
   id?: string | null;
@@ -606,6 +609,10 @@ const downloadingArtifactId = ref<number | null>(null);
 const savingArtifactId = ref<number | null>(null);
 const chatAttachments = ref<ChatUploadAttachment[]>([]);
 const chatUploading = ref(false);
+const attachmentsLoading = ref(false);
+let attachmentLoadVersion = 0;
+const attachmentsLoadFailed = ref(false);
+const promotingAttachmentId = ref<number | null>(null);
 const chatUploadProgress = ref(0);
 const chatUploadStatus = ref('');
 const literatureFormOpen = ref(false);
@@ -634,7 +641,7 @@ const compactChatViewport = ref(false);
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 const SUPPORTED_DEEPSEEK_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
 const DEFAULT_GLM_MODEL = 'glm-5.2';
-const CHAT_UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024;
+
 let minimapActiveLockUntil = 0;
 let messagesRequestSeq = 0;
 let compactChatMediaQuery: MediaQueryList | null = null;
@@ -1231,84 +1238,80 @@ async function handleChatFileChange(event: Event) {
   const target = event.target as HTMLInputElement;
   const files = Array.from(target.files || []);
   target.value = '';
-  if (files.length === 0) {
-    return;
-  }
-  if (sending.value) {
-    ui.message.warning('当前正在回复，稍后再上传资料');
-    return;
-  }
+  if (!files.length || sending.value || chatUploading.value) return;
   chatUploading.value = true;
-  chatUploadProgress.value = 0;
+  let sessionId = selectedSessionId.value;
   try {
-    const uploaded: ChatUploadAttachment[] = [];
-    for (let index = 0; index < files.length; index += 1) {
-      const document = await uploadChatFile(files[index], index, files.length);
-      uploaded.push({
-        documentId: document.id,
-        filename: document.filename,
-        status: document.status,
-      });
+    if (!sessionId) {
+      const model = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+      const { data } = await createSession({ title: t('chat.newSession'), ragDisabled: ragDisabled.value, modelProvider: model.provider, model: model.model });
+      sessions.value = [data, ...sessions.value];
+      sessionId = data.id;
+      applySelectedSession(sessionId);
     }
-    chatAttachments.value = [...chatAttachments.value, ...uploaded];
-    ui.message.success(uploaded.length === 1 ? '资料已上传，将随下一条消息使用' : `已上传 ${uploaded.length} 个资料文件`);
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
+      const error = attachmentUploadError(file);
+      if (error) { ui.message.error(`${file.name}：${error}`); continue; }
+      chatUploadStatus.value = `正在上传并解析 ${index + 1}/${files.length}：${file.name}`;
+      chatUploadProgress.value = Math.round(index / files.length * 100);
+      const { data } = await uploadSessionAttachment(sessionId, file);
+      if (data.status === 'FAILED') ui.message.error(data.errorMessage || '附件解析失败');
+    }
   } catch (error: unknown) {
-    ui.message.error(apiErrorMessage(error, '上传资料失败'));
+    ui.message.error(apiErrorMessage(error, '附件上传失败'));
   } finally {
+    if (sessionId && selectedSessionId.value === sessionId) await reloadChatAttachments(sessionId);
     chatUploading.value = false;
     chatUploadProgress.value = 0;
     chatUploadStatus.value = '';
   }
 }
 
-async function uploadChatFile(file: File, fileIndex: number, fileCount: number): Promise<KbDocumentResponse> {
-  const uploadId = globalThis.crypto?.randomUUID?.() || `chat-upload-${Date.now()}-${fileIndex}`;
-  const totalChunks = Math.max(1, Math.ceil(file.size / CHAT_UPLOAD_CHUNK_SIZE));
-  for (let chunkNumber = 0; chunkNumber < totalChunks; chunkNumber += 1) {
-    const start = chunkNumber * CHAT_UPLOAD_CHUNK_SIZE;
-    const end = Math.min(start + CHAT_UPLOAD_CHUNK_SIZE, file.size);
-    const chunk = file.slice(start, end);
-    chatUploadStatus.value = fileCount > 1
-      ? `Uploading ${fileIndex + 1}/${fileCount}: ${file.name}`
-      : `Uploading ${file.name}`;
-    await uploadChatChunkWithRetry({
-      uploadId,
-      filename: file.name,
-      chunkNumber,
-      totalChunks,
-      file: chunk,
-    });
-    const fileProgress = ((chunkNumber + 1) / totalChunks) * 90;
-    chatUploadProgress.value = Math.round(((fileIndex + fileProgress / 100) / fileCount) * 100);
-  }
-  chatUploadStatus.value = `Processing ${file.name}`;
-  const { data } = await mergeKbUpload({
-    uploadId,
-    filename: file.name,
-    totalChunks,
-    mimeType: file.type || 'application/octet-stream',
-    isPublic: false,
-  });
-  chatUploadProgress.value = Math.round(((fileIndex + 1) / fileCount) * 100);
-  return data;
-}
-
-async function uploadChatChunkWithRetry(payload: Parameters<typeof uploadChunk>[0]) {
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      await uploadChunk(payload);
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => window.setTimeout(resolve, attempt * 300));
+async function reloadChatAttachments(sessionId: number) {
+  const version = ++attachmentLoadVersion;
+  attachmentsLoading.value = true;
+  try {
+    const { data } = await listSessionAttachments(sessionId);
+    if (selectedSessionId.value === sessionId && version === attachmentLoadVersion) {
+      chatAttachments.value = data;
+      attachmentsLoadFailed.value = false;
     }
+  } catch (error: unknown) {
+    if (selectedSessionId.value === sessionId && version === attachmentLoadVersion) {
+      attachmentsLoadFailed.value = true;
+      ui.message.error(apiErrorMessage(error, '附件加载失败'));
+    }
+  } finally {
+    if (selectedSessionId.value === sessionId && version === attachmentLoadVersion) attachmentsLoading.value = false;
   }
-  throw lastError;
 }
 
-function removeChatAttachment(documentId: number) {
-  chatAttachments.value = chatAttachments.value.filter((item) => item.documentId !== documentId);
+async function removeChatAttachment(id: number) {
+  const sessionId = selectedSessionId.value;
+  if (!sessionId || sending.value || chatUploading.value) return;
+  attachmentsLoading.value = true;
+  try {
+    await removeSessionAttachment(sessionId, id);
+    if (selectedSessionId.value === sessionId) chatAttachments.value = chatAttachments.value.filter(item => item.id !== id);
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '移除附件失败'));
+  } finally {
+    if (selectedSessionId.value === sessionId) attachmentsLoading.value = false;
+  }
+}
+
+async function promoteChatAttachment(attachment: SessionAttachment) {
+  const sessionId = selectedSessionId.value;
+  if (!sessionId || promotingAttachmentId.value !== null) return;
+  promotingAttachmentId.value = attachment.id;
+  try {
+    const { data } = await promoteSessionAttachment(sessionId, attachment.id);
+    if (selectedSessionId.value === sessionId) attachment.knowledgeDocumentId = data.documentId;
+    ui.message.success('已提交知识库，索引完成后可检索；会话提问不需要等待索引');
+  } catch (error: unknown) {
+    ui.message.error(apiErrorMessage(error, '加入知识库失败'));
+  } finally { promotingAttachmentId.value = null; }
 }
 
 async function handleSend() {
@@ -1319,12 +1322,14 @@ async function handleSend() {
   if (sending.value) {
     return;
   }
-  if (chatUploading.value) {
-    ui.message.warning('资料还在上传，请稍后再发送');
+  const attachmentError = attachmentSendError(chatAttachments.value, chatUploading.value || attachmentsLoading.value);
+  if (attachmentError || attachmentsLoadFailed.value) {
+    ui.message.warning(attachmentError || '附件加载失败，请重新选择会话');
     return;
   }
 
   let activeSendSessionId: number | null = null;
+  const submittedDraft = draft.value;
   try {
     sending.value = true;
     let sessionId = selectedSessionId.value;
@@ -1350,7 +1355,6 @@ async function handleSend() {
     const content = buildContentWithChatAttachments(rawContent, attachmentsForSend);
     const displayContent = buildDisplayContentWithChatAttachments(rawContent, attachmentsForSend);
     draft.value = '';
-    chatAttachments.value = [];
     appendSessionMessage(sessionId, {
       localId: 'user-' + Date.now(),
       role: 'user',
@@ -1397,6 +1401,7 @@ async function handleSend() {
     if (activeSendSessionId) {
       await reloadCurrentMessages(activeSendSessionId).catch(() => undefined);
     }
+    if (!draft.value && selectedSessionId.value === activeSendSessionId) draft.value = submittedDraft;
     ui.message.error(apiErrorMessage(error, '发送失败'));
     sending.value = false;
   }
@@ -1414,7 +1419,9 @@ function isPlanArtifactRequest(content: string) {
 }
 
 function buildContentWithChatAttachments(content: string, attachments: ChatUploadAttachment[]) {
-  return chatAttachmentContent(content, attachments);
+  return chatAttachmentContent(content, attachments.filter(item => item.knowledgeDocumentId != null).map(item => ({
+    documentId: item.knowledgeDocumentId!, filename: item.filename, status: item.status,
+  })), 'session');
 }
 
 function buildDisplayContentWithChatAttachments(content: string, attachments: ChatUploadAttachment[]) {
@@ -1425,7 +1432,7 @@ function buildDisplayContentWithChatAttachments(content: string, attachments: Ch
     content,
     '',
     '已附加资料：',
-    ...attachments.map((item) => `- ${item.filename} (#${item.documentId})`),
+    ...attachments.map((item) => `- ${item.filename}（会话附件 #${item.id}）`),
   ].join('\n');
 }
 
@@ -2080,6 +2087,10 @@ async function afterSendFinished(sessionId: number) {
 
 function applySelectedSession(sessionId: number | null) {
   selectedSessionId.value = sessionId;
+  chatAttachments.value = [];
+  attachmentsLoadFailed.value = false;
+  attachmentsLoading.value = false;
+  if (sessionId != null) void reloadChatAttachments(sessionId);
   if (sessionId == null) {
     clearStoredSessionId();
     replaceRouteSessionId(null);
@@ -2092,6 +2103,9 @@ function applySelectedSession(sessionId: number | null) {
 
 function clearSessionSelection() {
   selectedSessionId.value = null;
+  chatAttachments.value = [];
+  attachmentsLoading.value = false;
+  attachmentsLoadFailed.value = false;
   messages.value = [];
   currentPlan.value = null;
   clearStoredSessionId();
@@ -2741,3 +2755,35 @@ function goToNavigation(navigationUrl: string) {
   void router.push(navigationUrl);
 }
 </script>
+
+<style scoped>
+.session-attachment-card {
+  display: flex;
+  flex: 0 0 240px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--pa-line, #dce1e8);
+  border-radius: 8px;
+  color: var(--pa-text-secondary, #475569);
+  background: var(--pa-surface-muted, #f8fafc);
+  font-size: 12px;
+}
+.session-attachment-card > span,
+.session-attachment-card > small {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+.session-attachment-card > button {
+  padding: 4px 8px;
+  border: 1px solid var(--pa-line, #dce1e8);
+  border-radius: 4px;
+  color: inherit;
+  background: var(--pa-surface, #fff);
+  cursor: pointer;
+}
+.session-attachment-card > button:disabled { opacity: 0.55; cursor: default; }
+.session-attachment-error { color: #b42318; }
+.session-attachment-help { order: 3; margin: 4px 12px; color: var(--pa-text-muted, #64748b); font-size: 11px; }
+</style>
