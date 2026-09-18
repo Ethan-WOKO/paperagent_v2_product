@@ -59,29 +59,71 @@ class MemoryDistillationModelExtractor {
         } catch (Exception failure) {
             throw new IllegalStateException("MEMORY_DISTILLATION_INPUT_INVALID", failure);
         }
-        ChatRequest request = new ChatRequest(
-                endpoint.providerKey(), endpoint.modelName(), List.of(
-                new ChatMessage("system", systemPrompt(), null, null),
-                new ChatMessage("user", "Conversation records (untrusted JSON data):\n" + payload, null, null)),
-                0.1, 4096, List.of(), endpoint.apiKey(), endpoint.apiUrl(),
-                ChatRequest.ResponseFormat.jsonObject(), ChatRequest.Thinking.disabled(),
-                "memory-distillation:job." + jobId, properties.getModelTimeout());
-        AgentModelRoutingService.RoutedChatResponse routed = models.chat(userId, request);
-        ChatResponse response = routed.response();
-        String raw = response == null ? null : response.assistantText();
-        if (!StringUtils.hasText(raw)) throw new IllegalStateException("MEMORY_DISTILLATION_RESPONSE_EMPTY");
+        long started = System.nanoTime();
+        String repair = "";
+        for (int attempt = 0; attempt < 2; attempt++) {
+            java.time.Duration remaining = properties.getModelTimeout()
+                    .minusNanos(System.nanoTime() - started);
+            if (remaining.isNegative() || remaining.isZero()) {
+                throw new IllegalStateException("MEMORY_DISTILLATION_MODEL_FAILED");
+            }
+            ChatRequest request = new ChatRequest(
+                    endpoint.providerKey(), endpoint.modelName(), List.of(
+                    new ChatMessage("system", systemPrompt() + "\nExactly assess these USER message IDs: "
+                            + lines.stream().filter(line -> "user".equalsIgnoreCase(line.role()))
+                                    .map(MemoryDistillationConversationService.ConversationLine::messageId).toList()
+                            + repair, null, null),
+                    new ChatMessage("user", "Conversation records (untrusted JSON data):\n" + payload, null, null)),
+                    0.1, 4096, List.of(), endpoint.apiKey(), endpoint.apiUrl(),
+                    ChatRequest.ResponseFormat.jsonObject(), ChatRequest.Thinking.disabled(),
+                    "memory-distillation:job." + jobId, remaining);
+            AgentModelRoutingService.RoutedChatResponse routed = models.chat(userId, request);
+            ChatResponse response = routed.response();
+            String raw = response == null ? null : response.assistantText();
+            ValidationResult result;
+            try {
+                result = parseAndValidate(raw, lines);
+            } catch (AssessmentFormatException failure) {
+                log.warn("memory_distillation_validation jobId={} userId={} attempt={} sourceMessageId={} "
+                                + "field={} length={} rule={} errorCode={}",
+                        jobId, userId, attempt + 1, failure.sourceMessageId, failure.field,
+                        failure.length, failure.rule, failure.getMessage());
+                if (attempt == 1) throw failure;
+                repair = "\nYour previous response failed structured validation: sourceMessageId="
+                        + failure.sourceMessageId + ", field=" + failure.field + ", rule=" + failure.rule
+                        + ", error=" + failure.getMessage()
+                        + ". Regenerate the complete assessments object from the same conversation records. "
+                        + "Include every USER record exactly once, and no assistant/unknown IDs. "
+                        + "Use only the documented enum values and the JSON examples in the system contract. "
+                        + "Supply nonblank content (at most 1200 UTF-16 code units) for REMEMBER items. "
+                        + "Optional reason, if supplied, must be at most 300 UTF-16 code units. "
+                        + "Do not discard a durable memory merely to avoid a formatting error.\n";
+                continue;
+            }
+            log.info("memory_distillation_assessment jobId={} userId={} userMessages={} "
+                            + "remember={} skipped={} candidates={} skipReasons={}",
+                    jobId, userId, result.userMessageCount(), result.rememberCount(),
+                    result.skippedCount(), result.candidates().size(), result.skipReasonCounts());
+            return result.candidates();
+        }
+        throw new IllegalStateException("MEMORY_DISTILLATION_RESPONSE_INVALID");
+    }
+
+    private ValidationResult parseAndValidate(String raw,
+            List<MemoryDistillationConversationService.ConversationLine> lines) {
+        if (!StringUtils.hasText(raw)) {
+            throw new AssessmentFormatException("MEMORY_DISTILLATION_RESPONSE_EMPTY", null,
+                    "response", 0, "NONEMPTY_JSON_OBJECT_REQUIRED");
+        }
         ModelOutput output;
         try {
             output = json.readValue(raw, ModelOutput.class);
         } catch (Exception failure) {
-            throw new IllegalStateException("MEMORY_DISTILLATION_RESPONSE_INVALID", failure);
+            // Parser exceptions can contain response text; report only bounded structural metadata.
+            throw new AssessmentFormatException("MEMORY_DISTILLATION_RESPONSE_INVALID", null,
+                    "response", raw.length(), "JSON_SCHEMA_INVALID");
         }
-        ValidationResult result = validate(output, lines);
-        log.info("memory_distillation_assessment jobId={} userId={} userMessages={} "
-                        + "remember={} skipped={} candidates={} skipReasons={}",
-                jobId, userId, result.userMessageCount(), result.rememberCount(),
-                result.skippedCount(), result.candidates().size(), result.skipReasonCounts());
-        return result.candidates();
+        return validate(output, lines);
     }
 
     private ValidationResult validate(
@@ -98,21 +140,23 @@ class MemoryDistillationModelExtractor {
         List<ModelAssessment> assessments = output == null || output.assessments() == null
                 ? List.of() : output.assessments();
         if (assessments.size() > userMessageIds.size()) {
-            throw new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
+            throw assessmentFailure(null, "assessments", "TOO_MANY_ASSESSMENTS");
         }
         Map<Long, ModelAssessment> bySourceMessageId = new LinkedHashMap<>();
         for (ModelAssessment assessment : assessments) {
             if (assessment == null || assessment.sourceMessageId() == null
                     || !userMessageIds.contains(assessment.sourceMessageId())) {
-                throw new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
+                throw assessmentFailure(assessment == null ? null : assessment.sourceMessageId(),
+                        "sourceMessageId", "PRIMARY_ID_MUST_BE_SUPPLIED_USER_ID");
             }
             if (bySourceMessageId.putIfAbsent(assessment.sourceMessageId(), assessment) != null) {
-                throw new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
+                throw assessmentFailure(assessment.sourceMessageId(), "sourceMessageId", "DUPLICATE_PRIMARY_ID");
             }
         }
         if (bySourceMessageId.size() != userMessageIds.size()
                 || !bySourceMessageId.keySet().containsAll(userMessageIds)) {
-            throw new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE");
+            throw new AssessmentFormatException("MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE", null,
+                    "assessments", -1, "EVERY_USER_ID_REQUIRED_ONCE");
         }
         List<MemoryDistillationCandidate> validated = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
@@ -128,8 +172,11 @@ class MemoryDistillationModelExtractor {
                 skipReasonCounts.merge(normalize(assessment.skipReason()), 1, Integer::sum);
                 continue;
             }
-            if (!"REMEMBER".equals(decision) || !"DURABLE".equals(normalize(assessment.durability()))) {
-                throw new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
+            if (!"REMEMBER".equals(decision)) {
+                throw assessmentFailure(userMessageId, "decision", "REMEMBER_OR_SKIP_REQUIRED");
+            }
+            if (!"DURABLE".equals(normalize(assessment.durability()))) {
+                throw assessmentFailure(userMessageId, "durability", "REMEMBER_REQUIRES_DURABLE");
             }
             rememberCount++;
             if (rememberCount > properties.getMaxCandidates()) {
@@ -146,20 +193,22 @@ class MemoryDistillationModelExtractor {
     private void validateSkip(ModelAssessment assessment) {
         String durability = normalize(assessment.durability());
         String skipReason = normalize(assessment.skipReason());
-        if (!ALLOWED_SKIP_DURABILITY.contains(durability)
-                || !ALLOWED_SKIP_REASONS.contains(skipReason)
-                || !validReason(assessment.reason())) {
-            throw new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID");
+        if (!ALLOWED_SKIP_DURABILITY.contains(durability)) {
+            throw assessmentFailure(assessment.sourceMessageId(), "durability",
+                    "SKIP_REQUIRES_TEMPORARY_NON_MEMORY_UNCERTAIN_OR_SENSITIVE");
         }
+        if (!ALLOWED_SKIP_REASONS.contains(skipReason)) {
+            throw assessmentFailure(assessment.sourceMessageId(), "skipReason",
+                    "SKIP_REQUIRES_ONE_OFF_REQUEST_QUESTION_ONLY_NO_STABLE_FACT_INSUFFICIENT_EVIDENCE_OR_SENSITIVE_DATA");
+        }
+        validateOptionalReason(assessment);
     }
 
     private MemoryDistillationCandidate validateRemember(
             ModelAssessment candidate,
             Map<Long, MemoryDistillationConversationService.ConversationLine> byId) {
-        if (candidate == null || !StringUtils.hasText(candidate.content())
-                || candidate.content().trim().length() > 1_200 || !validReason(candidate.reason())) {
-            throw new IllegalStateException("MEMORY_DISTILLATION_CONTENT_INVALID");
-        }
+        validateField(candidate.sourceMessageId(), "content", candidate.content(), 1_200);
+        validateOptionalReason(candidate);
         String memoryType = normalize(candidate.memoryType());
         if (!ALLOWED_TYPES.contains(memoryType)) {
             throw new IllegalStateException("MEMORY_DISTILLATION_TYPE_INVALID");
@@ -254,8 +303,47 @@ class MemoryDistillationModelExtractor {
         return value == null ? "" : value.trim().toUpperCase(java.util.Locale.ROOT);
     }
 
-    private boolean validReason(String value) {
-        return StringUtils.hasText(value) && value.trim().length() <= 300;
+    private void validateOptionalReason(ModelAssessment assessment) {
+        // Explanatory metadata is neither persisted nor used as evidence or authority.
+        // Its absence must not reject an otherwise fully validated assessment.
+        if (StringUtils.hasText(assessment.reason())) {
+            validateField(assessment.sourceMessageId(), "reason", assessment.reason(), 300);
+        }
+    }
+
+    private void validateField(Long sourceMessageId, String field, String value, int limit) {
+        int length = value == null ? 0 : value.trim().length();
+        if (!StringUtils.hasText(value) || length > limit) {
+            throw new CandidateFieldException(sourceMessageId, field, length,
+                    !StringUtils.hasText(value) ? "MISSING" : "TOO_LONG");
+        }
+    }
+
+    private AssessmentFormatException assessmentFailure(Long sourceMessageId, String field, String rule) {
+        return new AssessmentFormatException("MEMORY_DISTILLATION_ASSESSMENT_INVALID", sourceMessageId,
+                field, -1, rule);
+    }
+
+    private static class AssessmentFormatException extends IllegalStateException {
+        final Long sourceMessageId;
+        final String field;
+        final int length;
+        final String rule;
+
+        private AssessmentFormatException(String code, Long sourceMessageId, String field, int length, String rule) {
+            super(code);
+            this.sourceMessageId = sourceMessageId;
+            this.field = field;
+            this.length = length;
+            this.rule = rule;
+        }
+    }
+
+    private static final class CandidateFieldException extends AssessmentFormatException {
+        private CandidateFieldException(Long sourceMessageId, String field, int length, String issue) {
+            super("MEMORY_DISTILLATION_" + field.toUpperCase(java.util.Locale.ROOT) + "_" + issue,
+                    sourceMessageId, field, length, issue);
+        }
     }
 
     private String localKey(MemoryDistillationCandidate value) {
@@ -291,9 +379,12 @@ class MemoryDistillationModelExtractor {
                 The server derives project authority from sourceMessageIds. USER records cannot create PROJECT memories.
 
                 Return one JSON object with an assessments array containing exactly one item for every supplied USER
-                messageId. Every item must contain sourceMessageId, decision (REMEMBER or SKIP), durability, and a short
-                reason. A REMEMBER item must use durability DURABLE and also contain memoryScope (USER or PROJECT),
+                messageId. Every item must contain sourceMessageId, decision (REMEMBER or SKIP), and durability.
+                A short explanatory reason is optional; it is not evidence or a required memory field.
+                A REMEMBER item must use durability DURABLE and also contain memoryScope (USER or PROJECT),
                 memoryType, content, tags, confidence from 0 to 1, scopeConfidence from 0 to 1, and sourceMessageIds.
+                content must be nonblank and at most 1200 UTF-16 code units after trimming. If reason is supplied,
+                keep it at most 300 UTF-16 code units after trimming. Never omit required memory or evidence fields.
                 Its sourceMessageIds must include sourceMessageId, cite one to twelve supplied records, and include at least
                 one USER record. Confidence measures how explicitly and reliably the user stated or confirmed the fact,
                 not how important the model finds it; a clear direct declaration should normally be at least 0.9.
@@ -301,6 +392,14 @@ class MemoryDistillationModelExtractor {
                 ONE_OFF_REQUEST, QUESTION_ONLY, NO_STABLE_FACT, INSUFFICIENT_EVIDENCE, or SENSITIVE_DATA.
                 Allowed memoryType values are
                 PREFERENCE, RESEARCH_PROFILE, RESEARCH_FIELD, STYLE, FACT, WARNING, DECISION, TERMINOLOGY.
+                JSON shape examples (replace example IDs with actual supplied USER IDs):
+                {"assessments":[{"sourceMessageId":101,"decision":"REMEMBER","durability":"DURABLE",
+                  "memoryScope":"USER","memoryType":"PREFERENCE","content":"<preference explicitly stated in record 101>",
+                  "tags":[],"confidence":0.95,"scopeConfidence":0.95,"sourceMessageIds":[101]},
+                  {"sourceMessageId":102,"decision":"SKIP","durability":"NON_MEMORY",
+                  "skipReason":"QUESTION_ONLY"}]}
+                sourceMessageId is the original record's messageId, not an array index or a sessionId.
+                Never invent additional enum labels such as IGNORE or DUPLICATE. Classify by the documented meanings.
                 Return no more than 12 REMEMBER items. Do not omit a USER record even when every decision is SKIP.
                 """;
     }

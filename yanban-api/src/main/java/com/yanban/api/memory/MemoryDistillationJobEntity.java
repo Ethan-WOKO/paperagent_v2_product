@@ -44,6 +44,15 @@ class MemoryDistillationJobEntity {
     @Column(name = "message_count", nullable = false)
     private int messageCount;
 
+    @Column(name = "processed_through_message_id", nullable = false)
+    private long processedThroughMessageId;
+
+    @Column(name = "processed_message_count", nullable = false)
+    private int processedMessageCount;
+
+    @Column(name = "batch_attempt_count", nullable = false)
+    private int batchAttemptCount;
+
     @Column(name = "candidate_count", nullable = false)
     private int candidateCount;
 
@@ -91,6 +100,7 @@ class MemoryDistillationJobEntity {
         this.fromMessageId = fromMessageId;
         this.throughMessageId = throughMessageId;
         this.messageCount = messageCount;
+        this.processedThroughMessageId = fromMessageId;
         this.status = hasWork ? STATUS_PENDING : STATUS_NO_WORK;
         this.candidateCount = 0;
         this.createdMemoryCount = 0;
@@ -105,19 +115,32 @@ class MemoryDistillationJobEntity {
         }
         status = STATUS_RUNNING;
         attemptCount++;
+        batchAttemptCount++;
         startedAt = startedAt == null ? now : startedAt;
         claimedUntil = now.plus(lease);
         errorCode = null;
         errorMessage = null;
     }
 
-    void succeed(int candidateCount, int createdMemoryCount, Instant now) {
+    boolean owns(MemoryDistillationTransactions.Work work) {
+        return STATUS_RUNNING.equals(status) && userId == work.userId()
+                && attemptCount == work.attempt() && processedThroughMessageId == work.fromMessageId()
+                && work.throughMessageId() > work.fromMessageId() && work.throughMessageId() <= throughMessageId;
+    }
+
+    void completeBatch(MemoryDistillationTransactions.Work work, int candidates, int created, Instant now) {
         requireRunning();
-        this.status = STATUS_SUCCEEDED;
-        this.candidateCount = nonNegative(candidateCount);
-        this.createdMemoryCount = nonNegative(createdMemoryCount);
-        this.claimedUntil = null;
-        this.finishedAt = now;
+        processedThroughMessageId = work.throughMessageId();
+        processedMessageCount += nonNegative(work.messageCount());
+        candidateCount += nonNegative(candidates);
+        createdMemoryCount += nonNegative(created);
+        batchAttemptCount = 0;
+        claimedUntil = null;
+        boolean complete = processedThroughMessageId == throughMessageId;
+        // Messages deleted after the snapshot are resolved by scanning past their IDs as well.
+        if (complete) processedMessageCount = messageCount;
+        status = complete ? STATUS_SUCCEEDED : STATUS_PENDING;
+        finishedAt = complete ? now : null;
     }
 
     void fail(String code, String message, Instant now) {
@@ -150,6 +173,9 @@ class MemoryDistillationJobEntity {
     long fromMessageId() { return fromMessageId; }
     long throughMessageId() { return throughMessageId; }
     int messageCount() { return messageCount; }
+    long processedThroughMessageId() { return processedThroughMessageId; }
+    int processedMessageCount() { return processedMessageCount; }
+    int batchAttemptCount() { return batchAttemptCount; }
     int candidateCount() { return candidateCount; }
     int createdMemoryCount() { return createdMemoryCount; }
     int attemptCount() { return attemptCount; }

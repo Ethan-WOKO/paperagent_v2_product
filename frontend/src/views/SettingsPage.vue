@@ -306,6 +306,12 @@
           <NFormItem label="模型 ID">
             <NInput v-model:value="modelForm.modelName" placeholder="例如：deepseek-v4-flash" />
           </NFormItem>
+          <NFormItem label="支持图片输入">
+            <NSpace vertical>
+              <NSwitch v-model:value="modelForm.supportsVision" />
+              <small>仅对支持图片的模型及接口启用。普通连接测试只验证文本调用。</small>
+            </NSpace>
+          </NFormItem>
           <NFormItem :label="editingModelId ? 'API Key（留空保持不变）' : 'API Key'">
             <NInput
               v-model:value="modelForm.apiKey"
@@ -413,7 +419,7 @@ const form = reactive({
 const customModels = ref<UserModelResponse[]>([]);
 const modelModalVisible = ref(false);
 const editingModelId = ref<number | null>(null);
-const modelForm = reactive({ label: '', apiUrl: '', apiKey: '', modelName: '' });
+const modelForm = reactive({ label: '', apiUrl: '', apiKey: '', modelName: '', supportsVision: false });
 const testingModelId = ref<number | null>(null);
 const refreshingProvider = ref<string | null>(null);
 
@@ -559,6 +565,7 @@ function openCreateModelModal() {
   modelForm.apiUrl = '';
   modelForm.apiKey = '';
   modelForm.modelName = '';
+  modelForm.supportsVision = false;
   modelModalVisible.value = true;
 }
 
@@ -571,6 +578,7 @@ function openEditModelModal(model: UserModelResponse) {
   modelForm.apiUrl = model.apiUrl || '';
   modelForm.apiKey = '';
   modelForm.modelName = model.modelName;
+  modelForm.supportsVision = model.supportsVision === true;
   modelModalVisible.value = true;
 }
 
@@ -588,6 +596,7 @@ async function handleSaveModel() {
       apiUrl: modelForm.apiUrl,
       apiKey: modelForm.apiKey || undefined,
       modelName: modelForm.modelName,
+      supportsVision: modelForm.supportsVision,
     };
     if (editingModelId.value) {
       await updateModel(editingModelId.value, payload);

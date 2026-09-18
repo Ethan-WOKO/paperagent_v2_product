@@ -18,22 +18,33 @@ class MemoryDistillationConversationService {
     private static final Set<String> ROLES = Set.of("user", "assistant");
     private static final int MAX_MESSAGE_CHARACTERS = 4_000;
 
+    private final MemoryDistillationSourceRepository source;
     private final AgentMessageRepository messages;
     private final AgentSessionRepository sessions;
     private final MemoryDistillationProperties properties;
 
-    MemoryDistillationConversationService(AgentMessageRepository messages,
+    MemoryDistillationConversationService(MemoryDistillationSourceRepository source,
+                                          AgentMessageRepository messages,
                                           AgentSessionRepository sessions,
                                           MemoryDistillationProperties properties) {
+        this.source = source;
         this.messages = messages;
         this.sessions = sessions;
         this.properties = properties;
     }
 
     FrozenWindow freeze(long userId, long afterMessageId) {
-        List<AgentMessage> candidates = messages.findDistillationWindow(
-                userId, afterMessageId, ROLES, PageRequest.of(0, properties.getMessageBatchSize()));
-        if (candidates.isEmpty()) return new FrozenWindow(afterMessageId, afterMessageId, 0);
+        Long latest = source.latestId(userId);
+        long through = latest == null ? afterMessageId : Math.max(afterMessageId, latest);
+        return new FrozenWindow(afterMessageId, through,
+                Math.toIntExact(source.countWindow(userId, afterMessageId, through)));
+    }
+
+    FrozenWindow freezeBatch(long userId, long afterMessageId, long targetMessageId) {
+        List<AgentMessage> candidates = source.window(
+                userId, afterMessageId, targetMessageId, PageRequest.of(0, properties.getMessageBatchSize()));
+        // Deleted messages may leave an empty tail; reaching the frozen cut still completes the job.
+        if (candidates.isEmpty()) return new FrozenWindow(afterMessageId, targetMessageId, 0);
         int remaining = properties.getMaxInputCharacters();
         int count = 0;
         int userCount = 0;

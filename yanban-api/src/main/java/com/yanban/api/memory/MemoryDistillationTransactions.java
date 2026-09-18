@@ -72,24 +72,26 @@ class MemoryDistillationTransactions {
         List<MemoryDistillationJobEntity> values = jobs.findClaimable(now, PageRequest.of(0, 1));
         if (values.isEmpty()) return null;
         MemoryDistillationJobEntity job = values.get(0);
-        if (job.attemptCount() >= properties.getMaxAttempts()) {
+        if (job.batchAttemptCount() >= properties.getMaxAttempts()) {
             job.fail("MEMORY_DISTILLATION_ATTEMPTS_EXHAUSTED", "多次处理失败，请手动重新发起", now);
             jobs.saveAndFlush(job);
             return null;
         }
+        var batch = conversations.freezeBatch(job.userId(), job.processedThroughMessageId(), job.throughMessageId());
         job.claim(now, properties.getClaimLease());
         jobs.saveAndFlush(job);
-        return new Work(job.id(), job.userId(), job.fromMessageId(), job.throughMessageId());
+        return new Work(job.id(), job.userId(), batch.fromMessageId(), batch.throughMessageId(),
+                batch.messageCount(), job.attemptCount());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    void succeed(Work work, List<MemoryDistillationCandidate> candidates) {
+    MemoryDistillationJobResponse succeed(Work work, List<MemoryDistillationCandidate> candidates) {
         MemoryDistillationJobEntity job = jobs.findLocked(work.jobId()).orElseThrow();
-        if (!MemoryDistillationJobEntity.STATUS_RUNNING.equals(job.status())) return;
+        if (!job.owns(work)) return null;
         if (users.findByIdAndDeletedAtIsNull(work.userId()).isEmpty()) {
             job.fail("MEMORY_DISTILLATION_ACCOUNT_DELETED", "账号已删除，沉淀任务已停止", Instant.now());
             jobs.saveAndFlush(job);
-            return;
+            return MemoryDistillationJobResponse.from(job);
         }
         MemoryDistillationSettingEntity setting = lockedSetting(work.userId());
         int created = 0;
@@ -97,15 +99,18 @@ class MemoryDistillationTransactions {
             if (memories.createDistilledMemory(work.userId(), candidate).created()) created++;
         }
         Instant now = Instant.now();
-        setting.advance(work.fromMessageId(), work.throughMessageId(), now, properties.getInterval());
-        job.succeed(candidates.size(), created, now);
+        setting.advance(work.fromMessageId(), work.throughMessageId(), now, properties.getInterval(),
+                work.throughMessageId() == job.throughMessageId());
+        job.completeBatch(work, candidates.size(), created, now);
         settings.save(setting);
         jobs.saveAndFlush(job);
+        return MemoryDistillationJobResponse.from(job);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     void fail(Work work, String code, String message) {
         jobs.findLocked(work.jobId()).ifPresent(job -> {
+            if (!job.owns(work)) return;
             job.fail(code, message, Instant.now());
             jobs.saveAndFlush(job);
         });
@@ -116,5 +121,6 @@ class MemoryDistillationTransactions {
                 .orElseThrow(() -> new IllegalStateException("MEMORY_DISTILLATION_SETTINGS_MISSING"));
     }
 
-    record Work(long jobId, long userId, long fromMessageId, long throughMessageId) { }
+    record Work(long jobId, long userId, long fromMessageId, long throughMessageId,
+                int messageCount, int attempt) { }
 }

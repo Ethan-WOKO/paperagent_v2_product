@@ -9,6 +9,8 @@ public record MemoryDistillationJobResponse(
         long fromMessageId,
         long throughMessageId,
         int messageCount,
+        int processedMessageCount,
+        long processedThroughMessageId,
         int candidateCount,
         int createdMemoryCount,
         int attemptCount,
@@ -22,7 +24,7 @@ public record MemoryDistillationJobResponse(
     static MemoryDistillationJobResponse from(MemoryDistillationJobEntity job) {
         return new MemoryDistillationJobResponse(
                 job.id(), job.triggerType(), job.status(), job.fromMessageId(), job.throughMessageId(),
-                job.messageCount(), job.candidateCount(), job.createdMemoryCount(), job.attemptCount(),
+                job.messageCount(), job.processedMessageCount(), job.processedThroughMessageId(), job.candidateCount(), job.createdMemoryCount(), job.attemptCount(),
                 job.errorCode(), job.errorMessage(), job.startedAt(), job.finishedAt(),
                 job.createdAt(), job.updatedAt());
     }

@@ -25,6 +25,8 @@ describe('long-term memory localization', () => {
     expect(t('memory.confirmation.unconfirmed')).toBe('待确认');
     expect(t('memory.action.correct')).toBe('更正');
     expect(t('memory.validation.content')).toBe('请填写记忆内容。');
+    expect(t('memory.distillation.progressCount', { processed: 24, total: 92 }))
+      .toBe('已处理 24 / 92 条消息');
     expect(t('memory.error.stale', { detail: 'PROJECT memory is stale' }))
       .toContain('请刷新列表');
 
@@ -33,6 +35,8 @@ describe('long-term memory localization', () => {
     expect(t('memory.confirmation.unconfirmed')).toBe('Unconfirmed');
     expect(t('memory.action.correct')).toBe('Correct');
     expect(t('memory.validation.content')).toBe('Memory content is required.');
+    expect(t('memory.distillation.progressCount', { processed: 24, total: 92 }))
+      .toBe('24 / 92 messages processed');
     expect(t('memory.error.stale', { detail: 'PROJECT memory is stale' }))
       .toContain('Refresh the list');
   });

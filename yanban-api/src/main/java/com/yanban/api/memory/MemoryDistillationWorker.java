@@ -66,9 +66,15 @@ class MemoryDistillationWorker {
                     work.userId(), work.fromMessageId(), work.throughMessageId());
             List<MemoryDistillationCandidate> candidates = extractor.extract(
                     work.userId(), work.jobId(), lines);
-            transactions.succeed(work, candidates);
-            log.info("memory_distillation jobId={} userId={} outcome=succeeded candidates={}",
-                    work.jobId(), work.userId(), candidates.size());
+            MemoryDistillationJobResponse progress = transactions.succeed(work, candidates);
+            if (progress == null) {
+                log.info("memory_distillation jobId={} outcome=stale_batch_ignored", work.jobId());
+                return;
+            }
+            log.info("memory_distillation jobId={} userId={} outcome={} fromMessageId={} throughMessageId={} "
+                            + "processedMessages={} totalMessages={} createdMemories={}",
+                    work.jobId(), work.userId(), progress.status(), work.fromMessageId(), work.throughMessageId(),
+                    progress.processedMessageCount(), progress.messageCount(), progress.createdMemoryCount());
         } catch (RuntimeException failure) {
             String code = safeCode(failure);
             transactions.fail(work, code, userMessage(code));
@@ -89,14 +95,20 @@ class MemoryDistillationWorker {
         return switch (code) {
             case "MEMORY_DISTILLATION_RESPONSE_EMPTY", "MEMORY_DISTILLATION_RESPONSE_INVALID" ->
                     "模型没有返回有效的记忆候选，请检查模型配置后重试";
-            case "MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE",
-                    "MEMORY_DISTILLATION_ASSESSMENT_INVALID" ->
+            case "MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE" ->
                     "模型没有完成所有用户消息的记忆判断，请重试";
+            case "MEMORY_DISTILLATION_ASSESSMENT_INVALID" ->
+                    "模型返回的记忆判断格式不符合要求，自动修复未成功，请重试";
             case "MEMORY_DISTILLATION_CONFIDENCE_TOO_LOW" ->
                     "模型识别到长期记忆，但判断置信度不足，请重试";
             case "MEMORY_DISTILLATION_SCOPE_UNRESOLVED" ->
                     "模型识别到长期记忆，但无法确定其全局或项目作用域，请重试";
-            case "MEMORY_DISTILLATION_TOO_MANY_CANDIDATES", "MEMORY_DISTILLATION_CONTENT_INVALID",
+            case "MEMORY_DISTILLATION_CONTENT_INVALID", "MEMORY_DISTILLATION_CONTENT_MISSING",
+                    "MEMORY_DISTILLATION_REASON_MISSING" ->
+                    "模型返回的记忆内容或说明不完整，自动修复未成功，请重试";
+            case "MEMORY_DISTILLATION_CONTENT_TOO_LONG", "MEMORY_DISTILLATION_REASON_TOO_LONG" ->
+                    "模型返回的记忆内容或说明过长，自动修复未成功，请重试";
+            case "MEMORY_DISTILLATION_TOO_MANY_CANDIDATES",
                     "MEMORY_DISTILLATION_TYPE_INVALID", "MEMORY_DISTILLATION_CONFIDENCE_INVALID",
                     "MEMORY_DISTILLATION_SCOPE_CONFIDENCE_INVALID",
                     "MEMORY_DISTILLATION_SOURCE_INVALID", "MEMORY_DISTILLATION_USER_EVIDENCE_REQUIRED",

@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.task.TaskExecutor;
@@ -22,6 +24,36 @@ class MemoryDistillationWorkerTest {
 
     @Mock
     private MemoryDistillationModelExtractor extractor;
+
+    @Test
+    void invalidAssessmentReportsFormatFailureWithoutAdvancingTheJob() {
+        var work = work();
+        when(transactions.claim()).thenReturn(work);
+        when(conversations.load(42L, 0L, 5L)).thenReturn(List.of());
+        when(extractor.extract(42L, 9L, List.of()))
+                .thenThrow(new IllegalStateException("MEMORY_DISTILLATION_ASSESSMENT_INVALID"));
+        worker(Runnable::run).scan();
+        verify(transactions).fail(work, "MEMORY_DISTILLATION_ASSESSMENT_INVALID",
+                "模型返回的记忆判断格式不符合要求，自动修复未成功，请重试");
+        verify(transactions, never()).succeed(org.mockito.ArgumentMatchers.any(), anyList());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CONTENT_MISSING", "REASON_MISSING", "CONTENT_TOO_LONG", "REASON_TOO_LONG"})
+    void invalidFieldsReportFormattingFailureWithoutCommittingCandidates(String suffix) {
+        MemoryDistillationTransactions.Work work = work();
+        when(transactions.claim()).thenReturn(work);
+        when(conversations.load(42L, 0L, 5L)).thenReturn(List.of());
+        String code = "MEMORY_DISTILLATION_" + suffix;
+        when(extractor.extract(42L, 9L, List.of())).thenThrow(new IllegalStateException(code));
+
+        worker(Runnable::run).scan();
+
+        verify(transactions).fail(work, code, suffix.endsWith("MISSING")
+                ? "模型返回的记忆内容或说明不完整，自动修复未成功，请重试"
+                : "模型返回的记忆内容或说明过长，自动修复未成功，请重试");
+        verify(transactions, never()).succeed(org.mockito.ArgumentMatchers.any(), anyList());
+    }
 
     @Test
     void idleScanDoesNotInvokeConversationOrModelServices() {
@@ -148,7 +180,7 @@ class MemoryDistillationWorkerTest {
     }
 
     private MemoryDistillationTransactions.Work work() {
-        return new MemoryDistillationTransactions.Work(9L, 42L, 0L, 5L);
+        return new MemoryDistillationTransactions.Work(9L, 42L, 0L, 5L, 2, 1);
     }
 
     private MemoryDistillationCandidate candidate() {

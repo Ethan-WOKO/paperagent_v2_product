@@ -31,6 +31,8 @@ public class AgentModelRoutingService {
 
     private final ChatModelProvider models;
     private final UserSettingsService settings;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.yanban.api.attachment.AttachmentVisionPolicy attachmentVision;
 
     public AgentModelRoutingService(
             @Qualifier("chatModelProvider") ChatModelProvider models,
@@ -40,7 +42,7 @@ public class AgentModelRoutingService {
     }
 
     public RoutedChatResponse chat(Long userId, ChatRequest primaryRequest) {
-        return chatRoutes(primaryRequest, routes(userId, primaryRequest));
+        return chatRoutes(userId, primaryRequest, routes(userId, primaryRequest));
     }
 
     /** Uses an already-frozen ordered route list, for persistent Engine tasks. */
@@ -72,17 +74,18 @@ public class AgentModelRoutingService {
                 resolved.add(unavailableEndpoint(route));
             }
         }
-        return chatRoutes(requestTemplate, List.copyOf(resolved));
+        return chatRoutes(userId, requestTemplate, List.copyOf(resolved));
     }
 
     private RoutedChatResponse chatRoutes(
+            Long userId,
             ChatRequest primaryRequest,
             List<UserSettingsService.ModelEndpoint> routes) {
         RuntimeException lastFailure = null;
         for (int index = 0; index < routes.size(); index++) {
             UserSettingsService.ModelEndpoint endpoint = routes.get(index);
             try {
-                ChatResponse response = models.chat(forEndpoint(primaryRequest, endpoint));
+                ChatResponse response = models.chat(forEndpoint(userId, primaryRequest, endpoint));
                 if (response == null || response.message() == null) {
                     throw new ModelProviderException("Model returned an invalid response");
                 }
@@ -110,17 +113,18 @@ public class AgentModelRoutingService {
 
     public Flux<ChatChunk> stream(Long userId, ChatRequest primaryRequest) {
         List<UserSettingsService.ModelEndpoint> routes = routes(userId, primaryRequest);
-        return streamAttempt(primaryRequest, routes, 0);
+        return streamAttempt(userId, primaryRequest, routes, 0);
     }
 
     private Flux<ChatChunk> streamAttempt(
+            Long userId,
             ChatRequest primaryRequest,
             List<UserSettingsService.ModelEndpoint> routes,
             int index) {
         if (index >= routes.size()) return Flux.error(new IllegalStateException("MODEL_ROUTES_EXHAUSTED"));
         UserSettingsService.ModelEndpoint endpoint = routes.get(index);
         AtomicBoolean emitted = new AtomicBoolean(false);
-        return Flux.defer(() -> models.streamChat(forEndpoint(primaryRequest, endpoint)))
+        return Flux.defer(() -> models.streamChat(forEndpoint(userId, primaryRequest, endpoint)))
                 .doOnNext(ignored -> emitted.set(true))
                 .doOnComplete(() -> log.info(
                         "agent_model_route_selected traceId={} requestedProvider={} requestedModel={} resolvedProvider={} resolvedModel={} fallbackUsed={}",
@@ -136,7 +140,7 @@ public class AgentModelRoutingService {
                             primaryRequest.traceId(), endpoint.providerKey(), endpoint.modelName(), index + 1,
                             routes.size(), failure.getClass().getSimpleName(), emitted.get());
                     if (!emitted.get() && mayTryNext(failure) && index + 1 < routes.size()) {
-                        return streamAttempt(primaryRequest, routes, index + 1);
+                        return streamAttempt(userId, primaryRequest, routes, index + 1);
                     }
                     return Flux.error(failure);
                 });
@@ -176,14 +180,19 @@ public class AgentModelRoutingService {
     }
 
     private ChatRequest forEndpoint(
+            Long userId,
             ChatRequest request,
             UserSettingsService.ModelEndpoint endpoint) {
+        if (request.messages().stream().anyMatch(message -> !message.images().isEmpty())) {
+            if (attachmentVision == null) throw new IllegalStateException("Vision capability policy unavailable");
+            attachmentVision.require(userId, endpoint.providerKey(), endpoint.modelName());
+        }
         return new ChatRequest(
                 endpoint.providerKey(), endpoint.modelName(),
                 routeAwareMessages(request, endpoint),
                 request.temperature(), request.maxTokens(), request.tools(),
                 endpoint.apiKey(), endpoint.apiUrl(), request.responseFormat(),
-                request.thinking(), request.traceId());
+                request.thinking(), request.traceId(), request.timeout());
     }
 
     private List<ChatMessage> routeAwareMessages(
@@ -209,7 +218,7 @@ public class AgentModelRoutingService {
                 }
             }
             messages.add(new ChatMessage(
-                    message.role(), content, message.toolCalls(), message.toolCallId()));
+                    message.role(), content, message.toolCalls(), message.toolCallId(), message.images()));
         }
         if (!identityInjected) messages.add(0, ChatMessage.system(identityInstruction));
         return List.copyOf(messages);

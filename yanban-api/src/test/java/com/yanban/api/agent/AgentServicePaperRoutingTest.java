@@ -106,6 +106,17 @@ class AgentServicePaperRoutingTest {
     }
 
     @Test
+    void unsupportedAttachmentFailsBeforeUserMessagePersistenceOrModelDispatch() {
+        var attachments = mock(com.yanban.api.attachment.SessionAttachmentService.class);
+        ReflectionTestUtils.setField(service, "sessionAttachments", attachments);
+        when(attachments.validateForSend(USER_ID, SESSION_ID, "test", "model"))
+                .thenThrow(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "图片理解未启用"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> send("描述图片"))
+                .hasMessageContaining("图片理解未启用");
+        verifyNoInteractions(messages, runtimeCoordinator);
+    }
+
+    @Test
     void directPaperPolishingRequestReachesRuntimeWithoutNavigation() {
         assertPaperPriorityReachesRuntime("请帮我润色论文，使用已上传的 documentId=31，目标语言为中文。");
     }

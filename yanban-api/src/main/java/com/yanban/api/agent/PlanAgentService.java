@@ -232,6 +232,13 @@ public class PlanAgentService {
 
     @Transactional
     public AgentPlanResponse createPlan(Long userId, Long sessionId, CreateAgentPlanRequest request) {
+        AgentSession attachmentSession = agentService.getOwnedSession(userId, sessionId);
+        UserSettingsService.ModelEndpoint attachmentEndpoint = userSettingsService.resolveModelEndpoint(
+                userId, attachmentSession.getModelProviderSnapshot(), attachmentSession.getModelSnapshot());
+        if (agentService.validateSessionAttachments(userId, sessionId, attachmentEndpoint.providerKey(), attachmentEndpoint.modelName())) {
+            request = new CreateAgentPlanRequest(request.content() + agentService.sessionAttachmentManifest(userId, sessionId),
+                    request.ragDisabled(), request.skillId(), request.autoExecute());
+        }
         if (runtimeCoordinator == null) {
             return createPlanInternal(userId, sessionId, request);
         }

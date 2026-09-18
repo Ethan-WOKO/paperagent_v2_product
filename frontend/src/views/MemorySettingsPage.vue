@@ -45,7 +45,7 @@
             secondary
             data-testid="memory-distillation-start"
             :loading="distillationActive"
-            :disabled="distillationLoading || !distillationSettings?.available"
+            :disabled="distillationLoading || distillationActive || !distillationSettings?.available"
             @click="runDistillationNow"
           >
             {{ distillationActive ? t('memory.distillation.running') : t('memory.distillation.runNow') }}
@@ -68,7 +68,14 @@
               <small>{{ t('memory.distillation.nextRun') }}</small>
               <strong>{{ distillationSettings.autoEnabled ? formatOptionalDate(distillationSettings.nextRunAt) : t('memory.distillation.autoOff') }}</strong>
             </span>
-            <span v-if="distillationJob?.status === 'SUCCEEDED'">
+            <span v-if="distillationJob" data-testid="memory-distillation-progress">
+              <small>{{ t('memory.distillation.progress') }}</small>
+              <strong>{{ t('memory.distillation.progressCount', {
+                processed: distillationJob.processedMessageCount ?? 0,
+                total: distillationJob.messageCount,
+              }) }}</strong>
+            </span>
+            <span v-if="distillationJob">
               <small>{{ t('memory.distillation.result') }}</small>
               <strong>{{ t('memory.distillation.resultCount', { count: distillationJob.createdMemoryCount }) }}</strong>
             </span>

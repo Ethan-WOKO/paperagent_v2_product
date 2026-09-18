@@ -42,6 +42,12 @@ public class UserModel {
     @Column(name = "sort_order", nullable = false)
     private Integer sortOrder;
 
+    @Column(name = "supports_vision")
+    private Boolean supportsVision;
+
+    public Boolean getSupportsVision() { return supportsVision; }
+    public void setSupportsVision(Boolean value) { supportsVision = value; }
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

@@ -107,7 +107,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
 
     private OpenAiChatRequest toRequest(ChatRequest request, boolean stream) {
         List<OpenAiMessage> messages = request.messages().stream()
-                .map(message -> new OpenAiMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()))
+                .map(message -> new OpenAiMessage(message.role(), message.providerContent(), message.toolCalls(), message.toolCallId()))
                 .toList();
         return new OpenAiChatRequest(request.model(), messages, request.temperature(), request.maxTokens(), stream,
                 stream ? new StreamOptions(true) : null,
@@ -129,7 +129,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
                 intOrNull(response.usage().totalTokens())
         );
         return new ChatResponse(
-                new ChatMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()),
+                new ChatMessage(message.role(), ChatMessage.responseText(message.content()), message.toolCalls(), message.toolCallId()),
                 choice.finishReason(),
                 usage
         );
@@ -259,7 +259,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private record OpenAiMessage(
             String role,
-            String content,
+            Object content,
             @JsonProperty("tool_calls") List<ToolCall> toolCalls,
             @JsonProperty("tool_call_id") String toolCallId
     ) {

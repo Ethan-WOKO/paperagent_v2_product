@@ -12,7 +12,8 @@ public record UserModelResponse(
         boolean builtin,
         Integer sortOrder,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        Boolean supportsVision
 ) {
     public static UserModelResponse from(UserModel model) {
         return from(model, false);
@@ -29,7 +30,8 @@ public record UserModelResponse(
                 Boolean.TRUE.equals(model.getBuiltin()),
                 model.getSortOrder(),
                 model.getCreatedAt(),
-                model.getUpdatedAt()
+                model.getUpdatedAt(),
+                model.getSupportsVision()
         );
     }
 }
