@@ -506,6 +506,7 @@ onUnmounted(() => {
 
 .admin-page {
   display: grid;
+  align-content: start;
   gap: 12px;
   width: min(1500px, calc(100% - 40px));
   max-width: none;
