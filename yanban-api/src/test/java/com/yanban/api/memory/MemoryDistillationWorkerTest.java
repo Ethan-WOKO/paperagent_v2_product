@@ -167,7 +167,7 @@ class MemoryDistillationWorkerTest {
     }
 
     private MemoryDistillationTransactions.Work work() {
-        return new MemoryDistillationTransactions.Work(9L, 42L, 0L, 5L);
+        return new MemoryDistillationTransactions.Work(9L, 42L, 0L, 5L, 2, 1);
     }
 
     private MemoryDistillationCandidate candidate() {

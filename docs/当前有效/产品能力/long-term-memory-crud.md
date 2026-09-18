@@ -56,11 +56,19 @@ Issue #209 adds optional, incremental distillation of owner-qualified `agent_mes
 
 - Automatic distillation is off by default and can be enabled on `/settings/memory`.
 - Users can start a one-time manual run even while automatic distillation is off.
-- A job freezes an ID-bounded message window before calling the user's configured model.
+- A job freezes the latest owner-qualified message ID and total pending message count at request time.
+  It processes that whole cut in bounded batches (at most 12 user assessments by default), returning to
+  PENDING between batches for the worker to continue. Messages arriving after the frozen cut wait for
+  the next run. Duplicate manual starts reuse the active job rather than extending its cut.
 - Model output must use the strict candidate schema, cite messages in that window, include user evidence, and preserve the exact USER or PROJECT authority.
 - Valid candidates are stored as `ACTIVE` but `UNCONFIRMED` rows with source type `LLM_DISTILLED`.
 - Candidates are visible and editable in the existing memory ledger. They cannot enter Agent context until the user confirms or corrects them.
-- Candidate writes and cursor advancement share one transaction. Model, validation, or persistence failure leaves the cursor unchanged and does not affect the conversation path.
+- Each batch's candidate writes, cumulative job counts, and cursor checkpoint share one transaction.
+  Only reaching the frozen cut marks the job SUCCEEDED and updates the last successful run time.
+  Model, validation, or persistence failure leaves the failing batch's cursor unchanged; previously
+  committed batches remain durable. A later manual run resumes at that checkpoint. Reclaimed lease
+  attempts fence late successes and failures; successful batches reset the per-batch retry budget.
+  The page shows processed/total messages and cumulative created memories while the worker continues.
 - Raw prompts, model responses, and API keys are not stored in the job tables.
 
 The distillation API is:

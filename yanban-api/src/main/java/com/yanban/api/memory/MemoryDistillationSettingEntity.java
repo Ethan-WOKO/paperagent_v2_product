@@ -54,7 +54,7 @@ class MemoryDistillationSettingEntity {
         this.nextRunAt = autoEnabled ? now.plus(interval) : null;
     }
 
-    void advance(long expectedCursor, long throughMessageId, Instant now, Duration interval) {
+    void advance(long expectedCursor, long throughMessageId, Instant now, Duration interval, boolean complete) {
         if (lastProcessedMessageId != expectedCursor) {
             throw new IllegalStateException("MEMORY_DISTILLATION_CURSOR_CHANGED");
         }
@@ -62,8 +62,10 @@ class MemoryDistillationSettingEntity {
             throw new IllegalArgumentException("throughMessageId must not move backwards");
         }
         lastProcessedMessageId = throughMessageId;
-        lastSuccessAt = now;
-        scheduleNext(now, interval);
+        if (complete) {
+            lastSuccessAt = now;
+            scheduleNext(now, interval);
+        }
     }
 
     Long userId() { return userId; }

@@ -25,25 +25,45 @@ class MemoryDistillationConversationServiceTest {
     private AgentMessageRepository messages;
 
     @Mock
+    private MemoryDistillationSourceRepository source;
+
+    @Mock
     private AgentSessionRepository sessions;
 
     private MemoryDistillationConversationService service;
 
+    @Test
+    void freezesTheWholeBacklogWithoutLoadingItIntoTheModelBatch() {
+        when(source.latestId(42L)).thenReturn(3763L);
+        when(source.countWindow(42L, 198L, 3763L)).thenReturn(191L);
+        var target = service.freeze(42L, 198L);
+        assertThat(target.throughMessageId()).isEqualTo(3763L);
+        assertThat(target.messageCount()).isEqualTo(191);
+    }
+
+    @Test
+    void emptyDeletedTailReachesTheFrozenTarget() {
+        when(source.window(eq(42L), eq(100L), eq(120L), any(Pageable.class))).thenReturn(List.of());
+        var batch = service.freezeBatch(42L, 100L, 120L);
+        assertThat(batch.throughMessageId()).isEqualTo(120L);
+        assertThat(batch.messageCount()).isZero();
+    }
+
     @BeforeEach
     void setUp() {
         service = new MemoryDistillationConversationService(
-                messages, sessions, new MemoryDistillationProperties());
+                source, messages, sessions, new MemoryDistillationProperties());
     }
 
     @Test
     void freezesAnImmutableBoundedWindow() {
         AgentMessage first = message(11L, 1L, 42L, "user", "first");
         AgentMessage second = message(12L, 1L, 42L, "assistant", "second");
-        when(messages.findDistillationWindow(
-                eq(42L), eq(10L), org.mockito.ArgumentMatchers.<String>anyCollection(), any(Pageable.class)))
+        when(source.window(
+                eq(42L), eq(10L), eq(99L), any(Pageable.class)))
                 .thenReturn(List.of(first, second));
 
-        MemoryDistillationConversationService.FrozenWindow window = service.freeze(42L, 10L);
+        MemoryDistillationConversationService.FrozenWindow window = service.freezeBatch(42L, 10L, 99L);
 
         assertThat(window.fromMessageId()).isEqualTo(10L);
         assertThat(window.throughMessageId()).isEqualTo(12L);
@@ -55,16 +75,16 @@ class MemoryDistillationConversationServiceTest {
     void limitsEachWindowToTheConfiguredNumberOfUserAssessments() {
         MemoryDistillationProperties properties = new MemoryDistillationProperties();
         properties.setMaxCandidates(2);
-        service = new MemoryDistillationConversationService(messages, sessions, properties);
+        service = new MemoryDistillationConversationService(source, messages, sessions, properties);
         AgentMessage firstUser = message(11L, 1L, 42L, "user", "first");
         AgentMessage assistant = message(12L, 1L, 42L, "assistant", "reply");
         AgentMessage secondUser = message(13L, 1L, 42L, "user", "second");
         AgentMessage nextUser = message(14L, 1L, 42L, "user", "next window");
-        when(messages.findDistillationWindow(
-                eq(42L), eq(10L), org.mockito.ArgumentMatchers.<String>anyCollection(), any(Pageable.class)))
+        when(source.window(
+                eq(42L), eq(10L), eq(99L), any(Pageable.class)))
                 .thenReturn(List.of(firstUser, assistant, secondUser, nextUser));
 
-        MemoryDistillationConversationService.FrozenWindow window = service.freeze(42L, 10L);
+        MemoryDistillationConversationService.FrozenWindow window = service.freezeBatch(42L, 10L, 99L);
 
         assertThat(window.throughMessageId()).isEqualTo(13L);
         assertThat(window.messageCount()).isEqualTo(3);

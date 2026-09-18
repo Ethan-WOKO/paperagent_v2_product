@@ -13,6 +13,8 @@ export interface MemoryDistillationJobResponse {
   fromMessageId: number;
   throughMessageId: number;
   messageCount: number;
+  processedMessageCount?: number;
+  processedThroughMessageId?: number;
   candidateCount: number;
   createdMemoryCount: number;
   attemptCount: number;

@@ -66,9 +66,15 @@ class MemoryDistillationWorker {
                     work.userId(), work.fromMessageId(), work.throughMessageId());
             List<MemoryDistillationCandidate> candidates = extractor.extract(
                     work.userId(), work.jobId(), lines);
-            transactions.succeed(work, candidates);
-            log.info("memory_distillation jobId={} userId={} outcome=succeeded candidates={}",
-                    work.jobId(), work.userId(), candidates.size());
+            MemoryDistillationJobResponse progress = transactions.succeed(work, candidates);
+            if (progress == null) {
+                log.info("memory_distillation jobId={} outcome=stale_batch_ignored", work.jobId());
+                return;
+            }
+            log.info("memory_distillation jobId={} userId={} outcome={} fromMessageId={} throughMessageId={} "
+                            + "processedMessages={} totalMessages={} createdMemories={}",
+                    work.jobId(), work.userId(), progress.status(), work.fromMessageId(), work.throughMessageId(),
+                    progress.processedMessageCount(), progress.messageCount(), progress.createdMemoryCount());
         } catch (RuntimeException failure) {
             String code = safeCode(failure);
             transactions.fail(work, code, userMessage(code));
