@@ -70,16 +70,33 @@ public class SharedModelCatalog {
         int changed=jdbc.update("UPDATE shared_models SET approved=?,supports_vision=? WHERE provider_id=? AND model_name=?",input.approved(),input.supportsVision(),providerId,name);
         if(changed==0) jdbc.update("INSERT INTO shared_models(provider_id,model_name,approved,supports_vision,available,manual) VALUES(?,?,?,?,TRUE,TRUE)",providerId,name,input.approved(),input.supportsVision());
     }
+    public record ModelBatch(@jakarta.validation.constraints.NotEmpty @Size(max=2000)
+            List<@jakarta.validation.constraints.NotNull @jakarta.validation.Valid ModelInput> models) {}
+
+    @Transactional
+    public List<ModelView> saveModels(long providerId, ModelBatch batch) {
+        provider(providerId,true);
+        Set<String> existing=new HashSet<>(jdbc.queryForList("SELECT model_name FROM shared_models WHERE provider_id=?",String.class,providerId));
+        Set<String> seen=new HashSet<>();
+        for(ModelInput input:batch.models()) {
+            if(!existing.contains(input.modelName().trim()) || !seen.add(input.modelName().trim()))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"列表包含不存在或重复的模型，请重新读取列表");
+        }
+        for(ModelInput input:batch.models()) jdbc.update("UPDATE shared_models SET approved=?,supports_vision=? WHERE provider_id=? AND model_name=?",input.approved(),input.supportsVision(),providerId,input.modelName().trim());
+        return models(providerId);
+    }
+
     @Transactional
     public List<ModelView> sync(long providerId) {
         Provider p=provider(providerId,true);
-        if(!StringUtils.hasText(p.modelsUrl())) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"此厂商尚未配置模型列表接口，请填写接口或手动添加模型 ID");
-        List<String> names=discovery.discoverModels(p.modelsUrl(),crypto.decrypt(p.secret()));
+        String modelsUrl=StringUtils.hasText(p.modelsUrl()) ? p.modelsUrl()
+                : p.chatUrl().replaceAll("/chat/completions$", "/models");
+        List<String> names=discovery.discoverModels(modelsUrl,crypto.decrypt(p.secret()));
         // Network/parse failures occur before touching the last successful catalog.
         jdbc.update("UPDATE shared_models SET available=FALSE WHERE provider_id=? AND manual=FALSE",providerId);
         for(String name:names) {
             int changed=jdbc.update("UPDATE shared_models SET available=TRUE WHERE provider_id=? AND model_name=?",providerId,name);
-            if(changed==0) jdbc.update("INSERT INTO shared_models(provider_id,model_name,approved,supports_vision,available,manual) VALUES(?,?,FALSE,FALSE,TRUE,FALSE)",providerId,name);
+            if(changed==0) jdbc.update("INSERT INTO shared_models(provider_id,model_name,approved,supports_vision,available,manual) VALUES(?,?,TRUE,FALSE,TRUE,FALSE)",providerId,name);
         }
         return models(providerId);
     }

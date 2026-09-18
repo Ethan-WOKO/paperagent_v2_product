@@ -8,3 +8,5 @@ export const saveSharedProvider = (id: number | null, input: SharedProviderInput
 export const listSharedModels = (id: number) => http.get<SharedModel[]>(`${path}/${id}/models`);
 export const syncSharedModels = (id: number) => http.post<SharedModel[]>(`${path}/${id}/sync`);
 export const saveSharedModel = (id: number, input: Pick<SharedModel, 'modelName' | 'approved' | 'supportsVision'>) => http.put(`${path}/${id}/models`, input);
+
+export const saveSharedModels = (id: number, models: Pick<SharedModel, 'modelName' | 'approved' | 'supportsVision'>[]) => http.put<SharedModel[]>(`${path}/${id}/models/batch`, { models });

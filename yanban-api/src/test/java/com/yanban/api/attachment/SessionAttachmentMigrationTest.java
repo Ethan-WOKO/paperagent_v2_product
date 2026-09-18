@@ -41,13 +41,34 @@ class SessionAttachmentMigrationTest {
         return id;
     }
 
+    @Test @Transactional void automaticDiscoveryPreservesExclusionsAndBatchIsAtomic() {
+        long id=catalog.saveProvider(null,new com.yanban.api.settings.SharedModelCatalog.ProviderInput("Auto","https://example.com/v1",null,"key",true));
+        org.mockito.Mockito.when(discovery.discoverModels("https://example.com/v1/models","key")).thenReturn(java.util.List.of("one","two"));
+        assertThat(catalog.sync(id)).allMatch(model -> model.approved());
+        catalog.saveModels(id,new com.yanban.api.settings.SharedModelCatalog.ModelBatch(java.util.List.of(
+                new com.yanban.api.settings.SharedModelCatalog.ModelInput("one",false,false),
+                new com.yanban.api.settings.SharedModelCatalog.ModelInput("two",true,true))));
+        org.mockito.Mockito.when(discovery.discoverModels("https://example.com/v1/models","key")).thenReturn(java.util.List.of("one","two","three"));
+        var updated=catalog.sync(id);
+        assertThat(updated).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("one");assertThat(model.approved()).isFalse();});
+        assertThat(updated).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("two");assertThat(model.supportsVision()).isTrue();});
+        assertThat(updated).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("three");assertThat(model.approved()).isTrue();});
+        assertThatThrownBy(()->catalog.saveModels(id,new com.yanban.api.settings.SharedModelCatalog.ModelBatch(java.util.List.of(
+                new com.yanban.api.settings.SharedModelCatalog.ModelInput("two",false,false),
+                new com.yanban.api.settings.SharedModelCatalog.ModelInput("unknown",true,false)))))
+                .hasMessageContaining("不存在");
+        assertThat(catalog.models(id)).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("two");assertThat(model.approved()).isTrue();});
+    }
+
     @Test @Transactional void sharedCatalogApprovalsSyncAndSecretBoundaries() throws Exception {
         Long user=catalogUser("catalog-user");
         long provider=catalog.saveProvider(null,new com.yanban.api.settings.SharedModelCatalog.ProviderInput("Qwen","https://example.com/v1","https://example.com/v1/models","private-shared-secret",true));
         org.mockito.Mockito.when(discovery.discoverModels("https://example.com/v1/models","private-shared-secret")).thenReturn(java.util.List.of("qwen-new"));
         var first=catalog.sync(provider).get(0);
         String key="shared-"+first.id();
-        assertThat(first.approved()).isFalse();
+        assertThat(first.approved()).isTrue();
+        assertThat(catalog.availableModels()).hasSize(1);
+        catalog.saveModel(provider,new com.yanban.api.settings.SharedModelCatalog.ModelInput("qwen-new",false,false));
         assertThat(catalog.availableModels()).isEmpty();
         assertThatThrownBy(()->settingsService.resolveModelEndpoint(user,key,"qwen-new")).hasMessageContaining("未获批准");
         catalog.saveModel(provider,new com.yanban.api.settings.SharedModelCatalog.ModelInput("qwen-new",true,true));
@@ -64,7 +85,7 @@ class SessionAttachmentMigrationTest {
         org.mockito.Mockito.when(discovery.discoverModels("https://example.com/v1/models","private-shared-secret")).thenReturn(java.util.List.of("qwen-new","qwen-newer"));
         var second=catalog.sync(provider);
         assertThat(second).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("qwen-new");assertThat(model.approved()).isTrue();assertThat(model.supportsVision()).isTrue();});
-        assertThat(second).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("qwen-newer");assertThat(model.approved()).isFalse();});
+        assertThat(second).anySatisfy(model->{assertThat(model.modelName()).isEqualTo("qwen-newer");assertThat(model.approved()).isTrue();});
         catalog.saveProvider(provider,new com.yanban.api.settings.SharedModelCatalog.ProviderInput("Qwen","https://example.com/v1","https://example.com/v1/models",null,false));
         assertThat(catalog.availableModels()).isEmpty();
         assertThatThrownBy(()->settingsService.resolveModelEndpoint(user,key,"qwen-new")).hasMessageContaining("已停用");
@@ -103,6 +124,16 @@ class SessionAttachmentMigrationTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(listed).contains("apiKeyConfigured").doesNotContain("secret-not-returned","apiKeyEncrypted");
         assertThat(catalog.models(id).get(0).approved()).isTrue();
+        Long batchUser=catalogUser("batch-ordinary-user");
+        String batchOrdinary="Bearer "+jwt.createAccessToken(batchUser,"batch-ordinary-user");
+        String batch="{\"models\":[{\"modelName\":\"manual-model\",\"approved\":false,\"supportsVision\":true}]}";
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path+"/"+id+"/models/batch").header("Authorization",batchOrdinary).contentType("application/json").content(batch))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path+"/"+id+"/models/batch").header("Authorization",admin).contentType("application/json").content(batch))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].approved").value(false));
+        assertThat(catalog.models(id).get(0).approved()).isFalse();
+
     }
 
     @Test void concurrentNewWorkspaceSessionsReuseOneEmptySession() throws Exception {
