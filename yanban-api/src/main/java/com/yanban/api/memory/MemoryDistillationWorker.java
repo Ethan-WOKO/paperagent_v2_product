@@ -96,7 +96,12 @@ class MemoryDistillationWorker {
                     "模型识别到长期记忆，但判断置信度不足，请重试";
             case "MEMORY_DISTILLATION_SCOPE_UNRESOLVED" ->
                     "模型识别到长期记忆，但无法确定其全局或项目作用域，请重试";
-            case "MEMORY_DISTILLATION_TOO_MANY_CANDIDATES", "MEMORY_DISTILLATION_CONTENT_INVALID",
+            case "MEMORY_DISTILLATION_CONTENT_INVALID", "MEMORY_DISTILLATION_CONTENT_MISSING",
+                    "MEMORY_DISTILLATION_REASON_MISSING" ->
+                    "模型返回的记忆内容或说明不完整，自动修复未成功，请重试";
+            case "MEMORY_DISTILLATION_CONTENT_TOO_LONG", "MEMORY_DISTILLATION_REASON_TOO_LONG" ->
+                    "模型返回的记忆内容或说明过长，自动修复未成功，请重试";
+            case "MEMORY_DISTILLATION_TOO_MANY_CANDIDATES",
                     "MEMORY_DISTILLATION_TYPE_INVALID", "MEMORY_DISTILLATION_CONFIDENCE_INVALID",
                     "MEMORY_DISTILLATION_SCOPE_CONFIDENCE_INVALID",
                     "MEMORY_DISTILLATION_SOURCE_INVALID", "MEMORY_DISTILLATION_USER_EVIDENCE_REQUIRED",

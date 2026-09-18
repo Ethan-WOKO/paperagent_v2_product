@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,6 +37,132 @@ class MemoryDistillationModelExtractorTest {
     private AgentModelRoutingService models;
 
     private MemoryDistillationModelExtractor extractor;
+
+    @ParameterizedTest
+    @ValueSource(strings = {"content:null", "content:blank", "content:long",
+            "reason:null", "reason:blank", "reason:long"})
+    void repairsMissingOrOversizedFieldsOnceUsingTheSameProjectEvidence(String scenario) throws Exception {
+        String invalid = fieldResponse(scenario);
+        when(models.chat(eq(USER_ID), any(ChatRequest.class)))
+                .thenReturn(routed(invalid), routed(fieldResponse("valid")));
+
+        var result = extractor.extract(USER_ID, 24L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答")));
+
+        assertThat(result).singleElement().satisfies(candidate -> {
+            assertThat(candidate.content()).isEqualTo("用户偏好默认使用中文回答。");
+            assertThat(candidate.scope()).isEqualTo("USER");
+            assertThat(candidate.sourceMessageIds()).containsExactly(141L);
+        });
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(models, times(2)).chat(eq(USER_ID), requests.capture());
+        ChatRequest first = requests.getAllValues().get(0);
+        ChatRequest repair = requests.getAllValues().get(1);
+        assertThat(repair.messages().get(1)).isEqualTo(first.messages().get(1));
+        assertThat(repair.messages().get(0).content()).contains("sourceMessageId=141",
+                "field=" + scenario.split(":")[0], "complete assessments", "1200", "300");
+        assertThat(repair.timeout()).isLessThanOrEqualTo(first.timeout());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"content:null", "content:blank", "content:long",
+            "reason:null", "reason:blank", "reason:long"})
+    void failsWithSpecificFieldCodeAfterOneUnsuccessfulRepair(String scenario) throws Exception {
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(routed(fieldResponse(scenario)));
+        String[] parts = scenario.split(":");
+        String code = "MEMORY_DISTILLATION_" + parts[0].toUpperCase(java.util.Locale.ROOT)
+                + ("long".equals(parts[1]) ? "_TOO_LONG" : "_MISSING");
+
+        assertThatThrownBy(() -> extractor.extract(USER_ID, 25L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
+                .hasMessage(code);
+        verify(models, times(2)).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    @Test
+    void repairedResponseStillMustPassSourceAuthorityValidation() throws Exception {
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(
+                routed(fieldResponse("reason:null")),
+                routed(fieldResponse("valid").replace("\"sourceMessageIds\":[141]", "\"sourceMessageIds\":[999]")));
+        assertThatThrownBy(() -> extractor.extract(USER_ID, 26L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
+                .hasMessage("MEMORY_DISTILLATION_SOURCE_INVALID");
+        verify(models, times(2)).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    @Test
+    void authorityFailureDoesNotTriggerFormatRepair() throws Exception {
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(
+                routed(fieldResponse("valid").replace("\"sourceMessageIds\":[141]", "\"sourceMessageIds\":[999]")));
+        assertThatThrownBy(() -> extractor.extract(USER_ID, 27L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
+                .hasMessage("MEMORY_DISTILLATION_SOURCE_INVALID");
+        verify(models).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    private String fieldResponse(String scenario) throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        var output = mapper.readTree("""
+                {"assessments":[{"sourceMessageId":141,"decision":"REMEMBER","durability":"DURABLE",
+                "reason":"明确的长期语言偏好","memoryScope":"USER","memoryType":"PREFERENCE",
+                "content":"用户偏好默认使用中文回答。","tags":[],"confidence":0.95,
+                "scopeConfidence":0.98,"sourceMessageIds":[141]}]}
+                """);
+        if (!"valid".equals(scenario)) {
+            String[] parts = scenario.split(":");
+            var assessment = (com.fasterxml.jackson.databind.node.ObjectNode) output.get("assessments").get(0);
+            if ("null".equals(parts[1])) assessment.remove(parts[0]);
+            else assessment.put(parts[0], "blank".equals(parts[1]) ? "  "
+                    : "中".repeat("content".equals(parts[0]) ? 1201 : 301));
+        }
+        return mapper.writeValueAsString(output);
+    }
+
+    @Test
+    void acceptsExactFieldLimitsWithoutRetry() throws Exception {
+        String response = fieldResponse("valid")
+                .replace("用户偏好默认使用中文回答。", "中".repeat(1200))
+                .replace("明确的长期语言偏好", "因".repeat(300));
+        when(models.chat(eq(USER_ID), any(ChatRequest.class))).thenReturn(routed(response));
+        assertThat(extractor.extract(USER_ID, 28L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答")))).hasSize(1);
+        verify(models).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    @Test
+    void repairedResponseCannotSilentlyOmitUserAssessments() throws Exception {
+        when(models.chat(eq(USER_ID), any(ChatRequest.class)))
+                .thenReturn(routed(fieldResponse("reason:null")), routed("{\"assessments\":[]}"));
+        assertThatThrownBy(() -> extractor.extract(USER_ID, 29L, List.of(
+                line(141L, "user", "PROJECT", 7L, "默认使用中文回答"))))
+                .hasMessage("MEMORY_DISTILLATION_ASSESSMENT_INCOMPLETE");
+        verify(models, times(2)).chat(eq(USER_ID), any(ChatRequest.class));
+    }
+
+    @Test
+    void fieldDiagnosticsDoNotLogConversationOrModelContent() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+                .getLogger(MemoryDistillationModelExtractor.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            when(models.chat(eq(USER_ID), any(ChatRequest.class)))
+                    .thenReturn(routed(fieldResponse("reason:null")));
+            assertThatThrownBy(() -> extractor.extract(USER_ID, 30L, List.of(
+                    line(141L, "user", "PROJECT", 7L, "private-conversation-marker"))))
+                    .hasMessage("MEMORY_DISTILLATION_REASON_MISSING");
+            assertThat(appender.list).hasSize(2);
+            for (var event : appender.list) {
+                assertThat(event.getFormattedMessage()).contains("jobId=30", "sourceMessageId=141",
+                        "field=reason", "length=0", "MEMORY_DISTILLATION_REASON_MISSING")
+                        .doesNotContain("private-conversation-marker", "用户偏好默认使用中文回答", "secret-key");
+            }
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
 
     @BeforeEach
     void setUp() {
