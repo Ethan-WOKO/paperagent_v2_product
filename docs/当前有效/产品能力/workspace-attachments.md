@@ -18,7 +18,7 @@ Issue: #225。范围仅为工作区聊天产品适配，保留 Project/ReAct 和
 
 ## 配置与部署
 
-新增 V105（生产 MySQL 和测试 H2）创建两张独立表：`agent_session_attachments`、`agent_attachment_snapshots`。需要从包含此变更的分支构建并重启前后端；原工作区已有进程不会自动获得另一 worktree 中的代码。
+新增 V105（生产 MySQL 和测试 H2）创建两张独立表：`agent_session_attachments`、`agent_attachment_snapshots`。附件改动已按用户要求同步回 `codex/issue-185-react-optimization`。后续在 `C:/java_file/private_helper_Agent/paperagent_v2_product_issue_185_react_optimization` 构建和启动前后端，无需切换到 225 工作区。已启动的后端需要重新启动才能加载新接口及 V105。
 
 - `yanban.attachments.enabled` 默认 `true`，只控制新附件上传。设为 `false` 时，已保存的附件仍可读取和用于聊天。
 - `yanban.attachments.vision-models` 默认空，按逗号分隔填写精确的 `<providerKey>:<modelName>`。必须使用设置页实际配置的 providerKey/modelName，并确认该服务支持 OpenAI-compatible `image_url` 内容。可通过 Spring Boot 属性或 `YANBAN_ATTACHMENTS_VISION_MODELS` 环境变量配置。
