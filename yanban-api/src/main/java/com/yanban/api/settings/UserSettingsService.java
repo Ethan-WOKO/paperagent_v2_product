@@ -198,6 +198,7 @@ public class UserSettingsService {
                 false,
                 nextSortOrder
         );
+        if (request.supportsVision() != null) model.setSupportsVision(request.supportsVision());
         return toUserModelResponse(userModelRepository.saveAndFlush(model));
     }
 
@@ -207,6 +208,7 @@ public class UserSettingsService {
         UserModel model = findOwnedCustomModel(userId, modelId);
         String encryptedApiKey = resolveEncryptedApiKey(model.getApiKeyEncrypted(), request.apiKey());
         model.update(request.label().trim(), request.modelName().trim(), request.apiUrl().trim(), encryptedApiKey);
+        if (request.supportsVision() != null) model.setSupportsVision(request.supportsVision());
         return toUserModelResponse(userModelRepository.saveAndFlush(model));
     }
 

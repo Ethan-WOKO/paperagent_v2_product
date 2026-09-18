@@ -39,6 +39,7 @@ export interface UserModelResponse {
   providerKey: string;
   label: string;
   modelName: string;
+  supportsVision?: boolean | null;
   apiUrl: string | null;
   apiKeyConfigured: boolean;
   builtin: boolean;
@@ -52,6 +53,7 @@ export interface UserModelRequest {
   apiUrl: string;
   apiKey?: string;
   modelName: string;
+  supportsVision?: boolean | null;
 }
 
 export function getSettings() {

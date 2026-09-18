@@ -25,6 +25,52 @@ class SessionAttachmentMigrationTest {
     @Autowired AgentSessionRepository sessions;
     @Autowired SessionAttachmentRepository attachments;
     @Autowired EntityManager em;
+    @Autowired AttachmentVisionPolicy visionPolicy;
+
+    @Test @Transactional void modelApiCreatesAndUpdatesVisionWithOwnerIsolation() throws Exception {
+        jdbc.update("INSERT INTO sys_users(username,password_hash) VALUES('vision-api-owner','hash'),('vision-api-other','hash')");
+        Long owner = jdbc.queryForObject("SELECT id FROM sys_users WHERE username='vision-api-owner'", Long.class);
+        Long other = jdbc.queryForObject("SELECT id FROM sys_users WHERE username='vision-api-other'", Long.class);
+        // Settings initialization uses REQUIRES_NEW; seed settings in this test transaction.
+        em.persist(new com.yanban.api.settings.SysUserSettings(owner, "deepseek", null, null,
+                "deepseek-v4-flash", "glm-5.2", null, "[]", "[]", java.math.BigDecimal.ONE, 8, false));
+        em.flush();
+        String token = "Bearer " + jwt.createAccessToken(owner, "vision-api-owner");
+        String body = "{\"label\":\"Qwen\",\"apiUrl\":\"https://example.com/chat/completions\",\"modelName\":\"qwen3.8-max\",\"supportsVision\":true}";
+        var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/models")
+                .header("Authorization", token).contentType("application/json").content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isCreated())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.supportsVision").value(true))
+                .andReturn();
+        var json = mapper.readTree(result.getResponse().getContentAsString());
+        Long id = json.path("id").asLong();
+        String provider = json.path("providerKey").asText();
+        em.clear();
+        assertThatCode(() -> visionPolicy.require(owner, provider, "qwen3.8-max")).doesNotThrowAnyException();
+        assertThatThrownBy(() -> visionPolicy.require(other, provider, "qwen3.8-max")).hasMessageContaining("尚未配置");
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/models/" + id)
+                .header("Authorization", "Bearer " + jwt.createAccessToken(other, "vision-api-other"))
+                .contentType("application/json").content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/models/" + id)
+                .header("Authorization", token).contentType("application/json").content(body.replace("true", "false")))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.supportsVision").value(false));
+        em.clear();
+        assertThatThrownBy(() -> visionPolicy.require(owner, provider, "qwen3.8-max")).hasMessageContaining("未启用");
+    }
+
+    @Test @Transactional void modelVisionCapabilitySurvivesReload() {
+        jdbc.update("INSERT INTO sys_users(username,password_hash) VALUES('vision-owner','hash')");
+        Long user = jdbc.queryForObject("SELECT id FROM sys_users WHERE username='vision-owner'", Long.class);
+        var model = new com.yanban.api.settings.UserModel(user, "custom-vision", "Qwen", "qwen3.8-max", null, null, false, 1);
+        em.persist(model); em.flush(); em.clear();
+        assertThat(em.find(com.yanban.api.settings.UserModel.class, model.getId()).getSupportsVision()).isNull();
+        var loaded = em.find(com.yanban.api.settings.UserModel.class, model.getId());
+        loaded.setSupportsVision(true); em.flush(); em.clear();
+        assertThat(em.find(com.yanban.api.settings.UserModel.class, model.getId()).getSupportsVision()).isTrue();
+    }
+
     @Test @Transactional void persistsAndReloadsAttachmentWithoutKnowledgeRows() {
         jdbc.update("INSERT INTO sys_users(username,password_hash) VALUES('attachment-owner','hash')");
         Long user=jdbc.queryForObject("SELECT id FROM sys_users WHERE username='attachment-owner'",Long.class);

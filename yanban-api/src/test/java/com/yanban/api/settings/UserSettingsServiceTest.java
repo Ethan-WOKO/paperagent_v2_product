@@ -50,6 +50,22 @@ class UserSettingsServiceTest {
     UserSettingsService service;
 
     @Test
+    void savesVisionCapabilityAndPreservesItForOlderClients() {
+        var model = new UserModel(9L, "custom-9", "Qwen", "qwen3.8-max", null, null, false, 1);
+        when(userModelRepository.findById(12L)).thenReturn(Optional.of(model));
+        when(userModelRepository.saveAndFlush(any(UserModel.class))).thenAnswer(call -> call.getArgument(0));
+        var enabled = service.updateCustomModel(9L, 12L,
+                new UserModelRequest("Qwen", "https://example.com/chat/completions", null, "qwen3.8-max", true));
+        assertThat(enabled.supportsVision()).isTrue();
+        var legacy = service.updateCustomModel(9L, 12L,
+                new UserModelRequest("Qwen", "https://example.com/chat/completions", null, "qwen3.8-max"));
+        assertThat(legacy.supportsVision()).isTrue();
+        var disabled = service.updateCustomModel(9L, 12L,
+                new UserModelRequest("Qwen", "https://example.com/chat/completions", null, "qwen3.8-max", false));
+        assertThat(disabled.supportsVision()).isFalse();
+    }
+
+    @Test
     void reportsGithubPatConfiguredOnlyWhenTheStoredCredentialIsDecryptable() {
         Long userId = 9L;
         SysUserSettings settings = new SysUserSettings(

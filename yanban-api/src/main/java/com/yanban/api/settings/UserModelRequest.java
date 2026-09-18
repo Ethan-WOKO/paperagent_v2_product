@@ -17,6 +17,10 @@ public record UserModelRequest(
 
         @NotBlank
         @Size(max = 128)
-        String modelName
+        String modelName,
+        Boolean supportsVision
 ) {
+    public UserModelRequest(String label, String apiUrl, String apiKey, String modelName) {
+        this(label, apiUrl, apiKey, modelName, null);
+    }
 }
