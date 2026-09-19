@@ -4,9 +4,21 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from dotenv import load_dotenv
+
 from .contracts import Submission
 from .models import DemoModel, LangChainModel
 from .runtime import TERMINAL, Runtime
+
+
+def load_local_environment():
+    # Load only this service's file; explicit process variables take precedence.
+    load_dotenv(
+        Path(__file__).resolve().parents[2] / ".env",
+        override=False,
+        interpolate=False,
+        encoding="utf-8-sig",
+    )
 
 
 def demo_submission():
@@ -37,6 +49,7 @@ def main():
     parser.add_argument("command", choices=["demo", "serve", "serve-product"])
     parser.add_argument("--model", choices=["demo", "openai"], default="demo")
     args = parser.parse_args()
+    load_local_environment()
     # Never inherit ambient tracing of local documents into an external service.
     os.environ["LANGSMITH_TRACING"] = "false"
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
@@ -50,6 +63,9 @@ def main():
             parser.error(
                 "serve-product always uses Java model routing; do not configure a direct provider"
             )
+        for name in ("PAPERAGENT_PYTHON_TOKEN", "PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN"):
+            if not os.environ.get(name, "").strip():
+                parser.error(f"Set {name} in agent-engine-python/.env or the process environment")
         gateway = ProductGateway(
             "http://127.0.0.1:8080", os.environ["PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN"]
         )

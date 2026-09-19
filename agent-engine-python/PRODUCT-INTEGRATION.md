@@ -23,13 +23,20 @@ $env:YANBAN_AGENT_PYTHON_SERVICE_TOKEN = [guid]::NewGuid().ToString('N')
 # 按现有项目启动流程启动 Java，使上述变量生效。
 ```
 
-在 Python 服务的终端中显式配置（不要把 token 提交到仓库或命令输出）：
+Python 启动时自动读取本目录 `.env`，只需配置一次（该文件已被 Git 忽略）。首次复制 `.env.example` 为 `.env`，已有文件不要覆盖，然后填写：
+
+```dotenv
+PAPERAGENT_PYTHON_TOKEN=与Java的YANBAN_AGENT_PYTHON_SERVICE_TOKEN一致
+PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN=Java现有的ReAct引擎service-token
+```
+
+只读取 Python 服务目录的 `.env`，不会向上查找其他服务的配置。已有终端/系统环境变量优先于文件，token 按原样读取；修改文件后需重启 Python。Java 不会读取此文件，Java 侧仍需在自己的启动配置中设置对应值。
+
+之后每次直接启动：
 
 ```powershell
 cd agent-engine-python
 uv sync --locked
-# PAPERAGENT_PYTHON_TOKEN 应等于 Java 的 YANBAN_AGENT_PYTHON_SERVICE_TOKEN。
-# PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN 应等于 Java 已有的 ReAct engine-service-token。
 uv run --frozen paperagent-python serve-product
 ```
 

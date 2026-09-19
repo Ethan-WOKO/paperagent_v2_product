@@ -48,3 +48,9 @@ pnpm build
 - 对照工具只采集现有 trace；provider/model span 是现有 Java 观测字段，不保证包含完整实际 fallback 路由。正式对照须另核对模型网关调用事实，保持模型一致。
 
 本次没有修改会话缓存实现、根部署配置、`agent-v2/` 或 `agent-engine-reactplan/`，没有清空或写入共享 Redis。工作区既有 `.runtime/` 不纳入提交。
+
+## 本地 .env 启动配置补充
+
+按用户后续要求，CLI 增加显式服务目录的 `.env` 自动读取及 python-dotenv 依赖。执行 `uv sync --project agent-engine-python`、`uv run --project agent-engine-python ruff check agent-engine-python/src/paperagent_engine/cli.py` 和 `git diff --check` 均通过。用临时目录、隔离进程环境和替换 CLI 文件路径的 Python smoke assertions 验证：UTF-8 BOM 可读、token 不做变量插值、进程变量优先、不读取上级 `.env`、本目录文件不存在时仍不向上搜索。
+
+`git check-ignore agent-engine-python/.env` 确认本地 token 文件被忽略；只提交空值 `.env.example`。没有启动服务、运行真实任务，也未因这次仅启动配置调整重跑无关 Java/前端测试。上述 131 项测试记录对应此前引擎接入验证。
