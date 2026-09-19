@@ -212,7 +212,7 @@ export interface PersistedTask {
   view: TaskView;
   messages: ChatMessage[];
   modelCalls: number;
-  pendingModelCall?: { clientRequestId: string };
+  pendingModelCall?: { clientRequestId: string; contextPolicy?: "compact-v1" };
   metrics: { startedAt: string; finishedAt?: string; promptTokens: number; completionTokens: number };
   receiptRefs: string[];
   lastSandboxStatus?: Receipt["status"];
