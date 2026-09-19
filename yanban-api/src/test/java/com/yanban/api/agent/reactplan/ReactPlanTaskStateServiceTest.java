@@ -71,6 +71,16 @@ class ReactPlanTaskStateServiceTest {
     }
 
     @Test
+    void retiredPythonRecoveryCannotIssueAGrant() {
+        intakes.findByTaskId(taskId).orElseThrow().selectEngine("PYTHON");
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "engines",
+                new ReactPlanEngineSelection(intakes));
+        assertThatThrownBy(() -> service.authorizeRecovery(taskId, "a".repeat(64)))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("PYTHON_ENGINE_RETIRED");
+        org.mockito.Mockito.verifyNoInteractions(grants);
+    }
+
+    @Test
     void createsBoundedCredentialFreeCheckpointAndOrderedEvent() {
         ObjectNode checkpoint = checkpoint("running", 0);
         String digest = checkpoint.path("view").path("requestDigest").asText();

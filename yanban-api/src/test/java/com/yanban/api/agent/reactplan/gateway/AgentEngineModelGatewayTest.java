@@ -40,22 +40,6 @@ class AgentEngineModelGatewayTest {
             new AgentEngineModelGateway(json, settings, quotas, models, transactions);
 
     @Test
-    void readOnlyPrimaryFailureKeepsDiagnosticAndDoesNotCallFallback() {
-        when(transactions.claim(any(), any(), any(), any(), any(), anyLong())).thenReturn(Optional.empty());
-        when(settings.resolveModelEndpoint(7L, "deepseek", "deepseek-v4-flash"))
-                .thenReturn(new UserSettingsService.ModelEndpoint("deepseek", "deepseek-v4-flash", null, "secret", "builtin", "DeepSeek"));
-        when(models.chat(any())).thenThrow(new ModelProviderException("HTTP 429 insufficient balance secret"));
-        var authority = new EngineTaskAuthority("task." + "a".repeat(64), "b".repeat(64),
-                7, 8, 9, 10, "d".repeat(64), true, false, false,
-                "deepseek", "deepseek-v4-flash", List.of(), Instant.now().plusSeconds(60));
-        assertThatThrownBy(() -> gateway.complete(authority, request("deepseek", "deepseek-v4-flash")))
-                .isInstanceOf(EngineGatewayException.class).hasMessageContaining("余额")
-                .hasMessageNotContaining("secret");
-        verify(models).chat(any());
-        verify(transactions).fail(eq(authority.taskId()), any(), eq("MODEL_PROVIDER_QUOTA_EXHAUSTED"));
-    }
-
-    @Test
     void resolvesOwnerEndpointCallsProductModelAndPersistsItsUsageFacts() {
         ModelCompletionRequest request = request("deepseek", "deepseek-v4-flash");
         assertThat(request.requestDigest()).isEqualTo(

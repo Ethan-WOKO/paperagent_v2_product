@@ -502,7 +502,7 @@
                   <div class="v2-task-card__question-copy">
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
                     <p>{{ item.record.instruction }}</p>
-                    <small>{{ item.record.engine === 'PYTHON' ? 'Python · 只读分析' : 'TypeScript · ReAct' }}</small>
+                    <small v-if="item.record.engine === 'PYTHON'">Python 实验已停用 · 历史记录</small>
                   </div>
                   <div class="v2-task-card__status">
                     <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
@@ -606,22 +606,14 @@
                 @keydown="handleReactPlanKeydown"
               />
               <div class="reactplan-composer-actions">
-                <NSelect
-                  v-if="!reactPlanQuestion"
-                  v-model:value="selectedProjectEngine"
-                  aria-label="项目执行引擎"
-                  class="reactplan-skill-select"
-                  :options="projectEngineOptions"
-                  :disabled="reactPlanBusy"
-                />
                 <NButton
-                  v-if="selectedFile?.path.toLowerCase().endsWith('.tex') && !reactPlanQuestion && selectedProjectEngine === 'TS'"
+                  v-if="selectedFile?.path.toLowerCase().endsWith('.tex') && !reactPlanQuestion"
                   secondary
                   :disabled="reactPlanBusy"
                   @click="reactPlanInput = projectPaperPolishRequest(selectedFile!, 'en')"
                 >润色所选论文（英文）</NButton>
                 <NSelect
-                  v-if="!reactPlanQuestion && selectedProjectEngine === 'TS'"
+                  v-if="!reactPlanQuestion"
                   v-model:value="selectedReactPlanSkillId"
                   aria-label="ReAct task skill"
                   class="reactplan-skill-select"
@@ -991,23 +983,6 @@ const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.v
 const reactPlanInput = ref('');
 const reactPlanSkills = ref<SkillListItemResponse[]>([]);
 const selectedReactPlanSkillId = ref<string | null>(null);
-const projectEngineOptions = [
-  { label: 'TypeScript · ReAct（默认）', value: 'TS' },
-  { label: 'Python · LangGraph ReAct（只读实验）', value: 'PYTHON' },
-];
-const projectEngineSelections = ref<Record<number, 'TS' | 'PYTHON'>>({});
-const newSessionEngine = ref<'TS' | 'PYTHON'>('TS');
-const selectedProjectEngine = computed<'TS' | 'PYTHON'>({
-  get: () => activeSessionId.value
-    ? projectEngineSelections.value[activeSessionId.value]
-      ?? [...reactPlanRecords.value].reverse().find((record) => record.sessionId === activeSessionId.value)?.engine
-      ?? 'TS'
-    : newSessionEngine.value,
-  set: (engine) => {
-    if (activeSessionId.value) projectEngineSelections.value[activeSessionId.value] = engine;
-    else newSessionEngine.value = engine;
-  },
-});
 const reactPlanSkillOptions = computed(() => reactPlanSkills.value
   .filter((skill) => skill.enabled)
   .map((skill) => ({ label: skill.name, value: skill.id })));
@@ -1033,6 +1008,7 @@ let reactPlanClockTimer: number | null = null;
 let reactPlanSessionPollTimer: number | null = null;
 let reactPlanSessionRefreshProjectId: number | null = null;
 const reactPlanQuestion = computed(() => {
+  if (reactPlanRecord.value?.engine === 'PYTHON') return null;
   const record = reactPlanRecord.value;
   if (!record || record.view.state !== 'waiting_user') return null;
   return latestReactPlanQuestion(record.events, record.view.pendingQuestionId);
@@ -1059,11 +1035,11 @@ const reactPlanNavigationItems = computed(() => reactPlanTimeline.value.map((ite
   state: item.record.view.state,
 })));
 const reactPlanExecutionActive = computed(() => (
-  reactPlanRecord.value?.view.state === 'queued'
-    || reactPlanRecord.value?.view.state === 'running'
+  reactPlanRecord.value?.engine !== 'PYTHON' && (reactPlanRecord.value?.view.state === 'queued'
+    || reactPlanRecord.value?.view.state === 'running')
 ));
 const reactPlanCanCancel = computed(() => Boolean(
-  reactPlanRecord.value && !isReactPlanTerminal(reactPlanRecord.value.view.state),
+  reactPlanRecord.value && reactPlanRecord.value.engine !== 'PYTHON' && !isReactPlanTerminal(reactPlanRecord.value.view.state),
 ));
 const reactPlanActivityLabel = computed(() => {
   if (reactPlanCancelling.value) return '正在停止任务…';
@@ -2229,6 +2205,10 @@ function scheduleReactPlanReconnect(record: ReactPlanTaskRecord, epoch: number) 
 async function connectReactPlanTask(record: ReactPlanTaskRecord, epoch = projectEpoch) {
   invalidateReactPlanStream();
   if (!isCurrentReactPlan(record, epoch)) return;
+  if (record.engine === 'PYTHON') {
+    reactPlanError.value = 'Python 实验引擎已移除，历史记录保留；请发送新任务使用 TS 引擎。';
+    return;
+  }
   const controller = new AbortController();
   reactPlanAbortController = controller;
   reactPlanStreaming.value = true;
@@ -2334,7 +2314,6 @@ async function loadEarlierReactPlanTasks() {
 async function submitReactPlanTask() {
   const projectId = activeProjectId.value;
   const instruction = reactPlanInput.value.trim();
-  const engine = selectedProjectEngine.value;
   if (!projectId || !instruction || reactPlanBusy.value) return;
   const epoch = projectEpoch;
   const startedAt = new Date().toISOString();
@@ -2347,12 +2326,10 @@ async function submitReactPlanTask() {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
     const clientRequestId = newReactPlanRequestId();
-    projectEngineSelections.value[sessionId] = engine;
     const accepted = (await startReactPlanTask(sessionId, {
       clientRequestId,
       instruction,
-      engine,
-      ...(engine === 'TS' && selectedReactPlanSkillId.value ? { skillId: selectedReactPlanSkillId.value } : {}),
+      ...(selectedReactPlanSkillId.value ? { skillId: selectedReactPlanSkillId.value } : {}),
     }, controller.signal)).data;
     void listProjectSessions(projectId).then(({ data }) => {
       if (epoch === projectEpoch && projectId === activeProjectId.value) {
@@ -2366,7 +2343,6 @@ async function submitReactPlanTask() {
     if (epoch !== projectEpoch || sessionId !== activeSessionId.value) return;
     const record: ReactPlanTaskRecord = {
       version: 1,
-      engine: accepted.engine ?? engine,
       projectId,
       sessionId,
       clientRequestId,

@@ -21,13 +21,6 @@ if reactplan_enabled; then
     'fetch("http://127.0.0.1:8092/health", {headers: {authorization: "Bearer " + process.env.ENGINE_SERVICE_TOKEN}}).then(async response => { if (!response.ok) { console.error("HTTP " + response.status); process.exit(1); } console.log(await response.text()); }).catch(error => { console.error(error.message); process.exit(1); })'
 fi
 
-if python_engine_enabled; then
-  echo
-  echo "Python Engine health check (private Compose network)"
-  compose exec -T agent-engine-python python -c \
-    'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8097/healthz", timeout=3).read().decode())'
-fi
-
 if sandbox_enabled; then
   echo
   echo "Sandbox Broker health check (private Compose network)"

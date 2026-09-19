@@ -36,21 +36,6 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.web.server.ResponseStatusException;
 
 class ReactPlanRuntimeServiceTest {
-    @Test
-    void pythonSubmissionUsesReadOnlyAuthorityAndPlanCapabilities() {
-        var selection = mock(ReactPlanEngineSelection.class);
-        when(selection.readOnly(any())).thenReturn(true);
-        org.springframework.test.util.ReflectionTestUtils.setField(runtime, "engineSelection", selection);
-        runtime.submit(7L, 42L, new ReactPlanTaskRequest("Read Project", null, null, null, "PYTHON"));
-        var submission = ArgumentCaptor.forClass(JsonNode.class);
-        verify(engine).submit(submission.capture());
-        assertFalse(submission.getValue().path("authority").path("permissions").path("writeWorkspace").asBoolean());
-        assertFalse(submission.getValue().path("authority").path("permissions").path("executeSandbox").asBoolean());
-        assertEquals(0, submission.getValue().path("authority").path("model").path("fallbacks").size());
-        var command = ArgumentCaptor.forClass(ReactPlanBootstrapCommand.class);
-        verify(plans).bootstrap(any(Long.class), any(Long.class), command.capture());
-        assertEquals(Set.of(Capability.READ_PROJECT), command.getValue().executionProfile().capabilities());
-    }
     private final ObjectMapper json = new ObjectMapper();
     private AgentTurnProductContextResolver contexts;
     private AuthenticatedReactPlanBootstrapComposer plans;
@@ -62,6 +47,14 @@ class ReactPlanRuntimeServiceTest {
     private ReactPlanConversationSummaryQueue conversationSummaries;
     private SkillsService skills;
     private ReactPlanRuntimeService runtime;
+
+    @Test
+    void retiredPythonSubmissionFailsBeforeProductOrModelWork() {
+        ResponseStatusException failure = assertThrows(ResponseStatusException.class,
+                () -> runtime.submit(1, 2, new ReactPlanTaskRequest("hello", null, null, null, "PYTHON")));
+        assertEquals(410, failure.getStatusCode().value());
+        org.mockito.Mockito.verifyNoInteractions(contexts, plans, grants, engine, settings);
+    }
 
     @BeforeEach
     void setUp() {

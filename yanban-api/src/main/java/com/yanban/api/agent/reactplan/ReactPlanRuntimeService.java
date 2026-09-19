@@ -59,8 +59,6 @@ final class ReactPlanRuntimeService {
     private final ReactPlanConversationContextService conversations;
     private final ReactPlanConversationSummaryQueue conversationSummaries;
     private final SkillsService skills;
-    @Autowired(required = false)
-    private ReactPlanEngineSelection engineSelection;
 
     @Autowired
     ReactPlanRuntimeService(
@@ -100,29 +98,31 @@ final class ReactPlanRuntimeService {
                 conversations, conversationSummaries, null);
     }
 
+    @Autowired(required = false)
+    private ReactPlanEngineSelection engineSelection;
+
     JsonNode submit(long userId, long turnId, ReactPlanTaskRequest request) {
+        if ("PYTHON".equals(request.engine()) || engineSelection != null && engineSelection.readOnly(taskId(userId, turnId))) {
+            throw new ResponseStatusException(HttpStatus.GONE, "PYTHON_ENGINE_RETIRED");
+        }
         VerifiedAgentTurnProductContext context = projectContext(userId, turnId);
         String taskId = taskId(userId, turnId);
         UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(
                 userId, request.provider(), request.model());
         String provider = endpoint.providerKey();
         String model = endpoint.modelName();
-        List<EngineModelRouteCandidate> modelFallbacks = engineSelection != null && engineSelection.readOnly(taskId)
-                ? List.of() : modelFallbacks(userId, provider, model);
+        List<EngineModelRouteCandidate> modelFallbacks = modelFallbacks(
+                userId, provider, model);
         log.info("reactplan_model_routes_frozen taskId={} primaryProvider={} primaryModel={} fallbacks={}",
                 taskId, provider, model, modelFallbacks);
         conversationSummaries.catchUp(userId, context.identity().sessionId());
         Map<String, Object> authority = authority(
                 context, request.instruction(), provider, model,
                 modelFallbacks, skillSnapshot(userId, request.skillId()));
-        if (engineSelection != null && engineSelection.readOnly(taskId)) {
-            authority.put("permissions", Map.of("readProject", true, "writeWorkspace", false, "executeSandbox", false));
-        }
         String requestDigest = ReactPlanCanonicalJson.digest(json, authority);
 
         PersistenceResult<?> persisted = plans.bootstrap(
-                userId, turnId, planCommand(taskId, request.instruction(),
-                        engineSelection != null && engineSelection.readOnly(taskId)));
+                userId, turnId, planCommand(taskId, request.instruction()));
         if (!persisted.successful()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT, "The authenticated Turn is bound to another Plan request");
@@ -285,17 +285,17 @@ final class ReactPlanRuntimeService {
     }
 
     private static ReactPlanBootstrapCommand planCommand(
-            String taskId, String instruction, boolean readOnly) {
+            String taskId, String instruction) {
         RoutingDecision route = new RoutingDecision(
                 new RoutingRequestId("route-" + taskId.substring("task.".length(), 38)),
                 Route.PERSISTENT_PLAN_EXECUTE,
                 RoutingDecisionReason.DECLARED_REQUIREMENT,
-                readOnly ? Set.of(RoutingRequirement.PROJECT_FILE_ACCESS, RoutingRequirement.TOOL_USE) : Set.of(RoutingRequirement.PROJECT_FILE_ACCESS,
+                Set.of(RoutingRequirement.PROJECT_FILE_ACCESS,
                         RoutingRequirement.TOOL_USE,
                         RoutingRequirement.EXECUTION));
         ExecutionProfile profile = new ExecutionProfile(
                 ExecutionTier.SANDBOX_STANDARD,
-                readOnly ? Set.of(Capability.READ_PROJECT) : Set.of(Capability.READ_PROJECT, Capability.WRITE_WORKSPACE,
+                Set.of(Capability.READ_PROJECT, Capability.WRITE_WORKSPACE,
                         Capability.EXECUTE_COMMAND),
                 NetworkPolicy.DENY_ALL,
                 List.of(),
@@ -311,8 +311,7 @@ final class ReactPlanRuntimeService {
                         instruction,
                         List.of("authenticated frozen ProjectVersion"),
                         List.of("receipt-backed answer"),
-                        readOnly ? List.of("read-only analysis", "no writes, execution or publication")
-                                : List.of("modify isolated Workspace only", "no direct Project modification")),
+                        List.of("modify isolated Workspace only", "no direct Project modification")),
                 profile,
                 new BoundedExecutionHints(20, Duration.ofMinutes(6)),
                 frozen, frozen.plusMillis(1), frozen.plusMillis(2));

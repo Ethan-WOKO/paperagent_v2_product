@@ -210,6 +210,7 @@ class ReactPlanTaskStateService {
 
     @Transactional(readOnly = true)
     EngineTaskGrant authorizeRecovery(String taskId, String requestDigest) {
+        if (engines != null) engines.requireEnabled(engines.engine(taskId));
         ReactPlanTaskCheckpointEntity checkpoint = checkpoints.findById(taskId)
                 .orElseThrow(() -> notFound("TASK_NOT_FOUND"));
         if (!RECOVERABLE.contains(checkpoint.state())) conflict("TASK_NOT_RECOVERABLE");

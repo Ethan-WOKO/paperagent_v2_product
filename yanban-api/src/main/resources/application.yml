@@ -50,9 +50,6 @@ yanban:
       enabled: ${YANBAN_AGENT_REACTPLAN_ENABLED:false}
       engine-origin: ${YANBAN_AGENT_REACTPLAN_ENGINE_ORIGIN:http://127.0.0.1:8092}
       engine-service-token: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:}
-      python-enabled: ${YANBAN_AGENT_PYTHON_ENABLED:false}
-      python-origin: ${YANBAN_AGENT_PYTHON_ORIGIN:http://127.0.0.1:8097}
-      python-service-token: ${YANBAN_AGENT_PYTHON_SERVICE_TOKEN:}
       default-provider: ${YANBAN_AGENT_REACTPLAN_DEFAULT_PROVIDER:deepseek}
       default-model: ${YANBAN_AGENT_REACTPLAN_DEFAULT_MODEL:deepseek-chat}
       max-concurrent-tasks: ${YANBAN_AGENT_MAX_CONCURRENT_TASKS:20}

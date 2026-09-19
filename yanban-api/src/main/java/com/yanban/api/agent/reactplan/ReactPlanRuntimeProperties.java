@@ -19,28 +19,6 @@ public class ReactPlanRuntimeProperties {
     private int maxConcurrentTasksPerUser = 3;
     private int maxQueuedTasksPerUser = 10;
     private int taskLeaseSeconds = 30;
-    private boolean pythonEnabled;
-    private URI pythonOrigin = URI.create("http://127.0.0.1:8097");
-    private String pythonServiceToken = "";
-
-    public boolean isPythonEnabled() { return pythonEnabled; }
-    public void setPythonEnabled(boolean value) { pythonEnabled = value; }
-    public URI getPythonOrigin() { return pythonOrigin; }
-    public void setPythonOrigin(URI value) { pythonOrigin = value; }
-    public String getPythonServiceToken() { return pythonServiceToken; }
-    public void setPythonServiceToken(String value) { pythonServiceToken = value; }
-
-    @AssertTrue(message = "Python engine requires a dedicated token and loopback or fixed Compose service on port 8097")
-    public boolean isPythonConfigurationSafe() {
-        if (!pythonEnabled) return true;
-        if (pythonOrigin == null || pythonServiceToken == null || pythonServiceToken.length() < 32) return false;
-        return "http".equals(pythonOrigin.getScheme())
-                && ("127.0.0.1".equals(pythonOrigin.getHost())
-                    || "agent-engine-python".equals(pythonOrigin.getHost()))
-                && pythonOrigin.getPort() == 8097 && pythonOrigin.getUserInfo() == null
-                && pythonOrigin.getQuery() == null && pythonOrigin.getFragment() == null
-                && (pythonOrigin.getPath().isEmpty() || "/".equals(pythonOrigin.getPath()));
-    }
 
     @AssertTrue(message = "enabled ReAct runtime requires an engine service token of at least 32 characters")
     public boolean isServiceTokenSafe() {

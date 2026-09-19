@@ -10,9 +10,7 @@ public record ReactPlanTaskRequest(String instruction, String provider, String m
         model = optional(model, 128, "model");
         skillId = optional(skillId, 128, "skillId");
         engine = ReactPlanEngineSelection.normalize(engine);
-        if ("PYTHON".equals(engine) && instruction.length() > 2000) {
-            throw new IllegalArgumentException("Python analysis instructions are limited to 2000 characters during evaluation");
-        }
+
     }
 
     public ReactPlanTaskRequest(String instruction, String provider, String model) {

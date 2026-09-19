@@ -8,11 +8,9 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class ReactPlanEngineSelection {
     private final ReactPlanTurnIntakeRepository intakes;
-    private final ReactPlanRuntimeProperties properties;
 
-    ReactPlanEngineSelection(ReactPlanTurnIntakeRepository intakes, ReactPlanRuntimeProperties properties) {
+    ReactPlanEngineSelection(ReactPlanTurnIntakeRepository intakes) {
         this.intakes = intakes;
-        this.properties = properties;
     }
 
     public static String normalize(String engine) {
@@ -28,8 +26,8 @@ public class ReactPlanEngineSelection {
     public boolean readOnly(String taskId) { return "PYTHON".equals(engine(taskId)); }
 
     void requireEnabled(String engine) {
-        if ("PYTHON".equals(normalize(engine)) && !properties.isPythonEnabled()) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Python analysis engine is disabled");
+        if ("PYTHON".equals(normalize(engine))) {
+            throw new ResponseStatusException(HttpStatus.GONE, "PYTHON_ENGINE_RETIRED: Python demo has been removed; create a new TS task");
         }
     }
 }

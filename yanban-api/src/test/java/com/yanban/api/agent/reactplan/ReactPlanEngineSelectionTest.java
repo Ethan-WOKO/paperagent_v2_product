@@ -7,70 +7,39 @@ import java.net.http.*;
 import java.util.Optional;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 class ReactPlanEngineSelectionTest {
     @Test
-    void acceptsOnlyFixedComposeOriginOrLoopbackForPython() {
-        var properties = new ReactPlanRuntimeProperties();
-        properties.setPythonEnabled(true);
-        properties.setPythonServiceToken("p".repeat(32));
-        properties.setPythonOrigin(java.net.URI.create("http://agent-engine-python:8097"));
-        assertThat(properties.isPythonConfigurationSafe()).isTrue();
-        for (String origin : java.util.List.of("http://external.example:8097", "http://agent-engine-python:8080",
-                "http://user@agent-engine-python:8097", "http://agent-engine-python:8097/path",
-                "http://agent-engine-python:8097?token=x", "http://agent-engine-python:8097#fragment")) {
-            properties.setPythonOrigin(java.net.URI.create(origin));
-            assertThat(properties.isPythonConfigurationSafe()).as(origin).isFalse();
-        }
-    }
-
-    @Test
-    void legacyDefaultsTsAndPythonIsOptIn() {
-        var repository = mock(ReactPlanTurnIntakeRepository.class);
-        var properties = new ReactPlanRuntimeProperties();
-        var selection = new ReactPlanEngineSelection(repository, properties);
+    void defaultsToTsAndPermanentlyRejectsPython() {
+        var selection = new ReactPlanEngineSelection(mock(ReactPlanTurnIntakeRepository.class));
         assertThat(selection.engine("old")).isEqualTo("TS");
-        assertThatThrownBy(() -> selection.requireEnabled("PYTHON")).hasMessageContaining("disabled");
-        properties.setPythonEnabled(true);
-        properties.setPythonServiceToken("p".repeat(32));
-        assertThat(properties.isPythonConfigurationSafe()).isTrue();
-        assertThatThrownBy(() -> ReactPlanEngineSelection.normalize("other")).isInstanceOf(IllegalArgumentException.class);
+        selection.requireEnabled(null);
+        selection.requireEnabled("TS");
+        assertThatThrownBy(() -> selection.requireEnabled("PYTHON"))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        failure -> assertThat(failure.getStatusCode()).isEqualTo(HttpStatus.GONE))
+                .hasMessageContaining("PYTHON_ENGINE_RETIRED");
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void routesAllOperationsUsingPersistedIntakeNotNewSelection() throws Exception {
+    void historicalPythonOperationsNeverReachTsOrAnyHttpService() {
         var json = new ObjectMapper();
         var repository = mock(ReactPlanTurnIntakeRepository.class);
-        var properties = new ReactPlanRuntimeProperties();
-        properties.setPythonEnabled(true);
-        properties.setPythonServiceToken("p".repeat(32));
-        properties.setEngineServiceToken("t".repeat(32));
         String id = "task." + "a".repeat(64);
         var intake = new ReactPlanTurnIntakeEntity(1, 2, "request.1234567890123456", "a".repeat(64), 3, 4, id, LocalDateTime.now());
         intake.selectEngine("PYTHON");
         when(repository.findByTaskId(id)).thenReturn(Optional.of(intake));
         var http = mock(HttpClient.class);
-        var response = mock(HttpResponse.class);
-        when(response.statusCode()).thenReturn(200);
-        when(response.body()).thenReturn("{}");
-        when(http.send(any(), any(HttpResponse.BodyHandler.class))).thenReturn(response);
-        var client = new ReactPlanEngineClient(json, properties, http);
-        ReflectionTestUtils.setField(client, "selection", new ReactPlanEngineSelection(repository, properties));
-        client.submit(json.createObjectNode().put("taskId", id));
-        client.task(id);
-        client.cancel(id, "cancel.1234567890123456");
-        client.answer(id, json.createObjectNode());
-        var requests = ArgumentCaptor.forClass(HttpRequest.class);
-        verify(http, times(4)).send(requests.capture(), any(HttpResponse.BodyHandler.class));
-        assertThat(requests.getAllValues()).allSatisfy(request -> {
-            assertThat(request.uri().getPort()).isEqualTo(8097);
-            assertThat(request.headers().firstValue("Authorization")).contains("Bearer " + "p".repeat(32));
-        });
-        properties.setPythonEnabled(false);
-        assertThatThrownBy(() -> client.task(id)).hasMessageContaining("disabled");
-        verify(http, times(4)).send(any(), any(HttpResponse.BodyHandler.class));
+        var client = new ReactPlanEngineClient(json, new ReactPlanRuntimeProperties(), http);
+        ReflectionTestUtils.setField(client, "selection", new ReactPlanEngineSelection(repository));
+        assertThatThrownBy(() -> client.submit(json.createObjectNode().put("taskId", id))).hasMessageContaining("PYTHON_ENGINE_RETIRED");
+        assertThatThrownBy(() -> client.task(id)).hasMessageContaining("PYTHON_ENGINE_RETIRED");
+        assertThatThrownBy(() -> client.cancel(id, "cancel.1234567890123456")).hasMessageContaining("PYTHON_ENGINE_RETIRED");
+        assertThatThrownBy(() -> client.answer(id, json.createObjectNode())).hasMessageContaining("PYTHON_ENGINE_RETIRED");
+        assertThatThrownBy(() -> client.events(id, 0)).hasMessageContaining("PYTHON_ENGINE_RETIRED");
+        verifyNoInteractions(http);
     }
 }

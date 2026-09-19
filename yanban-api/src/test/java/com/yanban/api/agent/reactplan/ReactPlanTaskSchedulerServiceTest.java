@@ -40,33 +40,13 @@ class ReactPlanTaskSchedulerServiceTest {
     }
 
     @Test
-    void engineSpecificClaimsCannotTakeTheOtherEnginesTasks() {
+    void retiredPythonTasksCannotBeClaimedByTs() {
         ReactPlanEngineSelection engines = mock(ReactPlanEngineSelection.class);
         org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "engines", engines);
         when(engines.readOnly("python-task")).thenReturn(true);
-        assertThatThrownBy(() -> scheduler.claimPythonTask("ts-task", "engine.worker_one"))
-                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("TASK_ENGINE_MISMATCH");
         assertThatThrownBy(() -> scheduler.claimTask("python-task", "engine.worker_one"))
                 .isInstanceOf(ResponseStatusException.class).hasMessageContaining("TASK_ENGINE_MISMATCH");
-        verify(checkpoints, org.mockito.Mockito.never()).findLockedByTaskId(any());
-    }
-
-    @Test
-    void pythonSpecificClaimHonorsCapacityAndIssuesFencedLease() {
-        ReactPlanEngineSelection engines = mock(ReactPlanEngineSelection.class);
-        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "engines", engines);
-        ReactPlanTaskCheckpointEntity task = task("e", 7L, 70L);
-        when(engines.readOnly(task.taskId())).thenReturn(true);
-        when(checkpoints.findLockedByTaskId(task.taskId())).thenReturn(java.util.Optional.of(task));
-        jdbc.globalActive = 20;
-        assertThat(scheduler.claimPythonTask(task.taskId(), "engine.python_one")).isNull();
-        jdbc.globalActive = 0;
-        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any(), anyList()))
-                .thenReturn(new EngineTaskGrant("g".repeat(40), Instant.parse("2026-08-18T00:05:00Z")));
-        ReactPlanTaskSchedulerService.ClaimedTask claimed = scheduler.claimPythonTask(task.taskId(), "engine.python_one");
-        assertThat(claimed.lease().fence()).isEqualTo(1L);
-        assertThat(task.leaseOwner()).isEqualTo("engine.python_one");
-        assertThat(scheduler.claimPythonTask(task.taskId(), "engine.python_two")).isNull();
+        org.mockito.Mockito.verifyNoInteractions(checkpoints, grants);
     }
 
     @Test
@@ -135,6 +115,32 @@ class ReactPlanTaskSchedulerServiceTest {
         assertThatThrownBy(() -> scheduler.assertQueueCapacity(7L))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("AGENT_USER_QUEUE_FULL");
+    }
+
+    @Test
+    void retiredPythonHistoryDoesNotConsumeTsQueueCapacity() {
+        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:retired_queue;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        var database = new JdbcTemplate(dataSource);
+        database.execute("CREATE TABLE reactplan_agent_scheduler_lock (lock_id INT PRIMARY KEY)");
+        database.execute("INSERT INTO reactplan_agent_scheduler_lock VALUES (1)");
+        database.execute("CREATE TABLE reactplan_task_checkpoints (task_id VARCHAR(69), user_id BIGINT, state VARCHAR(32))");
+        database.execute("CREATE TABLE reactplan_turn_intakes (task_id VARCHAR(69), engine VARCHAR(16))");
+        properties.setMaxConcurrentTasksPerUser(1);
+        properties.setMaxQueuedTasksPerUser(1);
+        for (int i = 0; i < 3; i++) {
+            database.update("INSERT INTO reactplan_turn_intakes VALUES (?, 'PYTHON')", "python-" + i);
+            database.update("INSERT INTO reactplan_task_checkpoints VALUES (?, 7, 'running')", "python-" + i);
+        }
+        var actual = new ReactPlanTaskSchedulerService(database, json, checkpoints, grants, properties);
+        actual.assertQueueCapacity(7L);
+        database.execute("INSERT INTO reactplan_task_checkpoints VALUES ('legacy-ts', 7, 'queued')");
+        actual.assertQueueCapacity(7L);
+        database.execute("INSERT INTO reactplan_turn_intakes VALUES ('new-ts', 'TS')");
+        database.execute("INSERT INTO reactplan_task_checkpoints VALUES ('new-ts', 7, 'queued')");
+        assertThatThrownBy(() -> actual.assertQueueCapacity(7L)).hasMessageContaining("AGENT_USER_QUEUE_FULL");
+        assertThat(database.queryForObject("SELECT COUNT(*) FROM reactplan_task_checkpoints", Integer.class)).isEqualTo(5);
+        database.execute("DROP ALL OBJECTS");
     }
 
     private ReactPlanTaskCheckpointEntity task(String suffix, long userId, long turnId) {

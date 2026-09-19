@@ -87,12 +87,11 @@ final class ReactPlanEngineClient {
     }
 
     private HttpRequest.Builder base(String path, String taskId) {
-        boolean python = selection != null && selection.readOnly(taskId);
-        if (python) selection.requireEnabled("PYTHON");
-        URI origin = python ? properties.getPythonOrigin() : properties.getEngineOrigin();
+        if (selection != null) selection.requireEnabled(selection.engine(taskId));
+        URI origin = properties.getEngineOrigin();
         return HttpRequest.newBuilder(origin.resolve(path))
                 .timeout(Duration.ofSeconds(30))
-                .header("Authorization", "Bearer " + (python ? properties.getPythonServiceToken() : properties.getEngineServiceToken()));
+                .header("Authorization", "Bearer " + properties.getEngineServiceToken());
     }
 
     private static ResponseStatusException upstream(int status) {
