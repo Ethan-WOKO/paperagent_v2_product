@@ -43,15 +43,24 @@ class ReactPlanTurnIntakeTransactions {
     ReactPlanTurnIntakeEntity create(
             long userId, long sessionId, String clientRequestId,
             String requestDigest, String instruction) {
+        return create(userId, sessionId, clientRequestId, requestDigest, instruction, "TS");
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ReactPlanTurnIntakeEntity create(
+            long userId, long sessionId, String clientRequestId,
+            String requestDigest, String instruction, String engine) {
         AgentMessage message = messages.saveAndFlush(new AgentMessage(
                 sessionId, userId, "user", instruction, null, null));
         AgentTurn turn = turns.saveAndFlush(new AgentTurn(
                 sessionId, userId, message.getId()));
         String taskId = ReactPlanRuntimeService.taskId(userId, turn.getId());
-        return intakes.saveAndFlush(new ReactPlanTurnIntakeEntity(
+        ReactPlanTurnIntakeEntity intake = new ReactPlanTurnIntakeEntity(
                 userId, sessionId, clientRequestId, requestDigest,
                 turn.getId(), message.getId(), taskId,
-                LocalDateTime.now(ZoneOffset.UTC)));
+                LocalDateTime.now(ZoneOffset.UTC));
+        intake.selectEngine(engine);
+        return intakes.saveAndFlush(intake);
     }
 
     @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)

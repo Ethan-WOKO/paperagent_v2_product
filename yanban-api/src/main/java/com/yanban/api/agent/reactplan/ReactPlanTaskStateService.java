@@ -48,6 +48,8 @@ class ReactPlanTaskStateService {
     private final ReactPlanUsageSettlementRepository usageSettlements;
     private final ReactPlanTaskSchedulerService scheduler;
     private final ApplicationEventPublisher applicationEvents;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ReactPlanEngineSelection engines;
 
     ReactPlanTaskStateService(ObjectMapper json,
                               ReactPlanTaskCheckpointRepository checkpoints,
@@ -187,6 +189,7 @@ class ReactPlanTaskStateService {
     @Transactional(readOnly = true)
     List<StoredCheckpoint> stored() {
         return checkpoints.findAllByOrderByUpdatedAtAsc().stream()
+                .filter(entity -> engines == null || !engines.readOnly(entity.taskId()))
                 .map(entity -> new StoredCheckpoint(entity.checkpointRevision(), parse(entity.checkpointJson())))
                 .toList();
     }

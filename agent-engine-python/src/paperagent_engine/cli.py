@@ -34,12 +34,32 @@ def demo_submission():
 
 def main():
     parser = argparse.ArgumentParser(description="Isolated Python development engine")
-    parser.add_argument("command", choices=["demo", "serve"])
+    parser.add_argument("command", choices=["demo", "serve", "serve-product"])
     parser.add_argument("--model", choices=["demo", "openai"], default="demo")
     args = parser.parse_args()
     # Never inherit ambient tracing of local documents into an external service.
     os.environ["LANGSMITH_TRACING"] = "false"
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    if args.command == "serve-product":
+        import uvicorn
+
+        from .product import create_product_app
+        from .product_gateway import ProductGateway
+
+        if args.model != "demo":
+            parser.error(
+                "serve-product always uses Java model routing; do not configure a direct provider"
+            )
+        gateway = ProductGateway(
+            "http://127.0.0.1:8080", os.environ["PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN"]
+        )
+        app = create_product_app(
+            Path(__file__).resolve().parents[2] / ".product-data",
+            os.environ["PAPERAGENT_PYTHON_TOKEN"],
+            gateway,
+        )
+        uvicorn.run(app, host="127.0.0.1", port=8097, workers=1, access_log=False)
+        return
     model = DemoModel()
     if args.model == "openai":
         model = LangChainModel(

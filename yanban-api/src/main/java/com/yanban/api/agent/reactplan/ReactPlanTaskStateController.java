@@ -114,6 +114,17 @@ final class ReactPlanTaskStateController {
         return new ClaimResponse("1.0", scheduler.claimNext(request.owner()));
     }
 
+    @PostMapping("/python/tasks/{taskId}/claim")
+    ClaimResponse claimPython(
+            @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @PathVariable String taskId, @RequestBody ClaimRequest request) {
+        authenticate(authorization);
+        if (request == null || !"1.0".equals(request.contractVersion())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "CLAIM_REQUEST_INVALID");
+        }
+        return new ClaimResponse("1.0", scheduler.claimPythonTask(taskId, request.owner()));
+    }
+
     @PostMapping("/tasks/{taskId}/lease/renew")
     ReactPlanTaskSchedulerService.LeaseHeartbeat renew(
             @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,

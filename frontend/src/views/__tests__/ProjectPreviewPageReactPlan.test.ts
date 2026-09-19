@@ -7,7 +7,7 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     'utf8',
   );
 
-  it('隐藏链路选择并始终默认使用 ReAct', () => {
+  it('保留统一会话入口并默认使用 TypeScript ReAct', () => {
     expect(source).toContain("aria-label=\"ReAct project task\"");
     expect(source).toContain('v-model:value="reactPlanInput"');
     expect(source).not.toContain("@click=\"setProjectAgentRoute('v2')\"");
@@ -17,6 +17,16 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source.match(/class="v2-conversation__composer"/g)).toHaveLength(1);
     expect(source).not.toContain('projectAgentRoute');
     expect(source).toContain(':aria-busy="reactPlanBusy"');
+  });
+
+  it('按会话选择引擎并在异步创建会话前冻结提交选择', () => {
+    expect(source).toContain('aria-label="项目执行引擎"');
+    expect(source).toContain("ref<'TS' | 'PYTHON'>('TS')");
+    expect(source.indexOf('const engine = selectedProjectEngine.value;'))
+      .toBeLessThan(source.indexOf('projectEngineSelections.value[sessionId] = engine;'));
+    expect(source).toContain('engine: accepted.engine ?? engine');
+    expect(source).toContain("engine === 'TS' && selectedReactPlanSkillId.value");
+    expect(source).toContain('Python · Plan & Execute（只读实验）');
   });
 
   it('提交自然语言任务并消费带断点的认证 SSE，而不是固定工具流程', () => {

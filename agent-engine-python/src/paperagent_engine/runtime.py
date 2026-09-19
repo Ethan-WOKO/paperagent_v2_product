@@ -62,7 +62,7 @@ def context(state):
         output = item["output"]
         if i < len(observations) - 3 and output is not None:
             # Preserve pagination metadata for read tools, offload old content.
-            output = {k: v for k, v in output.items() if k != "text"}
+            output = {k: v for k, v in output.items() if k not in {"text", "content"}}
         visible.append({**item, "output": output})
     result = {
         "frame": frame,
@@ -150,14 +150,14 @@ class Runtime:
     def _act(self, state):
         if state["turn"] >= 10:
             raise EngineError("STEP_BUDGET_EXCEEDED")
-        tools = ToolSet(Submission.model_validate(state["request"]), state["memories"])
+        tools = self._tools(state)
         action = self._model(state, "act", lambda c: self.model.act(c, tools.tools).model_dump())
         return {"action": Action.model_validate(action).model_dump(), "turn": state["turn"] + 1}
 
     def _tool(self, state):
         call = state["action"]["call"]
         key = f"evidence_{state['revision']}_{state['index']}_{state['turn']}"
-        tools = ToolSet(Submission.model_validate(state["request"]), state["memories"])
+        tools = self._tools(state)
         result = self.store.operation(
             state["task_id"],
             key,
@@ -167,6 +167,9 @@ class Runtime:
         )
         observation = {"id": key, "name": call["name"], **result}
         return {"observations": [*state["observations"], observation]}
+
+    def _tools(self, state):
+        return ToolSet(Submission.model_validate(state["request"]), state["memories"])
 
     def _finish(self, state):
         result = state["action"]["result"]

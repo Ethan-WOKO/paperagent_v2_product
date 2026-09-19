@@ -4,6 +4,12 @@
 
 Project 页面使用 `agent-engine-reactplan` 的 TypeScript ReAct 执行链路。Java 产品层负责认证与授权、任务持久化、可信项目版本、Workspace、工具/沙箱网关以及验证后发布和回滚。不能将现行 Project 执行链称为旧 Java V2 plan-and-execute。
 
+## #233 Python 只读实验入口
+
+Project 页新增按提交选择 TS / Python 的开关，默认 TS；Python 还需 Java 显式启用。引擎冻结在 task intake，旧任务默认 TS，查询/SSE/取消及领取不能跨引擎。Python 使用 `agent-engine-python` 的 LangGraph Plan-and-Execute，只允许 Project 文件读取，Java grant 禁止写入、沙箱与发布。模型、事件持久化、用量结算、会话缓存失效仍由现有 Java 产品边界管理。独立 demo 与产品入口分离；这是用户明确要求的新实验路径，不涉及 #228 退役或默认运行时切换。
+
+本地启用、V108 路由迁移、恢复限制及性能对照方法见 [Python 产品接入说明](../../../agent-engine-python/PRODUCT-INTEGRATION.md)。尚无真实 Project 的性能或质量比较结论。
+
 ## 三条路径的边界
 
 - Project ReAct：当前项目页的发送、事件、取消与结果入口，TS Engine 运行模型/工具循环。

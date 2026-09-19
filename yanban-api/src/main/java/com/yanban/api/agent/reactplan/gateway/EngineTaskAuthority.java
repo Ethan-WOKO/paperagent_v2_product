@@ -24,7 +24,7 @@ public record EngineTaskAuthority(
                 || requestDigest == null || !requestDigest.matches("[a-f0-9]{64}")
                 || userId <= 0 || turnId <= 0 || sessionId <= 0 || projectId <= 0
                 || projectVersion == null || !projectVersion.matches("[a-f0-9]{64}")
-                || !readProject || !executeSandbox
+                || !readProject
                 || modelProvider == null || modelProvider.isBlank() || modelProvider.length() > 120
                 || modelName == null || modelName.isBlank() || modelName.length() > 240
                 || modelFallbacks == null || modelFallbacks.size() > 7

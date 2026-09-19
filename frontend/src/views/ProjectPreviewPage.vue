@@ -502,6 +502,7 @@
                   <div class="v2-task-card__question-copy">
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
                     <p>{{ item.record.instruction }}</p>
+                    <small>{{ item.record.engine === 'PYTHON' ? 'Python · 只读分析' : 'TypeScript · ReAct' }}</small>
                   </div>
                   <div class="v2-task-card__status">
                     <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
@@ -605,14 +606,22 @@
                 @keydown="handleReactPlanKeydown"
               />
               <div class="reactplan-composer-actions">
+                <NSelect
+                  v-if="!reactPlanQuestion"
+                  v-model:value="selectedProjectEngine"
+                  aria-label="项目执行引擎"
+                  class="reactplan-skill-select"
+                  :options="projectEngineOptions"
+                  :disabled="reactPlanBusy"
+                />
                 <NButton
-                  v-if="selectedFile?.path.toLowerCase().endsWith('.tex') && !reactPlanQuestion"
+                  v-if="selectedFile?.path.toLowerCase().endsWith('.tex') && !reactPlanQuestion && selectedProjectEngine === 'TS'"
                   secondary
                   :disabled="reactPlanBusy"
                   @click="reactPlanInput = projectPaperPolishRequest(selectedFile!, 'en')"
                 >润色所选论文（英文）</NButton>
                 <NSelect
-                  v-if="!reactPlanQuestion"
+                  v-if="!reactPlanQuestion && selectedProjectEngine === 'TS'"
                   v-model:value="selectedReactPlanSkillId"
                   aria-label="ReAct task skill"
                   class="reactplan-skill-select"
@@ -982,6 +991,23 @@ const v2NaturalTurnBusy = computed(() => v2TurnStarting.value || v2TurnPolling.v
 const reactPlanInput = ref('');
 const reactPlanSkills = ref<SkillListItemResponse[]>([]);
 const selectedReactPlanSkillId = ref<string | null>(null);
+const projectEngineOptions = [
+  { label: 'TypeScript · ReAct（默认）', value: 'TS' },
+  { label: 'Python · Plan & Execute（只读实验）', value: 'PYTHON' },
+];
+const projectEngineSelections = ref<Record<number, 'TS' | 'PYTHON'>>({});
+const newSessionEngine = ref<'TS' | 'PYTHON'>('TS');
+const selectedProjectEngine = computed<'TS' | 'PYTHON'>({
+  get: () => activeSessionId.value
+    ? projectEngineSelections.value[activeSessionId.value]
+      ?? [...reactPlanRecords.value].reverse().find((record) => record.sessionId === activeSessionId.value)?.engine
+      ?? 'TS'
+    : newSessionEngine.value,
+  set: (engine) => {
+    if (activeSessionId.value) projectEngineSelections.value[activeSessionId.value] = engine;
+    else newSessionEngine.value = engine;
+  },
+});
 const reactPlanSkillOptions = computed(() => reactPlanSkills.value
   .filter((skill) => skill.enabled)
   .map((skill) => ({ label: skill.name, value: skill.id })));
@@ -2308,6 +2334,7 @@ async function loadEarlierReactPlanTasks() {
 async function submitReactPlanTask() {
   const projectId = activeProjectId.value;
   const instruction = reactPlanInput.value.trim();
+  const engine = selectedProjectEngine.value;
   if (!projectId || !instruction || reactPlanBusy.value) return;
   const epoch = projectEpoch;
   const startedAt = new Date().toISOString();
@@ -2320,10 +2347,12 @@ async function submitReactPlanTask() {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
     const clientRequestId = newReactPlanRequestId();
+    projectEngineSelections.value[sessionId] = engine;
     const accepted = (await startReactPlanTask(sessionId, {
       clientRequestId,
       instruction,
-      ...(selectedReactPlanSkillId.value ? { skillId: selectedReactPlanSkillId.value } : {}),
+      engine,
+      ...(engine === 'TS' && selectedReactPlanSkillId.value ? { skillId: selectedReactPlanSkillId.value } : {}),
     }, controller.signal)).data;
     void listProjectSessions(projectId).then(({ data }) => {
       if (epoch === projectEpoch && projectId === activeProjectId.value) {
@@ -2337,6 +2366,7 @@ async function submitReactPlanTask() {
     if (epoch !== projectEpoch || sessionId !== activeSessionId.value) return;
     const record: ReactPlanTaskRecord = {
       version: 1,
+      engine: accepted.engine ?? engine,
       projectId,
       sessionId,
       clientRequestId,

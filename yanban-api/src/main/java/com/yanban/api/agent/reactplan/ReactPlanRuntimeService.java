@@ -59,6 +59,8 @@ final class ReactPlanRuntimeService {
     private final ReactPlanConversationContextService conversations;
     private final ReactPlanConversationSummaryQueue conversationSummaries;
     private final SkillsService skills;
+    @Autowired(required = false)
+    private ReactPlanEngineSelection engineSelection;
 
     @Autowired
     ReactPlanRuntimeService(
@@ -113,10 +115,14 @@ final class ReactPlanRuntimeService {
         Map<String, Object> authority = authority(
                 context, request.instruction(), provider, model,
                 modelFallbacks, skillSnapshot(userId, request.skillId()));
+        if (engineSelection != null && engineSelection.readOnly(taskId)) {
+            authority.put("permissions", Map.of("readProject", true, "writeWorkspace", false, "executeSandbox", false));
+        }
         String requestDigest = ReactPlanCanonicalJson.digest(json, authority);
 
         PersistenceResult<?> persisted = plans.bootstrap(
-                userId, turnId, planCommand(taskId, request.instruction()));
+                userId, turnId, planCommand(taskId, request.instruction(),
+                        engineSelection != null && engineSelection.readOnly(taskId)));
         if (!persisted.successful()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT, "The authenticated Turn is bound to another Plan request");
@@ -279,17 +285,17 @@ final class ReactPlanRuntimeService {
     }
 
     private static ReactPlanBootstrapCommand planCommand(
-            String taskId, String instruction) {
+            String taskId, String instruction, boolean readOnly) {
         RoutingDecision route = new RoutingDecision(
                 new RoutingRequestId("route-" + taskId.substring("task.".length(), 38)),
                 Route.PERSISTENT_PLAN_EXECUTE,
                 RoutingDecisionReason.DECLARED_REQUIREMENT,
-                Set.of(RoutingRequirement.PROJECT_FILE_ACCESS,
+                readOnly ? Set.of(RoutingRequirement.PROJECT_FILE_ACCESS, RoutingRequirement.TOOL_USE) : Set.of(RoutingRequirement.PROJECT_FILE_ACCESS,
                         RoutingRequirement.TOOL_USE,
                         RoutingRequirement.EXECUTION));
         ExecutionProfile profile = new ExecutionProfile(
                 ExecutionTier.SANDBOX_STANDARD,
-                Set.of(Capability.READ_PROJECT, Capability.WRITE_WORKSPACE,
+                readOnly ? Set.of(Capability.READ_PROJECT) : Set.of(Capability.READ_PROJECT, Capability.WRITE_WORKSPACE,
                         Capability.EXECUTE_COMMAND),
                 NetworkPolicy.DENY_ALL,
                 List.of(),
@@ -305,7 +311,8 @@ final class ReactPlanRuntimeService {
                         instruction,
                         List.of("authenticated frozen ProjectVersion"),
                         List.of("receipt-backed answer"),
-                        List.of("modify isolated Workspace only", "no direct Project modification")),
+                        readOnly ? List.of("read-only analysis", "no writes, execution or publication")
+                                : List.of("modify isolated Workspace only", "no direct Project modification")),
                 profile,
                 new BoundedExecutionHints(20, Duration.ofMinutes(6)),
                 frozen, frozen.plusMillis(1), frozen.plusMillis(2));

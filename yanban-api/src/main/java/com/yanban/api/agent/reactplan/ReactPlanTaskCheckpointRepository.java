@@ -20,6 +20,7 @@ interface ReactPlanTaskCheckpointRepository
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select checkpoint from ReactPlanTaskCheckpointEntity checkpoint "
             + "where checkpoint.state in ('queued','running') "
+            + "and not exists (select intake.id from ReactPlanTurnIntakeEntity intake where intake.taskId=checkpoint.taskId and intake.engine='PYTHON') "
             + "and (checkpoint.leaseExpiresAt is null or checkpoint.leaseExpiresAt <= :now) "
             + "order by checkpoint.createdAt asc")
     List<ReactPlanTaskCheckpointEntity> findClaimable(LocalDateTime now, Pageable page);

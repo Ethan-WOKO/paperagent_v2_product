@@ -23,6 +23,23 @@ class AgentEngineTaskGrantServiceTest {
     private static final String VERSION = "3".repeat(64);
 
     @Test
+    void pythonGrantAllowsReadButRejectsWriteAndSandbox() {
+        AgentEngineTaskGrantService service = service(properties(), NOW);
+        var selection = mock(com.yanban.api.agent.reactplan.ReactPlanEngineSelection.class);
+        when(selection.readOnly(TASK)).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "engineSelection", selection);
+        EngineTaskGrant grant = service.issue(TASK, DIGEST, 11, 12, "deepseek", "deepseek-v4-flash");
+        EngineTaskAuthority authority = service.verify("Bearer " + grant.value(), TASK, false);
+        assertThat(authority.readProject()).isTrue();
+        assertThat(authority.writeWorkspace()).isFalse();
+        assertThat(authority.executeSandbox()).isFalse();
+        assertThatThrownBy(() -> service.verify("Bearer " + grant.value(), TASK, true))
+                .isInstanceOf(EngineGatewayException.class);
+        assertThatThrownBy(() -> service.verifyWorkspaceWrite("Bearer " + grant.value(), TASK))
+                .isInstanceOf(EngineGatewayException.class);
+    }
+
+    @Test
     void signedGrantBindsAllAuthorityAndExpiresWithoutPersistence() {
         EngineGatewayProperties properties = properties();
         AgentEngineTaskGrantService service = service(properties, NOW);

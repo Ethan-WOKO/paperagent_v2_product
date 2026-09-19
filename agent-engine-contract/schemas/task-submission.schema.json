@@ -46,7 +46,7 @@
           "properties": {
             "readProject": { "const": true },
             "writeWorkspace": { "type": "boolean" },
-            "executeSandbox": { "const": true }
+            "executeSandbox": { "type": "boolean", "description": "False for the opt-in Python read-only engine; Java grants enforce this permission." }
           }
         },
         "model": {

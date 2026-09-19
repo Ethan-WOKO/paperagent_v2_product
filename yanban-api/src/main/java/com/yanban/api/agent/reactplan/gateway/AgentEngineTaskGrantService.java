@@ -23,6 +23,8 @@ public final class AgentEngineTaskGrantService {
     private final EngineGatewayProperties properties;
     private final Clock clock;
     private final AgentTurnProductContextResolver contexts;
+    @Autowired(required = false)
+    private com.yanban.api.agent.reactplan.ReactPlanEngineSelection engineSelection;
 
     @Autowired
     public AgentEngineTaskGrantService(
@@ -67,7 +69,9 @@ public final class AgentEngineTaskGrantService {
         EngineTaskAuthority authority = new EngineTaskAuthority(
                 taskId, requestDigest, authenticatedUserId, turnId,
                 context.identity().sessionId(), context.identity().projectId(),
-                context.projectVersionId().orElseThrow(), true, true, true,
+                context.projectVersionId().orElseThrow(), true,
+                engineSelection == null || !engineSelection.readOnly(taskId),
+                engineSelection == null || !engineSelection.readOnly(taskId),
                 modelProvider, modelName, modelFallbacks, expiresAt);
         byte[] payload = write(authority);
         String body = Base64.getUrlEncoder().withoutPadding().encodeToString(payload);

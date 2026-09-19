@@ -40,6 +40,36 @@ class ReactPlanTaskSchedulerServiceTest {
     }
 
     @Test
+    void engineSpecificClaimsCannotTakeTheOtherEnginesTasks() {
+        ReactPlanEngineSelection engines = mock(ReactPlanEngineSelection.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "engines", engines);
+        when(engines.readOnly("python-task")).thenReturn(true);
+        assertThatThrownBy(() -> scheduler.claimPythonTask("ts-task", "engine.worker_one"))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("TASK_ENGINE_MISMATCH");
+        assertThatThrownBy(() -> scheduler.claimTask("python-task", "engine.worker_one"))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("TASK_ENGINE_MISMATCH");
+        verify(checkpoints, org.mockito.Mockito.never()).findLockedByTaskId(any());
+    }
+
+    @Test
+    void pythonSpecificClaimHonorsCapacityAndIssuesFencedLease() {
+        ReactPlanEngineSelection engines = mock(ReactPlanEngineSelection.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "engines", engines);
+        ReactPlanTaskCheckpointEntity task = task("e", 7L, 70L);
+        when(engines.readOnly(task.taskId())).thenReturn(true);
+        when(checkpoints.findLockedByTaskId(task.taskId())).thenReturn(java.util.Optional.of(task));
+        jdbc.globalActive = 20;
+        assertThat(scheduler.claimPythonTask(task.taskId(), "engine.python_one")).isNull();
+        jdbc.globalActive = 0;
+        when(grants.issue(any(), any(), any(Long.class), any(Long.class), any(), any(), anyList()))
+                .thenReturn(new EngineTaskGrant("g".repeat(40), Instant.parse("2026-08-18T00:05:00Z")));
+        ReactPlanTaskSchedulerService.ClaimedTask claimed = scheduler.claimPythonTask(task.taskId(), "engine.python_one");
+        assertThat(claimed.lease().fence()).isEqualTo(1L);
+        assertThat(task.leaseOwner()).isEqualTo("engine.python_one");
+        assertThat(scheduler.claimPythonTask(task.taskId(), "engine.python_two")).isNull();
+    }
+
+    @Test
     void skipsASaturatedUserAndClaimsTheOldestEligibleUsersTask() {
         ReactPlanTaskCheckpointEntity saturated = task("a", 7L, 70L);
         ReactPlanTaskCheckpointEntity eligible = task("b", 8L, 80L);

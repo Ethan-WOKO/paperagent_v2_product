@@ -1,5 +1,7 @@
 # Python Plan-and-Execute 独立服务
 
+产品实验接入已在 #233 增加：见 [Project 页引擎开关与对照说明](PRODUCT-INTEGRATION.md)。以下内容描述阶段一的独立 demo 模式；`serve-product` 是单独的显式入口，权限、持久化和启动方式以接入说明为准。
+
 日期：2026-09-19。分类：开发 demo。Issue：[#231](https://github.com/Ethan-WOKO/paperagent_v2_product/issues/231)。
 
 适用范围：未来替换当前 TypeScript Project ReAct 的第一阶段技术验证。所有新增内容仅在本目录。

@@ -30,6 +30,7 @@ export type ReactPlanTaskEvent =
   | (ReactPlanEventBase & { type: 'delivery'; conclusion: string; receiptRefs: string[] });
 
 export interface ReactPlanTaskRecord {
+  engine?: 'TS' | 'PYTHON';
   version: 1;
   projectId: number;
   sessionId: number;
@@ -262,6 +263,7 @@ export function mergeReactPlanSessionTasks(
       turnId: task.turnId,
       taskId: task.taskId,
       startedAt: task.startedAt,
+      engine: task.engine ?? 'TS',
       finishedAt: task.finishedAt,
       view: task.task,
       events: task.events ?? local?.events ?? [],

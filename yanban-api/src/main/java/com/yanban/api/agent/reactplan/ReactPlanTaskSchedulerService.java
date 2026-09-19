@@ -26,6 +26,8 @@ class ReactPlanTaskSchedulerService {
     private final ReactPlanTaskCheckpointRepository checkpoints;
     private final AgentEngineTaskGrantService grants;
     private final ReactPlanRuntimeProperties properties;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ReactPlanEngineSelection engines;
 
     ReactPlanTaskSchedulerService(
             JdbcTemplate jdbc,
@@ -72,6 +74,9 @@ class ReactPlanTaskSchedulerService {
 
     @Transactional
     ClaimedTask claimTask(String taskId, String owner) {
+        if (engines != null && engines.readOnly(taskId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "TASK_ENGINE_MISMATCH");
+        }
         validateOwner(owner);
         lockScheduler();
         ReactPlanTaskCheckpointEntity selected = locked(taskId);
@@ -84,6 +89,22 @@ class ReactPlanTaskSchedulerService {
                 || countActive(selected.userId(), now) >= properties.getMaxConcurrentTasksPerUser()) {
             return null;
         }
+        return claim(selected, owner, now);
+    }
+
+    @Transactional
+    ClaimedTask claimPythonTask(String taskId, String owner) {
+        validateOwner(owner);
+        if (engines == null || !engines.readOnly(taskId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "TASK_ENGINE_MISMATCH");
+        }
+        lockScheduler();
+        ReactPlanTaskCheckpointEntity selected = locked(taskId);
+        LocalDateTime now = databaseNow();
+        if (!java.util.Set.of("queued", "running").contains(selected.state())
+                || selected.leaseExpiresAt() != null && selected.leaseExpiresAt().isAfter(now)) return null;
+        if (countActive(null, now) >= properties.getMaxConcurrentTasks()
+                || countActive(selected.userId(), now) >= properties.getMaxConcurrentTasksPerUser()) return null;
         return claim(selected, owner, now);
     }
 
