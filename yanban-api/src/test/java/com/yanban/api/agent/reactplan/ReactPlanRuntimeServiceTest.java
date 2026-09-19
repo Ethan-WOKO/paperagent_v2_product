@@ -46,6 +46,7 @@ class ReactPlanRuntimeServiceTest {
         verify(engine).submit(submission.capture());
         assertFalse(submission.getValue().path("authority").path("permissions").path("writeWorkspace").asBoolean());
         assertFalse(submission.getValue().path("authority").path("permissions").path("executeSandbox").asBoolean());
+        assertEquals(0, submission.getValue().path("authority").path("model").path("fallbacks").size());
         var command = ArgumentCaptor.forClass(ReactPlanBootstrapCommand.class);
         verify(plans).bootstrap(any(Long.class), any(Long.class), command.capture());
         assertEquals(Set.of(Capability.READ_PROJECT), command.getValue().executionProfile().capabilities());

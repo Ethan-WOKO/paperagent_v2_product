@@ -7,7 +7,11 @@ public final class EngineGatewayException extends RuntimeException {
     private final String code;
 
     EngineGatewayException(HttpStatus status, String code) {
-        super(code, null, false, false);
+        this(status, code, code);
+    }
+
+    EngineGatewayException(HttpStatus status, String code, String safeMessage) {
+        super(safeMessage, null, false, false);
         this.status = status;
         this.code = code;
     }

@@ -123,45 +123,52 @@ class JavaGateway:
             assert body["requestDigest"] == digest(
                 {k: v for k, v in body.items() if k != "requestDigest"}
             )
-            tools = body["tools"]
-            context = json.loads(body["messages"][-1]["content"])
+            assert all(t["function"]["name"] not in {"Plan", "finish_step"} for t in body["tools"])
+            policy = body["messages"][0]["content"]
+            assert "Do not continue or summarize a previous task" in policy
+            assert "greetings" in policy
+            current = next(
+                m["content"]
+                for m in body["messages"]
+                if m["role"] == "user" and m["content"].startswith("Current task: ")
+            )
+            observations = [
+                json.loads(m["content"]) for m in body["messages"] if m["role"] == "tool"
+            ]
+            native_ids = {c["id"] for m in body["messages"] for c in m.get("toolCalls", [])}
+            assert all(
+                m["toolCallId"] in native_ids for m in body["messages"] if m["role"] == "tool"
+            )
             call = None
-            if tools and tools[0]["function"]["name"] == "Plan":
-                call = (
-                    "Plan",
-                    {
-                        "steps": [
-                            {
-                                "key": "inspect",
-                                "objective": "Read paper",
-                                "done_when": "Paper content observed",
-                                "depends_on": [],
-                            }
-                        ]
-                    },
-                )
-            elif tools:
-                observations = context["observations"]
+            direct = {
+                "Current task: 你好": "你好！有什么可以帮你？",
+                "Current task: 你好，你是什么模型？": "provider=test; model=test-model",
+                "Current task: 什么是快速排序？": "快速排序通过分区递归排列元素。",
+            }
+            greeting = current in direct
+            if not greeting:
                 if not observations:
                     call = ("list_project_files", {})
                 elif len(observations) == 1:
-                    call = ("read_project_file", {"path": "paper.txt", "expectedSha256": "c" * 64})
-                else:
+                    file = observations[-1]["output"]["files"][0]
+                    assert len(file["sha256"]) == 64
                     call = (
-                        "finish_step",
-                        {
-                            "kind": "complete",
-                            "summary": "Observed sample size 100 in paper.txt",
-                            "evidence_refs": [observations[-1]["id"]],
-                        },
+                        "read_project_file",
+                        {"path": file["path"], "expectedSha256": file["sha256"]},
                     )
             result = {
                 "contractVersion": "1.0",
                 "clientRequestId": body["clientRequestId"],
                 "requestDigest": body["requestDigest"],
-                "content": None if call else "paper.txt reports a sample of 100.",
+                "content": None
+                if call
+                else (direct[current] if greeting else "paper.txt reports a sample of 100."),
                 "toolCalls": [
-                    {"id": "model-call", "name": call[0], "arguments": json.dumps(call[1])}
+                    {
+                        "id": f"model-call-{self.models}",
+                        "name": call[0],
+                        "arguments": json.dumps(call[1]),
+                    }
                 ]
                 if call
                 else [],
@@ -196,8 +203,8 @@ def test_real_graph_uses_product_models_tools_and_durable_events(tmp_path):
         assert client.post("/v1/tasks", json=submission(), headers=AUTH).status_code == 202
         view = finish(client)
         assert view["state"] == "succeeded", view
-        assert java.models == 5
-        assert java.checkpoint["modelCalls"] == 5
+        assert java.models == 3
+        assert java.checkpoint["modelCalls"] == 3
         assert "promptTokens" not in java.checkpoint["metrics"]
         assert any(path.endswith("/workspace/read") for path, _ in java.calls)
         assert not any(
@@ -208,7 +215,7 @@ def test_real_graph_uses_product_models_tools_and_durable_events(tmp_path):
         assert "paper.txt reports a sample of 100." in sse.text
         assert "ephemeral-grant-for-test-32-characters" not in sse.text
         assert client.post("/v1/tasks", json=submission(), headers=AUTH).json()["replayed"]
-        assert java.models == 5
+        assert java.models == 3
         schemas = [
             json.loads(p.read_text())
             for p in (Path(__file__).resolve().parents[2] / "agent-engine-contract/schemas").glob(
@@ -287,7 +294,7 @@ def test_explicit_resubmit_reconciles_paused_checkpoint_without_repeating_model(
         assert client.get(f"/v1/tasks/{TASK}", headers=AUTH).json()["state"] == "running"
         assert client.post("/v1/tasks", json=submission(), headers=AUTH).json()["replayed"]
         assert finish(client)["state"] == "succeeded"
-        assert java.models == 5
+        assert java.models == 3
 
 
 def test_large_and_invalid_requests_do_not_echo_input(tmp_path):
@@ -328,3 +335,108 @@ def test_gateway_read_continuation_does_not_skip_document_page():
     assert second["nextOffset"] is None
     assert second["nextDocumentCursor"] == "2:0"
     assert tools.invoke("read_project_file", {**args, "path": "../secret"})["success"] is False
+
+
+@pytest.mark.parametrize(
+    "instruction, expected",
+    [("你好", "你好"), ("你好，你是什么模型？", "provider=test"), ("什么是快速排序？", "快速排序")],
+)
+def test_greeting_with_old_project_history_needs_one_model_and_no_tools(
+    tmp_path, instruction, expected
+):
+    java = JavaGateway()
+    data = submission()
+    data["authority"]["instruction"] = instruction
+    data["requestDigest"] = digest(data["authority"])
+    data["context"] = {
+        "historicalContext": {
+            "earlierSummary": "Previously optimize Sort.java; do not continue unless asked"
+        }
+    }
+    with TestClient(make_app(tmp_path, java)) as client:
+        assert client.post("/v1/tasks", json=data, headers=AUTH).status_code == 202
+        assert finish(client)["state"] == "succeeded"
+        assert java.models == 1
+        assert not any("/workspace/" in path for path, _ in java.calls)
+        assert next(e for e in java.events if e["type"] == "delivery")["conclusion"].startswith(
+            expected
+        )
+
+
+def test_model_failure_is_visible_and_durable_without_fallback(tmp_path):
+    class FailedJava(JavaGateway):
+        def _handle(self, request):
+            if request.url.path.endswith("/model-completions"):
+                self.models += 1
+                return httpx.Response(
+                    502,
+                    json={
+                        "code": "MODEL_PROVIDER_QUOTA_EXHAUSTED",
+                        "category": "model",
+                        "message": "供应商报告余额不足 (HTTP 429)",
+                        "retryable": False,
+                    },
+                )
+            return super()._handle(request)
+
+    java = FailedJava()
+    with TestClient(make_app(tmp_path, java)) as client:
+        client.post("/v1/tasks", json=submission(), headers=AUTH)
+        view = finish(client)
+        assert view["state"] == "failed"
+        assert view["error"]["code"] == "MODEL_PROVIDER_QUOTA_EXHAUSTED"
+        assert "余额不足" in view["error"]["message"]
+        assert view["error"]["category"] == "model"
+        assert java.models == 1
+        assert java.events[-1]["error"] == view["error"]
+    with TestClient(make_app(tmp_path, java)) as client:
+        assert client.get(f"/v1/tasks/{TASK}", headers=AUTH).json()["error"] == view["error"]
+
+
+def test_repeated_reads_reuse_pinned_result_and_stop_unproductive_loop(tmp_path):
+    class RepeatingJava(JavaGateway):
+        def _handle(self, request):
+            response = super()._handle(request)
+            if request.url.path.endswith("/model-completions") and self.models in {3, 4}:
+                body = response.json()
+                body["content"] = None
+                body["toolCalls"] = [
+                    {
+                        "id": f"repeat-{self.models}",
+                        "name": "read_project_file",
+                        "arguments": json.dumps({"path": "paper.txt", "expectedSha256": "c" * 64}),
+                    }
+                ]
+                return httpx.Response(200, json=body)
+            return response
+
+    java = RepeatingJava()
+    with TestClient(make_app(tmp_path, java)) as client:
+        client.post("/v1/tasks", json=submission(), headers=AUTH)
+        view = finish(client)
+        assert view["state"] == "failed"
+        assert view["error"]["code"] == "REPEATED_TOOL_CALL_LIMIT"
+        assert sum(p.endswith("/workspace/read") for p, _ in java.calls) == 1
+        assert java.models == 4
+
+
+def test_old_inflight_graph_is_not_resumed_with_new_nodes(tmp_path, monkeypatch):
+    java = JavaGateway()
+    with TestClient(make_app(tmp_path, java)) as client:
+        service = client.app.state.service
+        monkeypatch.setattr(service.pool, "submit", lambda *a: None)
+        client.post("/v1/tasks", json=submission(), headers=AUTH)
+        with service.runtime.store.transaction() as db:
+            row = db.execute(
+                "SELECT submission FROM product_bindings WHERE task_id=?", (TASK,)
+            ).fetchone()
+            frozen = json.loads(row[0])
+            frozen.pop("pythonRuntime")
+            db.execute(
+                "UPDATE product_bindings SET submission=? WHERE task_id=?",
+                (json.dumps(frozen), TASK),
+            )
+        result = client.post("/v1/tasks", json=submission(), headers=AUTH)
+        assert result.status_code == 409
+        assert result.json()["code"] == "PYTHON_RUNTIME_UPGRADE_REQUIRED"
+        assert java.models == 0

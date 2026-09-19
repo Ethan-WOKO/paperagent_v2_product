@@ -22,8 +22,10 @@ final class AgentEngineGatewayExceptionHandler {
         };
         return ResponseEntity.status(failure.status()).body(new Problem(
                 "1.0", failure.code(), category,
-                "The product gateway rejected the request.",
-                failure.status().is5xxServerError() || failure.status().value() == 429));
+                failure.code().equals(failure.getMessage()) ? "The product gateway rejected the request." : failure.getMessage(),
+                !java.util.Set.of("MODEL_PROVIDER_QUOTA_EXHAUSTED", "MODEL_PROVIDER_AUTH_FAILED",
+                        "MODEL_PROVIDER_MODEL_NOT_FOUND").contains(failure.code())
+                        && (failure.status().is5xxServerError() || failure.status().value() == 429)));
     }
 
     @ExceptionHandler(Exception.class)

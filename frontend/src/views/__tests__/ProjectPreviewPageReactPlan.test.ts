@@ -26,7 +26,7 @@ describe('ProjectPreviewPage ReAct 接入', () => {
       .toBeLessThan(source.indexOf('projectEngineSelections.value[sessionId] = engine;'));
     expect(source).toContain('engine: accepted.engine ?? engine');
     expect(source).toContain("engine === 'TS' && selectedReactPlanSkillId.value");
-    expect(source).toContain('Python · Plan & Execute（只读实验）');
+    expect(source).toContain('Python · LangGraph ReAct（只读实验）');
   });
 
   it('提交自然语言任务并消费带断点的认证 SSE，而不是固定工具流程', () => {

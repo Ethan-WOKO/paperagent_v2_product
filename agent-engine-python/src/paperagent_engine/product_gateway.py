@@ -1,6 +1,7 @@
 """Read-only Java gateway adapter; product credentials never enter graph state."""
 
 import json
+import re
 from typing import Any
 
 import httpx
@@ -38,6 +39,28 @@ class ProductGateway:
         except httpx.HTTPError:
             raise EngineError("PRODUCT_GATEWAY_UNAVAILABLE", 502) from None
         if response.status_code >= 300:
+            try:
+                problem = response.json()
+                code = problem.get("code", "")
+                if re.fullmatch(r"(?:MODEL|TOOL|WORKSPACE|PROJECT)_[A-Z0-9_]{1,100}", code):
+                    failure = EngineError(code, response.status_code)
+                    # Only gateway-defined model diagnostics are retained; never raw HTTP bodies.
+                    if code.startswith("MODEL_"):
+                        message = str(problem.get("message", code))[:500]
+                        message = message.replace(token, "[redacted]").replace(
+                            self.service_token, "[redacted]"
+                        )
+                        message = re.sub(r"(?i)(bearer\s+|sk-)[\w.\-/+=]+", "[redacted]", message)
+                        failure.problem = {
+                            "contractVersion": "1.0",
+                            "code": code,
+                            "category": "model",
+                            "message": message,
+                            "retryable": bool(problem.get("retryable", False)),
+                        }
+                    raise failure
+            except (ValueError, TypeError, AttributeError):
+                pass
             raise EngineError("PRODUCT_GATEWAY_REJECTED", response.status_code)
         return response.json()
 
@@ -75,15 +98,16 @@ class GatewayChatModel(BaseChatModel):
             item = {"role": role, "content": message.content}
             if message.type == "tool":
                 item["toolCallId"] = message.tool_call_id
+            if message.type == "ai" and message.tool_calls:
+                item["toolCalls"] = [
+                    {
+                        "id": c["id"],
+                        "name": c["name"],
+                        "arguments": json.dumps(c["args"], ensure_ascii=False),
+                    }
+                    for c in message.tool_calls
+                ]
             projected.append(item)
-        if tools:
-            projected.insert(
-                0,
-                {
-                    "role": "system",
-                    "content": "Return exactly one tool call using the supplied function schemas. For structured output, call the schema function; do not return prose.",
-                },
-            )
         payload = {
             "contractVersion": "1.0",
             "clientRequestId": self.call_id,

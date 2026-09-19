@@ -74,3 +74,34 @@ git diff --check
 隔离容器 smoke：`--network none`、合成 token、无 host ports、随机独立 volume；验证 `/healthz`、UID=10001、镜像无本地 `.env`、`docker stop --time 60` exit 0、删除并替换容器后卷内容仍在。临时容器及其专属卷均已清理。没有创建 Project 任务或连接模型、Redis、MySQL。
 
 未验证真实云端全栈网络/认证和付费模型；本次没有改前端，不重复其构建。自动重启仅重启服务，不自动接管中断任务。
+
+## 产品 Python ReAct 对齐验证（2026-09-19）
+
+按用户后续要求，产品 Python 改为参考现有 TS 提示词与工具消息循环的只读 ReAct；独立离线 demo 保留 Plan-and-Execute。Java 仍持有任务、权限、事件和缓存边界。Python 新任务仅调用所选主模型，失败直接投影可读的脱敏错误，不再静默切换模型。该范围属于 #233 产品集成，不涉及 #228。
+
+仓库根目录执行：
+
+```powershell
+uv run --project agent-engine-python ruff format agent-engine-python/src agent-engine-python/tests
+uv run --project agent-engine-python ruff check agent-engine-python/src agent-engine-python/tests
+uv run --project agent-engine-python pytest -q agent-engine-python/tests
+uv run --project agent-engine-python python agent-engine-contract/conformance/validate_contract.py
+mvn -q -pl yanban-api -am "-Dtest=ReactPlanRuntimeServiceTest,AgentEngineModelGatewayTest,ModelFailureDiagnosticTest,AgentEngineGatewayContractTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+git diff --check
+```
+
+Python **74 tests passed**。Java 实际执行三个 suite，共 **13 tests passed**（6 + 5 + 2），无失败/跳过；命令中的 AgentEngineGatewayContractTest 不存在，未产生测试，不能视为验证证据。共享协议验证通过：8 schemas、15 operations、13 positive / 5 negative fixtures、5 ordered events、16 scenarios。lint 通过。
+
+在 `frontend/` 执行：
+
+```powershell
+pnpm exec vitest run src/views/__tests__/ProjectPreviewPageReactPlan.test.ts src/utils/__tests__/reactPlanTask.test.ts
+$env:CI='true'
+pnpm build
+```
+
+前端 **30 tests passed**，vue-tsc / Vite 构建通过。仍有既有 Starlette/AnyIO 弃用提示及 Vite bundle 体积提示。
+
+新增回归覆盖：带 Sort.java 历史的问候、身份和通用问题只调用一次模型且不读 Project；原生 assistant/tool 消息关联；完整 manifest hash 传递；重复读取缓存与循环上限；供应商失败经 Java/Python 投影到任务/SSE 并在重启后保留；旧版本未完成任务明确拒绝继续。提示词参考 `agent-engine-reactplan/src/engine.ts` 当前请求优先规则及其身份问答回归，但不宣称所有 TS 工具或场景等价。
+
+未使用真实 Project 或付费模型，工具/model HTTP 为 MockTransport；测试证明控制流与协议行为，不证明真实模型始终遵循提示词，也不构成性能/质量 A/B。没有重启用户服务、重建此版本 Docker 镜像或执行云部署；没有修改 Redis 会话缓存。用户需更新并重启 Java/Python、刷新前端，使用新任务测试；旧 Plan-and-Execute 未完成图不能迁移为新图。Python 仍为单 worker、本地 SQLite 和有界上下文，尚无完整 TS 功能覆盖及复杂长期记忆策略。

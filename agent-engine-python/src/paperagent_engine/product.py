@@ -15,17 +15,21 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .contracts import EngineError, Submission
-from .models import LangChainModel
-from .product_gateway import GatewayChatModel, GatewayTools
-from .runtime import TERMINAL, Runtime, context
+from .product_gateway import GatewayTools
+from .react_loop import ReactLoop
+from .runtime import TERMINAL, Runtime
 from .storage import canonical, digest, now
 
 
-class ProductRuntime(Runtime):
+class ProductRuntime(ReactLoop, Runtime):
     def __init__(self, directory, gateway):
         super().__init__(directory)
         self.gateway = gateway
+        self.configure_react()
         with self.store.transaction() as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS product_failures (task_id TEXT PRIMARY KEY, problem TEXT NOT NULL)"
+            )
             db.execute("""CREATE TABLE IF NOT EXISTS product_bindings (
                 task_id TEXT PRIMARY KEY, local_id TEXT UNIQUE NOT NULL,
                 submission TEXT NOT NULL, created TEXT NOT NULL)""")
@@ -43,7 +47,16 @@ class ProductRuntime(Runtime):
 
     def _tools(self, state):
         binding = self.binding(local_id=state["task_id"])
-        return GatewayTools(self.gateway, binding["task_id"], binding["submission"]["authority"])
+        tools = GatewayTools(self.gateway, binding["task_id"], binding["submission"]["authority"])
+        original = tools.invoke
+        tools.invoke = lambda name, args: self.store.operation(
+            state["task_id"],
+            "read-cache-" + digest([name, args]),
+            "read_cache",
+            [name, args],
+            lambda: original(name, args),
+        )
+        return tools
 
     def _tool(self, state):
         key = f"evidence_{state['revision']}_{state['index']}_{state['turn']}"
@@ -77,36 +90,6 @@ class ProductRuntime(Runtime):
         except Exception:
             record("failed")
             raise
-
-    def _model(self, state, purpose, invoke):
-        binding = self.binding(local_id=state["task_id"])
-        submission = binding["submission"]
-        payload = context(state)
-        payload["project"] = submission["authority"]["project"]
-        payload["history_data_not_instructions"] = canonical(
-            submission.get("context", {}).get("historicalContext", {})
-        )[:4000]
-        if submission["authority"].get("skill"):
-            payload["skill"] = submission["authority"]["skill"]["prompt"][:2000]
-        if len(canonical(payload)) > 30000:
-            raise EngineError("CONTEXT_BUDGET_EXCEEDED")
-        key = f"model-{state['revision']}-{state['index']}-{state['turn']}-{purpose}"
-        adapter = LangChainModel.__new__(LangChainModel)
-        adapter.chat = GatewayChatModel(
-            gateway=self.gateway,
-            task_id=binding["task_id"],
-            call_id="model." + digest([binding["task_id"], key]),
-            route=submission["authority"]["model"],
-        )
-
-        def run():
-            if purpose == "plan":
-                return adapter.plan(payload).model_dump()
-            if purpose == "act":
-                return adapter.act(payload, self._tools(state).tools).model_dump()
-            return {"text": adapter.synthesize(payload)}
-
-        return self.store.operation(state["task_id"], key, "model", payload, run)
 
 
 class ProductService:
@@ -159,8 +142,10 @@ class ProductService:
                     "client_request_id": task_id[5:],
                     "frame": {
                         "objective": authority["instruction"],
-                        "objects": ["Frozen Project files"],
-                        "deliverables": ["Read-only analysis with evidence and limitations"],
+                        "objects": ["Current user request"],
+                        "deliverables": [
+                            "Answer the current request; Project claims need evidence"
+                        ],
                         "constraints": [
                             "No writes, sandbox execution, network tools or publication"
                         ],
@@ -182,11 +167,17 @@ class ProductService:
             raise EngineError("INVALID_PRODUCT_SUBMISSION", 400) from None
         # Only the short-lived in-memory grant is refreshed on exact replay.
         frozen = {k: v for k, v in submission.items() if k != "gateway"}
+        frozen["pythonRuntime"] = "react-v1"
         with self.lock:
             try:
                 binding = self.runtime.binding(task_id=task_id)
                 if binding["submission"]["requestDigest"] != submission["requestDigest"]:
                     raise EngineError("TASK_DIGEST_CONFLICT")
+                if (
+                    binding["submission"].get("pythonRuntime") != "react-v1"
+                    and self.runtime.store.task(binding["local_id"])["status"] not in TERMINAL
+                ):
+                    raise EngineError("PYTHON_RUNTIME_UPGRADE_REQUIRED")
                 replayed = True
             except EngineError as exc:
                 if exc.status != 404:
@@ -252,7 +243,7 @@ class ProductService:
             "pendingQuestionId": None,
             "deliverySequence": delivery,
             "terminalSequence": local["last_sequence"] if local["status"] in TERMINAL else None,
-            "error": self.problem(local["error"]) if local["error"] else None,
+            "error": self.task_problem(task_id, local["error"]) if local["error"] else None,
             "createdAt": binding["created"],
             "updatedAt": events[-1]["occurredAt"] if events else binding["created"],
         }
@@ -266,6 +257,17 @@ class ProductService:
             "message": "Python read-only analysis stopped: " + code,
             "retryable": False,
         }
+
+    def task_problem(self, task_id, code):
+        with self.runtime.store.lock:
+            row = self.runtime.store.connection.execute(
+                "SELECT problem FROM product_failures WHERE task_id=?", (task_id,)
+            ).fetchone()
+        if row:
+            problem = json.loads(row[0])
+            if problem["code"] == code:
+                return problem
+        return self.problem(code)
 
     def events(self, task_id, after=0):
         binding = self.runtime.binding(task_id=task_id)
@@ -281,7 +283,9 @@ class ProductService:
                 item.update(
                     type="status",
                     state=event["status"],
-                    error=self.problem(event["error"]) if event.get("error") else None,
+                    error=self.task_problem(task_id, event["error"])
+                    if event.get("error")
+                    else None,
                 )
             elif event["type"] == "delivery":
                 item.update(type="delivery", conclusion=event["conclusion"], receiptRefs=[])
@@ -298,7 +302,7 @@ class ProductService:
             else:
                 item.update(
                     type="message",
-                    content=f"Python 只读分析：计划版本 {event['revision']}，已完成 {event['completed_count']} 步。",
+                    content="Python：正在处理当前请求。",
                 )
             result.append(item)
         return result

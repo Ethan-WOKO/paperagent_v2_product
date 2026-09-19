@@ -107,8 +107,8 @@ final class ReactPlanRuntimeService {
                 userId, request.provider(), request.model());
         String provider = endpoint.providerKey();
         String model = endpoint.modelName();
-        List<EngineModelRouteCandidate> modelFallbacks = modelFallbacks(
-                userId, provider, model);
+        List<EngineModelRouteCandidate> modelFallbacks = engineSelection != null && engineSelection.readOnly(taskId)
+                ? List.of() : modelFallbacks(userId, provider, model);
         log.info("reactplan_model_routes_frozen taskId={} primaryProvider={} primaryModel={} fallbacks={}",
                 taskId, provider, model, modelFallbacks);
         conversationSummaries.catchUp(userId, context.identity().sessionId());

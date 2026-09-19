@@ -1,6 +1,16 @@
 # Project 页引擎对照（实验功能，#233）
 
-日期：2026-09-19。当前默认运行时仍是 TypeScript ReAct。Python 使用 LangGraph Plan-and-Execute；本次只开放 Project 文件的只读分析。此文覆盖产品接入，README 中的 `/dev/v1` 仍是隔离 demo。
+日期：2026-09-19。当前默认运行时仍是 TypeScript ReAct。Python 产品入口现采用对齐 TS 行为的 LangGraph ReAct，只开放 Project 文件的只读工具。原 Plan-and-Execute 保留在独立 `/dev/v1` demo；产品入口不再强制规划。
+
+## 当前执行行为
+
+`bootstrap → respond →（有工具调用：read_tools → respond；纯文本答案：结束）`。LangChain 负责原生 assistant/tool 消息和工具适配，LangGraph 负责节点推进及检查点。沿用 TS 当前任务优先、历史不得擅自续做、问候/身份/通用问题无需项目工具的规则；未复制 TS 的写入、沙箱、工具发现或 ask_user 能力，不能视为全功能等价替换。
+
+无单独分类模型、强制 Plan、finish_step 或最终额外 synthesis 调用。完整文件路径/hash 随原生工具消息保留；旧正文可移出模型上下文，但不截短 hash。历史超预算整段省略并明确标记，避免截断 JSON。相同只读调用复用本任务内的持久化结果；第三次重复同一调用会以 `REPEATED_TOOL_CALL_LIMIT` 停止，避免无进展循环。
+
+Python 新任务固定所选 provider/model，**不自动回退其他模型**。TS 的原回退策略不变。供应商失败将保留分类错误码、可获取的 HTTP 状态及数字型供应商错误码，显示固定脱敏说明，写入任务错误和 SSE；不返回原始响应正文或凭证。只有供应商返回明确的余额/配额信息才提示余额/配额不足，HTTP 429 本身仅判为限流或配额限制。
+
+升级时先完成/取消旧 Python 在途任务，再重启 Java 和 Python，并刷新前端。旧终态历史保留；旧 Plan-and-Execute 在途任务不能用新图恢复，会返回 `PYTHON_RUNTIME_UPGRADE_REQUIRED`，应新建任务。不要删除执行数据目录。
 
 ## 开关与权限
 

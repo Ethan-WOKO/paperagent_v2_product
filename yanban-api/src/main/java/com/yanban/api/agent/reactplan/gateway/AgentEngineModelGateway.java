@@ -87,6 +87,12 @@ final class AgentEngineModelGateway {
                 routed = modelRoutes.chatConfigured(
                         authority.userId(), modelRequest(request), List.copyOf(routes));
             } catch (RuntimeException exhausted) {
+                if (!authority.executeSandbox()) {
+                    EngineGatewayException diagnostic = ModelFailureDiagnostic.from(exhausted);
+                    log.warn("reactplan_model_failure taskId={} provider={} model={} code={} detail={}",
+                            authority.taskId(), request.provider(), request.model(), diagnostic.code(), diagnostic.getMessage());
+                    throw diagnostic;
+                }
                 throw EngineGatewayException.badGateway("MODEL_PROVIDERS_EXHAUSTED");
             }
             ChatResponse response = routed.response();

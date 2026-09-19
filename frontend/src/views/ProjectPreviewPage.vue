@@ -993,7 +993,7 @@ const reactPlanSkills = ref<SkillListItemResponse[]>([]);
 const selectedReactPlanSkillId = ref<string | null>(null);
 const projectEngineOptions = [
   { label: 'TypeScript · ReAct（默认）', value: 'TS' },
-  { label: 'Python · Plan & Execute（只读实验）', value: 'PYTHON' },
+  { label: 'Python · LangGraph ReAct（只读实验）', value: 'PYTHON' },
 ];
 const projectEngineSelections = ref<Record<number, 'TS' | 'PYTHON'>>({});
 const newSessionEngine = ref<'TS' | 'PYTHON'>('TS');

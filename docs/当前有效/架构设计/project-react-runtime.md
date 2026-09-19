@@ -6,7 +6,7 @@ Project 页面使用 `agent-engine-reactplan` 的 TypeScript ReAct 执行链路�
 
 ## #233 Python 只读实验入口
 
-Project 页新增按提交选择 TS / Python 的开关，默认 TS；Python 还需 Java 显式启用。引擎冻结在 task intake，旧任务默认 TS，查询/SSE/取消及领取不能跨引擎。Python 使用 `agent-engine-python` 的 LangGraph Plan-and-Execute，只允许 Project 文件读取，Java grant 禁止写入、沙箱与发布。模型、事件持久化、用量结算、会话缓存失效仍由现有 Java 产品边界管理。独立 demo 与产品入口分离；这是用户明确要求的新实验路径，不涉及 #228 退役或默认运行时切换。
+Project 页新增按提交选择 TS / Python 的开关，默认 TS；Python 还需 Java 显式启用。引擎冻结在 task intake，旧任务默认 TS，查询/SSE/取消及领取不能跨引擎。Python 产品入口已改为对齐 TS 只读行为的 LangGraph ReAct：模型直接回答或调用工具后继续，不强制规划；独立 demo 仍保留 Plan-and-Execute。Java grant 禁止 Python 写入、沙箱与发布。Python 新任务固定所选模型，失败直接展示脱敏诊断；TS 原回退策略不变。模型、事件持久化、用量结算、会话缓存失效仍由现有 Java 产品边界管理。这不涉及 #228 退役或默认运行时切换。
 
 本地启用、V108 路由迁移、恢复限制及性能对照方法见 [Python 产品接入说明](../../../agent-engine-python/PRODUCT-INTEGRATION.md)。尚无真实 Project 的性能或质量比较结论。
 
