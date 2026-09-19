@@ -794,6 +794,7 @@
 <script setup lang="ts">
 import { projectPaperPolishRequest } from '@/utils/paperPolishInput';
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { loadConversationParts } from '@/utils/conversationLoading';
 import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
@@ -2747,13 +2748,13 @@ async function loadConversation(epoch = projectEpoch) {
   try {
     const sessionId = await ensureSession();
     if (!sessionId || epoch !== projectEpoch) return;
-    await Promise.all([
-      loadCandidates(sessionId, epoch),
-      loadV2TurnHistory(sessionId, epoch),
-    ]);
-    if (epoch === projectEpoch && activeProjectId.value) {
-      await loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
-    }
+    const projectId = activeProjectId.value;
+    await loadConversationParts(
+      async () => {
+        if (epoch === projectEpoch && projectId) await loadReactPlanRecord(projectId, sessionId, epoch);
+      },
+      [() => loadCandidates(sessionId, epoch), () => loadV2TurnHistory(sessionId, epoch)],
+    );
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
   }
@@ -2819,13 +2820,13 @@ async function selectConversation(sessionId: number) {
   selectedValidation.value = null;
   const epoch = projectEpoch;
   try {
-    await Promise.all([
-      loadCandidates(sessionId, epoch),
-      loadV2TurnHistory(sessionId, epoch),
-    ]);
-    if (epoch === projectEpoch && activeProjectId.value) {
-      await loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
-    }
+    const projectId = activeProjectId.value;
+    await loadConversationParts(
+      async () => {
+        if (epoch === projectEpoch && projectId) await loadReactPlanRecord(projectId, sessionId, epoch);
+      },
+      [() => loadCandidates(sessionId, epoch), () => loadV2TurnHistory(sessionId, epoch)],
+    );
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
   }

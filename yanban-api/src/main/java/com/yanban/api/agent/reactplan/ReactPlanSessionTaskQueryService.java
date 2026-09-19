@@ -1,6 +1,8 @@
 package com.yanban.api.agent.reactplan;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.yanban.api.agent.cache.ConversationSnapshotCache;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.core.agent.AgentMessage;
@@ -39,6 +41,7 @@ class ReactPlanSessionTaskQueryService {
     private final ReactPlanTurnIntakeRepository intakes;
     private final ReactPlanTaskCheckpointRepository checkpoints;
     private final ReactPlanTaskEventRepository events;
+    private final ConversationSnapshotCache snapshots;
 
     ReactPlanSessionTaskQueryService(
             ObjectMapper json,
@@ -46,13 +49,15 @@ class ReactPlanSessionTaskQueryService {
             AgentMessageRepository messages,
             ReactPlanTurnIntakeRepository intakes,
             ReactPlanTaskCheckpointRepository checkpoints,
-            ReactPlanTaskEventRepository events) {
+            ReactPlanTaskEventRepository events,
+            ConversationSnapshotCache snapshots) {
         this.json = json;
         this.sessions = sessions;
         this.messages = messages;
         this.intakes = intakes;
         this.checkpoints = checkpoints;
         this.events = events;
+        this.snapshots = snapshots;
     }
 
     @Transactional(readOnly = true)
@@ -84,14 +89,23 @@ class ReactPlanSessionTaskQueryService {
         Map<Long, AgentMessage> taskMessages = messages.findAllById(ordered.stream()
                         .map(ReactPlanTurnIntakeEntity::userMessageId).toList()).stream()
                 .collect(Collectors.toMap(AgentMessage::getId, Function.identity()));
+        // Check owner/session bindings before accessing any cached task body.
+        List<String> boundTaskIds = new ArrayList<>();
+        for (ReactPlanTurnIntakeEntity intake : ordered) {
+            var checkpoint = taskCheckpoints.get(intake.taskId());
+            var message = taskMessages.get(intake.userMessageId());
+            if (checkpoint != null && message != null) {
+                requireBoundFacts(userId, sessionId, intake, checkpoint, message);
+                boundTaskIds.add(intake.taskId());
+            }
+        }
         Map<String, List<JsonNode>> taskEvents = includeEvents
-                ? readEvents(taskIds) : Map.of();
+                ? readEvents(userId, sessionId, boundTaskIds, taskCheckpoints) : Map.of();
         List<SessionTask> result = new ArrayList<>();
         for (ReactPlanTurnIntakeEntity intake : ordered) {
             ReactPlanTaskCheckpointEntity checkpoint = taskCheckpoints.get(intake.taskId());
             AgentMessage message = taskMessages.get(intake.userMessageId());
             if (checkpoint == null || message == null) continue;
-            requireBoundFacts(userId, sessionId, intake, checkpoint, message);
             JsonNode view = parse(checkpoint.checkpointJson()).path("view");
             if (!view.isObject()) throw corrupt();
             Instant startedAt = intake.createdAt().toInstant(ZoneOffset.UTC);
@@ -124,17 +138,40 @@ class ReactPlanSessionTaskQueryService {
         return "intake." + intakeId;
     }
 
-    private Map<String, List<JsonNode>> readEvents(List<String> taskIds) {
+    private Map<String, List<JsonNode>> readEvents(long userId, long sessionId, List<String> taskIds,
+                                                 Map<String, ReactPlanTaskCheckpointEntity> checkpoints) {
+        Map<String, List<JsonNode>> result = new HashMap<>();
+        Map<String, String> cacheKeys = new HashMap<>();
+        List<String> missing = new ArrayList<>();
+        for (String taskId : taskIds) {
+            var checkpoint = checkpoints.get(taskId);
+            if (checkpoint != null && TERMINAL.contains(checkpoint.state())) {
+                String key = ConversationSnapshotCache.scope(userId, sessionId) + ":events:" + taskId
+                        + ":" + checkpoint.lastSequence() + ":" + checkpoint.checkpointRevision();
+                cacheKeys.put(taskId, key);
+            }
+        }
+        Map<String, List<JsonNode>> cached = snapshots.getMany(new ArrayList<>(cacheKeys.values()),
+                new TypeReference<List<JsonNode>>() {});
+        for (String taskId : taskIds) {
+            String key = cacheKeys.get(taskId);
+            if (key != null && cached.containsKey(key)) result.put(taskId, cached.get(key));
+            else missing.add(taskId);
+        }
+        if (missing.isEmpty()) return result;
         Map<String, List<JsonNode>> grouped = new LinkedHashMap<>();
         for (ReactPlanTaskEventEntity event
-                : events.findByTaskIdInOrderByTaskIdAscSequenceNumberAsc(taskIds)) {
+                : events.findByTaskIdInOrderByTaskIdAscSequenceNumberAsc(missing)) {
             grouped.computeIfAbsent(event.taskId(), ignored -> new ArrayList<>())
                     .add(parse(event.eventJson()));
         }
-        Map<String, List<JsonNode>> bounded = new HashMap<>();
-        grouped.forEach((taskId, values) -> bounded.put(taskId, List.copyOf(
-                values.subList(Math.max(0, values.size() - MAX_EVENTS_PER_TASK), values.size()))));
-        return bounded;
+        for (String taskId : missing) {
+            List<JsonNode> values = grouped.getOrDefault(taskId, List.of());
+            List<JsonNode> bounded = List.copyOf(values.subList(Math.max(0, values.size() - MAX_EVENTS_PER_TASK), values.size()));
+            result.put(taskId, bounded);
+            if (cacheKeys.containsKey(taskId)) snapshots.put(cacheKeys.get(taskId), bounded);
+        }
+        return result;
     }
 
     private void requireProjectSession(long userId, long sessionId) {

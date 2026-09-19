@@ -7,6 +7,10 @@ spring:
       - optional:file:../.env[.properties]
   profiles:
     default: dev
+  data:
+    redis:
+      connect-timeout: ${YANBAN_REDIS_CONNECT_TIMEOUT:300ms}
+      timeout: ${YANBAN_REDIS_COMMAND_TIMEOUT:300ms}
   servlet:
     multipart:
       max-file-size: ${YANBAN_PROJECT_MAX_FILE_SIZE:20MB}
@@ -36,6 +40,8 @@ logging:
     console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] traceId=%X{traceId:-} %logger{36} : %msg%n"
 
 yanban:
+  conversation-cache:
+    enabled: ${YANBAN_CONVERSATION_CACHE_ENABLED:true}
   agent:
     v2:
       workspace:

@@ -101,7 +101,9 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     expect(source).toContain('record.taskId === reactPlanRecord.value?.taskId');
     expect(source).toContain('resetReactPlanView();');
     expect(source).toContain('invalidateReactPlanStream();');
-    expect(source).toContain('loadReactPlanRecord(activeProjectId.value, sessionId, epoch)');
+    expect(source).toContain('loadReactPlanRecord(projectId, sessionId, epoch)');
+    expect(source).toContain('epoch === projectEpoch && projectId');
+    expect(source).toContain('await loadConversationParts(');
   });
 
   it('任务运行时允许切换和新建会话，离开时只断开事件流', () => {
