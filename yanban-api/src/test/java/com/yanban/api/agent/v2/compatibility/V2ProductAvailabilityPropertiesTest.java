@@ -25,10 +25,7 @@ class V2ProductAvailabilityPropertiesTest {
             assertThat(availability.document())
                     .isEqualTo(new V2ProductAvailabilityDocument(
                             1, true, List.of(
-                                    "literature.search",
-                                    "project.read-analysis",
-                                    "project.candidate",
-                                    "agent.turn")));
+                                    "literature.search")));
             assertThatThrownBy(() -> availability.document()
                     .capabilities().add("client.override"))
                     .isInstanceOf(UnsupportedOperationException.class);

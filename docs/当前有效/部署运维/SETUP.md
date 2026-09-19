@@ -2,6 +2,12 @@
 
 本文档描述当前仓库本地联调所需环境；实际版本和模块以根 `pom.xml`、前端依赖文件及当前 Compose 配置为准。
 
+## Project 运行链路与旧编排升级
+
+Project 页面运行 TypeScript ReAct（`agent-engine-reactplan`），Java 产品层负责权限、持久化、Workspace、工具/沙箱及发布。参见 [当前架构](../架构设计/project-react-runtime.md)。工作区 Plan Mode 是另一条仍受支持的路径。
+
+#228 的入口收敛版本会停止旧 Java V2 新建和浏览器自动恢复，但保留历史兼容。升级前检查旧 intake/adaptive/delivery/repair 的非终态记录及沙箱运行状态；存在活动任务时先完成排空或取消方案，不直接删除数据。历史迁移保持原样。不要把仍保留的 V2 包名理解为当前 Project 的执行链。
+
 ## 1. 基础工具最低版本
 
 - JDK 17

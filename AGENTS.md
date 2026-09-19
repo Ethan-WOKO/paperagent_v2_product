@@ -1,4 +1,4 @@
-# PaperAgent V2 Product Development Rules
+# PaperAgent Product Development Rules
 
 ## Start here
 
@@ -6,8 +6,15 @@ Before changing the repository, read:
 
 1. the active GitHub Issue and its frozen implementation contract;
 2. `docs/README.md`;
-3. `docs/当前有效/架构设计/v2-agent-core-integration.md`;
+3. `docs/当前有效/架构设计/project-react-runtime.md`;
 4. `docs/当前有效/开发流程/verification-matrix.md`.
+
+## Current Project runtime
+
+- The current Project runtime is TypeScript ReAct (`agent-engine-reactplan`) with Java product authority and gateways. Do not call it the legacy Java V2 orchestration.
+- Legacy Java V2 Planner/Step/Reflection/Final Synthesis is being retired under #228. Historical V2-named contracts, bootstrap, persistence and Workspace still serve ReAct; do not delete them by package name.
+- Workspace `PlanAgentService` and literature compatibility remain separate supported paths. Keep historical records/migrations and owner-qualified reads/deletion.
+- DSH and the unintegrated standalone lightweight engine are abandoned routes, not pending integrations.
 
 ## Product and runtime boundaries
 

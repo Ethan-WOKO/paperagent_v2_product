@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 class ProjectControllerV2AnalysisTest {
     @Test
-    void explicitEndpointsDelegateAuthenticatedRouteAuthorityOnly() {
+    void retiredStartRejectsWhileReadUsesAuthenticatedAuthority() {
         V2ProjectAnalysisService service =
                 mock(V2ProjectAnalysisService.class);
         V2ProjectAnalysisRequest request =
@@ -39,12 +39,13 @@ class ProjectControllerV2AnalysisTest {
                 mock(ProjectService.class), null, null, null,
                 Optional.empty(), Optional.of(service));
 
-        assertEquals(response, controller.startV2ProjectAnalysis(
-                7L, 8L, 9L, request));
+        assertEquals(org.springframework.http.HttpStatus.GONE,
+                org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                    () -> controller.startV2ProjectAnalysis(7L, 8L, 9L, request)).getStatusCode());
         assertEquals(failed, controller.readV2ProjectAnalysis(
                 7L, 8L, 9L, "request-1"));
         assertEquals(true, failed.terminal());
-        verify(service).execute(7L, 8L, 9L, request);
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).execute(7L, 8L, 9L, request);
         verify(service).read(7L, 8L, 9L, "request-1");
     }
 }

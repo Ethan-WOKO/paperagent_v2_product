@@ -800,7 +800,7 @@ import { ChevronRightIcon } from 'naive-ui/es/_internal/icons';
 import AppLayout from '@/components/AppLayout.vue';
 import ConversationQuestionRail from '@/components/ConversationQuestionRail.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
-import { deleteSession as deleteAgentSession, getV2NaturalLanguageTurn, getV2ProductAvailability, listV2NaturalLanguageTurns, startV2NaturalLanguageTurn, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
+import { deleteSession as deleteAgentSession, listV2NaturalLanguageTurns, updateSession as updateAgentSession, type AgentSessionResponse, type V2NaturalLanguageStepStatus, type V2NaturalLanguageTurnHistoryItem, type V2NaturalLanguageTurnResponse } from '@/api/agent';
 import { answerReactPlanQuestion, cancelReactPlanTask, getReactPlanTask, listReactPlanSessionTasks, startReactPlanTask, streamReactPlanEvents, type ReactPlanSessionTask, type ReactPlanTaskState } from '@/api/reactPlan';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
@@ -2429,39 +2429,6 @@ function handleReactPlanKeydown(event: KeyboardEvent) {
   sendReactPlanTask();
 }
 
-function storedV2NaturalLanguageRequest(projectId: number, sessionId: number) {
-  try {
-    const raw = window.localStorage.getItem(naturalLanguageStorageKey(projectId, sessionId));
-    if (!raw) return null;
-    const value = JSON.parse(raw) as { clientRequestId?: unknown; question?: unknown };
-    if (typeof value.clientRequestId !== 'string' || !value.clientRequestId
-        || typeof value.question !== 'string' || !value.question) {
-      window.localStorage.removeItem(naturalLanguageStorageKey(projectId, sessionId));
-      return null;
-    }
-    return { clientRequestId: value.clientRequestId, question: value.question };
-  } catch {
-    window.localStorage.removeItem(naturalLanguageStorageKey(projectId, sessionId));
-    return null;
-  }
-}
-
-function storeV2NaturalLanguageRequest(
-  projectId: number,
-  sessionId: number,
-  clientRequestId: string,
-  question: string,
-) {
-  window.localStorage.setItem(
-    naturalLanguageStorageKey(projectId, sessionId),
-    JSON.stringify({ clientRequestId, question }),
-  );
-}
-
-function clearStoredV2NaturalLanguageRequest(projectId: number, sessionId: number) {
-  window.localStorage.removeItem(naturalLanguageStorageKey(projectId, sessionId));
-}
-
 function currentV2NaturalLanguageIdentity(): V2NaturalLanguageRequestIdentity {
   return {
     projectId: activeProjectId.value ?? -1,
@@ -2596,166 +2563,6 @@ async function refreshProjectAfterV2AutoApply(clientRequestId: string, epoch: nu
   selectedFile.value = null;
   searchResults.value = [];
   await Promise.all([loadManifest(epoch), loadRevisions()]);
-}
-
-async function recoverV2NaturalLanguageTurn(projectId: number, sessionId: number) {
-  if (!v2NaturalTurnAvailable.value) return;
-  const stored = storedV2NaturalLanguageRequest(projectId, sessionId);
-  if (!stored) return;
-  stopV2NaturalLanguagePolling();
-  v2TurnClientRequestId = stored.clientRequestId;
-  v2TurnError.value = '';
-  if (!v2TurnHistory.value.some((item) => item.clientRequestId === stored.clientRequestId)) {
-    upsertV2PlanningTask(stored.clientRequestId, stored.question);
-  }
-  const sequence = v2TurnSequence;
-  const expected = { projectId, sessionId, clientRequestId: stored.clientRequestId, sequence };
-  const controller = new AbortController();
-  v2TurnAbortController = controller;
-  v2TurnPolling.value = true;
-  const epoch = projectEpoch;
-  const request = normalizeV2NaturalLanguageRequest(
-    stored.question,
-    stored.clientRequestId,
-  );
-  try {
-    const outcome = await pollV2NaturalLanguageTurn(
-      async () => (
-        await getV2NaturalLanguageTurn(sessionId, stored.clientRequestId, controller.signal)
-      ).data,
-      {
-        signal: controller.signal,
-        resume: async () => (
-          await startV2NaturalLanguageTurn(
-            sessionId, request, controller.signal,
-          )
-        ).data,
-        onOutcome: (value) => {
-          if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-            v2TurnOutcome.value = value;
-            upsertV2TurnOutcome(stored.clientRequestId, stored.question, value);
-          }
-        },
-      },
-    );
-    if (!isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) return;
-    v2TurnOutcome.value = outcome;
-    upsertV2TurnOutcome(stored.clientRequestId, stored.question, outcome);
-    clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-    await loadV2TurnHistory(sessionId, epoch);
-    await refreshProjectAfterV2AutoApply(stored.clientRequestId, epoch);
-    await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
-  } catch (cause) {
-    if (controller.signal.aborted) return;
-    if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-      if ((cause as { response?: { status?: number } })?.response?.status === 404) {
-        clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-      }
-      v2TurnError.value = v2NaturalLanguageFailureText(cause);
-      await loadV2TurnHistory(sessionId, epoch);
-      if (v2TurnHistory.value.some((item) => (
-        item.clientRequestId === stored.clientRequestId && item.status === 'FAILED'
-      ))) v2TurnError.value = '';
-    }
-  } finally {
-    if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-      v2TurnPolling.value = false;
-      v2TurnAbortController = null;
-    }
-  }
-}
-
-async function sendV2NaturalLanguageTurn() {
-  if (!v2NaturalTurnAvailable.value) {
-    v2TurnError.value = 'V2 暂时不可用，项目文件、候选修改和版本功能仍可继续使用。';
-    return;
-  }
-  const projectId = activeProjectId.value;
-  if (!projectId || v2NaturalTurnBusy.value) return;
-  const epoch = projectEpoch;
-  const clientRequestId = newV2NaturalLanguageClientRequestId();
-  const question = v2TurnInput.value.trim();
-  v2TurnStarting.value = true;
-  v2TurnError.value = '';
-  v2TurnOutcome.value = null;
-  try {
-    const sessionId = await ensureSession();
-    if (!sessionId || epoch !== projectEpoch || projectId !== activeProjectId.value) return;
-    const pending = storedV2NaturalLanguageRequest(projectId, sessionId);
-    if (pending) {
-      await recoverV2NaturalLanguageTurn(projectId, sessionId);
-      return;
-    }
-    const request = normalizeV2NaturalLanguageRequest(question, clientRequestId);
-    stopV2NaturalLanguagePolling();
-    v2TurnClientRequestId = clientRequestId;
-    const sequence = v2TurnSequence;
-    const expected = { projectId, sessionId, clientRequestId, sequence };
-    storeV2NaturalLanguageRequest(projectId, sessionId, clientRequestId, question);
-    upsertV2PlanningTask(clientRequestId, question);
-    const controller = new AbortController();
-    v2TurnAbortController = controller;
-    v2TurnPolling.value = true;
-    const outcome = await startThenPollV2NaturalLanguageTurn(
-      async () => (await startV2NaturalLanguageTurn(sessionId, request, controller.signal)).data,
-      async () => (
-        await getV2NaturalLanguageTurn(sessionId, clientRequestId, controller.signal)
-      ).data,
-      {
-        signal: controller.signal,
-        resume: async () => (
-          await startV2NaturalLanguageTurn(
-            sessionId, request, controller.signal,
-          )
-        ).data,
-        onOutcome: (value) => {
-          if (isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) {
-            v2TurnOutcome.value = value;
-            upsertV2TurnOutcome(clientRequestId, question, value);
-          }
-        },
-      },
-    );
-    if (!isCurrentV2NaturalLanguageRequest(expected, currentV2NaturalLanguageIdentity())) return;
-    v2TurnOutcome.value = outcome;
-    upsertV2TurnOutcome(clientRequestId, question, outcome);
-    v2TurnInput.value = '';
-    clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-    await loadV2TurnHistory(sessionId, epoch);
-    await refreshProjectAfterV2AutoApply(clientRequestId, epoch);
-    await presentV2NaturalLanguageCandidate(projectId, sessionId, outcome, epoch);
-  } catch (cause) {
-    const sessionId = activeSessionId.value;
-    if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      if (sessionId && (isDefinitiveV2NaturalLanguageStartRejection(cause)
-          || cause instanceof V2NaturalLanguageTurnNotCreatedError
-          || (cause instanceof Error && [
-            'v2-direct-answer-required',
-            'v2-intake-route-invalid',
-          ].includes(cause.message)))) {
-        clearStoredV2NaturalLanguageRequest(projectId, sessionId);
-      }
-      v2TurnError.value = v2NaturalLanguageFailureText(cause);
-      if (sessionId) {
-        await loadV2TurnHistory(sessionId, epoch);
-        if (v2TurnHistory.value.some((item) => (
-          item.clientRequestId === clientRequestId && item.status === 'FAILED'
-        ))) v2TurnError.value = '';
-      }
-    }
-  } finally {
-    if (epoch === projectEpoch && projectId === activeProjectId.value) {
-      v2TurnStarting.value = false;
-      v2TurnPolling.value = false;
-      v2TurnAbortController = null;
-    }
-  }
-}
-
-function handleV2TurnKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
-  event.preventDefault();
-  void sendV2NaturalLanguageTurn();
 }
 
 async function selectProject(projectId: number) {
@@ -2946,7 +2753,6 @@ async function loadConversation(epoch = projectEpoch) {
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
       await loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
-      void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -3019,7 +2825,6 @@ async function selectConversation(sessionId: number) {
     ]);
     if (epoch === projectEpoch && activeProjectId.value) {
       await loadReactPlanRecord(activeProjectId.value, sessionId, epoch);
-      void recoverV2NaturalLanguageTurn(activeProjectId.value, sessionId);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -3206,30 +3011,6 @@ async function submitProject() {
   }
 }
 
-async function loadProductV2Availability() {
-  try {
-    const document = (await getV2ProductAvailability()).data;
-    const capabilities = Array.isArray(document.capabilities) ? document.capabilities : [];
-    const validDocument = document.formatVersion === 1
-      && typeof document.enabled === 'boolean'
-      && capabilities.every((capability) => typeof capability === 'string')
-      && new Set(capabilities).size === capabilities.length;
-    v2NaturalTurnAvailable.value = validDocument
-      && document.enabled
-      && capabilities.includes('agent.turn');
-  } catch {
-    v2NaturalTurnAvailable.value = false;
-  }
-  if (!v2NaturalTurnAvailable.value) {
-    stopV2NaturalLanguagePolling();
-    v2TurnStarting.value = false;
-  }
-  const projectId = activeProjectId.value;
-  const sessionId = activeSessionId.value;
-  if (!projectId || !sessionId) return;
-  if (v2NaturalTurnAvailable.value) void recoverV2NaturalLanguageTurn(projectId, sessionId);
-}
-
 onMounted(() => {
   inspectorOpen.value = false;
   reactPlanClockTimer = window.setInterval(() => {
@@ -3238,7 +3019,6 @@ onMounted(() => {
   reactPlanSessionPollTimer = window.setInterval(() => {
     void refreshReactPlanSessionSummaries(true);
   }, 4_000);
-  void loadProductV2Availability();
   void listSkills().then(({ data }) => {
     reactPlanSkills.value = data;
   }).catch(() => {

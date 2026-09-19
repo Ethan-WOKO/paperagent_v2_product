@@ -203,14 +203,7 @@ public class AgentController {
             @AuthenticationPrincipal JwtUser currentUser,
             @PathVariable Long sessionId,
             @Valid @RequestBody V2NaturalLanguageTurnRequest request) {
-        v2Availability.requireAvailable(
-                V2ProductAvailability.NATURAL_LANGUAGE_TURN);
-        if (v2NaturalLanguageTurns == null) {
-            throw new IllegalStateException(
-                    "V2 natural-language intake is unavailable");
-        }
-        return v2NaturalLanguageTurns.execute(
-                currentUser.id(), sessionId, request);
+        throw V2ProductAvailability.retiredExecution();
     }
 
     @GetMapping("/v2/capabilities")

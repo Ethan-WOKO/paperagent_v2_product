@@ -22,7 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 class ProjectControllerV2AvailabilityTest {
 
     @Test
-    void disabledAnalysisAndCandidateStartAndReadFailBeforeDelegation() {
+    void retiredStartsAndConfiguredReadsFailBeforeDelegation() {
         V2ProjectAnalysisService analysis =
                 mock(V2ProjectAnalysisService.class);
         V2ProjectCandidateService candidate =
@@ -40,11 +40,11 @@ class ProjectControllerV2AvailabilityTest {
                         "improve", List.of("paper.md"),
                         "candidate-1");
 
-        assertUnavailable(() -> controller.startV2ProjectAnalysis(
+        assertRetired(() -> controller.startV2ProjectAnalysis(
                 7L, 8L, 9L, analysisRequest));
         assertUnavailable(() -> controller.readV2ProjectAnalysis(
                 7L, 8L, 9L, "analysis-1"));
-        assertUnavailable(() -> controller.startV2ProjectCandidate(
+        assertRetired(() -> controller.startV2ProjectCandidate(
                 7L, 8L, 9L, candidateRequest));
         assertUnavailable(() -> controller.readV2ProjectCandidate(
                 7L, 8L, 9L, "candidate-1"));
@@ -63,7 +63,7 @@ class ProjectControllerV2AvailabilityTest {
     }
 
     @Test
-    void enabledAnalysisAndCandidateEndpointsDelegateExactlyOnce() {
+    void retiredStartsNeverDelegateWhileHistoryRemainsReadable() {
         V2ProjectAnalysisService analysis =
                 mock(V2ProjectAnalysisService.class);
         V2ProjectCandidateService candidate =
@@ -79,18 +79,18 @@ class ProjectControllerV2AvailabilityTest {
                         "improve", List.of("paper.md"),
                         "candidate-1");
 
-        controller.startV2ProjectAnalysis(
-                7L, 8L, 9L, analysisRequest);
+        assertRetired(() -> controller.startV2ProjectAnalysis(
+                7L, 8L, 9L, analysisRequest));
         controller.readV2ProjectAnalysis(
                 7L, 8L, 9L, "analysis-1");
-        controller.startV2ProjectCandidate(
-                7L, 8L, 9L, candidateRequest);
+        assertRetired(() -> controller.startV2ProjectCandidate(
+                7L, 8L, 9L, candidateRequest));
         controller.readV2ProjectCandidate(
                 7L, 8L, 9L, "candidate-1");
 
-        verify(analysis).execute(7L, 8L, 9L, analysisRequest);
+        verify(analysis, org.mockito.Mockito.never()).execute(7L, 8L, 9L, analysisRequest);
         verify(analysis).read(7L, 8L, 9L, "analysis-1");
-        verify(candidate).execute(7L, 8L, 9L, candidateRequest);
+        verify(candidate, org.mockito.Mockito.never()).execute(7L, 8L, 9L, candidateRequest);
         verify(candidate).read(7L, 8L, 9L, "candidate-1");
     }
 
@@ -130,6 +130,14 @@ class ProjectControllerV2AvailabilityTest {
                 Optional.empty(), Optional.ofNullable(analysis),
                 Optional.ofNullable(candidate),
                 new V2ProductAvailability(enabled));
+    }
+
+    private static void assertRetired(Runnable invocation) {
+        assertThatThrownBy(invocation::run).isInstanceOfSatisfying(ResponseStatusException.class,
+                error -> {
+                    assertThat(error.getStatusCode()).isEqualTo(HttpStatus.GONE);
+                    assertThat(error.getReason()).startsWith("LEGACY_V2_EXECUTION_RETIRED");
+                });
     }
 
     private static void assertUnavailable(Runnable invocation) {

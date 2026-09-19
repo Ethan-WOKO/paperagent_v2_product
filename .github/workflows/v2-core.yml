@@ -1,4 +1,4 @@
-name: V2 core
+name: Java shared infrastructure and legacy compatibility
 
 on:
   pull_request:
@@ -37,7 +37,8 @@ jobs:
             exit 1
           fi
 
-      - name: Test V2 core
+      # Historical v2 package names include infrastructure still used by Project ReAct.
+      - name: Test shared core and retained legacy contracts
         run: mvn -f agent-v2/pom.xml test
 
       - name: Test product TaskFrame adapter

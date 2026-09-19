@@ -66,6 +66,7 @@ import org.springframework.web.server.ResponseStatusException;
         "yanban.jwt.secret=test_secret_123456789012345678901234567890"
 })
 class CandidateSandboxValidationIntegrationTest {
+    @Autowired org.springframework.jdbc.core.JdbcTemplate retirementJdbc;
     private static final long USER = 7L;
     private static final long PROJECT = 11L;
     private static final long SESSION = 13L;
@@ -238,6 +239,7 @@ class CandidateSandboxValidationIntegrationTest {
 
     @Test
     void failedAndTimedOutReceiptsRemainVisibleButCannotApply() {
+        long repairCount = retirementJdbc.queryForObject("select count(*) from candidate_validation_repairs", Long.class);
         CandidateValidationResponse failed = create("failure-key");
         dispatcher.reconcile(failed.validationId());
         SandboxDispatch first = dispatch.get();
@@ -246,6 +248,7 @@ class CandidateSandboxValidationIntegrationTest {
         dispatcher.reconcile(failed.validationId());
         CandidateValidationResponse failedResult = service.list(USER, PROJECT, ARTIFACT).get(0);
         assertThat(failedResult.status()).isEqualTo("FAILED");
+        assertThat(retirementJdbc.queryForObject("select count(*) from candidate_validation_repairs", Long.class)).isEqualTo(repairCount);
         assertThat(failedResult.stderr()).isEqualTo("compile failed");
         assertThatThrownBy(() -> gate.requireSuccessful(USER, PROJECT, ARTIFACT, failed.validationId(),
                 VERSION, candidate, List.of(0))).isInstanceOf(ResponseStatusException.class);

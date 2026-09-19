@@ -161,16 +161,8 @@ public class V2ProjectAnalysisService {
                     HttpStatus.NOT_FOUND,
                     "V2 Project analysis turn was not found");
         }
-        if ("SUCCEEDED".equals(delivery.status())) {
-            return response(delivery, true);
-        }
-        return execute(userId, projectId, sessionId,
-                new V2ProjectAnalysisRequest(
-                        delivery.objective(),
-                        deliveries.paths(delivery),
-                        delivery.searchQuery(),
-                        delivery.maxSearchResults(),
-                        delivery.id().clientRequestId()));
+        // Historical reads must never resume execution. Preserve the stored status.
+        return response(delivery, true);
     }
 
     private V2ProjectAnalysisResponse executeSerialized(
