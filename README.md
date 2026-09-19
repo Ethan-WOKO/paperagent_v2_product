@@ -1,3 +1,5 @@
+> 当前 Project 执行链路为 **TypeScript ReAct**，Java 产品层负责权限、Workspace、持久化、沙箱网关和发布。旧 Java V2 编排退役进度见 #228；历史命名不代表当前执行路线。参见 [当前架构](docs/当前有效/架构设计/project-react-runtime.md)。
+
 # 研伴 Agent（Yanban Agent）
 
 一个面向科研学习场景的 AI 研助平台，包含：

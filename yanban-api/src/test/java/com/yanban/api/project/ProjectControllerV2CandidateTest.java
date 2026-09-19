@@ -8,7 +8,7 @@ import static org.mockito.Mockito.*;
 
 class ProjectControllerV2CandidateTest {
     @Test
-    void explicitEndpointsDelegateOnlyAuthenticatedRouteAuthority() {
+    void retiredStartRejectsWhileReadUsesAuthenticatedAuthority() {
         var service = mock(V2ProjectCandidateService.class);
         var request = new V2ProjectCandidateRequest(
                 "improve explanation", List.of("README.md"), "request-1");
@@ -26,11 +26,12 @@ class ProjectControllerV2CandidateTest {
                 null, null, null, Optional.empty(), Optional.empty(),
                 Optional.of(service));
 
-        assertEquals(succeeded, controller.startV2ProjectCandidate(
-                7L, 8L, 9L, request));
+        assertEquals(org.springframework.http.HttpStatus.GONE,
+                org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                    () -> controller.startV2ProjectCandidate(7L, 8L, 9L, request)).getStatusCode());
         assertEquals(failed, controller.readV2ProjectCandidate(
                 7L, 8L, 9L, "request-2"));
-        verify(service).execute(7L, 8L, 9L, request);
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).execute(7L, 8L, 9L, request);
         verify(service).read(7L, 8L, 9L, "request-2");
     }
 }

@@ -100,10 +100,8 @@ public class V2ProjectCandidateService {
             throw new ResponseStatusException(
                     HttpStatus.NOT_FOUND, "V2 Project Candidate turn was not found");
         }
-        if (terminal(delivery)) return response(delivery, true);
-        return execute(userId, projectId, sessionId, new V2ProjectCandidateRequest(
-                delivery.objective(), deliveries.paths(delivery),
-                delivery.id().clientRequestId()));
+        // Historical reads must never resume execution. Preserve the stored status.
+        return response(delivery, true);
     }
 
     private V2ProjectCandidateResponse executeSerialized(Long userId, Long projectId,

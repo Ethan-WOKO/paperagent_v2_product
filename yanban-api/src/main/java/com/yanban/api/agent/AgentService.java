@@ -298,11 +298,14 @@ public class AgentService {
 
     @Transactional(readOnly = true)
     public List<AgentMessageResponse> listMessages(Long userId, Long sessionId, Integer limit, Long beforeId, String view) {
-        AgentSession session = getOwnedSession(userId, sessionId);
         int safeLimit = safeMessageLimit(limit);
         boolean chatView = view == null || view.isBlank() || "chat".equalsIgnoreCase(view);
-        if (chatView && beforeId == null) {
-            Optional<List<AgentMessageResponse>> cached = messageCache.getRecentVisibleMessages(userId, session.getId(), safeLimit);
+        // Capture generation before the transaction's first DB read; ownership is always checked.
+        String cacheKey = beforeId == null
+                ? messageCache.recentQueryKey(userId, sessionId, chatView ? "chat" : "all", safeLimit) : null;
+        AgentSession session = getOwnedSession(userId, sessionId);
+        if (beforeId == null) {
+            Optional<List<AgentMessageResponse>> cached = messageCache.getRecentMessages(cacheKey);
             if (cached.isPresent()) {
                 return cached.get();
             }
@@ -324,8 +327,8 @@ public class AgentService {
                 .filter(message -> !chatView || isChatVisibleMessage(message))
                 .map(AgentMessageResponse::from)
                 .toList();
-        if (chatView && beforeId == null) {
-            messageCache.putRecentVisibleMessages(userId, session.getId(), response);
+        if (beforeId == null) {
+            messageCache.putRecentMessages(cacheKey, response);
         }
         return response;
     }
@@ -1684,7 +1687,6 @@ public class AgentService {
 
     private AgentMessage saveAndCacheMessage(Long sessionId, Long userId, ChatMessage chatMessage) {
         AgentMessage saved = messages.saveAndFlush(toAgentMessage(sessionId, userId, chatMessage));
-        messageCache.appendVisibleMessage(userId, sessionId, AgentMessageResponse.from(saved));
         return saved;
     }
 

@@ -322,14 +322,7 @@ public class ProjectController {
             @PathVariable Long projectId,
             @PathVariable Long sessionId,
             @RequestBody V2ProjectAnalysisRequest request) {
-        v2Availability.requireAvailable(
-                V2ProductAvailability.PROJECT_READ_ANALYSIS);
-        if (v2ProjectAnalysis == null) {
-            throw new IllegalStateException(
-                    "V2 Project analysis is not configured");
-        }
-        return v2ProjectAnalysis.execute(
-                userId, projectId, sessionId, request);
+        throw V2ProductAvailability.retiredExecution();
     }
 
     @GetMapping("/{projectId}/agent/sessions/{sessionId}/v2/read-analysis-turns/{clientRequestId}")
@@ -354,12 +347,7 @@ public class ProjectController {
             @PathVariable Long projectId,
             @PathVariable Long sessionId,
             @RequestBody V2ProjectCandidateRequest request) {
-        v2Availability.requireAvailable(
-                V2ProductAvailability.PROJECT_CANDIDATE);
-        if (v2ProjectCandidate == null) {
-            throw new IllegalStateException("V2 Project Candidate is not configured");
-        }
-        return v2ProjectCandidate.execute(userId, projectId, sessionId, request);
+        throw V2ProductAvailability.retiredExecution();
     }
 
     @GetMapping("/{projectId}/agent/sessions/{sessionId}/v2/candidate-turns/{clientRequestId}")

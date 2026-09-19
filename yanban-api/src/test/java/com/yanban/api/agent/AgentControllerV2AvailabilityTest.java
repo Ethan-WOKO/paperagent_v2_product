@@ -34,10 +34,7 @@ class AgentControllerV2AvailabilityTest {
         assertThat(document.formatVersion()).isEqualTo(1);
         assertThat(document.enabled()).isFalse();
         assertThat(document.capabilities()).containsExactly(
-                "literature.search",
-                "project.read-analysis",
-                "project.candidate",
-                "agent.turn");
+                "literature.search");
         verifyNoInteractions(sessions, turns, outcomes);
     }
 

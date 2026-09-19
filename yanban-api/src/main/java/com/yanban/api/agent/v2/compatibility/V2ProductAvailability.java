@@ -32,7 +32,13 @@ public final class V2ProductAvailability {
 
     public V2ProductAvailabilityDocument document() {
         return new V2ProductAvailabilityDocument(
-                FORMAT_VERSION, enabled, CAPABILITIES);
+                FORMAT_VERSION, enabled, List.of(LITERATURE_SEARCH));
+    }
+
+    /** Old execution URLs remain explicit tombstones; current Project uses TypeScript ReAct. */
+    public static ResponseStatusException retiredExecution() {
+        return new ResponseStatusException(HttpStatus.GONE,
+                "LEGACY_V2_EXECUTION_RETIRED: 请使用项目页面的 ReAct 对话；旧任务不会自动重启");
     }
 
     public void requireAvailable(String capability) {

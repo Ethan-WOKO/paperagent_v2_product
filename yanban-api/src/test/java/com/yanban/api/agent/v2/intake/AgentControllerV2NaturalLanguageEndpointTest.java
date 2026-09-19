@@ -24,7 +24,7 @@ class AgentControllerV2NaturalLanguageEndpointTest {
             new JwtUser(7L, "user", 0L, "USER");
 
     @Test
-    void enabledEndpointDelegatesExactlyOnce() {
+    void retiredEndpointRejectsEvenWhenLegacyAvailabilityIsEnabled() {
         V2NaturalLanguageTurnService turns =
                 mock(V2NaturalLanguageTurnService.class);
         var request = new V2NaturalLanguageTurnRequest(
@@ -37,9 +37,10 @@ class AgentControllerV2NaturalLanguageEndpointTest {
         var controller = controller(
                 new V2ProductAvailability(true), turns);
 
-        assertSame(expected,
-                controller.sendV2NaturalLanguageTurn(USER, 9L, request));
-        verify(turns).execute(7L, 9L, request);
+        org.junit.jupiter.api.Assertions.assertEquals(org.springframework.http.HttpStatus.GONE,
+                assertThrows(ResponseStatusException.class,
+                    () -> controller.sendV2NaturalLanguageTurn(USER, 9L, request)).getStatusCode());
+        verify(turns, never()).execute(7L, 9L, request);
     }
 
     @Test

@@ -1,3 +1,5 @@
+> 2026-09-19 状态说明：本文保留旧 Java V2 的历史设计与复用基础设施说明，不是当前 Project 执行路线。现行链路见 [TypeScript ReAct 项目执行链路](project-react-runtime.md)。旧编排退役由 #228 跟踪，尚未全部完成；旧路线待办不得直接指导新功能开发。
+
 # V2 Capability Migration Map
 
 ## Natural-language V2 turn intake and initial Plan

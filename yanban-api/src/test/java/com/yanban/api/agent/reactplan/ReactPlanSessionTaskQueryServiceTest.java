@@ -4,10 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.cache.ConversationSnapshotCache;
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSession;
@@ -31,13 +35,14 @@ class ReactPlanSessionTaskQueryServiceTest {
     @Mock ReactPlanTurnIntakeRepository intakes;
     @Mock ReactPlanTaskCheckpointRepository checkpoints;
     @Mock ReactPlanTaskEventRepository events;
+    @Mock ConversationSnapshotCache snapshots;
 
     private ReactPlanSessionTaskQueryService service;
 
     @BeforeEach
     void setUp() {
         service = new ReactPlanSessionTaskQueryService(
-                new ObjectMapper(), sessions, messages, intakes, checkpoints, events);
+                new ObjectMapper(), sessions, messages, intakes, checkpoints, events, snapshots);
     }
 
     @Test
@@ -86,6 +91,27 @@ class ReactPlanSessionTaskQueryServiceTest {
         assertThat(result.get(0).finishedAt()).isNotNull();
         assertThat(page.hasMore()).isTrue();
         assertThat(page.nextCursor()).isEqualTo("intake.41");
+        String key = ConversationSnapshotCache.scope(userId, sessionId) + ":events:" + taskId
+                + ":" + checkpoint.lastSequence() + ":" + checkpoint.checkpointRevision();
+        verify(snapshots).put(eq(key), any());
+        when(snapshots.getMany(eq(List.of(key)), any())).thenReturn(java.util.Map.of(key, result.get(0).events()));
+        assertThat(service.list(userId,sessionId,true,null,1).items().get(0).events()).hasSize(1);
+        verify(events,times(1)).findByTaskIdInOrderByTaskIdAscSequenceNumberAsc(List.of(taskId));
+
+        // Running tasks must never reuse a terminal snapshot.
+        ReactPlanTaskCheckpointEntity running = new ReactPlanTaskCheckpointEntity(
+                taskId, "b".repeat(64), userId, sessionId, turnId, "running", 3,
+                "{\"view\":{\"state\":\"running\"}}", now);
+        when(checkpoints.findByTaskIdIn(List.of(taskId))).thenReturn(List.of(running));
+        service.list(userId,sessionId,true,null,1);
+        verify(events,times(2)).findByTaskIdInOrderByTaskIdAscSequenceNumberAsc(List.of(taskId));
+
+        ReactPlanTaskCheckpointEntity later = new ReactPlanTaskCheckpointEntity(
+                taskId, "b".repeat(64), userId, sessionId, turnId, "succeeded", 4,
+                "{\"view\":{\"state\":\"succeeded\"}}", now);
+        when(checkpoints.findByTaskIdIn(List.of(taskId))).thenReturn(List.of(later));
+        service.list(userId,sessionId,true,null,1);
+        verify(events,times(3)).findByTaskIdInOrderByTaskIdAscSequenceNumberAsc(List.of(taskId));
     }
 
     @Test
@@ -110,6 +136,7 @@ class ReactPlanSessionTaskQueryServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("404 NOT_FOUND");
         verify(intakes, never()).findByUserIdAndSessionIdOrderByIdDesc(any(), any(), any());
+        verifyNoInteractions(snapshots);
     }
 
     @Test
@@ -122,5 +149,6 @@ class ReactPlanSessionTaskQueryServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("400 BAD_REQUEST");
         verify(intakes, never()).findByUserIdAndSessionIdOrderByIdDesc(any(), any(), any());
+        verifyNoInteractions(snapshots);
     }
 }
