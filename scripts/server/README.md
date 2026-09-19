@@ -54,6 +54,44 @@ limited to 18 system-wide and 3 per user. The MySQL-backed leases make these
 limits apply across multiple Engine or Broker instances, rather than once per
 container.
 
+## Optional Python Project engine
+
+In the **repository-root** server `.env`, add:
+
+```dotenv
+YANBAN_AGENT_PYTHON_ENABLED=true
+YANBAN_AGENT_PYTHON_SERVICE_TOKEN=<independent-random-secret-at-least-32-characters>
+COMPOSE_PROFILES=sandbox,reactplan,python
+```
+
+Keep the existing ReAct/gateway configuration. Compose injects this new secret
+into both API and Python, and maps the existing ReAct service token to Python's
+Java gateway token. Do not copy the local `agent-engine-python/.env` to the server.
+The startup/update scripts automatically enable the `python` profile from the
+enable flag, validate the token, and wait for the engine healthcheck. The explicit
+`COMPOSE_PROFILES` value also supports direct `docker compose` invocations.
+
+After the updated code is on the server, build and start with:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+bash scripts/server/status.sh
+docker compose -f docker-compose.prod.yml logs -f agent-engine-python
+```
+
+The Python service has no published host port. API uses
+`http://agent-engine-python:8097`; Python uses `http://api:8080`.
+Its local graph state uses the `python_engine_data` named volume with one worker.
+Container replacement retains that state, but interrupted tasks still require
+explicit resubmission; this does not introduce automatic recovery. Do not use
+`down -v` for ordinary updates. TS remains the default Project engine.
+
+To stop only Python, cancel/drain Python tasks, then run
+`docker compose -f docker-compose.prod.yml stop agent-engine-python`.
+For lasting disablement also set the enable flag to `false`, remove `python`
+from `COMPOSE_PROFILES`, and recreate API to apply its environment. Preserve the
+data volume. Ctrl+C on `logs -f` only stops following logs, not the container.
+
 ## E2B sandbox deployment
 
 The server only needs the repository-root `.env`; do not copy the Windows

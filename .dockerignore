@@ -7,6 +7,13 @@
 .env
 .env.*
 !.env.example
+agent-engine-python/.env
+agent-engine-python/.env.*
+agent-engine-python/.venv/
+agent-engine-python/.data/
+agent-engine-python/.product-data/
+agent-engine-python/.eval/
+agent-engine-python/**/__pycache__/
 storage/
 logs/
 uploads/

@@ -12,6 +12,21 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 class ReactPlanEngineSelectionTest {
     @Test
+    void acceptsOnlyFixedComposeOriginOrLoopbackForPython() {
+        var properties = new ReactPlanRuntimeProperties();
+        properties.setPythonEnabled(true);
+        properties.setPythonServiceToken("p".repeat(32));
+        properties.setPythonOrigin(java.net.URI.create("http://agent-engine-python:8097"));
+        assertThat(properties.isPythonConfigurationSafe()).isTrue();
+        for (String origin : java.util.List.of("http://external.example:8097", "http://agent-engine-python:8080",
+                "http://user@agent-engine-python:8097", "http://agent-engine-python:8097/path",
+                "http://agent-engine-python:8097?token=x", "http://agent-engine-python:8097#fragment")) {
+            properties.setPythonOrigin(java.net.URI.create(origin));
+            assertThat(properties.isPythonConfigurationSafe()).as(origin).isFalse();
+        }
+    }
+
+    @Test
     void legacyDefaultsTsAndPythonIsOptIn() {
         var repository = mock(ReactPlanTurnIntakeRepository.class);
         var properties = new ReactPlanRuntimeProperties();

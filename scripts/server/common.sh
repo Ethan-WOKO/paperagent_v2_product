@@ -40,6 +40,10 @@ reactplan_enabled() {
   is_true "${value:-true}"
 }
 
+python_engine_enabled() {
+  is_true "$(env_value YANBAN_AGENT_PYTHON_ENABLED)"
+}
+
 require_env_value() {
   local key="$1"
   local value
@@ -59,6 +63,10 @@ require_secret_min_length() {
 }
 
 validate_deployment_env() {
+  if python_engine_enabled; then
+    reactplan_enabled || fail "YANBAN_AGENT_REACTPLAN_ENABLED must be true for Python Project routing"
+    require_secret_min_length YANBAN_AGENT_PYTHON_SERVICE_TOKEN 32
+  fi
   if reactplan_enabled; then
     is_true "$(env_value YANBAN_AGENT_ENGINE_GATEWAY_ENABLED)" ||
       fail "YANBAN_AGENT_ENGINE_GATEWAY_ENABLED must be true when ReAct is enabled"
@@ -103,6 +111,9 @@ compose() {
   fi
   if reactplan_enabled; then
     profile_args+=(--profile reactplan)
+  fi
+  if python_engine_enabled; then
+    profile_args+=(--profile python)
   fi
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "${profile_args[@]}" "$@"
 }
@@ -168,6 +179,9 @@ wait_for_stack() {
   done
   if reactplan_enabled; then
     wait_for_service agent-engine-reactplan 240
+  fi
+  if python_engine_enabled; then
+    wait_for_service agent-engine-python 240
   fi
   for service in api frontend; do
     wait_for_service "$service" 240

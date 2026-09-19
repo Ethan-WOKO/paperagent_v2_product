@@ -44,6 +44,31 @@ Python 固定监听 `127.0.0.1:8097`，Java 网关固定 `127.0.0.1:8080`，单 
 
 关闭实验入口时把 Java 的 `YANBAN_AGENT_PYTHON_ENABLED` 改为 `false` 并按正常流程重启。应先让在途 Python 任务完成或取消；关闭后在途任务不会被 TS 接管。保留 V108 和本地数据，以便读取历史或以后恢复。
 
+## 云服务器 Compose 部署
+
+`docker-compose.prod.yml` 已包含 Python 服务、独立持久化卷、健康检查和内部通信配置。服务器只在**仓库根目录 `.env`** 配置一次：
+
+```dotenv
+YANBAN_AGENT_PYTHON_ENABLED=true
+YANBAN_AGENT_PYTHON_SERVICE_TOKEN=自行生成的至少32字符独立服务器密钥
+COMPOSE_PROFILES=sandbox,reactplan,python
+```
+
+保留已有 TS/Java 网关配置。Compose 自动把新 token 同时传给 Java 和 Python，并用现有 `YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN` 配置 Python→Java 认证；不用再填一份 Python token，也不复制本地 Python `.env`。如果已有其他 profiles，应保留并追加 `python`。
+
+更新代码后执行原一键部署流程即可；直接使用 Compose 时运行：
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml logs -f agent-engine-python
+```
+
+`scripts/server` 启动/更新脚本会根据 enabled 开关自动加 Python profile、校验 token 并等待健康检查。Java 地址为 `http://agent-engine-python:8097`，Python 网关地址为 `http://api:8080`，固定服务名列入白名单；不向宿主机发布 Python 端口。镜像以非 root 用户运行，`.env`、本地数据和开发虚拟环境不进入构建上下文。
+
+Docker 使用 `python_engine_data` 卷和单 worker；重建容器保留状态，但不会自动恢复任务，已有恢复限制仍适用。不要用 `down -v` 更新。单独停止引擎用 `docker compose -f docker-compose.prod.yml stop agent-engine-python`；看日志时 Ctrl+C 仅退出日志。完整步骤见 [服务器脚本说明](../scripts/server/README.md#optional-python-project-engine)。
+
+编排使用标准 [Compose profiles](https://docs.docker.com/compose/how-tos/profiles/)，镜像依赖安装采用 [uv Docker 集成](https://docs.astral.sh/uv/guides/integration/docker/) 的锁定、非 editable 安装方式。
+
 ## 协议和恢复边界
 
 - 复用 `/v1/tasks`、任务 GET、SSE（Last-Event-ID）、取消协议。共享 submission schema 将 executeSandbox 扩展为布尔权限；TS 行为不变。新增内部 `POST /internal/v1/agent-engine/task-state/python/tasks/{taskId}/claim`，使用已有服务认证。

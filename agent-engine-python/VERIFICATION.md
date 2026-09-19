@@ -54,3 +54,23 @@ pnpm build
 按用户后续要求，CLI 增加显式服务目录的 `.env` 自动读取及 python-dotenv 依赖。执行 `uv sync --project agent-engine-python`、`uv run --project agent-engine-python ruff check agent-engine-python/src/paperagent_engine/cli.py` 和 `git diff --check` 均通过。用临时目录、隔离进程环境和替换 CLI 文件路径的 Python smoke assertions 验证：UTF-8 BOM 可读、token 不做变量插值、进程变量优先、不读取上级 `.env`、本目录文件不存在时仍不向上搜索。
 
 `git check-ignore agent-engine-python/.env` 确认本地 token 文件被忽略；只提交空值 `.env.example`。没有启动服务、运行真实任务，也未因这次仅启动配置调整重跑无关 Java/前端测试。上述 131 项测试记录对应此前引擎接入验证。
+
+## Compose 部署补充验证
+
+用户后续明确要求接入 `docker-compose.prod.yml`。新增 Python 镜像、profile、数据卷和健康检查，同时适配 Java/Python 固定 Compose 服务名、服务器启用/状态脚本及根环境示例。没有部署云端或启动现有产品栈。
+
+```powershell
+docker build -t paperagent-python:issue233-smoke agent-engine-python
+uv run --project agent-engine-python ruff check agent-engine-python/src agent-engine-python/tests
+uv run --project agent-engine-python pytest -q agent-engine-python/tests
+mvn -q -pl yanban-api -am "-Dtest=ReactPlanEngineSelectionTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+git diff --check
+```
+
+结果：镜像构建成功，Python **68 tests passed**，Java **3 tests passed**，lint 通过。新增测试验证 CLI 容器绑定/目录/网关配置、Compose token 同源、私有端口及持久化卷，并拒绝任意外部 origin。
+
+另以临时目录复制 Compose 和环境示例，使用 `docker compose --env-file <synthetic-env> -f <temporary-compose> config --format json` 验证开/关 profile 均可解析且 token 映射一致；未读取或输出真实根 `.env`。容器内 `bash -n` 校验脚本；用纯参数打印函数替代 docker 验证 profile 自动启用/禁用、健康等待、缺失 token 和禁用 Java 路由拒绝。
+
+隔离容器 smoke：`--network none`、合成 token、无 host ports、随机独立 volume；验证 `/healthz`、UID=10001、镜像无本地 `.env`、`docker stop --time 60` exit 0、删除并替换容器后卷内容仍在。临时容器及其专属卷均已清理。没有创建 Project 任务或连接模型、Redis、MySQL。
+
+未验证真实云端全栈网络/认证和付费模型；本次没有改前端，不重复其构建。自动重启仅重启服务，不自动接管中断任务。

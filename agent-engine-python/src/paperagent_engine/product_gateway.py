@@ -17,8 +17,8 @@ from .storage import digest
 
 class ProductGateway:
     def __init__(self, origin, service_token, client=None):
-        if origin not in {"http://127.0.0.1:8080", "http://localhost:8080"}:
-            raise ValueError("Product gateway must be the local Java service on port 8080")
+        if origin not in {"http://127.0.0.1:8080", "http://localhost:8080", "http://api:8080"}:
+            raise ValueError("Product gateway must be loopback or the fixed Compose api service")
         self.origin = origin
         self.service_token = service_token
         self.client = client or httpx.Client(timeout=35, follow_redirects=False)

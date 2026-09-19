@@ -154,6 +154,9 @@ services:
       YANBAN_AGENT_REACTPLAN_ENABLED: ${YANBAN_AGENT_REACTPLAN_ENABLED:-true}
       YANBAN_AGENT_REACTPLAN_ENGINE_ORIGIN: http://agent-engine-reactplan:8092
       YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:-}
+      YANBAN_AGENT_PYTHON_ENABLED: ${YANBAN_AGENT_PYTHON_ENABLED:-false}
+      YANBAN_AGENT_PYTHON_ORIGIN: http://agent-engine-python:8097
+      YANBAN_AGENT_PYTHON_SERVICE_TOKEN: ${YANBAN_AGENT_PYTHON_SERVICE_TOKEN:-}
       YANBAN_AGENT_MAX_CONCURRENT_TASKS: ${YANBAN_AGENT_MAX_CONCURRENT_TASKS:-20}
       YANBAN_AGENT_MAX_CONCURRENT_TASKS_PER_USER: ${YANBAN_AGENT_MAX_CONCURRENT_TASKS_PER_USER:-3}
       YANBAN_AGENT_MAX_QUEUED_TASKS_PER_USER: ${YANBAN_AGENT_MAX_QUEUED_TASKS_PER_USER:-10}
@@ -196,6 +199,32 @@ services:
       timeout: 5s
       retries: 20
       start_period: 10s
+
+  agent-engine-python:
+    profiles: ["python"]
+    build:
+      context: ./agent-engine-python
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    environment:
+      PAPERAGENT_PYTHON_HOST: 0.0.0.0
+      PAPERAGENT_PYTHON_JAVA_ORIGIN: http://api:8080
+      PAPERAGENT_PYTHON_DATA_DIR: /var/lib/paperagent-python
+      PAPERAGENT_PYTHON_TOKEN: ${YANBAN_AGENT_PYTHON_SERVICE_TOKEN:-}
+      PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN: ${YANBAN_AGENT_REACTPLAN_ENGINE_SERVICE_TOKEN:-}
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - python_engine_data:/var/lib/paperagent-python
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8097/healthz', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
   sandbox-broker:
     profiles: ["sandbox"]
@@ -251,3 +280,4 @@ volumes:
   minio_data:
   api_data:
   sandbox_broker_data:
+  python_engine_data:

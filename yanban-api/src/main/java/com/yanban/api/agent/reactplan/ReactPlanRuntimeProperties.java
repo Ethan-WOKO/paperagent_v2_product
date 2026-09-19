@@ -30,11 +30,13 @@ public class ReactPlanRuntimeProperties {
     public String getPythonServiceToken() { return pythonServiceToken; }
     public void setPythonServiceToken(String value) { pythonServiceToken = value; }
 
-    @AssertTrue(message = "Python engine requires a dedicated token and loopback port 8097")
+    @AssertTrue(message = "Python engine requires a dedicated token and loopback or fixed Compose service on port 8097")
     public boolean isPythonConfigurationSafe() {
         if (!pythonEnabled) return true;
         if (pythonOrigin == null || pythonServiceToken == null || pythonServiceToken.length() < 32) return false;
-        return "http".equals(pythonOrigin.getScheme()) && "127.0.0.1".equals(pythonOrigin.getHost())
+        return "http".equals(pythonOrigin.getScheme())
+                && ("127.0.0.1".equals(pythonOrigin.getHost())
+                    || "agent-engine-python".equals(pythonOrigin.getHost()))
                 && pythonOrigin.getPort() == 8097 && pythonOrigin.getUserInfo() == null
                 && pythonOrigin.getQuery() == null && pythonOrigin.getFragment() == null
                 && (pythonOrigin.getPath().isEmpty() || "/".equals(pythonOrigin.getPath()));

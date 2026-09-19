@@ -67,14 +67,23 @@ def main():
             if not os.environ.get(name, "").strip():
                 parser.error(f"Set {name} in agent-engine-python/.env or the process environment")
         gateway = ProductGateway(
-            "http://127.0.0.1:8080", os.environ["PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN"]
+            os.environ.get("PAPERAGENT_PYTHON_JAVA_ORIGIN", "http://127.0.0.1:8080"),
+            os.environ["PAPERAGENT_PYTHON_JAVA_SERVICE_TOKEN"],
         )
+        host = os.environ.get("PAPERAGENT_PYTHON_HOST", "127.0.0.1")
+        if host not in {"127.0.0.1", "0.0.0.0"}:
+            parser.error("PAPERAGENT_PYTHON_HOST must be 127.0.0.1 or 0.0.0.0")
         app = create_product_app(
-            Path(__file__).resolve().parents[2] / ".product-data",
+            Path(
+                os.environ.get(
+                    "PAPERAGENT_PYTHON_DATA_DIR",
+                    str(Path(__file__).resolve().parents[2] / ".product-data"),
+                )
+            ),
             os.environ["PAPERAGENT_PYTHON_TOKEN"],
             gateway,
         )
-        uvicorn.run(app, host="127.0.0.1", port=8097, workers=1, access_log=False)
+        uvicorn.run(app, host=host, port=8097, workers=1, access_log=False)
         return
     model = DemoModel()
     if args.model == "openai":
