@@ -115,7 +115,7 @@ class ReactPlanSessionTaskQueryService {
                     "1.0", intake.clientRequestId(), message.getContent(), intake.turnId(),
                     intake.taskId(), view.deepCopy(),
                     includeEvents ? taskEvents.getOrDefault(intake.taskId(), List.of()) : null,
-                    startedAt, finishedAt));
+                    startedAt, finishedAt, intake.engine()));
         }
         return new SessionTaskPage("1.0", List.copyOf(result), nextCursor, hasMore);
     }
@@ -220,7 +220,8 @@ class ReactPlanSessionTaskQueryService {
             JsonNode task,
             List<JsonNode> events,
             Instant startedAt,
-            Instant finishedAt) { }
+            Instant finishedAt,
+            String engine) { }
 
     record SessionTaskPage(
             String contractVersion,

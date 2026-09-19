@@ -7,6 +7,14 @@ describe('ProjectPreviewPage ReAct 接入', () => {
     'utf8',
   );
 
+  it('移除引擎选择且旧 Python 任务仅保留历史', () => {
+    expect(source).not.toContain('selectedProjectEngine');
+    expect(source).not.toContain('aria-label="项目执行引擎"');
+    expect(source).toContain("if (record.engine === 'PYTHON') {");
+    expect(source).toContain('Python 实验引擎已移除');
+    expect(source).toContain("reactPlanRecord.value.engine !== 'PYTHON'");
+  });
+
   it('隐藏链路选择并始终默认使用 ReAct', () => {
     expect(source).toContain("aria-label=\"ReAct project task\"");
     expect(source).toContain('v-model:value="reactPlanInput"');

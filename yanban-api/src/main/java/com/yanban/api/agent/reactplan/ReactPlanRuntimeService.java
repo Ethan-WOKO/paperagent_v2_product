@@ -98,7 +98,13 @@ final class ReactPlanRuntimeService {
                 conversations, conversationSummaries, null);
     }
 
+    @Autowired(required = false)
+    private ReactPlanEngineSelection engineSelection;
+
     JsonNode submit(long userId, long turnId, ReactPlanTaskRequest request) {
+        if ("PYTHON".equals(request.engine()) || engineSelection != null && engineSelection.readOnly(taskId(userId, turnId))) {
+            throw new ResponseStatusException(HttpStatus.GONE, "PYTHON_ENGINE_RETIRED");
+        }
         VerifiedAgentTurnProductContext context = projectContext(userId, turnId);
         String taskId = taskId(userId, turnId);
         UserSettingsService.ModelEndpoint endpoint = settings.resolveModelEndpoint(

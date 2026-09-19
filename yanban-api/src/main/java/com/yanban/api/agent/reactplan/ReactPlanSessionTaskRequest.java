@@ -5,7 +5,8 @@ public record ReactPlanSessionTaskRequest(
         String instruction,
         String provider,
         String model,
-        String skillId) {
+        String skillId,
+        String engine) {
 
     public ReactPlanSessionTaskRequest {
         if (clientRequestId == null
@@ -13,14 +14,20 @@ public record ReactPlanSessionTaskRequest(
             throw new IllegalArgumentException("clientRequestId is invalid");
         }
         clientRequestId = clientRequestId.trim();
+        engine = ReactPlanEngineSelection.normalize(engine);
     }
 
     ReactPlanTaskRequest taskRequest() {
-        return new ReactPlanTaskRequest(instruction, provider, model, skillId);
+        return new ReactPlanTaskRequest(instruction, provider, model, skillId, engine);
     }
 
     public ReactPlanSessionTaskRequest(String clientRequestId, String instruction,
                                        String provider, String model) {
         this(clientRequestId, instruction, provider, model, null);
+    }
+
+    public ReactPlanSessionTaskRequest(String clientRequestId, String instruction,
+                                       String provider, String model, String skillId) {
+        this(clientRequestId, instruction, provider, model, skillId, "TS");
     }
 }

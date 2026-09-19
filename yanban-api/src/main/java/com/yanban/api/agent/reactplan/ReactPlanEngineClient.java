@@ -20,6 +20,8 @@ final class ReactPlanEngineClient {
     private final ObjectMapper json;
     private final ReactPlanRuntimeProperties properties;
     private final HttpClient http;
+    @Autowired(required = false)
+    private ReactPlanEngineSelection selection;
 
     @Autowired
     ReactPlanEngineClient(ObjectMapper json, ReactPlanRuntimeProperties properties) {
@@ -46,7 +48,7 @@ final class ReactPlanEngineClient {
     }
 
     InputStream events(String taskId, long afterSequence) {
-        HttpRequest request = base("/v1/tasks/" + taskId + "/events")
+        HttpRequest request = base("/v1/tasks/" + taskId + "/events", taskId)
                 .header("Accept", "text/event-stream")
                 .header("Last-Event-ID", String.valueOf(afterSequence))
                 .GET().build();
@@ -65,7 +67,9 @@ final class ReactPlanEngineClient {
     }
 
     private JsonNode json(String method, String path, JsonNode body) {
-        HttpRequest.Builder builder = base(path).header("Accept", "application/json");
+        String taskId = body != null && body.has("taskId") ? body.path("taskId").asText()
+                : path.startsWith("/v1/tasks/") ? path.substring(10).split("/")[0] : "";
+        HttpRequest.Builder builder = base(path, taskId).header("Accept", "application/json");
         if (body == null) builder.GET();
         else builder.method(method, HttpRequest.BodyPublishers.ofString(body.toString()))
                 .header("Content-Type", "application/json");
@@ -82,7 +86,8 @@ final class ReactPlanEngineClient {
         }
     }
 
-    private HttpRequest.Builder base(String path) {
+    private HttpRequest.Builder base(String path, String taskId) {
+        if (selection != null) selection.requireEnabled(selection.engine(taskId));
         URI origin = properties.getEngineOrigin();
         return HttpRequest.newBuilder(origin.resolve(path))
                 .timeout(Duration.ofSeconds(30))

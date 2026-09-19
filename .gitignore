@@ -55,3 +55,6 @@ IEEE_TAES_regular_template_latex_v6-artifacts*/
 
 # Local MCP workspace
 workspace/
+
+# Local artifacts left by the retired Python demo (not source or deployable services).
+/agent-engine-python/

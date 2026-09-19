@@ -26,6 +26,8 @@ class ReactPlanTaskSchedulerService {
     private final ReactPlanTaskCheckpointRepository checkpoints;
     private final AgentEngineTaskGrantService grants;
     private final ReactPlanRuntimeProperties properties;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ReactPlanEngineSelection engines;
 
     ReactPlanTaskSchedulerService(
             JdbcTemplate jdbc,
@@ -72,6 +74,9 @@ class ReactPlanTaskSchedulerService {
 
     @Transactional
     ClaimedTask claimTask(String taskId, String owner) {
+        if (engines != null && engines.readOnly(taskId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "TASK_ENGINE_MISMATCH");
+        }
         validateOwner(owner);
         lockScheduler();
         ReactPlanTaskCheckpointEntity selected = locked(taskId);
@@ -137,7 +142,8 @@ class ReactPlanTaskSchedulerService {
     void assertQueueCapacity(long userId) {
         lockScheduler();
         Integer queued = jdbc.queryForObject(
-                "select count(*) from reactplan_task_checkpoints where user_id=? and state in ('queued','running')",
+                "select count(*) from reactplan_task_checkpoints where user_id=? and state in ('queued','running') "
+                        + "and not exists (select 1 from reactplan_turn_intakes intake where intake.task_id=reactplan_task_checkpoints.task_id and intake.engine='PYTHON')",
                 Integer.class, userId);
         int admitted = properties.getMaxConcurrentTasksPerUser()
                 + properties.getMaxQueuedTasksPerUser();

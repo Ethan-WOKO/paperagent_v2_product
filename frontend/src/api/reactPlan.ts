@@ -3,6 +3,7 @@ import { expireAuthSession, isJwtExpired } from '@/auth/session';
 import { consumeReactPlanSseChunk, type ReactPlanTaskEvent } from '@/utils/reactPlanTask';
 
 export type ReactPlanTaskState = 'queued' | 'running' | 'waiting_user' | 'succeeded' | 'failed' | 'cancelled';
+export type ProjectEngine = 'TS' | 'PYTHON';
 
 export interface ReactPlanProblem {
   contractVersion: '1.0';
@@ -28,6 +29,7 @@ export interface ReactPlanTaskView {
 }
 
 export interface StartReactPlanTaskResponse {
+  engine?: ProjectEngine;
   contractVersion: '1.0';
   replayed: boolean;
   turnId: number;
@@ -36,6 +38,7 @@ export interface StartReactPlanTaskResponse {
 }
 
 export interface ReactPlanSessionTask {
+  engine?: ProjectEngine;
   contractVersion: '1.0';
   clientRequestId: string;
   instruction: string;

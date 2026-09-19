@@ -27,6 +27,8 @@ final class ReactPlanTurnIntakeEntity {
     private String clientRequestId;
     @Column(name = "request_digest", nullable = false, length = 64)
     private String requestDigest;
+    @Column(name = "engine", nullable = false, length = 16)
+    private String engine = "TS";
     @Column(name = "turn_id", nullable = false)
     private Long turnId;
     @Column(name = "user_message_id", nullable = false)
@@ -52,6 +54,8 @@ final class ReactPlanTurnIntakeEntity {
     }
 
     String requestDigest() { return requestDigest; }
+    String engine() { return engine; }
+    void selectEngine(String value) { engine = ReactPlanEngineSelection.normalize(value); }
     long id() { return id; }
     String clientRequestId() { return clientRequestId; }
     long userId() { return userId; }

@@ -502,6 +502,7 @@
                   <div class="v2-task-card__question-copy">
                     <span class="v2-task-card__avatar" aria-hidden="true">你</span>
                     <p>{{ item.record.instruction }}</p>
+                    <small v-if="item.record.engine === 'PYTHON'">Python 实验已停用 · 历史记录</small>
                   </div>
                   <div class="v2-task-card__status">
                     <NTag size="small" :type="reactPlanStateTagType(item.record.view.state)">
@@ -1007,6 +1008,7 @@ let reactPlanClockTimer: number | null = null;
 let reactPlanSessionPollTimer: number | null = null;
 let reactPlanSessionRefreshProjectId: number | null = null;
 const reactPlanQuestion = computed(() => {
+  if (reactPlanRecord.value?.engine === 'PYTHON') return null;
   const record = reactPlanRecord.value;
   if (!record || record.view.state !== 'waiting_user') return null;
   return latestReactPlanQuestion(record.events, record.view.pendingQuestionId);
@@ -1033,11 +1035,11 @@ const reactPlanNavigationItems = computed(() => reactPlanTimeline.value.map((ite
   state: item.record.view.state,
 })));
 const reactPlanExecutionActive = computed(() => (
-  reactPlanRecord.value?.view.state === 'queued'
-    || reactPlanRecord.value?.view.state === 'running'
+  reactPlanRecord.value?.engine !== 'PYTHON' && (reactPlanRecord.value?.view.state === 'queued'
+    || reactPlanRecord.value?.view.state === 'running')
 ));
 const reactPlanCanCancel = computed(() => Boolean(
-  reactPlanRecord.value && !isReactPlanTerminal(reactPlanRecord.value.view.state),
+  reactPlanRecord.value && reactPlanRecord.value.engine !== 'PYTHON' && !isReactPlanTerminal(reactPlanRecord.value.view.state),
 ));
 const reactPlanActivityLabel = computed(() => {
   if (reactPlanCancelling.value) return '正在停止任务…';
@@ -2203,6 +2205,10 @@ function scheduleReactPlanReconnect(record: ReactPlanTaskRecord, epoch: number) 
 async function connectReactPlanTask(record: ReactPlanTaskRecord, epoch = projectEpoch) {
   invalidateReactPlanStream();
   if (!isCurrentReactPlan(record, epoch)) return;
+  if (record.engine === 'PYTHON') {
+    reactPlanError.value = 'Python 实验引擎已移除，历史记录保留；请发送新任务使用 TS 引擎。';
+    return;
+  }
   const controller = new AbortController();
   reactPlanAbortController = controller;
   reactPlanStreaming.value = true;

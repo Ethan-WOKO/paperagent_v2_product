@@ -48,6 +48,14 @@ class ReactPlanRuntimeServiceTest {
     private SkillsService skills;
     private ReactPlanRuntimeService runtime;
 
+    @Test
+    void retiredPythonSubmissionFailsBeforeProductOrModelWork() {
+        ResponseStatusException failure = assertThrows(ResponseStatusException.class,
+                () -> runtime.submit(1, 2, new ReactPlanTaskRequest("hello", null, null, null, "PYTHON")));
+        assertEquals(410, failure.getStatusCode().value());
+        org.mockito.Mockito.verifyNoInteractions(contexts, plans, grants, engine, settings);
+    }
+
     @BeforeEach
     void setUp() {
         contexts = mock(AgentTurnProductContextResolver.class);

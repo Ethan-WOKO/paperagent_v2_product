@@ -31,6 +31,20 @@ class ReactPlanTurnIntakePersistenceTest {
     private AgentSessionRepository sessions;
 
     @Test
+    void freezesEngineAndExcludesPythonFromTsClaims() {
+        var python = transactions.create(17L, 111L, "request.python_0123456789", "c".repeat(64), "Read files", "PYTHON");
+        var ts = transactions.create(17L, 111L, "request.typescript_012345", "d".repeat(64), "Read files");
+        LocalDateTime now = LocalDateTime.now();
+        for (var intake : java.util.List.of(python, ts)) {
+            checkpoints.saveAndFlush(new ReactPlanTaskCheckpointEntity(intake.taskId(), intake.requestDigest(),
+                    intake.userId(), intake.sessionId(), intake.turnId(), "queued", 0, "{}", now));
+        }
+        assertThat(intakes.findByTaskId(python.taskId()).orElseThrow().engine()).isEqualTo("PYTHON");
+        assertThat(checkpoints.findClaimable(now, PageRequest.of(0, 512)))
+                .extracting(ReactPlanTaskCheckpointEntity::taskId).contains(ts.taskId()).doesNotContain(python.taskId());
+    }
+
+    @Test
     void createsAProxiedAtomicMessageTurnAndIntake() {
         assertThat(AopUtils.isAopProxy(transactions)).isTrue();
 

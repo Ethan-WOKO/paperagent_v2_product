@@ -40,6 +40,16 @@ class ReactPlanTaskSchedulerServiceTest {
     }
 
     @Test
+    void retiredPythonTasksCannotBeClaimedByTs() {
+        ReactPlanEngineSelection engines = mock(ReactPlanEngineSelection.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "engines", engines);
+        when(engines.readOnly("python-task")).thenReturn(true);
+        assertThatThrownBy(() -> scheduler.claimTask("python-task", "engine.worker_one"))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("TASK_ENGINE_MISMATCH");
+        org.mockito.Mockito.verifyNoInteractions(checkpoints, grants);
+    }
+
+    @Test
     void skipsASaturatedUserAndClaimsTheOldestEligibleUsersTask() {
         ReactPlanTaskCheckpointEntity saturated = task("a", 7L, 70L);
         ReactPlanTaskCheckpointEntity eligible = task("b", 8L, 80L);
@@ -105,6 +115,32 @@ class ReactPlanTaskSchedulerServiceTest {
         assertThatThrownBy(() -> scheduler.assertQueueCapacity(7L))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("AGENT_USER_QUEUE_FULL");
+    }
+
+    @Test
+    void retiredPythonHistoryDoesNotConsumeTsQueueCapacity() {
+        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:retired_queue;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        var database = new JdbcTemplate(dataSource);
+        database.execute("CREATE TABLE reactplan_agent_scheduler_lock (lock_id INT PRIMARY KEY)");
+        database.execute("INSERT INTO reactplan_agent_scheduler_lock VALUES (1)");
+        database.execute("CREATE TABLE reactplan_task_checkpoints (task_id VARCHAR(69), user_id BIGINT, state VARCHAR(32))");
+        database.execute("CREATE TABLE reactplan_turn_intakes (task_id VARCHAR(69), engine VARCHAR(16))");
+        properties.setMaxConcurrentTasksPerUser(1);
+        properties.setMaxQueuedTasksPerUser(1);
+        for (int i = 0; i < 3; i++) {
+            database.update("INSERT INTO reactplan_turn_intakes VALUES (?, 'PYTHON')", "python-" + i);
+            database.update("INSERT INTO reactplan_task_checkpoints VALUES (?, 7, 'running')", "python-" + i);
+        }
+        var actual = new ReactPlanTaskSchedulerService(database, json, checkpoints, grants, properties);
+        actual.assertQueueCapacity(7L);
+        database.execute("INSERT INTO reactplan_task_checkpoints VALUES ('legacy-ts', 7, 'queued')");
+        actual.assertQueueCapacity(7L);
+        database.execute("INSERT INTO reactplan_turn_intakes VALUES ('new-ts', 'TS')");
+        database.execute("INSERT INTO reactplan_task_checkpoints VALUES ('new-ts', 7, 'queued')");
+        assertThatThrownBy(() -> actual.assertQueueCapacity(7L)).hasMessageContaining("AGENT_USER_QUEUE_FULL");
+        assertThat(database.queryForObject("SELECT COUNT(*) FROM reactplan_task_checkpoints", Integer.class)).isEqualTo(5);
+        database.execute("DROP ALL OBJECTS");
     }
 
     private ReactPlanTaskCheckpointEntity task(String suffix, long userId, long turnId) {

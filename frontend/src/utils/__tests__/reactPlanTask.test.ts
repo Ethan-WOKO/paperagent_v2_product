@@ -127,7 +127,18 @@ describe('ReAct task frontend state', () => {
       finishedAt: record.finishedAt,
     }], 1, 2);
 
-    expect(recovered).toEqual([{ ...record, events: [status(1)] }]);
+    expect(recovered).toEqual([{ ...record, engine: 'TS', events: [status(1)] }]);
+  });
+
+  it('restores the frozen Python engine from server history', () => {
+    const record = taskRecord(8);
+    const recovered = mergeReactPlanSessionTasks([], [{
+      contractVersion: '1.0', clientRequestId: record.clientRequestId,
+      instruction: record.instruction, turnId: record.turnId, taskId: record.taskId,
+      task: record.view, events: [], startedAt: record.startedAt, finishedAt: null, engine: 'PYTHON',
+    }], 1, 2);
+    expect(recovered[0].engine).toBe('PYTHON');
+    expect(parseReactPlanHistory(serializeReactPlanHistory(recovered), 1, 2)[0].engine).toBe('PYTHON');
   });
 
   it('keeps cached events when a server summary intentionally omits event bodies', () => {

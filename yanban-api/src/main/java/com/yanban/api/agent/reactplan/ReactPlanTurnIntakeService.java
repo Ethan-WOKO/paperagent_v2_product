@@ -23,6 +23,8 @@ final class ReactPlanTurnIntakeService {
     private final ReactPlanTurnIntakeTransactions transactions;
     private final ReactPlanRuntimeService runtime;
     private final AgentSessionTitleGenerator titleGenerator;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ReactPlanEngineSelection engineSelection;
 
     ReactPlanTurnIntakeService(
             ObjectMapper json,
@@ -40,6 +42,7 @@ final class ReactPlanTurnIntakeService {
     JsonNode start(long userId, long sessionId, ReactPlanSessionTaskRequest request) {
         requireProjectSession(userId, sessionId);
         ReactPlanTaskRequest task = request.taskRequest();
+        if (engineSelection != null) engineSelection.requireEnabled(task.engine());
         String digest = requestDigest(request.clientRequestId(), task);
         ResolvedIntake resolved = transactions.find(
                         userId, sessionId, request.clientRequestId())
@@ -47,7 +50,7 @@ final class ReactPlanTurnIntakeService {
                         requireExact(existing, digest), true))
                 .orElseGet(() -> createOrReadWinner(
                         userId, sessionId, request.clientRequestId(), digest,
-                        task.instruction()));
+                        task.instruction(), task.engine()));
         ReactPlanTurnIntakeEntity intake = resolved.entity();
         if (!resolved.replayed()
                 && transactions.shouldInitializeTitle(userId, sessionId, intake.taskId())) {
@@ -65,16 +68,18 @@ final class ReactPlanTurnIntakeService {
                 && accepted.path("replayed").asBoolean(false));
         response.put("turnId", intake.turnId());
         response.put("taskId", intake.taskId());
+        response.put("engine", intake.engine());
         response.set("task", accepted.path("task"));
         return response;
     }
 
     private ResolvedIntake createOrReadWinner(
             long userId, long sessionId, String clientRequestId,
-            String digest, String instruction) {
+            String digest, String instruction, String engine) {
         try {
-            return new ResolvedIntake(transactions.create(
-                    userId, sessionId, clientRequestId, digest, instruction), false);
+            return new ResolvedIntake("TS".equals(engine) ? transactions.create(
+                    userId, sessionId, clientRequestId, digest, instruction) : transactions.create(
+                    userId, sessionId, clientRequestId, digest, instruction, engine), false);
         } catch (DataIntegrityViolationException race) {
             return transactions.find(userId, sessionId, clientRequestId)
                     .map(existing -> new ResolvedIntake(
@@ -109,6 +114,7 @@ final class ReactPlanTurnIntakeService {
         value.put("instruction", request.instruction());
         value.put("provider", request.provider());
         value.put("model", request.model());
+        if (!"TS".equals(request.engine())) value.put("engine", request.engine());
         return ReactPlanCanonicalJson.digest(json, value);
     }
 
