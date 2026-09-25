@@ -50,11 +50,13 @@ class AgentEngineModelGatewayTest {
                         "deepseek", "deepseek-v4-flash", null, "secret", "builtin", "DeepSeek"));
         when(models.chat(any())).thenReturn(new ChatResponse(
                 new ChatMessage("assistant", "done", List.of(), null), "stop",
-                new ChatResponse.Usage(11, 4, 15)));
+                new ChatResponse.Usage(11, 4, 15, 8, 3)));
 
         ModelCompletionResult result = gateway.complete(authority(), request);
 
         assertThat(result.content()).isEqualTo("done");
+        assertThat(result.usage().cacheHitTokens()).isEqualTo(8);
+        assertThat(result.usage().cacheMissTokens()).isEqualTo(3);
         assertThat(result.replayed()).isFalse();
         assertThat(result.resolvedProvider()).isEqualTo("deepseek");
         assertThat(result.resolvedModel()).isEqualTo("deepseek-v4-flash");
@@ -94,6 +96,8 @@ class AgentEngineModelGatewayTest {
         assertThat(result.resolvedProvider()).isEqualTo("glm");
         assertThat(result.resolvedModel()).isEqualTo("glm-4.5-flash");
         assertThat(result.fallbackUsed()).isTrue();
+        assertThat(result.usage().cacheHitTokens()).isNull();
+        assertThat(result.usage().cacheMissTokens()).isNull();
         ArgumentCaptor<ChatRequest> routed = ArgumentCaptor.forClass(ChatRequest.class);
         verify(models, org.mockito.Mockito.times(2)).chat(routed.capture());
         List<String> fallbackSystemMessages = routed.getAllValues().get(1).messages().stream()
@@ -111,11 +115,19 @@ class AgentEngineModelGatewayTest {
         ModelCompletionRequest request = request("deepseek", "deepseek-v4-flash");
         ModelCompletionResult stored = new ModelCompletionResult("1.0", request.clientRequestId(),
                 request.requestDigest(), "cached", List.of(), "stop",
-                new AgentEngineGatewayDtos.ModelUsage(2, 1), false);
+                new AgentEngineGatewayDtos.ModelUsage(2, 1, 1, 1), false);
         when(transactions.claim(any(), any(), any(), any(), any(), anyLong()))
                 .thenReturn(Optional.of(json.writeValueAsString(stored)));
 
-        assertThat(gateway.complete(authority(), request).replayed()).isTrue();
+        var replayed = gateway.complete(authority(), request);
+        assertThat(replayed.replayed()).isTrue();
+        assertThat(replayed.usage().cacheHitTokens()).isEqualTo(1);
+        assertThat(replayed.usage().cacheMissTokens()).isEqualTo(1);
+        var legacy = json.valueToTree(stored);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) legacy.get("usage")).remove(List.of("cacheHitTokens", "cacheMissTokens"));
+        when(transactions.claim(any(), any(), any(), any(), any(), anyLong()))
+                .thenReturn(Optional.of(json.writeValueAsString(legacy)));
+        assertThat(gateway.complete(authority(), request).usage().cacheHitTokens()).isNull();
         verify(models, never()).chat(any());
         verify(quotas, never()).assertCanUseAi(any());
     }

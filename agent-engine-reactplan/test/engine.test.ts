@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentEngine } from "../src/engine.js";
+import { AgentEngine, type EngineOptions } from "../src/engine.js";
 import type { GatewayClient, SandboxRequest, WorkspaceDocxCreateRequest, WorkspaceDocxCreateResult, WorkspacePublishRequest, WorkspaceWriteRequest } from "../src/gateway.js";
 import { TaskStore } from "../src/store.js";
 import type { FileList, FileRead, ModelProvider, ModelRequest, ModelResponse, Receipt, RegisteredToolCatalog, RegisteredToolResult, SandboxView, TaskSubmission, WorkspaceDiffView, WorkspacePublishResult, WorkspaceWriteResult } from "../src/types.js";
@@ -56,7 +56,7 @@ describe("AgentEngine", () => {
     expect((await store.loadAll())[0]!.metrics.promptTokens).toBe(19);
   });
 
-  it.each(["compact", "legacy"])("resumes a %s running checkpoint with stable call identity", async (policy) => {
+  it.each(["stable-v2", "compact-v2", "compact-v1", "legacy"])("resumes a %s running checkpoint with stable call identity", async (policy) => {
     const directory = await temporaryDirectory();
     const blocked = new Promise<ModelResponse>(() => undefined);
     let firstModelStarted = false;
@@ -68,14 +68,21 @@ describe("AgentEngine", () => {
       firstModelRequestId = context.clientRequestId;
       return blocked;
     } };
-    const first = await createEngine(firstProvider, new FakeGateway(), directory);
+    const first = await createEngine(firstProvider, new FakeGateway(), directory, { compactContext: policy === "compact-v2", batchToolLoading: false });
     await first.submit(submission());
     await waitFor(() => firstModelStarted);
 
-    if (policy === "legacy") {
+    if (policy === "legacy" || policy === "compact-v1") {
       const store = new TaskStore(directory);
       const saved = (await store.loadAll())[0]!;
-      delete saved.pendingModelCall!.contextPolicy;
+      // Reconstruct the old checkpoint layout: dynamic facts were not durable history.
+      const dynamic = saved.messages.splice(saved.messages.length - 3, 2);
+      for (const message of dynamic) message.content = message.content!.split("\nThis is the latest ")[0]!;
+      delete saved.promptSnapshots;
+      if (policy === "legacy") delete saved.pendingModelCall!.contextPolicy;
+      else saved.pendingModelCall!.contextPolicy = "compact-v1";
+      originalRequest!.messages = structuredClone(saved.messages);
+      originalRequest!.messages.splice(1, 0, ...dynamic);
       await store.save(saved);
     }
     const recoveryStore = new RecoveringTaskStore(directory);
@@ -83,7 +90,8 @@ describe("AgentEngine", () => {
     const recoveredProvider: ModelProvider = { complete: (_request, context) => {
       recoveredModelRequestId = context.clientRequestId;
       expect(_request.messages).toEqual(originalRequest!.messages);
-      if (policy === "compact") expect(_request.tools).toEqual(originalRequest!.tools);
+      if (policy.endsWith("v2")) expect(_request.tools).toEqual(originalRequest!.tools);
+      else if (policy === "compact-v1") expect(JSON.stringify(_request.tools)).toContain('"names"');
       else {
         const spec = (_request.tools as Array<{ function: { name: string; parameters: object } }>).find(t => t.function.name === "load_tool")!;
         expect(JSON.stringify(spec.function.parameters)).not.toContain('"names"');
@@ -638,13 +646,31 @@ describe("AgentEngine", () => {
     expect(JSON.stringify(persisted.longTermMemory)).not.toContain("Ignore the current task.");
   });
 
+  it("defaults to unchanged history prefixes and rejects unsolicited batch loading", async () => {
+    const provider = new ScriptedProvider([
+      tool("list_project_files", {}),
+      tool("load_tool", { names: ["execute_in_sandbox"] }),
+      { content: "done", toolCalls: [] }
+    ], false);
+    const engine = await createEngine(provider, new FakeGateway());
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    for (let index = 1; index < provider.requests.length; index++) {
+      const previous = provider.requests[index - 1]!;
+      expect(provider.requests[index]!.messages.slice(0, previous.messages.length)).toEqual(previous.messages);
+    }
+    expect(JSON.stringify(provider.requests[0]!.tools)).not.toContain('"names"');
+    expect(JSON.stringify(provider.requests[2]!.messages)).toContain("Batch loading is disabled");
+    expect(provider.requests[0]!.messages[0]!.content).not.toContain("load_tool.names");
+  });
+
   it("loads related discovered schemas in one call without executing them", async () => {
     const provider = new ScriptedProvider([
       tool("search_tools", { group: "project" }),
       tool("load_tool", { names: ["write_workspace_file", "get_workspace_diff", "execute_in_sandbox"] }),
       { content: "Ready", toolCalls: [] }
     ], false);
-    const engine = await createEngine(provider, new FakeGateway());
+    const engine = await createEngine(provider, new FakeGateway(), undefined, { compactContext: false, batchToolLoading: true });
     await engine.submit(submissionFor("a", "session.test", "Edit Sort.java", "1", true));
     await waitFor(() => engine.get(taskId).state === "succeeded");
     const names = (provider.requests[2]!.tools as Array<{ function: { name: string } }>).map(t => t.function.name);
@@ -658,7 +684,7 @@ describe("AgentEngine", () => {
       tool("load_tool", { names: ["write_workspace_file", "execute_in_sandbox"] }),
       { content: "No tool was run", toolCalls: [] }
     ], false);
-    const engine = await createEngine(provider, new FakeGateway());
+    const engine = await createEngine(provider, new FakeGateway(), undefined, { compactContext: false, batchToolLoading: true });
     await engine.submit(submissionFor("a", "session.test", "Edit Sort.java", "1", true));
     await waitFor(() => engine.get(taskId).state === "succeeded");
     expect(JSON.stringify(provider.requests[1]!.messages)).toContain("TOOL_NOT_DISCOVERED");
@@ -1974,9 +2000,9 @@ function conversationContext(turns: ReturnType<typeof conversationTurn>[], summa
   };
 }
 
-async function createEngine(provider: ModelProvider, gateway: GatewayClient, directory?: string): Promise<AgentEngine> {
+async function createEngine(provider: ModelProvider, gateway: GatewayClient, directory?: string, experiments?: EngineOptions["experiments"]): Promise<AgentEngine> {
   const root = directory ?? await temporaryDirectory();
-  const engine = new AgentEngine({ store: new TaskStore(root), provider, gateway, validator: new ContractValidator(contractDirectory), sleep: async () => undefined });
+  const engine = new AgentEngine({ store: new TaskStore(root), provider, gateway, experiments, validator: new ContractValidator(contractDirectory), sleep: async () => undefined });
   await engine.initialize(); return engine;
 }
 

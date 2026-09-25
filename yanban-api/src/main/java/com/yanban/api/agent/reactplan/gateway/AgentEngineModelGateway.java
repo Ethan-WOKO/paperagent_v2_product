@@ -106,9 +106,13 @@ final class AgentEngineModelGateway {
             ModelCompletionResult result = new ModelCompletionResult(
                     "1.0", request.clientRequestId(), request.requestDigest(),
                     response.assistantText(), calls, response.finishReason(),
-                    new ModelUsage(prompt, completion), false,
+                    new ModelUsage(prompt, completion, usage == null ? null : usage.cacheHitTokens(),
+                            usage == null ? null : usage.cacheMissTokens()), false,
                     routed.resolvedProvider(), routed.resolvedModel(),
                     fallbackUsed);
+            log.info("reactplan_model_cache taskId={} callId={} provider={} model={} cacheHitTokens={} cacheMissTokens={}",
+                    authority.taskId(), request.clientRequestId(), routed.resolvedProvider(), routed.resolvedModel(),
+                    result.usage().cacheHitTokens(), result.usage().cacheMissTokens());
             String serialized = write(result);
             transactions.succeed(authority.taskId(), request.clientRequestId(), serialized,
                     prompt, completion);

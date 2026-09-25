@@ -4,7 +4,7 @@
 
 Project 页面使用 `agent-engine-reactplan` 的 TypeScript ReAct 执行链路。Java 产品层负责认证与授权、任务持久化、可信项目版本、Workspace、工具/沙箱网关以及验证后发布和回滚。不能将现行 Project 执行链称为旧 Java V2 plan-and-execute。
 
-#185 第一阶段优化使用 LangGraph JS 编排现有模型/工具循环、LangChain Core 管理模型消息投影；Java 仍是持久化和业务权限权威。已加入成功写入/过期读取正文的投影压缩、批量加载已发现工具 schema 和每轮上下文统计。未新增图状态数据库或改变验证后发布规则，详见 [诊断与验证](../开发流程/ts-langgraph-context-optimization.md)。
+#185 第一阶段优化使用 LangGraph JS 编排现有模型/工具循环、LangChain Core 管理模型消息投影；Java 仍是持久化和业务权限权威。2026-09-25 起，正文投影压缩、批量加载工具 schema 均为默认关闭的实验项；默认保留消息前缀并追加变化的事实，已接通缓存 token 和分阶段耗时观测。见 [缓存观测与保守策略](../开发流程/ts-react-cache-observability.md)。未新增图状态数据库或改变验证后发布规则，详见 [诊断与验证](../开发流程/ts-langgraph-context-optimization.md)。
 
 ## #233 Python 实验已移除
 

@@ -72,7 +72,9 @@
           "required": ["promptTokens", "completionTokens"],
           "properties": {
             "promptTokens": { "type": "integer", "minimum": 0 },
-            "completionTokens": { "type": "integer", "minimum": 0 }
+            "completionTokens": { "type": "integer", "minimum": 0 },
+            "cacheHitTokens": { "type": ["integer", "null"], "minimum": 0 },
+            "cacheMissTokens": { "type": ["integer", "null"], "minimum": 0 }
           }
         },
         "replayed": { "type": "boolean" },

@@ -72,28 +72,40 @@ export class HttpGatewayClient implements GatewayClient {
   private async call<T>(url: string, grant: string, signal: AbortSignal, body?: unknown, fallbackCategory: import("./types.js").Problem["category"] = "tool"): Promise<T> {
     const serialized = body === undefined ? undefined : JSON.stringify(body);
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
-      let response: Response;
+      const started = performance.now();
+      let status: number | null = null;
       try {
-        response = await fetch(url, { method: serialized === undefined ? "GET" : "POST", headers: { authorization: `Bearer ${grant}`, ...(serialized === undefined ? {} : { "content-type": "application/json" }) }, ...(serialized === undefined ? {} : { body: serialized }), signal });
-      } catch (error) {
-        if (signal.aborted) throw error;
-        if (attempt < this.maxAttempts) {
-          await this.retry(attempt, null, fallbackCategory, signal);
+        let response: Response;
+        try {
+          response = await fetch(url, { method: serialized === undefined ? "GET" : "POST", headers: { authorization: `Bearer ${grant}`, ...(serialized === undefined ? {} : { "content-type": "application/json" }) }, ...(serialized === undefined ? {} : { body: serialized }), signal });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          if (attempt < this.maxAttempts) {
+            await this.retry(attempt, null, fallbackCategory, signal);
+            continue;
+          }
+          throw new EngineProblem(502, problem("GATEWAY_TRANSPORT_FAILED", fallbackCategory, "Product gateway request failed after bounded retries", true));
+        }
+        status = response.status;
+        if (response.ok) return await response.json() as T;
+
+        let gatewayProblem: { code?: string; category?: import("./types.js").Problem["category"]; message?: string; retryable?: boolean } = {};
+        try { gatewayProblem = await response.json() as typeof gatewayProblem; } catch { /* sanitized fallback */ }
+        const category = gatewayProblem.category ?? fallbackCategory;
+        const retryable = gatewayProblem.retryable ?? response.status >= 500;
+        if (attempt < this.maxAttempts && response.status >= 500 && retryable) {
+          await this.retry(attempt, response.status, category, signal);
           continue;
         }
-        throw new EngineProblem(502, problem("GATEWAY_TRANSPORT_FAILED", fallbackCategory, "Product gateway request failed after bounded retries", true));
+        throw new EngineProblem(response.status, problem(gatewayProblem.code ?? "GATEWAY_REQUEST_FAILED", category, gatewayProblem.message ?? `Product gateway returned HTTP ${response.status}`, retryable));
+      } finally {
+        const path = new URL(url).pathname;
+        const taskId = path.match(/task\.[a-f0-9]{64}/)?.[0] ?? null;
+        process.stdout.write(JSON.stringify({ event: "reactplan_gateway_attempt", taskId,
+          operation: path.split("/tasks/")[1]?.split("/").slice(1, 2)[0] ?? "unknown",
+          attempt, status, cancelled: signal.aborted,
+          durationMillis: Math.max(0, performance.now() - started) }) + "\n");
       }
-      if (response.ok) return await response.json() as T;
-
-      let gatewayProblem: { code?: string; category?: import("./types.js").Problem["category"]; message?: string; retryable?: boolean } = {};
-      try { gatewayProblem = await response.json() as typeof gatewayProblem; } catch { /* sanitized fallback */ }
-      const category = gatewayProblem.category ?? fallbackCategory;
-      const retryable = gatewayProblem.retryable ?? response.status >= 500;
-      if (attempt < this.maxAttempts && response.status >= 500 && retryable) {
-        await this.retry(attempt, response.status, category, signal);
-        continue;
-      }
-      throw new EngineProblem(response.status, problem(gatewayProblem.code ?? "GATEWAY_REQUEST_FAILED", category, gatewayProblem.message ?? `Product gateway returned HTTP ${response.status}`, retryable));
     }
     throw new EngineProblem(502, problem("GATEWAY_RETRY_EXHAUSTED", fallbackCategory, "Product gateway retry budget exhausted", true));
   }
