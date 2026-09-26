@@ -12,7 +12,7 @@ import { TaskStore } from "../src/store.js";
 import { ContractValidator } from "../src/validation.js";
 import { digestObject } from "../src/util.js";
 
-it.each([false, true].flatMap(compactContext => [false, true].map(batchToolLoading => ({ compactContext, batchToolLoading }))))
+it.each([false, true].map(compactContext => ({ compactContext })))
   ("runs an isolated HTTP task with frozen experiments %j and observable cache counters", async experiments => {
     const taskId = `task.${"9".repeat(64)}`;
     const token = "isolated-http-smoke-token-32-characters";
@@ -65,7 +65,7 @@ it.each([false, true].flatMap(compactContext => [false, true].map(batchToolLoadi
       const usage = logs.filter(row => row.event === "reactplan_model_context");
       expect(usage.map(row => row.cacheHitTokens)).toEqual([null, 80]);
       expect(usage.map(row => row.cacheMissTokens)).toEqual([null, 20]);
-      expect(usage.every(row => row.batchToolLoading === experiments.batchToolLoading)).toBe(true);
+      expect(usage.every(row => row.batchToolLoading === false)).toBe(true);
       expect(logs.some(row => row.event === "reactplan_gateway_attempt" && row.attempt === 2)).toBe(true);
       expect(JSON.stringify(logs)).not.toContain(token);
       expect((await store.loadAll())[0]!.experiments).toEqual(experiments);

@@ -215,7 +215,8 @@ export interface PersistedTask {
   messages: ChatMessage[];
   modelCalls: number;
   pendingModelCall?: { clientRequestId: string; contextPolicy?: "compact-v1" | "stable-v2" | "compact-v2"; batchToolLoading?: boolean };
-  experiments?: { compactContext: boolean; batchToolLoading: boolean };
+  // batchToolLoading is accepted only when reading historical checkpoints.
+  experiments?: { compactContext: boolean; batchToolLoading?: boolean };
   promptSnapshots?: Record<string, string>;
   metrics: { startedAt: string; finishedAt?: string; promptTokens: number; completionTokens: number };
   receiptRefs: string[];

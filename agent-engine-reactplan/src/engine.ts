@@ -40,7 +40,8 @@ const LEGACY_LOAD_TOOL = functionTool(
   }
 );
 
-const LOAD_TOOL = functionTool(
+// Recovery only: preserve the schema of an already-dispatched historical request.
+const RETIRED_BATCH_LOAD_TOOL = functionTool(
   "load_tool",
   "Load parameter schemas only for tools returned by a previous search_tools result. Search first; do not guess tool names. Use name for one tool or names for up to six tools needed for the current step. This only exposes schemas; it never executes tools or grants permission.",
   { type: "object", additionalProperties: false,
@@ -78,7 +79,7 @@ export interface EngineOptions {
   validator: ContractValidator;
   sleep?: Sleeper;
   monotonicNow?: () => number;
-  experiments?: PersistedTask["experiments"];
+  experiments?: { compactContext: boolean } | undefined;
 }
 
 export class AgentEngine {
@@ -161,7 +162,7 @@ export class AgentEngine {
     const longTermMemory = structuredClone(
       submission.context?.longTermMemory ?? emptyLongTermMemory());
     const task: PersistedTask = {
-      experiments: { compactContext: false, batchToolLoading: false, ...this.options.experiments },
+      experiments: { compactContext: false, ...this.options.experiments },
       authority: structuredClone(submission.authority),
       view: { contractVersion: "1.0", taskId: submission.taskId, requestDigest: submission.requestDigest, state: "queued", lastSequence: 0, pendingQuestionId: null, deliverySequence: null, terminalSequence: null, error: null, createdAt: now, updatedAt: now },
       messages: initialMessages(submission, historicalContext, longTermMemory), modelCalls: 0,
@@ -429,7 +430,7 @@ export class AgentEngine {
     await this.ensureRegisteredTools(task, signal);
     if (!task.pendingModelCall) {
       if (task.modelCalls >= MAX_MODEL_CALLS) throw new EngineProblem(422, problem("MODEL_CALL_BUDGET_EXHAUSTED", "model", "Task reached the 20-call model budget"));
-      task.experiments ??= { compactContext: false, batchToolLoading: false, ...this.options.experiments };
+      task.experiments ??= { compactContext: false, ...this.options.experiments };
       // Append changed server facts once; never rewrite an already-sent prefix.
       task.promptSnapshots ??= {};
       for (const [kind, message] of Object.entries({ groups: compactToolGroupMessage(availableToolSpecs(task)), evidence: groundingMessage(task.observations) })) {
@@ -445,7 +446,7 @@ export class AgentEngine {
       task.pendingModelCall = {
         clientRequestId: `model.${sha256(`${task.view.taskId}\0${task.modelCalls}`)}`,
         contextPolicy: task.experiments.compactContext ? "compact-v2" : "stable-v2",
-        batchToolLoading: task.experiments.batchToolLoading
+        batchToolLoading: false
       };
       await this.options.store.save(task);
     }
@@ -461,7 +462,7 @@ export class AgentEngine {
       groundingMessage(task.observations));
     const modelTools = [
         SEARCH_TOOLS,
-        batchToolLoading ? LOAD_TOOL : LEGACY_LOAD_TOOL,
+        batchToolLoading ? RETIRED_BATCH_LOAD_TOOL : LEGACY_LOAD_TOOL,
         ...loadedToolSpecs(availableTools, task.loadedToolNames ?? []),
         ...availableTools.filter((tool) => tool.function.name === "ask_user")
       ];

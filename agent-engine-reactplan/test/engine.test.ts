@@ -68,7 +68,7 @@ describe("AgentEngine", () => {
       firstModelRequestId = context.clientRequestId;
       return blocked;
     } };
-    const first = await createEngine(firstProvider, new FakeGateway(), directory, { compactContext: policy === "compact-v2", batchToolLoading: false });
+    const first = await createEngine(firstProvider, new FakeGateway(), directory, { compactContext: policy === "compact-v2" });
     await first.submit(submission());
     await waitFor(() => firstModelStarted);
 
@@ -664,13 +664,13 @@ describe("AgentEngine", () => {
     expect(provider.requests[0]!.messages[0]!.content).not.toContain("load_tool.names");
   });
 
-  it("loads related discovered schemas in one call without executing them", async () => {
+  it("loads multiple discovered schemas through separate calls in one model response", async () => {
     const provider = new ScriptedProvider([
       tool("search_tools", { group: "project" }),
-      tool("load_tool", { names: ["write_workspace_file", "get_workspace_diff", "execute_in_sandbox"] }),
+      { content: null, toolCalls: ["write_workspace_file", "get_workspace_diff", "execute_in_sandbox"].map((name, index) => ({ id: `load-${index}`, name: "load_tool", arguments: JSON.stringify({ name }) })) },
       { content: "Ready", toolCalls: [] }
     ], false);
-    const engine = await createEngine(provider, new FakeGateway(), undefined, { compactContext: false, batchToolLoading: true });
+    const engine = await createEngine(provider, new FakeGateway(), undefined, { compactContext: false });
     await engine.submit(submissionFor("a", "session.test", "Edit Sort.java", "1", true));
     await waitFor(() => engine.get(taskId).state === "succeeded");
     const names = (provider.requests[2]!.tools as Array<{ function: { name: string } }>).map(t => t.function.name);
@@ -679,18 +679,34 @@ describe("AgentEngine", () => {
     expect(provider.requests).toHaveLength(3);
   });
 
-  it("rejects batch loading without discovery and does not partially expose tools", async () => {
+  it("rejects undiscovered single-tool loading without exposing schemas", async () => {
     const provider = new ScriptedProvider([
-      tool("load_tool", { names: ["write_workspace_file", "execute_in_sandbox"] }),
+      tool("load_tool", { name: "write_workspace_file" }),
       { content: "No tool was run", toolCalls: [] }
     ], false);
-    const engine = await createEngine(provider, new FakeGateway(), undefined, { compactContext: false, batchToolLoading: true });
+    const engine = await createEngine(provider, new FakeGateway(), undefined, { compactContext: false });
     await engine.submit(submissionFor("a", "session.test", "Edit Sort.java", "1", true));
     await waitFor(() => engine.get(taskId).state === "succeeded");
     expect(JSON.stringify(provider.requests[1]!.messages)).toContain("TOOL_NOT_DISCOVERED");
     expect((provider.requests[1]!.tools as Array<{ function: { name: string } }>).map(t => t.function.name))
       .not.toContain("write_workspace_file");
     expect((await engine.events(taskId)).filter(e => e.type === "tool")).toHaveLength(0);
+  });
+
+  it("ignores a retired batch experiment flag on the next new model request", async () => {
+    const provider = new ScriptedProvider([
+      tool("search_tools", { group: "project" }),
+      { content: "done", toolCalls: [] }
+    ], false);
+    // Simulate an older caller/checkpoint retaining the retired setting.
+    const settings = { compactContext: false, batchToolLoading: true };
+    const engine = await createEngine(provider, new FakeGateway(), undefined, settings);
+    await engine.submit(submission());
+    await waitFor(() => engine.get(taskId).state === "succeeded");
+    for (const request of provider.requests) {
+      const loader = (request.tools as Array<{ function: { name: string; parameters: object } }>).find(t => t.function.name === "load_tool")!;
+      expect(JSON.stringify(loader.function.parameters)).not.toContain('"names"');
+    }
   });
 
   it("injects the frozen Skill prompt and intersects its allowed tool catalog", async () => {

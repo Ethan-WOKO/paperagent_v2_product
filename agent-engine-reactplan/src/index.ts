@@ -13,8 +13,7 @@ const engine = new AgentEngine({
   store: new HttpTaskStore(gatewayOrigin, token),
   provider: new GatewayModelProvider(gateway),
   gateway,
-  experiments: { compactContext: process.env.REACTPLAN_COMPACT_CONTEXT === "true",
-    batchToolLoading: process.env.REACTPLAN_BATCH_TOOL_LOADING === "true" },
+  experiments: { compactContext: process.env.REACTPLAN_COMPACT_CONTEXT === "true" },
   validator: new ContractValidator()
 });
 await engine.initialize();
