@@ -42,7 +42,7 @@ const LEGACY_LOAD_TOOL = functionTool(
 
 const LOAD_TOOL = functionTool(
   "load_tool",
-  "Load schemas for discovered tools. Use names to load up to six related tools together (for a file edit: write_workspace_file, get_workspace_diff, execute_in_sandbox). This only exposes schemas; it never executes tools or grants permission. name remains supported.",
+  "Load parameter schemas only for tools returned by a previous search_tools result. Search first; do not guess tool names. Use name for one tool or names for up to six tools needed for the current step. This only exposes schemas; it never executes tools or grants permission.",
   { type: "object", additionalProperties: false,
     properties: { name: { type: "string", minLength: 1, maxLength: 64 },
       names: { type: "array", minItems: 1, maxItems: 6, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 64 } } },
