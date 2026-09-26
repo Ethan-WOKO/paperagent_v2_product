@@ -32,6 +32,7 @@ export interface TaskPersistence {
 }
 
 export class TaskStore implements TaskPersistence {
+  private readonly saves = new Map<string, Promise<void>>();
   constructor(private readonly root: string) {}
 
   async initialize(): Promise<void> { await mkdir(this.root, { recursive: true }); }
@@ -44,10 +45,20 @@ export class TaskStore implements TaskPersistence {
   }
 
   async save(task: PersistedTask): Promise<void> {
-    const directory = this.directory(task.view.taskId);
+    const taskId = task.view.taskId;
+    const snapshot = JSON.stringify(task);
+    const previous = this.saves.get(taskId) ?? Promise.resolve();
+    const saving = previous.catch(() => undefined).then(() => this.writeSnapshot(taskId, snapshot));
+    this.saves.set(taskId, saving);
+    try { await saving; }
+    finally { if (this.saves.get(taskId) === saving) this.saves.delete(taskId); }
+  }
+
+  private async writeSnapshot(taskId: string, snapshot: string): Promise<void> {
+    const directory = this.directory(taskId);
     const target = resolve(directory, "task.json");
     const temporary = resolve(directory, `task.${process.pid}.${randomUUID()}.tmp`);
-    await writeFile(temporary, JSON.stringify(task), { encoding: "utf8", flag: "wx" });
+    await writeFile(temporary, snapshot, { encoding: "utf8", flag: "wx" });
     await rename(temporary, target);
   }
 

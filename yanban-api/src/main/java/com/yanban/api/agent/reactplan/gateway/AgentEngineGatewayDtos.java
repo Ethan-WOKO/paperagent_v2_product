@@ -90,7 +90,9 @@ public final class AgentEngineGatewayDtos {
                                          String requestDigest, String provider, String model,
                                          List<ModelMessage> messages, List<ModelToolSpec> tools,
                                          int maxOutputTokens) { }
-    public record ModelUsage(int promptTokens, int completionTokens) { }
+    public record ModelUsage(int promptTokens, int completionTokens, Integer cacheHitTokens, Integer cacheMissTokens) {
+        public ModelUsage(int promptTokens, int completionTokens) { this(promptTokens, completionTokens, null, null); }
+    }
     public record ModelCompletionResult(String contractVersion, String clientRequestId,
                                         String requestDigest, String content,
                                         List<ModelToolCall> toolCalls, String finishReason,

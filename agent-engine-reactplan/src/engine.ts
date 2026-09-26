@@ -1,3 +1,5 @@
+import { runReactGraph, type ReactDecision } from "./react-graph.js";
+import { projectModelContext } from "./model-context.js";
 import type { AcceptedAnswer, ChatMessage, HistoricalContextEnvelope, LongTermMemoryEnvelope, ModelProvider, PendingCall, PersistedTask, Problem, Receipt, RecentConversationTurn, RegisteredToolCatalog, RegisteredToolResult, RegisteredToolSpec, TaskEvent, TaskObservations, TaskSubmission, TaskView, ToolName, WorkspaceWriteResult } from "./types.js";
 import type { DocxBlock, GatewayClient, SandboxRequest, WorkspaceDocxCreateRequest, WorkspacePublishRequest, WorkspaceWriteRequest } from "./gateway.js";
 import { ContractValidator } from "./validation.js";
@@ -29,13 +31,23 @@ const WORKSPACE_MODEL_TOOLS = [
   functionTool("get_workspace_diff", "Inspect the authoritative ADD/MODIFY diff currently present in the isolated task Workspace. This never publishes changes.", { type: "object", additionalProperties: false, properties: {} })
 ];
 
-const LOAD_TOOL = functionTool(
+const LEGACY_LOAD_TOOL = functionTool(
   "load_tool",
   "Load the parameter schema for one available tool selected from the server-provided compact tool catalog. Call this before using a tool whose schema is not loaded yet.",
   {
     type: "object", additionalProperties: false, required: ["name"],
     properties: { name: { type: "string", minLength: 1, maxLength: 64 } }
   }
+);
+
+// Recovery only: preserve the schema of an already-dispatched historical request.
+const RETIRED_BATCH_LOAD_TOOL = functionTool(
+  "load_tool",
+  "Load parameter schemas only for tools returned by a previous search_tools result. Search first; do not guess tool names. Use name for one tool or names for up to six tools needed for the current step. This only exposes schemas; it never executes tools or grants permission.",
+  { type: "object", additionalProperties: false,
+    properties: { name: { type: "string", minLength: 1, maxLength: 64 },
+      names: { type: "array", minItems: 1, maxItems: 6, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 64 } } },
+    oneOf: [{ required: ["name"] }, { required: ["names"] }] }
 );
 
 const SEARCH_TOOLS = functionTool(
@@ -67,6 +79,7 @@ export interface EngineOptions {
   validator: ContractValidator;
   sleep?: Sleeper;
   monotonicNow?: () => number;
+  experiments?: { compactContext: boolean } | undefined;
 }
 
 export class AgentEngine {
@@ -149,6 +162,7 @@ export class AgentEngine {
     const longTermMemory = structuredClone(
       submission.context?.longTermMemory ?? emptyLongTermMemory());
     const task: PersistedTask = {
+      experiments: { compactContext: false, ...this.options.experiments },
       authority: structuredClone(submission.authority),
       view: { contractVersion: "1.0", taskId: submission.taskId, requestDigest: submission.requestDigest, state: "queued", lastSequence: 0, pendingQuestionId: null, deliverySequence: null, terminalSequence: null, error: null, createdAt: now, updatedAt: now },
       messages: initialMessages(submission, historicalContext, longTermMemory), modelCalls: 0,
@@ -352,178 +366,10 @@ export class AgentEngine {
         return;
       }
       if (task.view.state !== "running") await this.status(task, "running", null);
-      while (!terminal(task.view.state) && task.view.state !== "waiting_user") {
-        this.checkCancelled(signal);
-        while (task.nextPendingCall < task.pendingCalls.length) {
-          const call = task.pendingCalls[task.nextPendingCall]!;
-          let paused: boolean;
-          try {
-            paused = await this.executePending(task, call, signal);
-          } catch (error) {
-            if (!recoverableModelToolArguments(error)) throw error;
-            const modelCallNumber = call.modelCallNumber ?? task.modelCalls;
-            if (task.toolArgumentRepairModelCall !== modelCallNumber) {
-              task.toolArgumentRepairAttempts = (task.toolArgumentRepairAttempts ?? 0) + 1;
-              task.toolArgumentRepairModelCall = modelCallNumber;
-            }
-            if ((task.toolArgumentRepairAttempts ?? 0) > MAX_TOOL_ARGUMENT_REPAIRS) throw error;
-            task.messages.push({
-              role: "tool", toolCallId: modelCallId(call),
-              content: JSON.stringify({
-                status: "REJECTED",
-                code: error.problem.code,
-                toolName: call.name,
-                message: `${error.problem.message}. Re-read the loaded parameter schema and retry with every required argument. The tool was not executed.`
-              })
-            });
-            paused = false;
-          }
-          if (paused) return;
-          task.nextPendingCall += 1;
-          await this.options.store.save(task);
-        }
-        task.pendingCalls = []; task.nextPendingCall = 0;
-        await this.ensureRegisteredTools(task, signal);
-        if (!task.pendingModelCall) {
-          if (task.modelCalls >= MAX_MODEL_CALLS) throw new EngineProblem(422, problem("MODEL_CALL_BUDGET_EXHAUSTED", "model", "Task reached the 20-call model budget"));
-          task.modelCalls += 1;
-          task.pendingModelCall = {
-            clientRequestId: `model.${sha256(`${task.view.taskId}\0${task.modelCalls}`)}`
-          };
-          await this.options.store.save(task);
-        }
-        const modelMessages = structuredClone(task.messages);
-        const availableTools = availableToolSpecs(task);
-        modelMessages.splice(1, 0,
-          compactToolGroupMessage(availableTools),
-          groundingMessage(task.observations));
-        const response = await this.options.provider.complete({
-          provider: task.authority.model.provider,
-          model: task.authority.model.model,
-          messages: modelMessages,
-          tools: [
-            SEARCH_TOOLS,
-            LOAD_TOOL,
-            ...loadedToolSpecs(availableTools, task.loadedToolNames ?? []),
-            ...availableTools.filter((tool) => tool.function.name === "ask_user")
-          ],
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-          signal
-        }, {
-          taskId: task.view.taskId,
-          taskGrant: this.grants.get(task.view.taskId)!.value,
-          clientRequestId: task.pendingModelCall.clientRequestId
-        });
-        task.metrics.promptTokens += response.usage?.promptTokens ?? 0;
-        task.metrics.completionTokens += response.usage?.completionTokens ?? 0;
-        delete task.pendingModelCall;
-        await this.options.store.save(task);
-        this.checkCancelled(signal);
-        const loadedAtDispatch = new Set(task.loadedToolNames ?? []);
-        const calls = response.toolCalls.map((call, ordinal) => ({
-          ...call,
-          id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal),
-          modelCallId: call.id,
-          ordinal,
-          schemaLoadedAtDispatch: BOOTSTRAP_TOOL_NAMES.has(call.name)
-            || PRELOADED_PROJECT_TOOL_NAMES.has(call.name)
-            || loadedAtDispatch.has(call.name),
-          modelCallNumber: task.modelCalls
-        }));
-        task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ modelCallId: id, name, arguments: args }) => ({ id: id!, name, arguments: args })) } : {}) });
-        const progressContent = calls.length > 0
-          ? bounded(response.content?.trim() ?? "", 2000)
-          : "";
-        if (progressContent) {
-          await this.emit(task, { type: "message", content: progressContent });
-        }
-        if (calls.length === 0) {
-          const conclusion = bounded(response.content?.trim() ?? "", 16000);
-          if (!conclusion) {
-            task.emptyModelResponseRepairs =
-              (task.emptyModelResponseRepairs ?? 0) + 1;
-            if (task.emptyModelResponseRepairs <= 1) {
-              task.messages.push({
-                role: "user",
-                content: "Your previous response contained neither answer text nor a tool call. Continue from the existing verified tool results. Return either one valid tool call or a concise final answer; do not repeat a failed document line-range request."
-              });
-              await this.options.store.save(task);
-              continue;
-            }
-            throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls after one repair attempt"));
-          }
-          if (task.observations.workspaceChanges.length > 0
-              && !candidateWorkspaceValidated(task.observations)) {
-            task.candidateValidationRepairs += 1;
-            if (task.candidateValidationRepairs > MAX_CANDIDATE_VALIDATION_REPAIRS) {
-              throw new EngineProblem(502, problem(
-                "CANDIDATE_VALIDATION_REQUIRED", "code_validation",
-                "The modified Workspace was not inspected and validated against exact sandbox inputs", true));
-            }
-            task.messages.push({
-              role: "user",
-              content: candidateValidationFeedback(task.observations)
-            });
-            await this.options.store.save(task);
-            continue;
-          }
-          let deliveredConclusion = conclusion;
-          if (task.observations.workspaceChanges.length > 0) {
-            if (!task.publication) {
-              const proofRef = validatedCandidateProof(
-                task.authority.project.projectVersion, task.observations);
-              if (!proofRef) throw new EngineProblem(502, problem(
-                "CANDIDATE_VALIDATION_REQUIRED", "code_validation",
-                "The modified Workspace has no exact validation proof", true));
-              const request = workspacePublishRequest(task.view.taskId, proofRef,
-                task.observations.workspaceChanges);
-              await this.tool(task, request.clientRequestId, "project.publish",
-                `receiptRef=${request.receiptRef}; changedFiles=${request.entries.length}`,
-                "requested", null, request.receiptRef);
-              const result = await this.options.gateway.publish(
-                task.view.taskId, this.requireGrant(task.view.taskId), request, signal);
-              this.options.validator.validate("gateway-workspacePublishResult", result);
-              if (result.clientRequestId !== request.clientRequestId
-                  || result.requestDigest !== request.requestDigest
-                  || result.baseProjectVersion !== task.authority.project.projectVersion
-                  || result.receiptRef !== request.receiptRef) {
-                throw new EngineProblem(502, problem(
-                  "WORKSPACE_PUBLICATION_INVALID", "tool",
-                  "Project publication result identity is invalid", true));
-              }
-              task.publication = {
-                operationId: result.operationId,
-                baseProjectVersion: result.baseProjectVersion,
-                publishedProjectVersion: result.publishedProjectVersion,
-                publishedRevisionId: result.publishedRevisionId,
-                receiptRef: result.receiptRef
-              };
-              await this.tool(task, request.clientRequestId, "project.publish",
-                `receiptRef=${request.receiptRef}; changedFiles=${request.entries.length}`,
-                "succeeded",
-                `publishedProjectVersion=${result.publishedProjectVersion}; publishedRevisionId=${result.publishedRevisionId}`,
-                result.receiptRef);
-              await this.options.store.save(task);
-            }
-            deliveredConclusion = bounded(`${conclusion}\n\n已自动发布为新的 ProjectVersion：${task.publication.publishedProjectVersion}（Revision ${task.publication.publishedRevisionId}）。旧版本仍保留，可通过现有版本回滚功能恢复。`, 16000);
-          }
-          // A formal FAILED Receipt is trustworthy task evidence: validation
-          // ran and the tested code failed. System, timeout, and cancellation
-          // outcomes are rejected while handling the Receipt and never reach
-          // this delivery gate.
-          const delivery = await this.emit(task, {
-            type: "delivery", conclusion: deliveredConclusion,
-            receiptRefs: [...task.receiptRefs],
-            ...(task.publication ? { publication: task.publication } : {})
-          });
-          task.view.deliverySequence = delivery.sequence;
-          await this.options.store.save(task);
-          await this.status(task, "succeeded", null);
-          return;
-        }
-        task.pendingCalls = calls; task.nextPendingCall = 0;
-        await this.options.store.save(task);
-      }
+      await runReactGraph({
+        tools: () => this.executePendingCalls(task, signal),
+        model: () => this.modelStep(task, signal)
+      });
     } catch (error) {
       if (terminal(task.view.state)) return;
       if (signal.aborted && signal.reason === TASK_LEASE_LOST) return;
@@ -536,6 +382,238 @@ export class AgentEngine {
       const failure = error instanceof EngineProblem ? error.problem : problem("ENGINE_INTERNAL_FAILURE", "internal", "The agent engine encountered an internal failure", true);
       await this.status(task, "failed", failure);
     }
+  }
+
+  private async executePendingCalls(task: PersistedTask, signal: AbortSignal): Promise<ReactDecision> {
+    if (terminal(task.view.state) || task.view.state === "waiting_user") return "stop";
+    this.checkCancelled(signal);
+    while (task.nextPendingCall < task.pendingCalls.length) {
+      const call = task.pendingCalls[task.nextPendingCall]!;
+      let paused: boolean;
+      const toolStarted = this.monotonicNow();
+      let toolOutcome = "completed";
+      try {
+        paused = await this.executePending(task, call, signal);
+      } catch (error) {
+        toolOutcome = signal.aborted ? "cancelled" : "failed";
+        if (!recoverableModelToolArguments(error)) throw error;
+        const modelCallNumber = call.modelCallNumber ?? task.modelCalls;
+        if (task.toolArgumentRepairModelCall !== modelCallNumber) {
+          task.toolArgumentRepairAttempts = (task.toolArgumentRepairAttempts ?? 0) + 1;
+          task.toolArgumentRepairModelCall = modelCallNumber;
+        }
+        if ((task.toolArgumentRepairAttempts ?? 0) > MAX_TOOL_ARGUMENT_REPAIRS) throw error;
+        task.messages.push({
+          role: "tool", toolCallId: modelCallId(call),
+          content: JSON.stringify({
+            status: "REJECTED",
+            code: error.problem.code,
+            toolName: call.name,
+            message: `${error.problem.message}. Re-read the loaded parameter schema and retry with every required argument. The tool was not executed.`
+          })
+        });
+        paused = false;
+      } finally {
+        process.stdout.write(JSON.stringify({ event: "reactplan_tool_timing", taskId: task.view.taskId,
+          callId: call.id, toolName: call.name, outcome: toolOutcome,
+          durationMillis: Math.max(0, this.monotonicNow() - toolStarted) }) + "\n");
+      }
+      if (paused) return "stop";
+      task.nextPendingCall += 1;
+      await this.options.store.save(task);
+    }
+    task.pendingCalls = []; task.nextPendingCall = 0;
+    return "continue";
+  }
+
+  private async modelStep(task: PersistedTask, signal: AbortSignal): Promise<ReactDecision> {
+    await this.ensureRegisteredTools(task, signal);
+    if (!task.pendingModelCall) {
+      if (task.modelCalls >= MAX_MODEL_CALLS) throw new EngineProblem(422, problem("MODEL_CALL_BUDGET_EXHAUSTED", "model", "Task reached the 20-call model budget"));
+      task.experiments ??= { compactContext: false, ...this.options.experiments };
+      // Append changed server facts once; never rewrite an already-sent prefix.
+      task.promptSnapshots ??= {};
+      for (const [kind, message] of Object.entries({ groups: compactToolGroupMessage(availableToolSpecs(task)), evidence: groundingMessage(task.observations) })) {
+        message.content += `\nThis is the latest ${kind} snapshot; earlier snapshots describe earlier observations.`;
+        const digest = digestObject(message);
+        if (task.promptSnapshots[kind] !== digest) {
+          if (task.modelCalls === 0) task.messages.splice(task.messages.length - 1, 0, message);
+          else task.messages.push(message);
+          task.promptSnapshots[kind] = digest;
+        }
+      }
+      task.modelCalls += 1;
+      task.pendingModelCall = {
+        clientRequestId: `model.${sha256(`${task.view.taskId}\0${task.modelCalls}`)}`,
+        contextPolicy: task.experiments.compactContext ? "compact-v2" : "stable-v2",
+        batchToolLoading: false
+      };
+      await this.options.store.save(task);
+    }
+    const policy = task.pendingModelCall.contextPolicy;
+    const batchToolLoading = policy === "compact-v1" || task.pendingModelCall.batchToolLoading === true;
+    const context = policy === "compact-v1" || policy === "compact-v2"
+      ? projectModelContext(task)
+      : { messages: structuredClone(task.messages), originalChars: JSON.stringify(task.messages).length, projectedChars: JSON.stringify(task.messages).length };
+    const modelMessages = context.messages;
+    const availableTools = availableToolSpecs(task);
+    if (policy === undefined || policy === "compact-v1") modelMessages.splice(1, 0,
+      compactToolGroupMessage(availableTools),
+      groundingMessage(task.observations));
+    const modelTools = [
+        SEARCH_TOOLS,
+        batchToolLoading ? RETIRED_BATCH_LOAD_TOOL : LEGACY_LOAD_TOOL,
+        ...loadedToolSpecs(availableTools, task.loadedToolNames ?? []),
+        ...availableTools.filter((tool) => tool.function.name === "ask_user")
+      ];
+    const modelStarted = this.monotonicNow();
+    const response = await this.options.provider.complete({
+      provider: task.authority.model.provider,
+      model: task.authority.model.model,
+      messages: modelMessages,
+      tools: modelTools,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      signal
+    }, {
+      taskId: task.view.taskId,
+      taskGrant: this.grants.get(task.view.taskId)!.value,
+      clientRequestId: task.pendingModelCall.clientRequestId
+    }).catch(error => {
+      process.stdout.write(JSON.stringify({ event: "reactplan_model_failure", taskId: task.view.taskId,
+        modelCall: task.modelCalls, callId: task.pendingModelCall!.clientRequestId,
+        durationMillis: Math.max(0, this.monotonicNow() - modelStarted),
+        code: error instanceof EngineProblem ? error.problem.code : "MODEL_REQUEST_FAILED" }) + "\n");
+      throw error;
+    });
+    process.stdout.write(JSON.stringify({
+      event: "reactplan_model_context", taskId: task.view.taskId, modelCall: task.modelCalls,
+      callId: task.pendingModelCall.clientRequestId,
+      resolvedProvider: response.resolvedProvider ?? task.authority.model.provider,
+      resolvedModel: response.resolvedModel ?? task.authority.model.model,
+      contextPolicy: task.pendingModelCall.contextPolicy ?? "legacy",
+      originalHistoryChars: context.originalChars, projectedHistoryChars: context.projectedChars,
+      toolSchemaChars: JSON.stringify(modelTools).length,
+      totalMessageChars: JSON.stringify(modelMessages).length,
+      promptTokens: response.usage?.promptTokens ?? null,
+      completionTokens: response.usage?.completionTokens ?? null,
+      cacheHitTokens: response.usage?.cacheHitTokens ?? null,
+      cacheMissTokens: response.usage?.cacheMissTokens ?? null,
+      durationMillis: Math.max(0, this.monotonicNow() - modelStarted),
+      replayed: response.replayed ?? null,
+      batchToolLoading, loadedSchemaCount: modelTools.length,
+      repeatedReadRequests: repeatedReadRequests(task.messages)
+    }) + "\n");
+    task.metrics.promptTokens += response.usage?.promptTokens ?? 0;
+    task.metrics.completionTokens += response.usage?.completionTokens ?? 0;
+    delete task.pendingModelCall;
+    await this.options.store.save(task);
+    this.checkCancelled(signal);
+    const loadedAtDispatch = new Set(task.loadedToolNames ?? []);
+    const calls = response.toolCalls.map((call, ordinal) => ({
+      ...call,
+      id: deterministicCallId(task.view.taskId, task.modelCalls, ordinal),
+      modelCallId: call.id,
+      ordinal,
+      schemaLoadedAtDispatch: BOOTSTRAP_TOOL_NAMES.has(call.name)
+        || PRELOADED_PROJECT_TOOL_NAMES.has(call.name)
+        || loadedAtDispatch.has(call.name),
+      batchToolLoading,
+      modelCallNumber: task.modelCalls
+    }));
+    task.messages.push({ role: "assistant", content: response.content, ...(calls.length ? { toolCalls: calls.map(({ modelCallId: id, name, arguments: args }) => ({ id: id!, name, arguments: args })) } : {}) });
+    const progressContent = calls.length > 0
+      ? bounded(response.content?.trim() ?? "", 2000)
+      : "";
+    if (progressContent) {
+      await this.emit(task, { type: "message", content: progressContent });
+    }
+    if (calls.length === 0) {
+      const conclusion = bounded(response.content?.trim() ?? "", 16000);
+      if (!conclusion) {
+        task.emptyModelResponseRepairs =
+          (task.emptyModelResponseRepairs ?? 0) + 1;
+        if (task.emptyModelResponseRepairs <= 1) {
+          task.messages.push({
+            role: "user",
+            content: "Your previous response contained neither answer text nor a tool call. Continue from the existing verified tool results. Return either one valid tool call or a concise final answer; do not repeat a failed document line-range request."
+          });
+          await this.options.store.save(task);
+          return "continue";
+        }
+        throw new EngineProblem(502, problem("MODEL_RESPONSE_EMPTY", "model", "Model returned neither content nor tool calls after one repair attempt"));
+      }
+      if (task.observations.workspaceChanges.length > 0
+          && !candidateWorkspaceValidated(task.observations)) {
+        task.candidateValidationRepairs += 1;
+        if (task.candidateValidationRepairs > MAX_CANDIDATE_VALIDATION_REPAIRS) {
+          throw new EngineProblem(502, problem(
+            "CANDIDATE_VALIDATION_REQUIRED", "code_validation",
+            "The modified Workspace was not inspected and validated against exact sandbox inputs", true));
+        }
+        task.messages.push({
+          role: "user",
+          content: candidateValidationFeedback(task.observations)
+        });
+        await this.options.store.save(task);
+        return "continue";
+      }
+      let deliveredConclusion = conclusion;
+      if (task.observations.workspaceChanges.length > 0) {
+        if (!task.publication) {
+          const proofRef = validatedCandidateProof(
+            task.authority.project.projectVersion, task.observations);
+          if (!proofRef) throw new EngineProblem(502, problem(
+            "CANDIDATE_VALIDATION_REQUIRED", "code_validation",
+            "The modified Workspace has no exact validation proof", true));
+          const request = workspacePublishRequest(task.view.taskId, proofRef,
+            task.observations.workspaceChanges);
+          await this.tool(task, request.clientRequestId, "project.publish",
+            `receiptRef=${request.receiptRef}; changedFiles=${request.entries.length}`,
+            "requested", null, request.receiptRef);
+          const result = await this.options.gateway.publish(
+            task.view.taskId, this.requireGrant(task.view.taskId), request, signal);
+          this.options.validator.validate("gateway-workspacePublishResult", result);
+          if (result.clientRequestId !== request.clientRequestId
+              || result.requestDigest !== request.requestDigest
+              || result.baseProjectVersion !== task.authority.project.projectVersion
+              || result.receiptRef !== request.receiptRef) {
+            throw new EngineProblem(502, problem(
+              "WORKSPACE_PUBLICATION_INVALID", "tool",
+              "Project publication result identity is invalid", true));
+          }
+          task.publication = {
+            operationId: result.operationId,
+            baseProjectVersion: result.baseProjectVersion,
+            publishedProjectVersion: result.publishedProjectVersion,
+            publishedRevisionId: result.publishedRevisionId,
+            receiptRef: result.receiptRef
+          };
+          await this.tool(task, request.clientRequestId, "project.publish",
+            `receiptRef=${request.receiptRef}; changedFiles=${request.entries.length}`,
+            "succeeded",
+            `publishedProjectVersion=${result.publishedProjectVersion}; publishedRevisionId=${result.publishedRevisionId}`,
+            result.receiptRef);
+          await this.options.store.save(task);
+        }
+        deliveredConclusion = bounded(`${conclusion}\n\n已自动发布为新的 ProjectVersion：${task.publication.publishedProjectVersion}（Revision ${task.publication.publishedRevisionId}）。旧版本仍保留，可通过现有版本回滚功能恢复。`, 16000);
+      }
+      // A formal FAILED Receipt is trustworthy task evidence: validation
+      // ran and the tested code failed. System, timeout, and cancellation
+      // outcomes are rejected while handling the Receipt and never reach
+      // this delivery gate.
+      const delivery = await this.emit(task, {
+        type: "delivery", conclusion: deliveredConclusion,
+        receiptRefs: [...task.receiptRefs],
+        ...(task.publication ? { publication: task.publication } : {})
+      });
+      task.view.deliverySequence = delivery.sequence;
+      await this.options.store.save(task);
+      await this.status(task, "succeeded", null);
+      return "stop";
+    }
+    task.pendingCalls = calls; task.nextPendingCall = 0;
+    await this.options.store.save(task);
+    return "continue";
   }
 
   private async executePending(task: PersistedTask, call: PendingCall, signal: AbortSignal): Promise<boolean> {
@@ -562,7 +640,7 @@ export class AgentEngine {
           group, query: query || null,
           tools: matches.map((tool) => ({
             name: tool.function.name,
-            description: bounded(tool.function.description, 1000)
+            description: bounded(tool.function.description.split(". ")[0]!, 180)
           })),
           truncated: matches.length === 20
         })
@@ -570,27 +648,31 @@ export class AgentEngine {
       return false;
     }
     if (call.name === "load_tool") {
-      const name = requireString(args.name, "name");
-      const available = availableToolSpecs(task).find((tool) => tool.function.name === name);
-      if (!available) {
-        throw new EngineProblem(502, problem(
-          "MODEL_TOOL_UNKNOWN", "model", "The requested tool is not present in the available tool catalog"));
+      if (args.names !== undefined && !(call.batchToolLoading ?? (task.experiments === undefined))) {
+        throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "Batch loading is disabled; load one discovered tool with name"));
       }
-      if (!(task.discoveredToolNames ?? []).includes(name)) {
-        task.messages.push({
-          role: "tool", toolCallId: modelCallId(call),
-          content: JSON.stringify({
+      const names = args.names === undefined ? [requireString(args.name, "name")]
+        : Array.isArray(args.names) && args.names.length >= 1 && args.names.length <= 6
+          && args.name === undefined && args.names.every(name => typeof name === "string" && name.length > 0 && name.length <= 64)
+          ? stableUnique(args.names as string[]) : [];
+      if (!names.length) throw new EngineProblem(502, problem("MODEL_TOOL_ARGUMENTS_INVALID", "model", "load_tool requires name or one to six names"));
+      for (const name of names) {
+        if (!availableToolSpecs(task).some(tool => tool.function.name === name)) {
+          throw new EngineProblem(502, problem("MODEL_TOOL_UNKNOWN", "model", "The requested tool is not present in the available tool catalog"));
+        }
+        if (!(task.discoveredToolNames ?? []).includes(name)) {
+          task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
             status: "REJECTED", code: "TOOL_NOT_DISCOVERED", toolName: name,
             message: `Search the ${toolGroup(name)} group with search_tools before loading ${name}.`
-          })
-        });
-        return false;
+          }) });
+          return false;
+        }
       }
-      task.loadedToolNames = stableUnique([...(task.loadedToolNames ?? []), name]);
-      task.messages.push({
-        role: "tool", toolCallId: modelCallId(call),
-        content: JSON.stringify({ loaded: name, instruction: `The ${name} parameter schema is now available. Call ${name} when needed.` })
-      });
+      task.loadedToolNames = stableUnique([...(task.loadedToolNames ?? []), ...names]);
+      task.messages.push({ role: "tool", toolCallId: modelCallId(call), content: JSON.stringify({
+        loaded: args.names === undefined ? names[0] : names,
+        instruction: "These parameter schemas are now available. Call the tools only when needed."
+      }) });
       return false;
     }
     const available = availableToolSpecs(task).find((tool) => tool.function.name === call.name);
@@ -895,6 +977,7 @@ export class AgentEngine {
         const remaining = request.timeoutMillis + 30000 - (this.monotonicNow() - acceptedAt);
         if (remaining <= 0) throw sandboxDeadline(view.executionRef);
         await this.sleep(Math.min(delays[poll] ?? 5000, remaining), signal); poll += 1;
+        this.checkCancelled(signal);
         if (this.monotonicNow() - acceptedAt >= request.timeoutMillis + 30000) throw sandboxDeadline(view.executionRef);
         view = await this.options.gateway.execution(task.view.taskId, grant, request.clientRequestId, signal);
         this.options.validator.validate("gateway-sandboxView", view);
@@ -903,6 +986,11 @@ export class AgentEngine {
       const receipt = await this.options.gateway.receipt(task.view.taskId, grant, view.receiptRef, signal);
       this.options.validator.validate("receipt", receipt);
       const validationAnchors = validatedReceiptAnchors(receipt, request);
+      const receiptMillis = Date.parse(receipt.finishedAt) - Date.parse(receipt.startedAt);
+      process.stdout.write(JSON.stringify({ event: "reactplan_sandbox_timing", taskId: task.view.taskId,
+        callId: call.id, receiptRef: receipt.receiptRef, status: receipt.status,
+        receiptDurationMillis: Number.isFinite(receiptMillis) && receiptMillis >= 0 ? receiptMillis : null,
+        pollingCount: poll }) + "\n");
       if (!task.receiptRefs.includes(receipt.receiptRef)) task.receiptRefs.push(receipt.receiptRef);
       task.lastSandboxStatus = receipt.status;
       task.observations.sandboxRuns.push({
@@ -1386,7 +1474,7 @@ function initialMessages(
 ): ChatMessage[] {
   const runtimeIdentity = `provider=${submission.authority.model.provider}; model=${submission.authority.model.model}`;
   const messages: ChatMessage[] = [
-    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. When calling tools, response content is optional; if present, it must be one brief user-facing progress update that says what is being checked or changed, never hidden reasoning, chain-of-thought, speculative conclusions, raw tool arguments, or secrets. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files. After any Workspace write, inspect the diff and validate every exact changed file hash before reporting success. When every changed file is a plain document, inspect the Workspace diff and do not invoke the sandbox: the server performs deterministic document-integrity validation locally. Otherwise choose validation scope before build system: use a source runner for an explicitly targeted, genuinely standalone supported source after inspecting imports; use Maven test/verify for a project/module build or a target that depends on project build context, and only when a root pom.xml exists. Maven inputs must include every exact changed-file hash; the product supplies bounded current UTF-8 build context. Read relevant imports and dependency descriptors before the first execution. Standalone Java/Python runs may declare exact pinned dependencies using the sandbox tool syntax, but never invent, add, or upgrade dependencies merely to pass validation. If the observed build system is unsupported, perform the strongest allowed content check and clearly say the full build was not verified. Do not rerun an unchanged successful command: the server reuses identical argv and input hashes. Do not claim publication yourself: after exact validation the server deterministically publishes the Candidate and appends the authoritative new ProjectVersion to the delivery. Sandbox commands start at the Project root, so argv must use exact Project-relative paths. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
+    { role: "system", content: `You are PaperAgent's bounded ReAct executor running with ${runtimeIdentity}. If asked what model you are, report these exact configured values; never guess or claim a different provider or model. The current task is authoritative and always takes priority over historical conversation. Do not continue or summarize a previous task unless the current task asks for it. When the current task requires Project facts, inspect only through the provided Project tools and use exact manifest hashes. Do not call Project or sandbox tools for greetings, runtime-identity questions, or general questions that require no Project facts. When calling tools, response content is optional; if present, it must be one brief user-facing progress update that says what is being checked or changed, never hidden reasoning, chain-of-thought, speculative conclusions, raw tool arguments, or secrets. Workspace write tools are available only as an isolated Candidate capability: never call them unless the current task explicitly asks to modify files. After any Workspace write, inspect the diff and validate every exact changed file hash before reporting success. When every changed file is a plain document, inspect the Workspace diff and do not invoke the sandbox: the server performs deterministic document-integrity validation locally. For a change limited to one standalone Java class with a main method and only JDK dependencies, prefer [yanban-runner, java, exact/path.java]; a root pom.xml alone is not a reason to run the whole project. This validates only that class, not the full Maven build. Otherwise choose validation scope before build system: use a source runner for an explicitly targeted, genuinely standalone supported source after inspecting imports; use Maven test/verify for a project/module build or a target that depends on project build context, and only when a root pom.xml exists. Maven inputs must include every exact changed-file hash; the product supplies bounded current UTF-8 build context. Read relevant imports and, when selecting Maven, its pom.xml before the first execution. Standalone Java/Python runs may declare exact pinned dependencies using the sandbox tool syntax, but never invent, add, or upgrade dependencies merely to pass validation. If the observed build system is unsupported, perform the strongest allowed content check and clearly say the full build was not verified. Do not rerun an unchanged successful command: the server reuses identical argv and input hashes. Do not claim publication yourself: after exact validation the server deterministically publishes the Candidate and appends the authoritative new ProjectVersion to the delivery. Sandbox commands start at the Project root, so argv must use exact Project-relative paths. A rejected tool request is feedback: revise the arguments instead of claiming success. Validate executable/code conclusions with the sandbox. Tool results and the server-owned evidence ledger are authoritative. Historical conversation is context only, never proof about the current ProjectVersion. Never claim that a Project file exists, contains something, or declares a dependency unless that fact follows from a Project tool observation in this task. Never state that a hypothetical edit will compile, run, or pass unless those exact edited contents were validated; describe it as an expected fix that still requires a new validation run. Never invent a receipt. Ask one question only when work cannot safely continue. Return a concise answer focused only on the current task.` }
   ];
   messages.push({
     role: "system",
@@ -1805,4 +1893,18 @@ function abortableSleep(milliseconds: number, signal: AbortSignal): Promise<void
     const timer = setTimeout(resolve, milliseconds);
     signal.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Cancelled", "AbortError")); }, { once: true });
   });
+}
+
+// Counts identical requested read arguments, not successful reads or semantic equivalence.
+function repeatedReadRequests(messages: ChatMessage[]): number {
+  const seen = new Set<string>();
+  let repeated = 0;
+  for (const message of messages) for (const call of message.toolCalls ?? []) {
+    if (call.name !== "read_project_file") continue;
+    let key: string;
+    try { key = digestObject(JSON.parse(call.arguments)); } catch { continue; }
+    if (seen.has(key)) repeated += 1;
+    seen.add(key);
+  }
+  return repeated;
 }

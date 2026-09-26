@@ -4,11 +4,13 @@
 
 Project 页面使用 `agent-engine-reactplan` 的 TypeScript ReAct 执行链路。Java 产品层负责认证与授权、任务持久化、可信项目版本、Workspace、工具/沙箱网关以及验证后发布和回滚。不能将现行 Project 执行链称为旧 Java V2 plan-and-execute。
 
+#185 第一阶段优化使用 LangGraph JS 编排现有模型/工具循环、LangChain Core 管理模型消息投影；Java 仍是持久化和业务权限权威。2026-09-25 起，正文投影压缩为默认关闭的实验项；2026-09-26 已移除批量加载入口，仅保留历史待完成请求的恢复兼容；默认保留消息前缀并追加变化的事实，已接通缓存 token 和分阶段耗时观测。见 [缓存观测与保守策略](../开发流程/ts-react-cache-observability.md)。未新增图状态数据库或改变验证后发布规则，详见 [诊断与验证](../开发流程/ts-langgraph-context-optimization.md)。
+
 ## #233 Python 实验已移除
 
 用户决定停止 Python demo。Project 仅提供现有 TS ReAct 入口；Python 服务、引擎选择、专用环境变量及 Compose 配置已移除。V108 历史迁移、intake 引擎标记和只读历史查询保留，以免破坏已有数据库或把 Python 旧任务交给 TS 执行。旧 Python 运行请求返回 410；不会自动转换或恢复旧任务。没有删除 Java 会话、消息、任务数据，也没有修改 Redis 缓存实现。
 
-LangGraph 优化现有 TS 引擎尚待讨论，本轮未引入框架。清理验证见 [Python demo 移除验证](../开发流程/python-demo-removal-verification.md)。
+Python 清理验证见 [Python demo 移除验证](../开发流程/python-demo-removal-verification.md)。后续框架优化只在现有 TS 引擎中实施。
 
 ## 三条路径的边界
 

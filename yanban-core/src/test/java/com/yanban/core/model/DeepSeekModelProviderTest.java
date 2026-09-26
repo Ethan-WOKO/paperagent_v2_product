@@ -49,7 +49,7 @@ class DeepSeekModelProviderTest {
                       "usage": {
                         "prompt_tokens": 5,
                         "completion_tokens": 7,
-                        "total_tokens": 12
+                        "total_tokens": 12, "prompt_cache_hit_tokens": 3, "prompt_cache_miss_tokens": 2
                       }
                     }
                     """.getBytes(StandardCharsets.UTF_8);
@@ -75,6 +75,8 @@ class DeepSeekModelProviderTest {
         assertThat(response.assistantText()).isEqualTo("你好，我是研伴。");
         assertThat(response.finishReason()).isEqualTo("stop");
         assertThat(response.usage().totalTokens()).isEqualTo(12);
+        assertThat(response.usage().cacheHitTokens()).isEqualTo(3);
+        assertThat(response.usage().cacheMissTokens()).isEqualTo(2);
         assertThat(authorization.get()).isEqualTo("Bearer test-key");
         assertThat(traceId.get()).isEqualTo("trace-deepseek-1");
         assertThat(requestBody.get()).contains("\"model\":\"deepseek-chat\"");

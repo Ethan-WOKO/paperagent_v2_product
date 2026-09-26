@@ -123,11 +123,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
         if (message == null) {
             throw new ModelProviderException("OpenAI-compatible API returned empty message");
         }
-        ChatResponse.Usage usage = response.usage() == null ? null : new ChatResponse.Usage(
-                intOrNull(response.usage().promptTokens()),
-                intOrNull(response.usage().completionTokens()),
-                intOrNull(response.usage().totalTokens())
-        );
+        ChatResponse.Usage usage = ProviderUsage.parse(response.usage());
         return new ChatResponse(
                 new ChatMessage(message.role(), ChatMessage.responseText(message.content()), message.toolCalls(), message.toolCallId()),
                 choice.finishReason(),
@@ -199,14 +195,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
     }
 
     private ChatResponse.Usage parseUsage(JsonNode usageNode) {
-        if (usageNode == null || !usageNode.isObject()) {
-            return null;
-        }
-        return new ChatResponse.Usage(
-                jsonIntOrNull(usageNode.get("prompt_tokens")),
-                jsonIntOrNull(usageNode.get("completion_tokens")),
-                jsonIntOrNull(usageNode.get("total_tokens"))
-        );
+        return ProviderUsage.parse(usageNode);
     }
 
     private Integer jsonIntOrNull(JsonNode node) {
@@ -265,7 +254,7 @@ public class OpenAiCompatibleModelProvider implements ChatModelProvider {
     ) {
     }
 
-    private record OpenAiChatResponse(List<OpenAiChoice> choices, OpenAiUsage usage) {
+    private record OpenAiChatResponse(List<OpenAiChoice> choices, JsonNode usage) {
     }
 
     private record OpenAiChoice(OpenAiMessage message, @JsonProperty("finish_reason") String finishReason) {
